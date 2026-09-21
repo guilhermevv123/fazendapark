@@ -18,6 +18,29 @@
  * porteiro antigo lê. Quem traduz uma na outra é `roleLegado()`, em
  * `utils/papeis.ts` — deixar um humano escolher as duas é deixar as duas
  * discordarem.
+ *
+ * ## O e-mail é UM no sistema inteiro, não um por organização
+ *
+ * Esta conferência já foi `WHERE org_id = $1 AND lower(email) = $2`, de mãos
+ * dadas com o índice único `(org_id, email)` do banco. Só que **o login não
+ * pergunta a organização**: `auth/entrar.post.ts` procura o e-mail em
+ * `users` inteiro e fica com a primeira linha. Duas pessoas com o mesmo
+ * endereço em lojas diferentes viravam um cadastro que nascia "com sucesso" e
+ * uma pessoa que nunca mais entrava — sem erro, sem log, sem nada na tela: a
+ * senha dela era conferida contra o hash da OUTRA e a resposta era
+ * "E-mail ou senha não confere". O suporte não tem como adivinhar isso.
+ *
+ * Entre as duas saídas (ensinar a organização ao login, ou tratar o e-mail
+ * como global), esta rota implementa a segunda — e recusa na cara, com frase
+ * que diz o que fazer, em vez de criar um acesso que não abre. A recusa não
+ * diz DE QUEM é a outra organização: quem cadastra não precisa saber, e o
+ * nome do cliente vizinho não é dele.
+ *
+ * O índice do banco continua sendo `(org_id, email)`, então esta trava é de
+ * aplicação: duas criações simultâneas do mesmo e-mail em organizações
+ * diferentes ainda passariam as duas. Fechar isso de verdade pede um índice
+ * único em `lower(email)` — migração, que esta rodada não tinha número pra
+ * criar.
  */
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
@@ -58,8 +81,23 @@ export default defineEventHandler(async (event) => {
   const papel = d.papel as (typeof PAPEIS)[number]
   const email = d.email.trim().toLowerCase()
 
+  // A busca é no sistema INTEIRO, e a linha da própria organização vem
+  // primeiro — ela é a que tem conserto pela tela (reativar), então é a frase
+  // que o operador precisa ouvir quando as duas existem.
   const jaExiste = await q1<any>(
-    `SELECT id, active FROM users WHERE org_id = $1 AND lower(email) = $2`, [orgId, email])
+    `SELECT id, active, (org_id = $1) AS mesma_organizacao
+       FROM users
+      WHERE lower(email) = $2
+      ORDER BY (org_id = $1) DESC
+      LIMIT 1`, [orgId, email])
+  if (jaExiste && !jaExiste.mesma_organizacao) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: `O e-mail ${email} já é usado por outra organização aqui no sistema, e o `
+        + `login é um só para todas. Se fosse criado assim, um dos dois acessos deixaria de `
+        + `abrir sem avisar. Use outro endereço para esta pessoa.`,
+    })
+  }
   if (jaExiste) {
     throw createError({
       statusCode: 409,

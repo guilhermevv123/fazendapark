@@ -52,15 +52,37 @@ const linha = computed(() => {
 })
 
 // ------------------------------------------------------------- rosca (SVG)
+/**
+ * A rosca divide por `criados`, que é o total que o servidor contou — não pela
+ * soma de três fatias escolhidas a dedo.
+ *
+ * Era `finalizados + abandonados + abertos`, e o pedido estornado POR INTEIRO
+ * não cabia em nenhuma das três: ele sumia do desenho E do denominador, então
+ * as porcentagens eram calculadas sobre uma população menor que a do evento.
+ * Medido numa fixture de 6 pedidos com 1 estorno total: a rosca dizia 5 e
+ * `/relatorios` dizia 6 criados, com a suíte inteira verde.
+ *
+ * Agora as fatias vêm de baldes que somam `criados` por construção (o balde
+ * `outros` é o resto da subtração no servidor), e o denominador é o mesmo
+ * número que a outra tela mostra.
+ */
 const rosca = computed(() => {
   const f = data.value?.funil
   if (!f) return null
-  const total = f.finalizados + f.abandonados + f.abertos
+  const total = f.criados ?? (f.finalizados + f.abandonados + f.abertos)
   if (!total) return null
   const fatias = [
     { rotulo: 'Finalizados', n: f.finalizados, cor: '#0050C3' },
     { rotulo: 'Abandonados', n: f.abandonados, cor: '#7FC4F5' },
     { rotulo: 'Em aberto', n: f.abertos, cor: '#D8DDE5' },
+    // Os três que não existiam no desenho e faziam o pedido sumir da tela. As
+    // cores são os tokens da casa lidos de `tailwind.config.js` — `erro`
+    // (#C1292E), `alerta` (#B26A00) e `tinta.fraca` (#8A97A8) — e não um tom
+    // inventado: aqui é `fill` de SVG, então o Tailwind não geraria classe
+    // nenhuma e um hex fora da paleta passaria despercebido pra sempre.
+    { rotulo: 'Devolvidos', n: f.devolvidos ?? 0, cor: '#C1292E' },
+    { rotulo: 'Em contestação', n: f.contestados ?? 0, cor: '#B26A00' },
+    { rotulo: 'Outros', n: f.outros ?? 0, cor: '#8A97A8' },
   ].filter((x) => x.n > 0)
   const R = 70, r = 46, cx = 90, cy = 90
   let ang = -Math.PI / 2
@@ -168,6 +190,16 @@ useHead({ title: 'Dashboard do evento' })
             <p class="rotulo-kpi">Total de vendas</p>
             <p class="numero-kpi mt-2">{{ reais(data.totais.cobradoCents) }}</p>
             <p class="mt-1 text-sm text-acao">{{ reais(data.totais.hojeCents) }} hoje</p>
+            <!--
+              A devolução aparece NOMEADA, e não escondida dentro do total.
+              O painel calculava este número e não mostrava em lugar nenhum:
+              o estorno total (pedido devolvido por inteiro) não existia em
+              nenhuma tela de relatório. Total cobrado e dinheiro que voltou
+              são duas coisas, e as duas ficam na cara de quem abre a tela.
+            -->
+            <p v-if="data.totais.estornadoCents" class="mt-1 text-sm text-erro">
+              − {{ reais(data.totais.estornadoCents) }} devolvidos ao comprador
+            </p>
           </div>
           <span class="flex h-10 w-10 items-center justify-center rounded-full bg-acao-fraco text-acao">
             <IconeMenu nome="carteira" />
@@ -179,7 +211,7 @@ useHead({ title: 'Dashboard do evento' })
             <p class="rotulo-kpi">Ingressos emitidos</p>
             <p class="numero-kpi mt-2">{{ num(data.totais.ingressos) }}</p>
             <p class="mt-1 text-sm text-tinta-suave">
-              {{ num(data.totais.pagos) }} pagos / {{ num(data.totais.cortesias) }} cortesias
+              {{ num(data.totais.pagos) }} pagos / {{ num(data.totais.cortesiasEmitidas) }} cortesias
             </p>
           </div>
           <span class="flex h-10 w-10 items-center justify-center rounded-full bg-acao-fraco text-acao">
@@ -189,9 +221,18 @@ useHead({ title: 'Dashboard do evento' })
 
         <article class="card flex items-start justify-between">
           <div>
+            <!--
+              O rótulo e o campo dizem a MESMA régua. O campo se chamava
+              `ticketMedioCents` aqui (por ingresso) e `ticketMedioCents` em
+              relatórios (por pedido): mesmo nome, contas opostas. Agora o nome
+              carrega a régua, e o número por pedido vai na linha de baixo pra
+              ninguém precisar abrir a outra tela pra comparar.
+            -->
             <p class="rotulo-kpi">Ticket médio por ingresso</p>
-            <p class="numero-kpi mt-2">{{ reais(data.totais.ticketMedioCents) }}</p>
-            <p class="mt-1 text-sm text-tinta-suave">Vendas por ingressos pagos</p>
+            <p class="numero-kpi mt-2">{{ reais(data.totais.ticketMedioPorIngressoCents) }}</p>
+            <p class="mt-1 text-sm text-tinta-suave">
+              {{ reais(data.totais.ticketMedioPorPedidoCents) }} por pedido
+            </p>
           </div>
           <span class="flex h-10 w-10 items-center justify-center rounded-full bg-acao-fraco text-acao">
             <IconeMenu nome="ingresso" />

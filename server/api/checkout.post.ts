@@ -30,7 +30,7 @@ import {
 } from '../utils/estoque'
 import { faceComDesconto, type ModoTaxa } from '../utils/dinheiro'
 import {
-  aplicarCupom, CupomRecusado, emData, PEDIDO_EM_PE, resgatarCupom, type Cupom,
+  aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
 import {
   acharOuCriarCliente, cancelarCobranca, centavosParaReais, criarCobranca,
@@ -40,7 +40,11 @@ import {
   conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, MOTIVOS,
   MOTIVOS_EM_TEXTO, motivoValido,
 } from '../utils/meia-entrada'
-import { fimDasVendas } from './e/[slug].get'
+import {
+  compravel, estaPublicado, LOTE_DA_VITRINE, portaDeVenda, recadoDeLoteFechado,
+  restaDasVariacoes, restamPorTipo, situacoesDoSetor, TETO_PADRAO_POR_PEDIDO,
+  type SituacaoDoLote,
+} from './e/[slug].get'
 import { gerarCodigo } from '../utils/ingresso'
 import { cpfValido } from '../utils/documento'
 import * as simulado from '../utils/gateway-simulado'
@@ -48,13 +52,13 @@ import * as simulado from '../utils/gateway-simulado'
 /**
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa.
  *
- * Sem um teto aqui, o único freio era o `max_per_order` de CADA lote — e vinte
- * linhas de seis ingressos são cento e vinte ingressos num clique só. Não é
- * hipótese de cambista: é o jeito mais barato de esvaziar um lote inteiro e
- * revender no portão. O produtor sobe este número em `events.max_per_order`
- * quando quiser vender excursão.
+ * Mora em `e/[slug].get.ts` porque a VITRINE também precisa dele: ela anuncia
+ * o teto de cada linha e trava o botão de pagar, e um segundo `= 20` aqui
+ * seria duas verdades sobre o mesmo limite — a tela deixando montar 20 no dia
+ * em que a porta passar a recusar acima de 10. Continua reexportado daqui
+ * porque é aqui que ele recusa.
  */
-export const TETO_PADRAO_POR_PEDIDO = 20
+export { TETO_PADRAO_POR_PEDIDO }
 
 const Entrada = z.object({
   eventSlug: z.string().min(1),
@@ -108,11 +112,24 @@ export default defineEventHandler(async (event) => {
     `SELECT e.*, o.asaas_api_key, o.asaas_env, o.asaas_wallet
        FROM events e JOIN organizations o ON o.id = e.org_id
       WHERE e.slug = $1`, [dados.eventSlug])
-  if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
-  if (ev.status !== 'ativo') {
-    throw createError({ statusCode: 409, statusMessage: 'As vendas deste evento não estão abertas' })
+  // Rascunho e oculto: o MESMO 404 do slug que não existe, igual à vitrine.
+  // Um 409 aqui ("As vendas deste evento não estão abertas") contra um 404 no
+  // slug inventado é um oráculo: dá pra varrer nomes de slug e descobrir qual
+  // lançamento está montado no painel antes do anúncio. A vitrine esconde
+  // isso de propósito (`estaPublicado`) e a porta tem que esconder igual.
+  if (!ev || !estaPublicado(ev)) {
+    throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
   }
-  conferirJanelaDeVenda(ev)
+
+  // A MESMA porta da vitrine, com a MESMA frase (server/api/e/[slug].get.ts).
+  // Enquanto eram duas funções, a vitrine dava um evento terminado ontem por
+  // `vendasAbertas: true` e o checkout respondia 409 nele — a tela montava a
+  // compra e o não chegava depois do CPF.
+  const porta = portaDeVenda(ev)
+  if (!porta.aberta) {
+    throw createError({ statusCode: 409, statusMessage: porta.recado!,
+      data: { tipo: 'venda_fechada', motivo: porta.motivo } })
+  }
 
   // --------------------------------------------- 2. preços, lidos do banco
   const lotIds = [...new Set(dados.itens.map((i) => i.lotId))]
@@ -197,6 +214,12 @@ export default defineEventHandler(async (event) => {
 
   const pedido = await tx(async (c) => {
     await conferirTetoPorDocumento(c, ev, dados.itens, documento, porLote, porTipo)
+
+    // O que a vitrine mostra fechado, a porta recusa — e com a frase dela.
+    // Vem antes de `reservar` porque é uma pergunta de outra natureza ("este
+    // lote está à venda?") e porque o recado dela é mais útil que "Lote não
+    // está disponível": ele diz qual lote abrir no lugar.
+    await conferirVitrine(c, ev, dados.itens)
 
     await reservar(c, dados.itens.map((i) => ({
       lotId: i.lotId, ticketTypeId: i.ticketTypeId ?? null, quantidade: i.quantidade,
@@ -326,6 +349,22 @@ export default defineEventHandler(async (event) => {
       // continua à venda, que é a saída que ele tem.
       throw createError({ statusCode: 409, statusMessage: e.recado,
         data: { tipo: 'cota_meia', cota: e.cota, restavam: e.restavam } })
+    }
+    // Trava de DIA, que mora no banco (gatilho `sessao_confere_vaga`, db/016):
+    // capacidade da sessão, dia que o lote não vende, dia de outro evento.
+    //
+    // `23514` sozinho não serve como assinatura — é o mesmo SQLSTATE de todo
+    // CHECK do schema, e CHECK que estoura É bug nosso e merece o 500. O que
+    // separa os dois é `routine`: `exec_stmt_raise` só aparece quando o RAISE
+    // partiu de uma função NOSSA, ou seja, quando a mensagem foi escrita para
+    // quem está no guichê. Medido antes disto: segundo pedido num dia de
+    // capacidade 2 respondia `HTTP 500 {"statusMessage":"Server Error"}` e
+    // engolia a frase boa ("O dia 05/12 09:00 não comporta mais 1 pessoa(s):
+    // restam 0 de 2 lugares. Ofereça outro dia ou outro horário."), que já
+    // existia e nunca chegava na tela.
+    if (e?.code === '23514' && e?.routine === 'exec_stmt_raise') {
+      throw createError({ statusCode: 409, statusMessage: e.message,
+        data: { tipo: 'sessao' } })
     }
     throw e
   })
@@ -499,32 +538,84 @@ async function confirmarGratuito(orderId: string) {
 }
 
 /**
- * A venda está aberta AGORA?
+ * O lote que a VITRINE mostra fechado, o checkout recusa — com a frase dela.
  *
- * `sales_end_at` sozinho não responde. O painel aceita as duas formas de
- * fechar a venda — data fixa OU "X minutos depois que começar" — e o CHECK do
- * banco garante que só uma está preenchida. A vitrine já lia as duas
- * (`fimDasVendas`); o checkout lia só a primeira, então um evento configurado
- * do segundo jeito vendia ingresso para uma sessão que já tinha começado. O
- * comprador só descobre na portaria, com a família no carro.
+ * `reservar()` (utils/estoque.ts) confere o que dá pra ver olhando a linha do
+ * lote: visível, dentro das datas, no canal certo, com estoque. O que ele não
+ * tem como saber é **qual lote do setor está vigente**: com `auto_rotate_lots`
+ * ligado o setor vende um lote por vez, e isso é uma decisão do SETOR — só
+ * aparece olhando os lotes irmãos, na ordem de `sort_order`.
  *
- * E, por baixo das duas, `ends_at`: evento que já terminou não vende ingresso
- * de jeito nenhum, tenha configuração de venda ou não. Este era o buraco
- * aberto — quem não preenche nenhum dos dois campos (o caso mais comum, e o
- * do evento semeado) vendia para sempre.
+ * Sem esta conferência, o medido era: vitrine com o 2º lote em `em_breve` e
+ * `maxPorCompra: 0`, e o `POST /api/checkout` naquele mesmo lote respondendo
+ * **200** com pedido criado (PED-VU93-GARV, 6600 centavos). O comprador que
+ * montasse a requisição na mão — ou a tela, num F5 na virada — comprava o lote
+ * mais caro antes da hora, ou o mais barato depois dela.
+ *
+ * **Por que aqui dentro da transação e sem `FOR UPDATE`:** a decisão de giro
+ * lê os lotes irmãos, que esta transação não trava (travar o setor inteiro
+ * faria a venda do evento virar fila de um por vez). Ela roda na transação pra
+ * enxergar o mundo já confirmado, e o que ela decide é "qual lote está à
+ * venda", não "cabe mais um" — quem responde a segunda, com a trava na mão e
+ * até o COMMIT, continua sendo `reservar()`. Uma leitura defasada aqui erra no
+ * único instante em que o lote vigente está virando, e erra para o lado certo:
+ * a venda segue e o estoque decide.
  */
-function conferirJanelaDeVenda(ev: any, agora = new Date()) {
-  const fuso = ev.timezone ?? 'America/Bahia'
+async function conferirVitrine(c: PoolClient, ev: any, itens: any[]) {
+  const lotIds = [...new Set(itens.map((i) => i.lotId))]
+  const DOS_MESMOS_SETORES =
+    `l.sector_id IN (SELECT sector_id FROM lots WHERE id = ANY($1::uuid[]))`
 
-  if (ev.ends_at && new Date(ev.ends_at) <= agora) {
-    throw createError({ statusCode: 409,
-      statusMessage: `Este evento terminou em ${emData(ev.ends_at, fuso)} `
-        + 'e não vende mais ingresso. Veja as próximas datas na página do evento.' })
+  // Os lotes IRMÃOS entram na consulta de propósito: sem eles não existe
+  // "vigente", e `situacoesDoSetor` devolveria todo lote como se estivesse
+  // sozinho no setor — que é exatamente o furo.
+  const { rows: lotes } = await c.query(
+    `SELECT l.id, l.name, l.sector_id, l.quantity, l.sold, l.reserved,
+            l.starts_at, l.expires_at, l.half_quota_bps, l.sort_order
+       FROM lots l
+      WHERE ${DOS_MESMOS_SETORES} AND ${LOTE_DA_VITRINE}
+      ORDER BY l.sector_id, l.sort_order`, [lotIds])
+  if (!lotes.length) return
+
+  const { rows: tipos } = await c.query(
+    `SELECT tt.id, tt.lot_id, tt.kind, tt.quantity, tt.sold
+       FROM ticket_types tt
+       JOIN lots l ON l.id = tt.lot_id
+      WHERE ${DOS_MESMOS_SETORES} AND ${LOTE_DA_VITRINE}`, [lotIds])
+
+  const restam = restamPorTipo(lotes, tipos)
+  for (const t of tipos) (t as any).restam = restam.get(t.id) ?? 0
+  const restaPorLote = restaDasVariacoes(tipos)
+  for (const l of lotes) l.restaNasVariacoes = restaPorLote.get(l.id) ?? null
+
+  const porSetor = new Map<string, any[]>()
+  for (const l of lotes) {
+    if (!porSetor.has(l.sector_id)) porSetor.set(l.sector_id, [])
+    porSetor.get(l.sector_id)!.push(l)
   }
-  const fim = fimDasVendas(ev)
-  if (fim && fim <= agora) {
+
+  const agora = new Date()
+  const situacao = new Map<string, SituacaoDoLote>()
+  for (const doSetor of porSetor.values()) {
+    // `vendasAbertas: true` porque a porta do EVENTO já foi decidida lá em
+    // cima por `portaDeVenda` — se estivesse fechada, esta função nem rodava.
+    const ss = situacoesDoSetor(doSetor, {
+      vendasAbertas: true, giroAutomatico: ev.auto_rotate_lots, agora,
+    })
+    doSetor.forEach((l, i) => situacao.set(l.id, ss[i]))
+  }
+
+  for (const lotId of lotIds) {
+    const s = situacao.get(lotId)
+    // Lote fora da vitrine (invisível, ou só de bilheteria) não é caso desta
+    // função: quem recusa é `reservar()`, que tem a frase do canal.
+    if (!s || compravel(s)) continue
+    const l = lotes.find((x) => x.id === lotId)!
     throw createError({ statusCode: 409,
-      statusMessage: `As vendas deste evento encerraram em ${emData(fim, fuso)}.` })
+      statusMessage: recadoDeLoteFechado(
+        s, { nome: l.name, abreEm: l.starts_at, encerrouEm: l.expires_at },
+        ev.timezone)!,
+      data: { tipo: 'lote_fora_da_vitrine', situacao: s } })
   }
 }
 

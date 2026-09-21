@@ -53,8 +53,32 @@ const CHAVE_PAGO = 'dt:pago'
 const carrinho = ref<Carrinho | null>(null)
 const etapa = ref<'dados' | 'cobranca' | 'pago'>('dados')
 const erro = ref('')
-const erroDoCupom = ref('')
 const enviando = ref(false)
+
+/**
+ * O estado do cupom, num lugar só.
+ *
+ * Antes o comprador digitava o código e só descobria que ele não servia no
+ * clique de pagar — depois de nome, e-mail, CPF e forma de pagamento. Código de
+ * cupom vem de story, panfleto ou promoter: errar é o caso comum, e a hora de
+ * saber é a hora de digitar. `POST /api/cupom/conferir` responde com a MESMA
+ * régua do checkout (utils/cupom.ts), então o sim daqui não briga com o não de
+ * lá.
+ *
+ * `nao_vale` cobre os dois caminhos que existem — a conferência prévia e o 409
+ * do checkout — porque são a mesma notícia pro comprador e o mesmo lugar na
+ * tela. Dois estados separados para a mesma frase é como as duas acabam
+ * aparecendo juntas.
+ *
+ * `parcial` é o cupom conferido sem CPF: tudo confere menos "uma vez por
+ * pessoa", que precisa do documento. A tela avisa em vez de prometer.
+ */
+const cupom = reactive({
+  estado: 'vazio' as 'vazio' | 'conferindo' | 'vale' | 'nao_vale',
+  recado: '',
+  descontoCents: null as number | null,
+  parcial: false,
+})
 const pedido = ref<any>(null)
 const ingressos = ref<any[]>([])
 const copiado = ref(false)
@@ -148,10 +172,62 @@ function mascaraTel(v: string) {
  * reenvia sem a declaração — reclamar de um campo que o servidor recusa
  * deixaria o comprador preso numa tela sem saída.
  */
+/** Os itens do carrinho como id + quantidade — nunca preço (ver `itensDoCheckout`). */
+const itensCrus = () => (carrinho.value?.linhas ?? []).map((l) => ({
+  lotId: l.loteId, ticketTypeId: l.tipoId ?? null, quantidade: l.quantidade,
+}))
+
+/**
+ * Confere o cupom agora, sem cobrar nada.
+ *
+ * Chamada quando o comprador sai do campo do cupom e quando ele termina o CPF
+ * (aí a conferência deixa de ser parcial). Não grava nada e não reserva o uso:
+ * quem dá a palavra final continua sendo o checkout, com a linha do cupom
+ * travada — por isso o recado de sucesso não promete, só informa.
+ *
+ * Falha de rede NÃO vira erro vermelho: o cupom não foi recusado, só não deu
+ * pra perguntar. Pintar de vermelho aqui faria o comprador tirar um cupom bom.
+ */
+async function conferirCupom() {
+  const codigo = form.cupom.trim()
+  if (!codigo) {
+    Object.assign(cupom, { estado: 'vazio', recado: '', descontoCents: null, parcial: false })
+    return
+  }
+  cupom.estado = 'conferindo'
+  try {
+    const r = await $fetch<any>('/api/cupom/conferir', {
+      method: 'POST',
+      body: {
+        eventSlug: slug, codigo,
+        documento: form.documento.replace(/\D/g, '') || undefined,
+        itens: itensCrus(),
+      },
+    })
+    Object.assign(cupom, {
+      estado: r.ok ? 'vale' : 'nao_vale',
+      recado: r.recado ?? '',
+      descontoCents: r.descontoCents ?? null,
+      parcial: Boolean(r.parcial),
+    })
+  } catch (e: any) {
+    console.error('[pagamento] não deu pra conferir o cupom', e?.data ?? e)
+    Object.assign(cupom, { estado: 'vazio', recado: '', descontoCents: null, parcial: false })
+  }
+}
+
+/**
+ * O CPF acabou de ser preenchido: se há cupom no campo, vale reconferir.
+ * A conferência sem CPF é parcial — "uma vez por pessoa" só dá pra responder
+ * com o documento na mão, e é justamente esse o limite que mais recusa.
+ */
+function revisarCupomComCpf() {
+  if (form.cupom.trim()) void conferirCupom()
+}
+
 async function pagar(semDeclaracao = false) {
   if (!carrinho.value) return
   erro.value = ''
-  erroDoCupom.value = ''
   enviando.value = true
   try {
     const r = await $fetch<any>('/api/checkout', {
@@ -208,8 +284,9 @@ async function pagar(semDeclaracao = false) {
     // Erro de cupom fica COLADO no campo do cupom, com o botão de seguir sem
     // ele. Numa faixa geral, o comprador relê o formulário inteiro procurando
     // o que errou.
-    if (tipo === 'cupom') erroDoCupom.value = recado
-    else erro.value = recado
+    if (tipo === 'cupom') {
+      Object.assign(cupom, { estado: 'nao_vale', recado, descontoCents: null, parcial: false })
+    } else erro.value = recado
   } finally {
     enviando.value = false
   }
@@ -218,7 +295,7 @@ async function pagar(semDeclaracao = false) {
 /** Tira o cupom recusado do caminho e tenta de novo, sem desconto. */
 async function seguirSemCupom() {
   form.cupom = ''
-  erroDoCupom.value = ''
+  Object.assign(cupom, { estado: 'vazio', recado: '', descontoCents: null, parcial: false })
   await pagar()
 }
 
@@ -412,7 +489,8 @@ useHead({ title: 'Pagamento' })
               <label for="cpf" class="rotulo">CPF</label>
               <input id="cpf" :value="form.documento" required inputmode="numeric" class="campo tabular-nums"
                      autocomplete="off"
-                     @input="form.documento = mascaraCpf(($event.target as HTMLInputElement).value)">
+                     @input="form.documento = mascaraCpf(($event.target as HTMLInputElement).value)"
+                     @blur="revisarCupomComCpf">
               <p class="mt-1 text-xs text-tinta-fraca">Vai impresso no ingresso.</p>
             </div>
             <div>
@@ -424,13 +502,35 @@ useHead({ title: 'Pagamento' })
           </div>
           <div>
             <label for="cupom" class="rotulo">Cupom (opcional)</label>
+            <!-- `@blur` e não `@input`: conferir a cada tecla mandaria uma
+                 requisição por letra e diria "não encontramos o cupom ZZB"
+                 enquanto a pessoa ainda digita ZZBOM. -->
             <input id="cupom" v-model="form.cupom" class="campo uppercase" autocomplete="off"
-                   :class="erroDoCupom ? 'border-erro' : ''">
+                   :class="cupom.estado === 'nao_vale' ? 'border-erro' : ''"
+                   @blur="conferirCupom">
+            <p v-if="cupom.estado === 'conferindo'" class="mt-2 text-sm text-tinta-suave">
+              Conferindo o cupom…
+            </p>
+            <!-- O cupom que VALE também precisa dizer isso, e com o número: o
+                 comprador digitou o código pra ganhar desconto e até aqui só
+                 descobria se funcionou depois de pagar. -->
+            <div v-else-if="cupom.estado === 'vale'"
+                 class="mt-2 rounded-card border border-ok/40 bg-ok-claro p-3 text-sm text-ok">
+              <p>
+                {{ cupom.recado }}
+                <template v-if="cupom.descontoCents">
+                  Desconto de <span class="font-bold tabular-nums">{{ reais(cupom.descontoCents) }}</span>.
+                </template>
+              </p>
+              <p v-if="cupom.parcial" class="mt-1 text-tinta-suave">
+                O limite de uso por CPF é conferido quando você preencher o CPF.
+              </p>
+            </div>
             <!-- O recado do cupom mora COLADO no campo, e vem com a saída:
                  sem o botão, quem digitou um cupom vencido fica preso — o
                  formulário inteiro está certo e o botão de pagar não passa. -->
-            <div v-if="erroDoCupom" class="faixa-erro mt-2">
-              <p>{{ erroDoCupom }}</p>
+            <div v-else-if="cupom.estado === 'nao_vale'" class="faixa-erro mt-2">
+              <p>{{ cupom.recado }}</p>
               <button type="button" class="btn-secundario mt-2 w-full py-2" :disabled="enviando"
                       @click="seguirSemCupom">
                 Continuar sem o cupom

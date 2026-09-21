@@ -21,16 +21,38 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { H3Event } from 'h3'
 import { q1, tx } from './db'
+import { ehPapel, papelDoRoleLegado, type Papel as PapelDaGrade } from './papeis'
 
 export const COOKIE = 'dt_sessao'
 const DIAS = 30
 const RENOVA_APOS_MIN = 60 // só mexe no banco se a última visita foi há mais de 1h
 
+/**
+ * Duas colunas dizem o papel da MESMA pessoa, e elas não querem dizer a mesma
+ * coisa. Enquanto a sessão carregava só uma, a tela mostrava um papel e o
+ * servidor decidia por outro — medido: quem é `financeiro` aparecia como
+ * "admin" no menu do canto, porque `roleLegado('financeiro') = 'admin'`.
+ *
+ * Agora as duas viajam juntas, com nome que diz qual é qual:
+ *
+ * - `papelFino` é `users.papel` — a MESMA coluna que o `middleware/03.papel.ts`
+ *   lê pra decidir cada rota. É este que a tela mostra e o que qualquer código
+ *   novo deve usar.
+ * - `papel` é `users.role`, a grade GROSSA e legada, que só o porteiro antigo
+ *   (`middleware/01.autenticacao.ts`) e o `exigir()` daqui de baixo entendem.
+ *   O vocabulário dela é outro (`admin`, `operacional`) e as duas palavras que
+ *   coincidem não significam o mesmo: `financeiro` fino chega no evento,
+ *   `financeiro` legado não. Passar um no lugar do outro tranca gente pra fora
+ *   sem erro nenhum aparecer.
+ */
 export type Sessao = {
   usuarioId: string
   orgId: string
   nome: string
   email: string
+  /** `users.papel` — a grade fina, a mesma que tranca a rota. Use este. */
+  papelFino: PapelDaGrade
+  /** `users.role` — legado. Só `podeFazer`/`exigir` e o porteiro 01 leem. */
   papel: Papel
 }
 
@@ -71,7 +93,8 @@ export async function lerSessao(event: H3Event): Promise<Sessao | null> {
   if (!segredo) return null
 
   const linha = await q1<any>(
-    `SELECT s.id, s.last_seen_at, u.id AS uid, u.org_id, u.name, u.email, u.role, u.active
+    `SELECT s.id, s.last_seen_at, u.id AS uid, u.org_id, u.name, u.email,
+            u.papel, u.role, u.active
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1
         AND s.revoked_at IS NULL
@@ -99,7 +122,12 @@ export async function lerSessao(event: H3Event): Promise<Sessao | null> {
 
   return {
     usuarioId: linha.uid, orgId: linha.org_id, nome: linha.name,
-    email: linha.email, papel: linha.role as Papel,
+    email: linha.email,
+    // Linha antiga que a migração 012 não alcançou (banco de cópia, restore
+    // parcial) cai no papel derivado do `role` — a mesma regra do
+    // `middleware/03.papel.ts`, pra sessão e porteiro nunca discordarem.
+    papelFino: ehPapel(linha.papel) ? linha.papel : papelDoRoleLegado(linha.role),
+    papel: linha.role as Papel,
   }
 }
 

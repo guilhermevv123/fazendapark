@@ -53,9 +53,9 @@ import { exigir } from '../../utils/sessao'
 import { ehPapel, papelDoRoleLegado, papelPode, ROTULO } from '../../utils/papeis'
 import { lerQr } from '../../utils/ingresso'
 import {
-  LIMITE_FILA, MENSAGEM_DA_FILA, normalizarFila,
-  SQL_CONFLITOS, SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA_EM, SQL_PUBLICO,
-  type ResultadoDaFila,
+  conferirRelogio, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA, MENSAGEM_DE_RELOGIO,
+  normalizarFila, retratoDoPublico, SQL_CONFLITOS, SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA_EM,
+  SQL_PUBLICO, type Relogio, type ResultadoDaFila,
 } from '../../utils/catraca'
 
 /** Teto da lista que desce. Acima disso o tablet não aguentaria mesmo. */
@@ -130,7 +130,13 @@ export default defineEventHandler(async (event) => {
   /* ------------------------------------------------------------ a fila sobe */
 
   const { fila, repetidasNoEnvio } = normalizarFila(p.data.fila)
-  const itens: Array<{ id: string; codigo: string; resultado: ResultadoDaFila; mensagem: string }> = []
+  const itens: Array<{
+    id: string; codigo: string; resultado: ResultadoDaFila; mensagem: string
+    /** só aparece quando o relógio do aparelho foi recusado */
+    relogio?: { enviado: string | null; motivo: string; desvioMin: number }
+  }> = []
+  /** as passagens cuja hora foi recusada — viram um aviso só, no fim */
+  const tortos: Relogio[] = []
 
   for (const item of fila) {
     // O QR pode vir assinado (DT1:…) ou o operador digitou o código legível —
@@ -138,8 +144,25 @@ export default defineEventHandler(async (event) => {
     const lido = lerQr(item.qr)
     const codigo = lido.ok ? lido.code! : item.qr.trim().toUpperCase()
 
+    // A hora do aparelho passa pela cerca ANTES de virar linha: o que é
+    // recusado é o INSTANTE, nunca a passagem (ver a nota em utils/catraca.ts).
+    // `relogio.em = null` faz o `COALESCE($8, now())` do insert usar a hora do
+    // SERVIDOR, que é a única confiável quando a do aparelho não é.
+    const relogio = conferirRelogio(item.em, evento)
+    if (relogio.torto) tortos.push(relogio)
+
     const registra = (resultado: ResultadoDaFila) => {
-      itens.push({ id: item.id, codigo, resultado, mensagem: MENSAGEM_DA_FILA[resultado] })
+      itens.push({
+        id: item.id, codigo, resultado, mensagem: MENSAGEM_DA_FILA[resultado],
+        // O `resultado` NÃO vira "recusada" por causa do relógio: nesse
+        // vocabulário "recusada" quer dizer "essa pessoa não entrou", e ela
+        // entrou. O relógio é um aviso paralelo, sobre o APARELHO.
+        ...(relogio.torto
+          ? { relogio: { enviado: relogio.enviado,
+                         motivo: MENSAGEM_DE_RELOGIO[relogio.motivo!],
+                         desvioMin: relogio.desvioMin } }
+          : {}),
+      })
     }
 
     // Assinatura errada = QR fabricado. Não entra no livro: contar gente que
@@ -152,7 +175,7 @@ export default defineEventHandler(async (event) => {
       [codigo, orgId, eventId])
     if (!ingresso) { registra('invalido'); continue }
 
-    const quando = item.em ?? null
+    const quando = relogio.em
 
     const desfecho = await tx(async (c) => {
       const gravou = await c.query(SQL_GRAVA_ENTRADA, [
@@ -217,6 +240,11 @@ export default defineEventHandler(async (event) => {
 
   const conta = (r: ResultadoDaFila) => itens.filter((i) => i.resultado === r).length
 
+  /** a passagem com o relógio mais distante — a que a faixa da tela descreve */
+  const pior = tortos.length
+    ? tortos.reduce((p, r) => (Math.abs(r.desvioMin) > Math.abs(p.desvioMin) ? r : p))
+    : null
+
   return {
     ok: true,
     evento: { id: evento.id, nome: evento.name },
@@ -231,15 +259,32 @@ export default defineEventHandler(async (event) => {
       conflitos: conta('conflito'),
       cancelados: conta('cancelado'),
       recusadas: conta('invalido'),
+      /** quantas passagens tiveram a hora do aparelho recusada */
+      relogioTorto: tortos.length,
     },
     itens,
-    publico: {
-      pessoas: publico?.pessoas ?? 0,
-      entradas: publico?.entradas ?? 0,
-      ingressos: publico?.ingressos ?? 0,
-      offline: publico?.offline ?? 0,
-      ultima: publico?.ultima ?? null,
-    },
+    // O aviso do aparelho, montado uma vez: com a fila inteira de um tablet
+    // sem NTP, repetir a mensagem em 400 itens não é aviso, é ruído.
+    //
+    // As três partes saem da MESMA passagem — a pior. Saíam de duas: o motivo
+    // vinha de `tortos[0]` e a hora do pior, e uma remessa com um item no
+    // futuro seguido de um em 1970 escrevia na faixa "marcou a passagem no
+    // futuro — a pior marcava 01/01/1970". Frase que não fecha na tela é a
+    // mesma doença dos KPIs que discordavam, em tamanho pequeno.
+    relogio: pior
+      ? {
+          passagens: tortos.length,
+          dispositivo: deviceId ?? null,
+          motivo: MENSAGEM_DE_RELOGIO[pior.motivo!],
+          /** a hora mais distante que este aparelho mandou — a que dá o susto */
+          piorEnviado: pior.enviado,
+          desvioMin: pior.desvioMin,
+        }
+      : null,
+    // Uma consulta, um retrato: pessoas, ingressos e comparecimento saem da
+    // MESMA linha (ver `retratoDoPublico` em utils/catraca.ts). Era daqui que
+    // nascia a contradição na tela — cada card buscava o seu número.
+    publico: retratoDoPublico(publico),
     conflitos: conflitos.map((c) => ({
       ticketId: c.ticket_id,
       codigo: c.code,
@@ -273,7 +318,8 @@ export default defineEventHandler(async (event) => {
 async function listaDoEvento(eventId: string, orgId: string) {
   const linhas = await q<any>(
     `SELECT t.code, t.status, t.holder_name, s.name AS setor, s.admits,
-            l.name AS lote, tt.name AS tipo,
+            l.name AS lote, tt.name AS tipo, tt.kind AS especie,
+            t.half_reason, t.half_document, t.half_document_required,
             es.id AS sessao_id, es.starts_at, es.ends_at
        FROM tickets t
        JOIN sectors s ON s.id = t.sector_id
@@ -295,6 +341,11 @@ async function listaDoEvento(eventId: string, orgId: string) {
       lote: t.lote,
       tipo: t.tipo,
       pessoas: t.admits,
+      // A meia desce com a lista porque o portão que precisa dela é justamente
+      // o que está sem rede: sem estes três campos aqui, o apagão devolve o
+      // operador ao problema que a migração 015 resolveu — ele lê
+      // "Meia-entrada" e não sabe qual papel pedir.
+      meia: meiaDoIngresso(t),
       sessaoInicio: t.starts_at,
       sessaoFim: t.ends_at,
     })),

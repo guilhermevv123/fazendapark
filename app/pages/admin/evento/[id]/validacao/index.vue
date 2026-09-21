@@ -46,12 +46,26 @@ const apenasConsultar = ref(false)
 const lendo = ref(false)
 const campo = ref<HTMLInputElement | null>(null)
 
+/** o que a portaria pede quando o ingresso é meia (migração 015) */
+type Meia = { motivo: string; rotulo: string; documento: string; numero: string | null }
+
+/** o retrato do público — um objeto, uma consulta (ver `publico` abaixo) */
+type Publico = {
+  pessoas: number; entradas: number; ingressos: number
+  offline: number; aptos: number; comparecimentoPct: number
+}
+
 type Resposta = {
   ok: boolean; resultado: string; mensagem: string; consulta?: boolean
   titular?: string | null; entrouEm?: string | null
   portao?: string | null; operadorEntrada?: string | null
   local?: boolean; pessoas?: number
-  ingresso?: { titular: string | null; setor: string; lote: string; tipo: string | null }
+  /** só nas respostas do SERVIDOR: a decisão local não sabe contar o parque */
+  publico?: Publico
+  ingresso?: {
+    titular: string | null; setor: string; lote: string; tipo: string | null
+    meia?: Meia | null
+  }
 }
 const ultima = ref<Resposta | null>(null)
 const historico = ref<(Resposta & { codigo: string; quando: Date })[]>([])
@@ -63,6 +77,8 @@ const { data, refresh } = await useFetch<any>(`/api/admin/evento/${id}/checkins`
 type IngressoLocal = {
   codigo: string; status: string; titular: string | null
   setor: string; lote: string; tipo: string | null; pessoas: number
+  /** a meia desce com a lista: é no apagão que o operador mais precisa dela */
+  meia?: Meia | null
   sessaoInicio: string | null; sessaoFim: string | null
   /** marcado por ESTE aparelho enquanto estava sem rede */
   usadoAqui?: { em: string; gate: string | null }
@@ -81,7 +97,32 @@ const online = ref(true)
 const sincronizando = ref(false)
 const baixando = ref(false)
 const avisoLocal = ref('')
-const publico = ref<{ pessoas: number; entradas: number; offline: number } | null>(null)
+/**
+ * O retrato do público — UM objeto, vindo de UMA consulta
+ * (`retratoDoPublico`/`SQL_PUBLICO`, em server/utils/catraca.ts).
+ *
+ * Os três cards de cima saíam de dois lugares e se contradiziam na cara do
+ * operador: "Pessoas dentro = 2 (em 2 passagens)" ao lado de "Já entraram = 0
+ * (de 392 aptos)" e "Comparecimento = 0%". Um contava o LIVRO de passagens
+ * (`entries`) e os outros dois contavam o carimbo do ingresso
+ * (`tickets.status = 'usado'`), que é trava e não ledger — ele volta atrás em
+ * cancelamento e nunca existiu para a passagem retroativa da migração 013.
+ *
+ * Agora os três leem daqui. Sem rede eles mostram "—" juntos: não saber é
+ * honesto, discordar não.
+ *
+ * Quem escreve aqui são os DOIS caminhos que falam com o servidor: a
+ * sincronização (`sincronizar`) e cada leitura registrada (`ler`). Ficar só na
+ * sincronização foi um furo medido em 21/09: com rede boa ela roda uma vez, na
+ * montagem, e os três números congelavam na abertura da tela enquanto a porta
+ * seguia deixando gente entrar — servidor com `pessoas = 1`, tela mostrando
+ * `0`. O quarto card (do log do leitor) continuava andando ao lado, que é a
+ * discordância de sempre por outro caminho.
+ */
+const publico = ref<Publico | null>(null)
+/** aparelho que sincronizou com o relógio fora da janela do evento */
+const avisoRelogio = ref<{ passagens: number; dispositivo: string | null
+                           motivo: string; piorEnviado: string | null } | null>(null)
 const conflitos = ref<any[]>([])
 const swPronto = ref<'sim' | 'nao' | 'indisponivel'>('indisponivel')
 
@@ -231,10 +272,15 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
     }
   }
 
+  // A meia sai da lista baixada, igual ao resto: sem rede o operador continua
+  // precisando saber QUAL papel pedir, e é justamente no apagão que ele não
+  // tem como perguntar a ninguém.
+  const dados = { titular: t.titular, setor: t.setor, lote: t.lote, tipo: t.tipo,
+                  meia: t.meia ?? null }
+
   if (apenasConsultar.value) {
     return { local: true, ok: true, resultado: 'ok', mensagem: 'Válido (não marcado)',
-             consulta: true,
-             ingresso: { titular: t.titular, setor: t.setor, lote: t.lote, tipo: t.tipo } }
+             consulta: true, ingresso: dados }
   }
 
   // Passou: entra na fila com id criado AQUI, e o ingresso fica marcado no
@@ -249,8 +295,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   guardar(CHAVE_LISTA, { em: listaEm.value, ingressos: lista.value })
 
   return { local: true, ok: true, resultado: 'ok', mensagem: 'Liberado (sem rede)',
-           pessoas: t.pessoas,
-           ingresso: { titular: t.titular, setor: t.setor, lote: t.lote, tipo: t.tipo } }
+           pessoas: t.pessoas, ingresso: dados }
 }
 
 async function ler() {
@@ -285,6 +330,12 @@ async function ler() {
                   apenasConsultar: apenasConsultar.value,
                   entradaId: idPassagem, deviceId: aparelho.value },
         })
+        // O retrato do público vem DENTRO da resposta da porta (o mesmo
+        // `SQL_PUBLICO` da sincronização), então os três cards do topo andam a
+        // cada leitura sem uma segunda ida à rede — que num portão com 4G ruim
+        // é justamente o que não dá pra gastar. A consulta ("só conferir") não
+        // traz retrato: ela não mexe em nada.
+        if (ultima.value?.publico) publico.value = ultima.value.publico
         // Só repinta os contadores quando alguém realmente entrou — recontar a
         // cada leitura recusada bate no banco no pior momento possível.
         if (ultima.value?.ok && !ultima.value.consulta) refresh()
@@ -345,6 +396,9 @@ async function sincronizar({ comLista = false } = {}) {
   // envio. Antes o aviso nunca era apagado e uma falha de dez segundos atrás
   // ficava na tela o evento inteiro.
   avisoLocal.value = ''
+  // Pelo mesmo motivo do aviso acima: o relógio torto de DEZ minutos atrás não
+  // pode ficar na tela o evento inteiro depois de o aparelho ser acertado.
+  avisoRelogio.value = null
   const soma = { aplicadas: 0, repetidas: 0, conflitos: 0, recusadas: 0, cancelados: 0 }
   let baixarAgora = comLista
   try {
@@ -377,6 +431,19 @@ async function sincronizar({ comLista = false } = {}) {
       ultimoEnvio.value = { ...soma }
       publico.value = r.publico
       conflitos.value = r.conflitos ?? []
+
+      // O relógio do aparelho. Somado entre as remessas: uma fila de 900
+      // passagens vira três envios, e mostrar só o último diria "3 passagens
+      // com hora errada" quando foram 900.
+      if (r.relogio) {
+        avisoRelogio.value = avisoRelogio.value
+          ? { ...avisoRelogio.value,
+              passagens: avisoRelogio.value.passagens + Number(r.relogio.passagens ?? 0) }
+          : { passagens: Number(r.relogio.passagens ?? 0),
+              dispositivo: r.relogio.dispositivo ?? null,
+              motivo: r.relogio.motivo,
+              piorEnviado: r.relogio.piorEnviado ?? null }
+      }
 
       if (r.lista) {
         // A lista nova não pode apagar o que este aparelho marcou e ainda não
@@ -430,6 +497,9 @@ const prontoParaApagao = computed(() =>
 
 const quando = (v: string | null | undefined) =>
   v ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : ''
+
+/** 0,5% e não "0.5%" — e sem casa decimal quando não precisa */
+const pct = (v: number) => Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 })
 
 useHead({ title: 'Leitor de entrada' })
 </script>
@@ -497,6 +567,25 @@ useHead({ title: 'Leitor de entrada' })
       </template>
     </p>
 
+    <!-- Relógio do aparelho fora da janela do evento. Fica GRANDE e em cima
+         porque o estrago é silencioso: a passagem entra do mesmo jeito (a
+         pessoa passou), mas com a hora do servidor — e o operador precisa
+         saber qual tablet acertar antes que a noite inteira vá embora assim. -->
+    <div v-if="avisoRelogio" class="card mt-3 border-alerta bg-alerta-claro">
+      <p class="rotulo-kpi text-alerta">
+        Relógio errado em {{ avisoRelogio.passagens }} passagem(ns)
+        <template v-if="avisoRelogio.dispositivo">
+          do aparelho <span class="font-mono">{{ avisoRelogio.dispositivo }}</span>
+        </template>
+      </p>
+      <p class="mt-1 text-sm text-tinta-corpo">
+        {{ avisoRelogio.motivo }}<template v-if="avisoRelogio.piorEnviado">
+          — a pior marcava <strong>{{ quando(avisoRelogio.piorEnviado) }}</strong></template>.
+        As entradas foram registradas com a <strong>hora do servidor</strong>; ninguém ficou de
+        fora da contagem. Acerte a data e a hora desse aparelho antes do próximo apagão.
+      </p>
+    </div>
+
     <p v-if="ultimoEnvio" class="mt-3 text-sm text-tinta-suave">
       Último envio: {{ ultimoEnvio.aplicadas }} registrada(s),
       {{ ultimoEnvio.repetidas }} repetida(s),
@@ -506,33 +595,47 @@ useHead({ title: 'Leitor de entrada' })
         {{ ultimoEnvio.recusadas }} recusada(s)</span>.
     </p>
 
+    <!-- Os três primeiros cards saem do MESMO objeto (`publico`), que sai de
+         uma consulta só. Antes um contava o livro de passagens e os outros
+         dois o carimbo do ingresso, e a tela exibia "2 dentro" ao lado de
+         "0 entraram" e "0%". "—" nos três quando ainda não houve conversa com
+         o servidor: não saber é honesto, discordar não. O quarto card é outra
+         pergunta — ele conta LEITURA, não pessoa, e por isso vem do log do
+         leitor mesmo. -->
     <div class="mt-4 grid gap-3 sm:grid-cols-4">
       <div class="card">
         <p class="rotulo-kpi">Pessoas dentro</p>
         <p class="numero-kpi mt-1">{{ publico ? publico.pessoas : '—' }}</p>
         <p v-if="publico" class="mt-1 text-xs text-tinta-fraca">
           em {{ publico.entradas }} passagem(ns)
+          <template v-if="publico.offline"> · {{ publico.offline }} sem rede</template>
         </p>
       </div>
-      <template v-if="data">
-        <div class="card">
-          <p class="rotulo-kpi">Já entraram</p>
-          <p class="numero-kpi mt-1">{{ data.resumo.entraram }}</p>
-          <p class="mt-1 text-xs text-tinta-fraca">de {{ data.resumo.aptos }} aptos</p>
-        </div>
-        <div class="card">
-          <p class="rotulo-kpi">Comparecimento</p>
-          <p class="numero-kpi mt-1">{{ data.resumo.comparecimentoPct }}%</p>
-        </div>
-        <div class="card">
-          <p class="rotulo-kpi">Recusadas</p>
-          <p class="numero-kpi mt-1" :class="data.resumo.recusadas ? 'text-erro' : ''">
-            {{ data.resumo.recusadas }}
-          </p>
-          <p class="mt-1 text-xs text-tinta-fraca">{{ data.resumo.leituras }} leituras no total</p>
-        </div>
-      </template>
-      <div v-else class="card sm:col-span-3">
+      <div class="card">
+        <p class="rotulo-kpi">Já entraram</p>
+        <p class="numero-kpi mt-1">{{ publico ? publico.ingressos : '—' }}</p>
+        <p v-if="publico" class="mt-1 text-xs text-tinta-fraca">
+          de {{ publico.aptos }} ingressos aptos
+        </p>
+      </div>
+      <div class="card">
+        <p class="rotulo-kpi">Comparecimento</p>
+        <p class="numero-kpi mt-1">{{ publico ? `${pct(publico.comparecimentoPct)}%` : '—' }}</p>
+        <p class="mt-1 text-xs text-tinta-fraca">ingressos que passaram na porta</p>
+      </div>
+      <div v-if="data" class="card">
+        <p class="rotulo-kpi">Recusadas</p>
+        <p class="numero-kpi mt-1" :class="data.resumo.recusadas ? 'text-erro' : ''">
+          {{ data.resumo.recusadas }}
+        </p>
+        <p class="mt-1 text-xs text-tinta-fraca">{{ data.resumo.leituras }} leituras no total</p>
+      </div>
+      <!-- O log do leitor é rota de /admin e o papel `portaria` leva 403 nela
+           — medido: quem opera este leitor NUNCA vê o card de recusadas. Em
+           vez de um "—" com desculpa, o quarto card passa a mostrar o número
+           que a portaria tem direito de ver e de fato precisa: quantas
+           passagens foram decididas sem rede e ainda vão ser conferidas. -->
+      <div v-else class="card">
         <p class="rotulo-kpi">Passagens sem rede</p>
         <p class="numero-kpi mt-1">{{ publico ? publico.offline : '—' }}</p>
         <p class="mt-1 text-xs text-tinta-fraca">
@@ -578,6 +681,26 @@ useHead({ title: 'Leitor de entrada' })
       <p v-if="ultima.pessoas && ultima.pessoas > 1" class="mt-1 text-lg">
         {{ ultima.pessoas }} pessoas nesta entrada
       </p>
+
+      <!-- MEIA-ENTRADA: o pedido de documento, do tamanho de quem lê de
+           relance com fila na frente. Fundo branco dentro da faixa colorida
+           porque é o que o operador tem que PARAR e ler — o resto do card ele
+           só olha a cor. Sem isto a tela dizia "Meia-entrada" no nome do tipo
+           e o operador ficava adivinhando qual papel pedir (migração 015). -->
+      <div v-if="ultima.ingresso?.meia"
+           class="mx-auto mt-4 max-w-xl rounded-card bg-white p-4 text-left text-tinta-corpo">
+        <p class="titulo text-2xl font-bold text-tinta">
+          MEIA-ENTRADA · {{ ultima.ingresso.meia.rotulo }}
+        </p>
+        <p class="rotulo mt-3">Peça este documento</p>
+        <p class="text-lg font-bold text-tinta">{{ ultima.ingresso.meia.documento }}</p>
+        <template v-if="ultima.ingresso.meia.numero">
+          <p class="rotulo mt-3">Número declarado na compra — confira se bate</p>
+          <p class="font-mono text-xl font-bold tracking-wide text-tinta">
+            {{ ultima.ingresso.meia.numero }}
+          </p>
+        </template>
+      </div>
       <!-- A recusa útil: além de "já entrou", QUANDO e ONDE. Sem isso a fila
            para com o cliente jurando que não entrou. -->
       <p v-if="ultima.entrouEm" class="mt-1 opacity-90">

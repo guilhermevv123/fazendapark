@@ -136,6 +136,14 @@ export function papelDoRoleLegado(role: string | null | undefined): Papel {
  * tela do evento e mostra quanto entrou. Custa uma porta fechada na cara de
  * quem é de operação — e o preço de deixar aberto é a operação inteira vendo
  * o caixa.
+ *
+ * **Esta tabela tem que cobrir TODA rota de `server/api/admin/`.** O balde do
+ * `null` é rede de segurança pra rota que nasce amanhã, não destino de rota
+ * que já existe: enquanto `sessoes`, `reenviar`, `remarcar` e `cancelar`
+ * estiveram fora daqui, quatro telas já construídas respondiam 403 pra todo
+ * mundo menos o master — inclusive a que o guichê usa. O teste
+ * `papeis.test.ts` varre a pasta de rotas e fica vermelho quando sobra uma
+ * sem área.
  */
 const AREA_DA_TELA: Record<string, Area> = {
   resumo: 'evento_ver',
@@ -143,15 +151,24 @@ const AREA_DA_TELA: Record<string, Area> = {
 
   configuracoes: 'evento',
   ingressos: 'evento',
+  // as datas/horários do evento: a tela mora em `ingressos/sessoes`
+  sessoes: 'evento',
   ordenar: 'evento',
   assentos: 'evento',
   cortesias: 'evento',
   cupons: 'evento',
   promoters: 'evento',
+  // adiar é o caminho em que o dinheiro FICA (ver `remarcar.post.ts`): o que
+  // muda é a data do evento e a das sessões, que é configuração de evento.
+  remarcar: 'evento',
 
   vendas: 'venda',
   participantes: 'venda',
   transferencias: 'venda',
+  // "não chegou, manda de novo" — ato sobre o PEDIDO de quem está na frente
+  // do guichê. Em `pdv` ele ficaria só na bilheteria; em `venda` alcança
+  // também quem atende pelo painel, que é onde o chamado costuma cair.
+  reenviar: 'venda',
 
   pdv: 'pdv',
 
@@ -163,6 +180,13 @@ const AREA_DA_TELA: Record<string, Area> = {
   bordero: 'dinheiro',
   extrato: 'dinheiro',
   relatorios: 'dinheiro',
+  // Cancelar mata todo ingresso válido e enfileira ESTORNO de cada pedido
+  // vivo: é a maior saída de dinheiro do sistema depois do saque. O botão
+  // mora na tela de Configurações (área `evento`), mas quem manda aqui é o
+  // ATO, não a página em que o botão foi parar — deixar em `evento` daria a
+  // quem é de operação, que por definição não tem caixa, o poder de estornar
+  // o evento inteiro em dois cliques.
+  cancelar: 'dinheiro',
 }
 
 /** Rotas que não são de um evento. Mais específica primeiro. */
@@ -172,9 +196,41 @@ const AREA_DA_RAIZ: [string, Area][] = [
   ['/api/admin/organizacoes', 'organizacao'],
   ['/api/admin/organizacao', 'organizacao'],
   ['/api/admin/financeiro', 'dinheiro'],
+  // A tela de "quem mexeu nisso": valor de venda, motivo de estorno e e-mail
+  // de operador. Sem esta linha nem o financeiro abria — e a tranca própria
+  // que a rota tem (`podeFazer(..., 'financeiro')`, em `auditoria.get.ts`)
+  // virava código morto, porque ninguém além do master chegava até ela.
+  ['/api/admin/auditoria', 'dinheiro'],
+  // O extrato do Asaas ao lado do nosso caixa: conferência de dinheiro.
+  ['/api/admin/reconciliacao', 'dinheiro'],
   ['/api/admin/eventos', 'evento_ver'],
   ['/api/admin/pedido', 'venda'],
   ['/api/admin/evento', 'evento'], // criar evento; o `/evento/<id>/...` é tratado acima
+]
+
+/**
+ * Rotas administrativas que ficam de fora da grade DE PROPÓSITO — o `null`
+ * delas é decisão registrada, não esquecimento.
+ *
+ * `/api/admin/payout` é a única rota do sistema em que o dinheiro SAI da
+ * plataforma. `executar.post.ts` documenta a ausência como a tranca dela
+ * ("mandar dinheiro embora é ato de dono") e `executar.test.ts` prende essa
+ * decisão com um caso que exige `areaDaRota('/api/admin/payout/executar')
+ * === null`. Quem quiser abrir pro financeiro muda os três lugares juntos, de
+ * propósito, no mesmo diff — que é exatamente o que esta lista força.
+ *
+ * Serve também pro teste de varredura: rota que aparece aqui pode ficar sem
+ * área; qualquer outra sem área deixa a suíte vermelha.
+ */
+export const SO_DO_MASTER: string[] = [
+  '/api/admin/payout',
+  // `/api/admin/filas` nasceu nesta mesma rodada, em outra trilha. Ela segue
+  // sem área — que é o estado em que ela já está no ar — porque quem decide a
+  // quem uma tela serve é quem a construiu: a resposta mistura "o ingresso
+  // saiu?" (bilheteria) com "o estorno voltou?" (dinheiro), e chutar uma das
+  // duas abriria a outra de lambuja. Fica trancada até essa decisão existir,
+  // que é a direção segura.
+  '/api/admin/filas',
 ]
 
 const RAIZ_DO_EVENTO = '/api/admin/evento/'
@@ -202,6 +258,118 @@ export function areaDaRota(caminho: string): Area | null {
     if (c === prefixo || c.startsWith(prefixo + '/')) return area
   }
   return null
+}
+
+/* --------------------------------------------------- a página do painel */
+
+/**
+ * A PÁGINA do painel → área. É o que o menu da lateral lê pra não oferecer
+ * porta fechada.
+ *
+ * Por que aqui e não uma lista no `layouts/admin.vue`: duas listas de quem-vê-o-quê
+ * divergem no primeiro dia em que alguém muda uma e esquece a outra, e a que
+ * envelhece é sempre a da tela — que passa a oferecer o que o servidor nega
+ * (item morto) ou a esconder o que ele libera (tela que "sumiu"). Esta é a
+ * MESMA tabela que tranca a rota: as telas do evento caem em `AREA_DA_TELA`,
+ * e aqui embaixo fica só o que DIVERGE do caminho da API.
+ *
+ * **Esconder item de menu não protege nada** — quem tranca é o
+ * `middleware/03.papel.ts`, que roda antes de qualquer handler. O menu é
+ * conveniência: porta que a pessoa não consegue abrir não devia estar
+ * desenhada na parede.
+ */
+const RAIZ_DA_PAGINA_DO_EVENTO = '/admin/evento/'
+
+/**
+ * Telas do evento cujo nome de PÁGINA não é o da rota de API. O resto cai em
+ * `AREA_DA_TELA` pelo primeiro segmento depois do id, que é o mesmo nos dois
+ * lados (`/admin/evento/<id>/ingressos/cupons` → `ingressos` → evento).
+ */
+const AREA_DA_PAGINA_DO_EVENTO: Record<string, Area | 'livre'> = {
+  // O leitor de entrada não tem rota de API sob o evento: ele fala com
+  // `/api/checkin`, que é a área `portaria` — a única da portaria.
+  validacao: 'portaria',
+  // e o histórico de leituras é a outra área, a que a portaria não tem
+  'validacao/historico': 'portaria_historico',
+}
+
+/**
+ * Páginas do painel que não são de um evento. Mais específica primeiro —
+ * `/admin` casa com tudo e por isso fica por último.
+ */
+const AREA_DA_PAGINA_RAIZ: [string, Area | 'livre'][] = [
+  ['/admin/organizacoes', 'organizacao'],
+  ['/admin/configuracoes', 'organizacao'], // cadastro e chave do Asaas
+  ['/admin/equipe', 'equipe'],
+  ['/admin/financeiro', 'dinheiro'],
+  ['/admin/auditoria', 'dinheiro'],
+  ['/admin/reconciliacao', 'dinheiro'],
+  // Suporte é "o que fazer quando algo dá errado no dia do evento", e ele é
+  // uma parede de ATALHOS: Vendas, Histórico de leituras, Participantes,
+  // Cortesias, Financeiro, Equipe, Configurações. Pra quem só abre o leitor
+  // de entrada, a tela inteira é porta fechada — sete, em vez das seis do
+  // menu. Fica na área da única consulta que ela faz (`/api/admin/eventos`).
+  ['/admin/suporte', 'evento_ver'],
+  ['/admin/evento/novo', 'evento'],
+]
+
+/**
+ * A lista de eventos. Ela casa EXATO, e por isso não entra na lista acima.
+ *
+ * Enquanto `['/admin', 'evento_ver']` era só mais um prefixo daquela lista,
+ * ele engolia TODA página de raiz que ninguém tinha classificado — `/admin` é
+ * prefixo de qualquer coisa sob o painel — e devolvia `evento_ver` pra ela.
+ * O resultado é o avesso do que este arquivo promete duas vezes (no comentário
+ * de `podeAbrirPagina` e na decisão 1 lá no topo): a página nova nascia
+ * LIBERADA no menu de quem é de operação e de quem é do financeiro, enquanto a
+ * rota dela — que não tem catch-all nenhum, `areaDaRota` devolve `null` —
+ * respondia 403 no clique. Ou seja, o item morto que este arquivo existe pra
+ * apagar voltava a nascer sozinho na PRÓXIMA tela.
+ *
+ * Não é hipótese: `/api/admin/filas` já existe e é só-do-master (está em
+ * `SO_DO_MASTER`). Medido antes desta linha,
+ * `podeAbrirPagina('operacao', '/admin/filas')` devolvia `true` e
+ * `decidirAcesso('operacao', '/api/admin/filas')` devolvia 403 — bastava
+ * alguém pendurar a tela de filas no menu pra recriar o defeito inteiro.
+ *
+ * Com o casamento exato, página de raiz sem classificação volta a ser `null`,
+ * que é só-do-master: igual à rota, e igual ao que está escrito.
+ */
+const PAGINA_DA_LISTA_DE_EVENTOS: [string, Area] = ['/admin', 'evento_ver']
+
+/** Área de uma página do painel, ou `null` quando ninguém classificou. */
+export function areaDaPagina(caminho: string): Area | 'livre' | null {
+  const c = (caminho.split('?')[0] ?? '').replace(/\/+$/, '') || '/'
+
+  if (c.startsWith(RAIZ_DA_PAGINA_DO_EVENTO)) {
+    const partes = c.slice(RAIZ_DA_PAGINA_DO_EVENTO.length).split('/')
+    // `/admin/evento/novo` não tem id: é a criação, não uma tela do evento
+    if (partes[0] === 'novo') return 'evento'
+    const tela = partes[1]
+    if (!tela) return 'evento_ver' // `/admin/evento/<id>` cru
+    const duas = partes.slice(1, 3).join('/')
+    return AREA_DA_PAGINA_DO_EVENTO[duas]
+      ?? AREA_DA_PAGINA_DO_EVENTO[tela]
+      ?? AREA_DA_TELA[tela]
+      ?? null
+  }
+
+  for (const [prefixo, area] of AREA_DA_PAGINA_RAIZ) {
+    if (c === prefixo || c.startsWith(prefixo + '/')) return area
+  }
+  if (c === PAGINA_DA_LISTA_DE_EVENTOS[0]) return PAGINA_DA_LISTA_DE_EVENTOS[1]
+  return null
+}
+
+/**
+ * O menu pergunta isto. Mesma régua da rota: página sem classificação é
+ * página do master, igual a `decidirAcesso`.
+ */
+export function podeAbrirPagina(papel: Papel, caminho: string): boolean {
+  const area = areaDaPagina(caminho)
+  if (area === 'livre') return true
+  if (!area) return papel === 'master'
+  return papelPode(papel, area)
 }
 
 /* ------------------------------------------------------------- vocabulário */
@@ -278,3 +446,4 @@ export const papelPode = (papel: Papel, area: Area) => PODE[papel]?.includes(are
 export function ehPapel(v: unknown): v is Papel {
   return typeof v === 'string' && (PAPEIS as string[]).includes(v)
 }
+

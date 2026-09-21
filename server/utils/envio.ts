@@ -25,7 +25,22 @@
  * RETURNING`. Quem chega segundo pula a linha travada em vez de esperar por
  * ela, que é o que mantém dois trabalhadores dividindo trabalho em vez de
  * brigando.
+ *
+ * ## O laço nasce no plugin, não no `import`
+ *
+ * O trabalhador de fundo é ligado por `server/plugins/00.filas.ts`, que o
+ * Nitro roda no boot do processo. Este arquivo NÃO liga nada por conta
+ * própria ao ser importado — ver a nota em `garantirWorker()` pro defeito que
+ * isso causou no build de produção.
+ *
+ * ## Fila invisível é fila que só se descobre quando o cliente liga
+ *
+ * A última parte do arquivo (`baterPonto`, `vereditoDaFila`) existe porque
+ * contar a fila não responde "ela está andando?". Fila vazia com trabalhador
+ * morto é idêntica a fila vazia com trabalhador vivo, até a primeira venda.
+ * Quem distingue é o carimbo de cada varredura.
  */
+import { hostname } from 'node:os'
 import QRCode from 'qrcode'
 import type { PoolClient, Pool } from 'pg'
 import { db, q, q1 } from './db'
@@ -358,6 +373,15 @@ export const INTERVALO_MS = Number(process.env.ENVIO_INTERVALO_MS || 15_000)
  * Liga o trabalhador de fundo. Idempotente: chamar dez vezes não cria dez
  * laços.
  *
+ * **Quem chama isto é `server/plugins/00.filas.ts`, e ninguém mais precisa.**
+ * Até a versão anterior o laço subia por efeito colateral de `import` deste
+ * módulo, no fim do arquivo. Em dev funcionava e por isso ninguém viu; no
+ * `npm run build` o empacotador fatia o servidor por rota, e o único pedaço
+ * que importava este módulo era o da rota de reenvio — que é `lazy: true`.
+ * Resultado medido no build: o trabalhador só nascia se alguém abrisse a tela
+ * de reenvio, e ninguém abre. O comprador pagava e não recebia nada, que era
+ * exatamente o defeito que a fila existia pra fechar.
+ *
  * `unref()` pra não segurar o processo vivo — sem isso, o mesmo laço que
  * mantém a fila andando em produção travaria o `vitest` no fim da suíte.
  */
@@ -367,14 +391,24 @@ export function garantirWorker(): boolean {
     if (rodando) return   // varredura anterior ainda não terminou
     rodando = true
     processarFila()
-      .then((f) => {
+      .then(async (f) => {
         // Só fala quando fez alguma coisa: "0 enviados" a cada 15 s esconde
         // o dia em que 300 falharem de uma vez.
         const ruins = f.filter((r) => !r.ok)
         if (f.length) console.log(`[envio] ${f.length - ruins.length} enviado(s)` +
           (ruins.length ? `, ${ruins.length} com falha: ${ruins[0].erro}` : ''))
+        // A batida sai TODA varredura, inclusive a que não achou nada. É o
+        // que separa "fila vazia" de "trabalhador morto" — ver baterPonto().
+        await baterPonto(FILA_DE_ENVIO, {
+          feitos: f.length - ruins.length, falhos: ruins.length,
+          erro: ruins[0]?.erro ?? null,
+        })
       })
-      .catch((e) => console.error('[envio] varredura falhou:', e?.message ?? e))
+      .catch(async (e) => {
+        const erro = String(e?.message ?? e)
+        console.error('[envio] varredura falhou:', erro)
+        await baterPonto(FILA_DE_ENVIO, { erro })
+      })
       .finally(() => { rodando = false })
   }, INTERVALO_MS)
   relogio.unref?.()
@@ -386,6 +420,291 @@ export function pararWorker() {
   relogio = null
 }
 
-// Sobe junto com quem importar este módulo. `DT_ENVIO_WORKER=off` desliga —
-// é o que o teste usa pra decidir na mão quando a fila anda.
-garantirWorker()
+/* ------------------------------------------------------ batida do ponto */
+
+/**
+ * Os nomes das duas filas de fundo do sistema. Os dois trabalhadores nascem
+ * no mesmo plugin e são lidos pela mesma tela, então os nomes moram num lugar
+ * só — string solta em três arquivos é como a tela passa a olhar uma fila que
+ * ninguém carimba mais.
+ */
+export const FILA_DE_ENVIO = 'envio'
+export const FILA_DE_ESTORNO = 'estorno'
+
+/** host:pid. Com duas instâncias no ar, "não bate" pode ser só UMA morta. */
+export function instanciaDoProcesso(): string {
+  return `${hostname()}:${process.pid}`
+}
+
+/**
+ * Registra que o trabalhador SUBIU (ou que está desligado de propósito).
+ *
+ * Chamado pelo plugin no boot, uma vez por processo. Sem esta linha, a tela
+ * de saúde não consegue distinguir "nunca subiu neste ambiente" de "subiu e
+ * parou", que pedem respostas completamente diferentes: a primeira é
+ * configuração, a segunda é o processo travado.
+ */
+export async function anunciarWorker(
+  worker: string, ligado: boolean, intervaloMs?: number | null,
+  /**
+   * Este trabalhador carimba CADA varredura, ou só o boot?
+   *
+   * A fila de estorno não carimba: o laço dela mora em `utils/cancelamento.ts`
+   * e aquele arquivo não é meu pra mexer. Dizer aqui que ela carimba faria a
+   * tela acusar silêncio 45 s depois do boot, todo boot, numa fila que está
+   * trabalhando — alarme falso diário até o operador parar de olhar a tela,
+   * que é um estrago maior do que o da tela não existir.
+   */
+  carimba = true,
+): Promise<void> {
+  await engolir(q(
+    `INSERT INTO worker_heartbeats (worker, status, instance, beat_ms, beats,
+                                    booted_at, beat_at)
+     VALUES ($1::text, $2::text, $3::text, $4::int, $5::boolean, now(), now())
+     ON CONFLICT (worker) DO UPDATE SET
+       status = EXCLUDED.status, instance = EXCLUDED.instance,
+       beat_ms = EXCLUDED.beat_ms, beats = EXCLUDED.beats,
+       booted_at = now(), beat_at = now(),
+       last_error = NULL`,
+    [worker, ligado ? 'ligado' : 'desligado', instanciaDoProcesso(),
+     regua(intervaloMs), carimba]))
+}
+
+/**
+ * A régua do trabalhador, ou nada.
+ *
+ * Um `NaN` aqui derruba a linha INTEIRA — o Postgres recusa "NaN" num `int`,
+ * e como falha de carimbo é engolida de propósito, o efeito visível é a fila
+ * some da tela de saúde como se nunca tivesse subido. É fácil chegar num
+ * `NaN`: o intervalo vem de `Number(process.env.…)` de OUTRO módulo, e a
+ * ordem em que o empacotador inicializa as constantes entre módulos não é
+ * coisa que este arquivo controle. Sem régua a tela usa a dela; sem linha
+ * nenhuma a tela mente.
+ */
+function regua(ms?: number | null): number | null {
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.round(ms) : null
+}
+
+/**
+ * A batida de cada varredura.
+ *
+ * Bate MESMO quando não havia nada na fila, de propósito: fila vazia com
+ * trabalhador vivo e fila vazia com trabalhador morto são a mesma linha no
+ * banco até a primeira venda — e aí já é tarde. O que distingue as duas é
+ * alguém dizendo "estou aqui" de quinze em quinze segundos.
+ *
+ * `done`/`failed` são acumulados (`+`), não substituídos: a pergunta de quem
+ * abre a tela às 21h é "quanto já saiu desde que este processo subiu", e
+ * sobrescrever com o resultado da última varredura responderia sempre 0 ou 1.
+ *
+ * Falha de batida NUNCA derruba a fila: o ponto é um registro sobre o
+ * trabalho, não o trabalho. Se o banco piscar na hora do carimbo, o ingresso
+ * ainda tem que sair.
+ */
+export async function baterPonto(
+  worker: string,
+  o: {
+    feitos?: number; falhos?: number; erro?: string | null
+    /** a régua daquele laço; sem isto vale a da fila de e-mail, que é quem bate aqui */
+    intervaloMs?: number | null
+  } = {},
+): Promise<void> {
+  const feitos = o.feitos ?? 0
+  const falhos = o.falhos ?? 0
+  // `instance` NÃO se mexe aqui, e isso custou uma tela mentindo.
+  //
+  // `instance` e `booted_at` são o mesmo fato: QUAL processo subiu e QUANDO.
+  // Quem escreve os dois juntos é `anunciarWorker`, no boot. Quando a batida
+  // também reescrevia `instance`, a linha passava a misturar dois processos —
+  // medido na tela: `subiuEm 06:29:50` com `instancia :21600`, e o 21600 não
+  // tinha subido àquela hora. Numa investigação de "o ingresso não saiu às
+  // 21h", esse par manda olhar o log do processo errado.
+  //
+  // A régua do UPDATE vai por COALESCE: batida sem régua na mão não apaga a
+  // que o anúncio do boot gravou. Sem isso, a tela de saúde perderia a
+  // referência de "quanto tempo é silêncio demais" na primeira varredura.
+  //
+  // Todo parâmetro vai CASTADO. Sem o `::int`, o Postgres recebe dois valores
+  // sem tipo nos dois lados do `+` e recusa a consulta inteira com
+  // "operator is not unique: unknown + unknown" — e, como falha de carimbo é
+  // engolida de propósito, o erro só aparecia como uma linha no log com a
+  // batida nunca chegando ao banco. Foi assim que este mesmo INSERT rodou
+  // três varreduras seguidas sem gravar nada.
+  await engolir(q(
+    `INSERT INTO worker_heartbeats (worker, instance, beat_ms, beat_at, worked_at,
+                                    done, failed, last_error)
+     VALUES ($1::text, $2::text, $3::int, now(),
+             CASE WHEN $4::int + $5::int > 0 THEN now() END,
+             $4::int, $5::int, $6::text)
+     ON CONFLICT (worker) DO UPDATE SET
+       beat_ms = COALESCE(EXCLUDED.beat_ms, worker_heartbeats.beat_ms),
+       beat_at = now(),
+       worked_at = COALESCE(EXCLUDED.worked_at, worker_heartbeats.worked_at),
+       done = worker_heartbeats.done + EXCLUDED.done,
+       failed = worker_heartbeats.failed + EXCLUDED.failed,
+       last_error = COALESCE(EXCLUDED.last_error, worker_heartbeats.last_error)`,
+    [worker, instanciaDoProcesso(), regua(o.intervaloMs ?? INTERVALO_MS),
+     feitos, falhos, o.erro ?? null]))
+}
+
+/** Erro de carimbo vira uma linha no log, nunca uma exceção que sobe. */
+async function engolir(p: Promise<unknown>): Promise<void> {
+  try { await p } catch (e: any) {
+    console.error('[fila] não consegui bater o ponto:', e?.message ?? e)
+  }
+}
+
+/* ------------------------------------------------------------ o veredito */
+
+/** O que a tela de saúde recebe sobre UMA fila, já medido pelo banco. */
+export interface SinalDaFila {
+  /** o que a fila carimbou, ou null quando nunca carimbou nada */
+  status?: 'ligado' | 'desligado' | null
+  bateuHaSegundos?: number | null
+  /** o intervalo daquele processo, que é a régua do "atrasado" */
+  intervaloMs?: number | null
+  /**
+   * A fila carimba cada varredura? Quando não carimba, o silêncio dela não
+   * quer dizer nada e acusar por silêncio seria mentira — sobra julgar pelo
+   * resultado, que é o que ficou parado. `undefined` = carimba (é o normal).
+   */
+  carimba?: boolean | null
+  /** itens prontos pra sair e ainda parados */
+  maduros: number
+  /** idade do mais velho que já podia ter saído */
+  maisVelhoSegundos?: number | null
+  /**
+   * Pedidos que desistiram DE VEZ: falharam, não têm nenhuma linha pendente e
+   * nunca tiveram saída.
+   *
+   * Contar só o que está `na_fila` responde "a fila anda?" e deixa passar a
+   * pergunta que o cliente faz: "cadê o meu ingresso?". `status = 'falhou'` é
+   * fim de linha — `SQL_RESERVA` não pega a linha nem por id, nenhum laço
+   * tenta de novo —, então fila vazia por desistência é indistinguível de
+   * fila vazia por entrega. Medido no build antes disto: dois e-mails
+   * perdidos de vez e a resposta era `ok: true`, "Andando, e sem nada
+   * esperando", com o custo ao lado dizendo que tinha gente sem ingresso.
+   */
+  perdidos?: number | null
+}
+
+/**
+ * Três batidas perdidas. Uma só é ruído — a varredura anterior pode estar no
+ * meio de um SMTP lento e a seguinte sai atrasada. Três seguidas não é
+ * lentidão, é ausência.
+ */
+const BATIDAS_DE_TOLERANCIA = 3
+
+/**
+ * "A fila está andando?", em uma frase que o operador lê às 21h.
+ *
+ * PURO de propósito: a decisão é aritmética e cabe num teste de mesa, sem
+ * subir servidor nem encher banco. A rota só junta os números e pergunta
+ * aqui — é o que impede a tela de responder por conta própria e divergir.
+ *
+ * A ordem das perguntas importa. "Não carimbou nunca" vem antes de "tem item
+ * parado": a fila com 300 presos e nenhum carimbo é o trabalhador que não
+ * subiu, e mandar o operador olhar os 300 itens é mandar ele pro lugar
+ * errado.
+ */
+export function vereditoDaFila(s: SinalDaFila): { parado: boolean; frase: string } {
+  const espera = Math.max(1000, s.intervaloMs ?? INTERVALO_MS)
+  const atraso = Math.round((espera * BATIDAS_DE_TOLERANCIA) / 1000)
+
+  if (s.status === 'desligado') {
+    return {
+      parado: true,
+      frase: 'Esta fila está DESLIGADA neste servidor (DT_ENVIO_WORKER=off). '
+        + 'Nada sai dela enquanto estiver assim.',
+    }
+  }
+
+  if (s.status == null || s.bateuHaSegundos == null) {
+    return {
+      parado: true,
+      frase: 'Esta fila nunca deu sinal de vida neste servidor — o trabalhador não subiu. '
+        + 'Ninguém vai receber nada até ele subir; reinicie o servidor e confira esta tela.',
+    }
+  }
+
+  // Só quem carimba pode ser acusado de silêncio. Numa fila que só registra o
+  // boot, `bateuHaSegundos` é a idade do processo, e comparar a idade do
+  // processo com o intervalo de varredura condena todo servidor que passou de
+  // um minuto no ar.
+  const carimba = s.carimba !== false
+
+  if (carimba && s.bateuHaSegundos > atraso) {
+    return {
+      parado: true,
+      frase: `O trabalhador desta fila não dá sinal há ${emPortugues(s.bateuHaSegundos)} `
+        + `(o normal é a cada ${Math.round(espera / 1000)}s). `
+        + 'O que estiver na fila não está saindo.',
+    }
+  }
+
+  const perdidos = s.perdidos ?? 0
+
+  if (s.maduros > 0 && (s.maisVelhoSegundos ?? 0) > atraso) {
+    return {
+      parado: true,
+      frase: (carimba ? 'O trabalhador está vivo, mas ' : 'Esta fila está atrasada: ')
+        + `${s.maduros} item(ns) já podiam ter saído e `
+        + `o mais velho espera há ${emPortugues(s.maisVelhoSegundos ?? 0)}. `
+        + 'Olhe o último erro da fila.'
+        // Os dois cabem na mesma tela e pedem coisas diferentes: o atrasado
+        // sai sozinho quando destravar, o que parou de vez só sai se alguém
+        // mandar. Escolher um e calar o outro é o que fazia a resposta se
+        // contradizer.
+        + (perdidos > 0 ? ` E ${paradosDeVez(perdidos)}: ninguém tenta de novo.` : ''),
+    }
+  }
+
+  // Fila VAZIA porque desistiu não é fila vazia porque entregou. Este ramo é
+  // o que separa as duas — e ele vem depois do atraso de propósito: quando há
+  // os dois, o item atrasado ainda anda sozinho e o operador precisa saber
+  // primeiro se a fila está de pé.
+  if (perdidos > 0) {
+    return {
+      parado: true,
+      frase: `${paradosDeVez(perdidos)}: o teto de tentativas estourou e ninguém tenta `
+        + 'de novo sozinho. Quem pagou continua sem. Olhe o último erro e mande de novo '
+        + 'pelo painel.',
+    }
+  }
+
+  // "Andando" é afirmação sobre o trabalhador, e quem não carimba não dá essa
+  // garantia. Dizer "andando" de uma fila que só registrou o boot é o tipo de
+  // frase confortável que faz o operador fechar a tela sem olhar.
+  const nada = s.maduros > 0
+    ? `${s.maduros} item(ns) na vez de sair.`
+    : 'e sem nada esperando.'
+
+  return {
+    parado: false,
+    frase: carimba
+      ? (s.maduros > 0 ? `Andando: ${nada}` : `Andando, ${nada}`)
+      : `Sem nada atrasado — mas esta fila não carimba varredura, então o que dá `
+        + `pra afirmar dela é só o que está parado (${s.maduros} na vez de sair).`,
+  }
+}
+
+/**
+ * "1 pedido parou de vez" / "3 pedidos pararam de vez".
+ *
+ * PEDIDO, e não item de fila: duas tentativas falhas do mesmo comprador são
+ * duas linhas e uma pessoa só, e o operador que lê "2" vai procurar dois
+ * clientes que não existem.
+ */
+function paradosDeVez(n: number): string {
+  return n === 1 ? '1 pedido parou de vez' : `${n} pedidos pararam de vez`
+}
+
+/** "3 min", "2 h 10 min" — tempo pra quem está no guichê, não em milissegundos. */
+export function emPortugues(segundos: number): string {
+  const s = Math.max(0, Math.round(segundos))
+  if (s < 90) return `${s}s`
+  const min = Math.round(s / 60)
+  if (min < 90) return `${min} min`
+  const h = Math.floor(min / 60)
+  return `${h}h${min % 60 ? ` ${min % 60} min` : ''}`
+}

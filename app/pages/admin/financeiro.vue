@@ -75,8 +75,14 @@ useHead({ title: 'Financeiro' })
       <div class="card">
         <p class="rotulo-kpi">Total líquido</p>
         <p class="numero-kpi mt-1">{{ brl(data.totais.liquidoCents) }}</p>
+        <!--
+          A legenda tinha ficado descrevendo a conta ANTIGA (`face − estorno`),
+          que utils/liquido.ts aposentou. O numero ja estava certo e a frase
+          nao — que e pior que os dois errados, porque ninguem confere um
+          numero que a legenda explica.
+        -->
         <p class="mt-1 text-xs text-tinta-fraca">
-          face das vendas pagas, menos estorno — sem a taxa de serviço
+          o que sobra das vendas pagas depois da taxa de serviço e dos estornos
         </p>
       </div>
       <div class="card">

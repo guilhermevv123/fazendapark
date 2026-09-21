@@ -42,6 +42,20 @@ const PEDIDO_TIPO = '0000e010-0000-4000-8000-0000000000a6'
 const PEDIDO_DISPUTA = '0000e010-0000-4000-8000-0000000000a7'
 /** outro comprador com reserva em pé no mesmo lote — é a vítima do estoque comido */
 const PEDIDO_VIZINHO2 = '0000e010-0000-4000-8000-0000000000a8'
+/** desistência do comprador: estoque já voltou e o pedido SEGUE 'pago' de propósito */
+const PEDIDO_DESISTIU = '0000e010-0000-4000-8000-0000000000a9'
+/** compra em 12x — a parcela do meio não pode virar ingresso */
+const PEDIDO_12X = '0000e010-0000-4000-8000-0000000000aa'
+/** outra compra em 12x, essa vai receber a ÚLTIMA parcela */
+const PEDIDO_12X_FIM = '0000e010-0000-4000-8000-0000000000ab'
+/** à vista, e o gateway informa menos que o total: alerta, nunca recusa */
+const PEDIDO_MENOS = '0000e010-0000-4000-8000-0000000000ac'
+/** pago, vai levar um estorno parcial SEM valor — a entrega que fica pendurada */
+const PEDIDO_PENDURADO = '0000e010-0000-4000-8000-0000000000ad'
+/** 12x NO CARTÃO — o banco autoriza a compra inteira na venda: emite na primeira */
+const PEDIDO_12X_CARTAO = '0000e010-0000-4000-8000-0000000000ae'
+/** 12x no cartão, mas o payload não diz a forma: quem responde é `orders.payment_method` */
+const PEDIDO_12X_SEM_FORMA = '0000e010-0000-4000-8000-0000000000af'
 
 /** cota de "meia" do lote: 4 no total */
 const TIPO_MEIA = '0000e010-0000-4000-8000-0000000000b1'
@@ -125,6 +139,12 @@ const eventosGravados = async (chave: string) =>
 async function semearPedido(o: {
   id: string; codigo: string; situacao: string; cobranca: string | null
   quantidade: number; estornadoCents?: number; tipo?: string | null
+  /** o que o checkout pediu ao gateway (`orders.installments`) */
+  parcelas?: number
+  /** `orders.payment_method` — 'credito' ou 'pix'; é a rede de baixo da régua */
+  forma?: string | null
+  /** minutos de vida do carrinho — só pra provar que a parcela do meio tira o prazo */
+  expiraEmMin?: number | null
 }) {
   const faceUnit = 10_000
   const taxaUnit = 1_000
@@ -133,11 +153,15 @@ async function semearPedido(o: {
   await sql(
     `INSERT INTO orders (id, org_id, event_id, code, status, channel,
                          face_cents, fee_cents, platform_cents, discount_cents,
-                         total_cents, refunded_cents, asaas_payment_id, paid_at)
+                         total_cents, refunded_cents, asaas_payment_id, paid_at,
+                         installments, payment_method, expires_at)
      VALUES ($1,$2,$3,$4,$5,'online',$6,$7,$8,0,$9,$10,$11,
-             CASE WHEN $5 = 'pago' THEN now() ELSE NULL END)`,
+             CASE WHEN $5 = 'pago' THEN now() ELSE NULL END,
+             $12, $14, CASE WHEN $13::int IS NULL THEN NULL
+                       ELSE now() + make_interval(mins => $13::int) END)`,
     [o.id, ORG, EVENTO, o.codigo, o.situacao, face, taxa, taxa, face + taxa,
-     o.estornadoCents ?? 0, o.cobranca])
+     o.estornadoCents ?? 0, o.cobranca, o.parcelas ?? 1, o.expiraEmMin ?? null,
+     o.forma ?? null])
   await sql(
     `INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity,
                               unit_face_cents, unit_fee_cents, unit_total_cents)
@@ -159,6 +183,8 @@ async function semearPedido(o: {
 async function limpar() {
   await sql(`DELETE FROM payment_events WHERE gateway_event_id LIKE $1`, [PREFIXO + '%'])
   await sql(`DELETE FROM tickets WHERE event_id = $1`, [EVENTO])
+  // a fila de devolução prende o pedido por chave estrangeira — sai antes
+  await sql(`DELETE FROM refund_jobs WHERE event_id = $1`, [EVENTO])
   await sql(`DELETE FROM orders WHERE event_id = $1`, [EVENTO])
   await sql(`DELETE FROM events WHERE id = $1`, [EVENTO])
   await sql(`DELETE FROM organizations WHERE id = $1`, [ORG])
@@ -206,6 +232,28 @@ beforeAll(async () => {
                        cobranca: 'pay_zz_wh_7', quantidade: 2 })
   await semearPedido({ id: PEDIDO_VIZINHO2, codigo: 'ZZ-WH-8', situacao: 'aguardando_pagamento',
                        cobranca: 'pay_zz_wh_8', quantidade: 5 })
+  // nasce esperando pagamento: a compra tem que acontecer pelo caminho de
+  // verdade (webhook → emissão) pra desistência ter o que desfazer
+  await semearPedido({ id: PEDIDO_DESISTIU, codigo: 'ZZ-WH-9', situacao: 'aguardando_pagamento',
+                       cobranca: 'pay_zz_wh_9', quantidade: 3 })
+  // 12x: o total é o mesmo (R$ 220); o que muda é o gateway mandar um evento
+  // por parcela, cada um com a fatia dele.
+  await semearPedido({ id: PEDIDO_12X, codigo: 'ZZ-WH-10', situacao: 'aguardando_pagamento',
+                       cobranca: 'pay_zz_wh_10', quantidade: 2, parcelas: 12, expiraEmMin: 30 })
+  await semearPedido({ id: PEDIDO_12X_FIM, codigo: 'ZZ-WH-11', situacao: 'aguardando_pagamento',
+                       cobranca: 'pay_zz_wh_11', quantidade: 2, parcelas: 12, expiraEmMin: 30 })
+  await semearPedido({ id: PEDIDO_MENOS, codigo: 'ZZ-WH-12', situacao: 'aguardando_pagamento',
+                       cobranca: 'pay_zz_wh_12', quantidade: 2 })
+  await semearPedido({ id: PEDIDO_PENDURADO, codigo: 'ZZ-WH-13', situacao: 'pago',
+                       cobranca: 'pay_zz_wh_13', quantidade: 2 })
+  // 12x NO CARTÃO: o único parcelamento que este checkout sabe criar
+  // (`checkout.post.ts` só manda `installmentCount` com billingType CREDIT_CARD).
+  await semearPedido({ id: PEDIDO_12X_CARTAO, codigo: 'ZZ-WH-14',
+                       situacao: 'aguardando_pagamento', cobranca: 'pay_zz_wh_14',
+                       quantidade: 2, parcelas: 12, forma: 'credito', expiraEmMin: 30 })
+  await semearPedido({ id: PEDIDO_12X_SEM_FORMA, codigo: 'ZZ-WH-15',
+                       situacao: 'aguardando_pagamento', cobranca: 'pay_zz_wh_15',
+                       quantidade: 2, parcelas: 12, forma: 'credito', expiraEmMin: 30 })
 
   // O servidor de dev pode ou não ter ASAAS_WEBHOOK_TOKEN no ambiente. Se
   // tiver, este teste não tem como adivinhar o valor: descobre pelo 401 e
@@ -725,4 +773,533 @@ describe('webhook do Asaas · segredo', () => {
     expect(chaveDoEvento(semId)).not.toBe(
       chaveDoEvento({ event: 'PAYMENT_REFUNDED', payment: pagamento }))
   })
+})
+
+/* ==========================================================================
+ * O ESTORNO QUE NÓS MESMOS PEDIMOS
+ * ======================================================================= */
+
+/**
+ * `JA_DESFEITO` olha o STATUS do pedido — e existem dois caminhos que devolvem
+ * o estoque deixando o pedido em 'pago' DE PROPÓSITO: a desistência do
+ * comprador (`cancelar.post.ts`) e a escolha 'reembolso' do adiamento
+ * (`remarcar.post.ts`). Os dois matam o ingresso, devolvem o lugar e
+ * enfileiram a devolução; o pedido só sai de 'pago' quando o dinheiro sai.
+ *
+ * Entre a resposta do gateway e o commit de `gravarDevolucao` cabe o
+ * PAYMENT_REFUNDED do estorno que NÓS pedimos — e nele o pedido ainda está
+ * 'pago', que não estava em `JA_DESFEITO`. O ramo de venda desfeita devolvia o
+ * MESMO lugar de novo, e quem perde é quem está com reserva em pé no mesmo
+ * lote.
+ */
+describe('webhook do Asaas · a devolução que a casa pediu', () => {
+  it('não devolve o lugar duas vezes quando o estoque já voltou pela desistência', async () => {
+    if (!podeBater()) return
+
+    // 1. a compra acontece de verdade: paga pelo webhook, ingressos emitidos
+    await entregar(corpoAsaas({
+      idEvento: PREFIXO + 'pago9', evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_DESISTIU,
+      cobranca: 'pay_zz_wh_9', status: 'RECEIVED', valorReais: 330,
+    }))
+    expect(await ingressos(PEDIDO_DESISTIU, 'valido'),
+      'o pedido nem chegou a emitir — o caso não provaria nada').toBe(3)
+
+    // 2. a desistência, com o código DE VERDADE de `cancelar.post.ts`: devolve
+    //    o estoque, enfileira a devolução e DEIXA o pedido em 'pago'.
+    //    O ingresso é deixado válido de propósito neste teste: é o que separa
+    //    as duas obrigações do webhook — não mexer no estoque (porque a fila
+    //    já resolveu) e, ainda assim, cancelar o ingresso.
+    const { tx } = await import('../../utils/db')
+    const { SQL_ENFILEIRA_ESTORNO_DE_UM_PEDIDO, devolverEstoqueDoPedido } =
+      await import('../../utils/cancelamento')
+    const enfileirado = await tx(async (c) => {
+      await c.query(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, [PEDIDO_DESISTIU])
+      await devolverEstoqueDoPedido(c, PEDIDO_DESISTIU)
+      const { rows } = await c.query(SQL_ENFILEIRA_ESTORNO_DE_UM_PEDIDO,
+        [PEDIDO_DESISTIU, 'arrependimento', null, null])
+      return rows
+    })
+    expect(enfileirado.length, 'a devolução não entrou na fila — o caso perde o sentido').toBe(1)
+
+    const p0 = await pedido(PEDIDO_DESISTIU)
+    expect(p0.status, 'a desistência tirou o pedido de "pago" — não é o caso deste teste')
+      .toBe('pago')
+
+    const antes = await lote()
+    // Com o lote em zero vendido o `GREATEST(sold - n, 0)` esconderia a segunda
+    // subtração. A afirmação abaixo garante que o defeito teria como aparecer.
+    expect(Number(antes.sold),
+      'o lote precisa ter venda de OUTRO comprador pra segunda devolução aparecer')
+      .toBeGreaterThanOrEqual(3)
+
+    // 3. e então chega o PAYMENT_REFUNDED do estorno que nós pedimos
+    const r = await entregar(corpoAsaas({
+      idEvento: PREFIXO + 'estorno9', evento: 'PAYMENT_REFUNDED', pedido: PEDIDO_DESISTIU,
+      cobranca: 'pay_zz_wh_9', status: 'REFUNDED', valorReais: 330,
+      extra: { refunds: [{ value: 330, status: 'DONE' }] },
+    }))
+    expect(r.status).toBe(200)
+
+    const depois = await lote()
+    expect(Number(depois.sold),
+      'o webhook devolveu o MESMO lugar uma segunda vez: o lote passou a achar que tem '
+      + 'lugar pra vender que é de quem já comprou')
+      .toBe(Number(antes.sold))
+    expect(Number(depois.reserved), 'comeu a reserva de outro comprador do mesmo lote')
+      .toBe(Number(antes.reserved))
+
+    // e o resto do desfazimento continua acontecendo
+    const p = await pedido(PEDIDO_DESISTIU)
+    expect(p.status, 'não fechou o pedido como estornado').toBe('estornado')
+    expect(Number(p.refunded_cents), 'não gravou o valor devolvido').toBe(33_000)
+    expect(await ingressos(PEDIDO_DESISTIU, 'valido'),
+      'estornou o dinheiro e deixou o ingresso valendo na portaria').toBe(0)
+  }, 60_000)
+})
+
+/* ==========================================================================
+ * PAGO DE QUANTO
+ * ======================================================================= */
+
+/**
+ * O ramo de pagamento emitia o pedido INTEIRO sem nunca comparar
+ * `payment.value` com `orders.total_cents`. O checkout manda `installmentCount`
+ * até 12 e o Asaas dispara um PAYMENT_RECEIVED por parcela: a parcela 1 de 12
+ * emitia TODOS os ingressos, válidos na catraca, com 1/12 do dinheiro na conta.
+ *
+ * A regra não é bloquear por valor — é distinguir parcelamento de desconto.
+ */
+describe('webhook do Asaas · pago de quanto', () => {
+  it('a régua do recebimento: parcelamento, juros e desconto', async () => {
+    const { conferirValorRecebido } = await import('../../utils/asaas')
+    const total = 22_000
+
+    // à vista, valor certo: emite calado
+    const aVista = conferirValorRecebido({ pagamento: { value: 220 }, totalCents: total })
+    expect(aVista.emitir).toBe(true)
+    expect(aVista.aviso, 'inventou alerta num pagamento normal').toBeNull()
+
+    // juros de boleto vencido: veio MAIS. Não é problema nosso.
+    const comJuros = conferirValorRecebido({ pagamento: { value: 231.5 }, totalCents: total })
+    expect(comJuros.emitir, 'recusou quem pagou a mais por causa de juros do banco').toBe(true)
+    expect(comJuros.aviso).toBeNull()
+
+    // parcela do meio: registra e NÃO emite
+    const meio = conferirValorRecebido({
+      pagamento: { value: 18.34, installmentNumber: 1, installmentCount: 12 },
+      totalCents: total,
+    })
+    expect(meio.emitir, 'a parcela 1 de 12 liberou os ingressos inteiros').toBe(false)
+    expect(meio.faltamCents, 'não disse quanto falta').toBe(total - 1_834)
+    expect(String(meio.aviso)).toContain('faltam')
+
+    // a última parcela completa a compra: emite
+    const fim = conferirValorRecebido({
+      pagamento: { value: 18.34, installmentNumber: 12, installmentCount: 12 },
+      totalCents: total,
+    })
+    expect(fim.emitir, 'a última parcela não liberou os ingressos').toBe(true)
+
+    // o payload nem sempre traz installmentCount — `orders.installments` é a rede
+    const semContagem = conferirValorRecebido({
+      pagamento: { value: 18.34, installmentNumber: 2 },
+      totalCents: total, parcelasDoPedido: 12,
+    })
+    expect(semContagem.emitir,
+      'sem installmentCount no payload voltou a emitir tudo na parcela 2').toBe(false)
+
+    // à vista e veio MENOS: emite (o cliente está no portão) e DENUNCIA
+    const menos = conferirValorRecebido({ pagamento: { value: 200 }, totalCents: total })
+    expect(menos.emitir, 'recusa silenciosa: quem pagou ficaria sem ingresso').toBe(true)
+    expect(String(menos.aviso), 'a diferença sumiu em silêncio').toContain('ATENÇÃO')
+
+    // gateway sem valor no payload: não dá pra conferir, e não conferir nunca
+    // pode virar porta fechada
+    const semValor = conferirValorRecebido({ pagamento: {}, totalCents: total })
+    expect(semValor.emitir).toBe(true)
+    expect(String(semValor.aviso)).toContain('não informou')
+  })
+
+  /**
+   * A régua não pode olhar só o NÚMERO da parcela: quem manda é a forma.
+   *
+   * No CARTÃO o banco autoriza a compra inteira no segundo da venda — o
+   * parcelamento é dele com o comprador, e o que chega mês a mês é o Asaas
+   * creditando a nossa fatia. Segurar o ingresso até a parcela 12 deixa no
+   * portão quem já pagou tudo, e o evento acontece onze meses antes disso.
+   *
+   * No CARNÊ (boleto/pix parcelado) cada parcela é dinheiro separado de
+   * verdade: a 1 de 12 não promete as outras onze.
+   */
+  it('parcelado no cartão não é parcelado em carnê: quem decide é a forma', async () => {
+    const { conferirValorRecebido } = await import('../../utils/asaas')
+    const total = 22_000
+    const parcela1 = { value: 18.34, installmentNumber: 1, installmentCount: 12 }
+
+    const cartao = conferirValorRecebido({
+      pagamento: { ...parcela1, billingType: 'CREDIT_CARD' }, totalCents: total,
+    })
+    expect(cartao.emitir,
+      'compra 12x no cartão ficou sem ingresso na parcela 1: o banco já autorizou tudo e '
+      + 'o comprador vai parar no portão').toBe(true)
+    expect(cartao.cartao).toBe(true)
+    expect(String(cartao.aviso), 'não escreveu por que emitiu sem o dinheiro todo na conta')
+      .toContain('cartão')
+
+    // o carnê segue com a régua antiga
+    const carne = conferirValorRecebido({
+      pagamento: { ...parcela1, billingType: 'BOLETO' }, totalCents: total,
+    })
+    expect(carne.emitir, 'boleto parcelado emitiu tudo com 1/12 pago').toBe(false)
+    const pix = conferirValorRecebido({
+      pagamento: { ...parcela1, billingType: 'PIX' }, totalCents: total,
+    })
+    expect(pix.emitir, 'pix parcelado emitiu tudo com 1/12 pago').toBe(false)
+
+    // payload calado sobre a forma: `orders.payment_method` responde
+    const nossoCartao = conferirValorRecebido({
+      pagamento: parcela1, totalCents: total, formaDoPedido: 'credito',
+    })
+    expect(nossoCartao.emitir, 'sem billingType no payload, o pedido dizia cartão e não emitiu')
+      .toBe(true)
+    const nossoPix = conferirValorRecebido({
+      pagamento: parcela1, totalCents: total, formaDoPedido: 'pix',
+    })
+    expect(nossoPix.emitir, 'pix parcelado emitiu pela rede de baixo').toBe(false)
+
+    // e o gateway manda mais que a nossa coluna: ele é quem sabe como a
+    // cobrança ficou de verdade
+    const gatewayManda = conferirValorRecebido({
+      pagamento: { ...parcela1, billingType: 'BOLETO' },
+      totalCents: total, formaDoPedido: 'credito',
+    })
+    expect(gatewayManda.emitir,
+      'a cobrança virou boleto no gateway e a régua seguiu acreditando na nossa coluna')
+      .toBe(false)
+  })
+
+  it('parcela do meio registra o recebimento e NÃO emite ingresso', async () => {
+    if (!podeBater()) return
+    const chave = PREFIXO + 'parcela1'
+    // O prazo é posto aqui, e não na fixture, pra a afirmação lá embaixo ser
+    // sobre o que ESTA entrega fez — e não sobre um relógio de dez minutos
+    // atrás que já podia ter sido varrido.
+    await sql(`UPDATE orders SET expires_at = now() + interval '30 minutes'
+                WHERE id = $1`, [PEDIDO_12X])
+    const r = await entregar(corpoAsaas({
+      idEvento: chave, evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_12X,
+      cobranca: 'pay_zz_wh_10', status: 'RECEIVED', valorReais: 18.34,
+      extra: { installmentNumber: 1, installmentCount: 12, installment: 'ins_zz_10' },
+    }))
+    expect(r.status).toBe(200)
+    expect(r.corpo.emitiu,
+      'a parcela 1 de 12 emitiu os ingressos: entrada válida na catraca com 1/12 pago')
+      .toBe(false)
+
+    expect(await ingressos(PEDIDO_12X),
+      'saiu ingresso no meio do parcelamento').toBe(0)
+    const p = await pedido(PEDIDO_12X)
+    expect(p.status, 'marcou como pago com 1/12 na conta').toBe('aguardando_pagamento')
+
+    // A diferença precisa ficar VISÍVEL no pedido: a tela do pedido mostra a
+    // trilha do gateway (`erro` de cada entrega), e é lá que o operador
+    // descobre por que o ingresso não saiu.
+    const [linha] = await eventosGravados(chave)
+    expect(linha.processed_at, 'deixou a entrega pendurada em vez de registrar').toBeTruthy()
+    expect(String(linha.error), 'não escreveu a diferença em lugar nenhum').toContain('faltam')
+
+    // E o prazo do carrinho vira prazo DO PARCELAMENTO. Sem isto, parar de
+    // emitir na parcela 1 trocaria um defeito por outro pior:
+    // `liberarExpirados()` mataria a venda em 20 minutos (o `hold_minutes` do
+    // evento) com o comprador pagando as 12 parcelas.
+    //
+    // A medida é em meses porque zerar a coluna não funciona: o gatilho
+    // `pedido_pendente_tem_prazo` reescreve `expires_at` nulo de pedido
+    // pendente pro hold do evento, dentro do próprio UPDATE e sem erro nenhum.
+    const [{ expira, fora_do_carrinho, longe }] = await sql(
+      `SELECT expires_at AS expira,
+              expires_at > now() + interval '11 months' AS longe,
+              expires_at > now() + interval '2 hours'   AS fora_do_carrinho
+         FROM orders WHERE id = $1`, [PEDIDO_12X])
+    expect(expira, 'o pedido parcelado ficou sem prazo nenhum — reserva presa pra sempre')
+      .not.toBeNull()
+    expect(fora_do_carrinho,
+      'o pedido parcelado continuou com prazo de carrinho: a varredura de expirados '
+      + 'mata a venda no meio do parcelamento').toBe(true)
+    expect(longe,
+      'o prazo não alcança a última das 12 parcelas: a venda morre antes de o comprador terminar')
+      .toBe(true)
+  }, 30_000)
+
+  it('a parcela que COMPLETA libera os ingressos', async () => {
+    if (!podeBater()) return
+    const r = await entregar(corpoAsaas({
+      idEvento: PREFIXO + 'parcela12', evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_12X_FIM,
+      cobranca: 'pay_zz_wh_11', status: 'RECEIVED', valorReais: 18.34,
+      extra: { installmentNumber: 12, installmentCount: 12, installment: 'ins_zz_11' },
+    }))
+    expect(r.status).toBe(200)
+    expect(r.corpo.emitiu, 'a última parcela não emitiu — o comprador pagou tudo e ficou sem')
+      .toBe(true)
+    expect(await ingressos(PEDIDO_12X_FIM, 'valido')).toBe(2)
+    expect((await pedido(PEDIDO_12X_FIM)).status).toBe('pago')
+  }, 30_000)
+
+  /**
+   * O mesmo caso de cima, mas pela PORTA — porque o que a régua devolve só
+   * vira ingresso se o ramo do pagamento passar a forma pra ela. O pedido
+   * carrega `payment_method = 'credito'` e o payload carrega
+   * `billingType: 'CREDIT_CARD'`, que é como a entrega chega de verdade.
+   *
+   * Medido antes desta distinção, nesta mesma rota: `emitiu: false`,
+   * `ingressos: 0`, pedido parado em 'aguardando_pagamento' com prazo pra
+   * agosto de 2027 — o comprador de 12x no cartão ficaria sem entrada no dia
+   * do evento.
+   */
+  it('compra parcelada no CARTÃO emite na primeira parcela', async () => {
+    if (!podeBater()) return
+    const chave = PREFIXO + 'cartao1'
+    const r = await entregar(corpoAsaas({
+      idEvento: chave, evento: 'PAYMENT_CONFIRMED', pedido: PEDIDO_12X_CARTAO,
+      cobranca: 'pay_zz_wh_14', status: 'CONFIRMED', valorReais: 18.34,
+      extra: {
+        billingType: 'CREDIT_CARD',
+        installmentNumber: 1, installmentCount: 12, installment: 'ins_zz_14',
+      },
+    }))
+    expect(r.status).toBe(200)
+    expect(r.corpo.emitiu,
+      'quem comprou 12x no cartão ficou sem ingresso: o cartão autoriza a compra inteira '
+      + 'na venda e o evento é antes da última parcela').toBe(true)
+    expect(await ingressos(PEDIDO_12X_CARTAO, 'valido'),
+      'nenhum ingresso saiu numa compra que o banco já garantiu inteira').toBe(2)
+    expect((await pedido(PEDIDO_12X_CARTAO)).status).toBe('pago')
+
+    // a diferença de caixa continua escrita: o dinheiro entra mês a mês
+    const [linha] = await eventosGravados(chave)
+    expect(String(linha.error), 'emitiu sem dizer que o dinheiro ainda entra parcelado')
+      .toContain('cartão')
+
+    // e sem a forma no payload, quem responde é `orders.payment_method`
+    const semForma = await entregar(corpoAsaas({
+      idEvento: PREFIXO + 'cartao2', evento: 'PAYMENT_CONFIRMED', pedido: PEDIDO_12X_SEM_FORMA,
+      cobranca: 'pay_zz_wh_15', status: 'CONFIRMED', valorReais: 18.34,
+      extra: {
+        billingType: undefined,
+        installmentNumber: 1, installmentCount: 12, installment: 'ins_zz_15',
+      },
+    }))
+    expect(semForma.corpo.emitiu,
+      'payload sem billingType: a rota não consultou a forma do pedido').toBe(true)
+    expect(await ingressos(PEDIDO_12X_SEM_FORMA, 'valido')).toBe(2)
+  }, 30_000)
+
+  it('à vista com valor menor emite e deixa o alerta escrito, nunca recusa', async () => {
+    if (!podeBater()) return
+    const chave = PREFIXO + 'menos'
+    const r = await entregar(corpoAsaas({
+      idEvento: chave, evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_MENOS,
+      cobranca: 'pay_zz_wh_12', status: 'RECEIVED', valorReais: 200,
+    }))
+    expect(r.status).toBe(200)
+    expect(r.corpo.emitiu, 'recusou em silêncio quem pagou: o cliente fica parado no portão')
+      .toBe(true)
+    expect(await ingressos(PEDIDO_MENOS, 'valido')).toBe(2)
+
+    const [linha] = await eventosGravados(chave)
+    expect(String(linha.error), 'a diferença de R$ 20 não ficou escrita em lugar nenhum')
+      .toContain('ATENÇÃO')
+  }, 30_000)
+})
+
+/* ==========================================================================
+ * A FILA DE ENTREGAS PENDURADAS
+ * ======================================================================= */
+
+/**
+ * A rota responde 200 mesmo quando não soube tratar — e isso está certo: 500
+ * faz o Asaas retentar pra sempre. O preço é que a entrega que falhou fica
+ * pendurada (`processed_at IS NULL`) e **ninguém lia essa coluna pra agir**: a
+ * tela de reconciliação mostra e não reprocessa, e o gateway não reentrega
+ * porque recebeu 200.
+ *
+ * O caso que dói é o estorno sem valor no payload: o pedido segue 'pago' com
+ * `refunded_cents = 0` e o líquido conta como nosso um dinheiro que já voltou
+ * pro comprador. Quem fecha é `reprocessarEntregasPendentes()`, que pergunta
+ * ao gateway o que faltava.
+ *
+ * Mutação: apague o consumidor e este arquivo nem compila. Deixe o consumidor
+ * e tire a busca no gateway (`completarPayload`) e o caso fica vermelho na
+ * afirmação do `refunded_cents` — a entrega é reprocessada e falha igual.
+ */
+describe('webhook do Asaas · a entrega pendurada tem consumidor', () => {
+  it('o estorno sem valor volta a ser tratado depois de perguntar ao gateway', async () => {
+    if (!podeBater()) return
+    const chave = PREFIXO + 'pendurado'
+
+    // 1. a entrega que falha ALTO de propósito: estorno parcial sem valor
+    const r = await entregar(corpoAsaas({
+      idEvento: chave, evento: 'PAYMENT_PARTIALLY_REFUNDED', pedido: PEDIDO_PENDURADO,
+      cobranca: 'pay_zz_wh_13', status: 'PARTIALLY_REFUNDED', valorReais: 220,
+    }))
+    expect(r.status, 'devolveu erro em vez de registrar').toBe(200)
+
+    const [antes] = await eventosGravados(chave)
+    expect(antes.processed_at, 'deu baixa num evento que não soube tratar').toBeNull()
+    expect((await pedido(PEDIDO_PENDURADO)).status,
+      'marcou estorno parcial sem saber quanto voltou').toBe('pago')
+
+    // 2. o consumidor entra em campo. `carenciaMin: 0` porque a carência de
+    //    verdade (5 min) existe justamente pra ninguém retentar debaixo do pé
+    //    de quem acabou de falhar — inclusive o trabalhador do servidor de dev.
+    const asaas = await import('../../utils/asaas')
+    let perguntou = 0
+    asaas.usarConsultaDeCobranca(async ({ paymentId }) => {
+      perguntou++
+      // o que o gateway responde quando a gente pergunta pela cobrança
+      return { id: paymentId, status: 'PARTIALLY_REFUNDED', value: 220, refundedValue: 30 }
+    })
+    try {
+      const feitos = await asaas.reprocessarEntregasPendentes({
+        id: antes.id, carenciaMin: 0, limite: 1,
+      })
+      expect(feitos.length, 'o consumidor não alcançou a entrega pendurada').toBe(1)
+      expect(feitos[0].resolvido,
+        `a entrega continuou pendurada: ${feitos[0].erro}`).toBe(true)
+    } finally {
+      asaas.usarConsultaDeCobranca(null)
+    }
+
+    expect(perguntou,
+      'reprocessou o MESMO payload sem valor: daria o mesmo erro pra sempre')
+      .toBeGreaterThan(0)
+
+    // 3. o dinheiro que tinha voltado pro comprador agora está no pedido
+    const [depois] = await eventosGravados(chave)
+    expect(depois.processed_at, 'a entrega não deu baixa nem depois de resolvida').toBeTruthy()
+    const p = await pedido(PEDIDO_PENDURADO)
+    expect(p.status).toBe('estornado_parcial')
+    expect(Number(p.refunded_cents),
+      'o líquido continuaria contando como nosso um dinheiro já devolvido').toBe(3_000)
+  }, 60_000)
+
+  /**
+   * A lista que o operador abre. A cerca é da CONSULTA, não do middleware: o
+   * `02.tenant` só cerca caminho com id de recurso na URL, e aqui não tem.
+   * Sem esta cerca o financeiro de uma produtora veria — e reprocessaria — o
+   * dinheiro da outra.
+   */
+  it('a lista de entregas penduradas não atravessa a cerca da organização', async () => {
+    if (!podeBater()) return
+    const chave = PREFIXO + 'cerca'
+    await entregar(corpoAsaas({
+      idEvento: chave, evento: 'PAYMENT_PARTIALLY_REFUNDED', pedido: PEDIDO_VIZINHO,
+      cobranca: 'pay_zz_wh_3', status: 'PARTIALLY_REFUNDED', valorReais: 440,
+    }))
+    const [linha] = await eventosGravados(chave)
+    expect(linha.processed_at, 'a entrega não ficou pendurada — o caso perde o sentido').toBeNull()
+
+    const { SQL_ENTREGAS_PENDENTES_TODAS } = await import('../../utils/asaas')
+    /** uma produtora que não é a nossa — não precisa existir pra provar a cerca */
+    const VIZINHA = '0000e010-0000-4000-8000-00000000000f'
+
+    const daCasa = await sql(SQL_ENTREGAS_PENDENTES_TODAS, [ORG, false, 200])
+    expect(daCasa.some((l: any) => l.id === linha.id),
+      'a produtora não enxerga a própria entrega pendurada').toBe(true)
+
+    const daVizinha = await sql(SQL_ENTREGAS_PENDENTES_TODAS, [VIZINHA, false, 200])
+    expect(daVizinha.some((l: any) => l.id === linha.id),
+      'a entrega pendurada de uma produtora apareceu na lista da outra').toBe(false)
+
+    // A ÓRFÃ (sem pedido) não tem organização: só o master a enxerga, e ela
+    // não pode sumir num JOIN — é a mais suspeita das três (costuma ser o
+    // webhook apontado pro ambiente errado).
+    const orfa = await sql(
+      `INSERT INTO payment_events (provider, gateway_event_id, event_name, payload)
+       VALUES ('asaas', $1, 'PAYMENT_RECEIVED', '{}'::jsonb) RETURNING id`,
+      [PREFIXO + 'orfa'])
+    const semMaster = await sql(SQL_ENTREGAS_PENDENTES_TODAS, [ORG, false, 200])
+    expect(semMaster.some((l: any) => l.id === orfa[0].id),
+      'quem não é master viu a entrega órfã').toBe(false)
+    const comMaster = await sql(SQL_ENTREGAS_PENDENTES_TODAS, [ORG, true, 200])
+    expect(comMaster.some((l: any) => l.id === orfa[0].id),
+      'a entrega órfã sumiu da lista do master: dinheiro parado que ninguém enxerga')
+      .toBe(true)
+  }, 40_000)
+
+  it('a carência segura a retentativa — a entrega que acabou de falhar não é reprocessada já', async () => {
+    if (!podeBater()) return
+    // A mesma linha do caso acima já foi resolvida; esta é outra, recém-nascida.
+    const chave = PREFIXO + 'carencia'
+    await entregar(corpoAsaas({
+      idEvento: chave, evento: 'PAYMENT_PARTIALLY_REFUNDED', pedido: PEDIDO_CANCELA,
+      cobranca: 'pay_zz_wh_2', status: 'PARTIALLY_REFUNDED', valorReais: 330,
+    }))
+    const [linha] = await eventosGravados(chave)
+    expect(linha.processed_at).toBeNull()
+
+    const { reprocessarEntregasPendentes } = await import('../../utils/asaas')
+    // varredura normal (carência padrão): a entrega de agora não pode ser pega
+    const feitos = await reprocessarEntregasPendentes({ limite: 50 })
+    expect(feitos.some((f) => f.id === linha.id),
+      'a varredura pegou uma entrega que acabou de falhar: retentativa sem espera queima '
+      + 'as tentativas todas no mesmo minuto').toBe(false)
+  }, 40_000)
+})
+
+/* ==========================================================================
+ * O CONSUMIDOR PRECISA EXISTIR NUM SERVIDOR QUE NINGUÉM ABRIU
+ * ======================================================================= */
+
+/**
+ * A fila de entregas ganhou consumidor — mas ele subia do MÓDULO DA ROTA do
+ * webhook, e isso não é "no boot".
+ *
+ * `npm run dev` esconde: lá tudo carrega. No `npm run build` o Nitro fatia o
+ * servidor por rota e só carrega o pedaço quando alguém bate nela. Medido no
+ * build de antes:
+ *
+ *   nitro.mjs   → { route: '/api/webhooks/asaas', handler: _lazy_…, lazy: true }
+ *   chunks/routes/api/webhooks/asaas.post.mjs:18 → garantirWorkerDoWebhook();
+ *
+ * Ou seja: depois de todo deploy o consumidor ficava esperando o Asaas bater
+ * primeiro. E o que ele existe pra resolver é a entrega pendurada — dinheiro
+ * que já voltou pro comprador com o pedido ainda em 'pago' e o líquido
+ * contando errado. Numa noite sem venda nova, ninguém drena.
+ *
+ * É a MESMA armadilha que `server/plugins/00.filas.ts` documenta pras filas de
+ * e-mail e de estorno. A saída aqui é a do `utils/cancelamento.ts`: a chamada
+ * mora no fim de um módulo que cai no pedaço quente, e o pedaço quente é
+ * avaliado no boot.
+ *
+ * Este caso lê o BUILD, não o código-fonte: é a única coisa que responde
+ * "nasce sem requisição?". Sem `.output`, pula — como o resto do arquivo pula
+ * sem servidor.
+ */
+describe('webhook do Asaas · o consumidor nasce com o processo', () => {
+  it('a chamada do trabalhador fica no pedaço quente do build, não no da rota', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const quente = new URL('../../../.output/server/chunks/nitro/nitro.mjs', import.meta.url)
+
+    let build: string
+    try {
+      build = await readFile(quente, 'utf8')
+    } catch {
+      console.warn('  (pulado: sem .output — rode `npm run build`)')
+      return
+    }
+
+    // A rota é fatiada e carregada só quando alguém bate nela. Se um dia
+    // deixar de ser, o caso abaixo continua certo — só perde a graça.
+    expect(/\{ route: '\/api\/webhooks\/asaas'[^}]*lazy: true/.test(build),
+      'a rota do webhook deixou de ser lazy — confira se a premissa ainda vale')
+      .toBe(true)
+
+    // E a chamada existe no pedaço que é avaliado no boot do processo.
+    expect(/^\s*(if \([^)]*\)\s*)?garantirWorkerDoWebhook\(\);/m.test(build),
+      'o consumidor da fila de entregas só sobe quando alguém bate na rota do webhook: '
+      + 'depois de um deploy, a entrega pendurada (dinheiro já devolvido com o pedido em '
+      + '"pago") fica esperando o Asaas mandar outra coisa')
+      .toBe(true)
+  }, 20_000)
 })

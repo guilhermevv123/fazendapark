@@ -8,9 +8,39 @@
  * Não exige login de propósito: o código é a credencial. Por isso ele é
  * aleatório e longo, e por isso esta rota devolve o e-mail mascarado — quem
  * chuta um código não descobre de quem ele é.
+ *
+ * ## "Cortesia" aqui é a origem do pedido, não o valor
+ *
+ * O campo saía de `tickets.is_courtesy`, que quer dizer "o pedido fechou em
+ * zero". Quem comprou com cupom de 100% e quem levou a criança de 4 anos
+ * recebiam, na própria tela do pedido, um ingresso escrito CORTESIA — e o
+ * comprador que usou o cupom que ele ganhou merecidamente lê ali que alguém
+ * lhe deu esmola. Pior no sentido inverso: em evento com meia/gratuidade por
+ * idade, "cortesia" no ingresso é o que a fiscalização de meia-entrada cobra
+ * explicação.
+ *
+ * Agora vêm dois campos separados, e eles nunca são verdade juntos:
+ * `cortesia` (saiu pela porta da cortesia) e `gratuito` (é venda, e ela deu
+ * zero). A régua é a mesma de `utils/emissao.ts`, a mesma do borderô e a
+ * mesma de Participantes — a tela do comprador não pode divergir do
+ * relatório do produtor sobre o mesmo ingresso.
+ *
+ * ## Por que `customers` entra por LEFT JOIN
+ *
+ * `orders.customer_id` é opcional (a FK é `ON DELETE SET NULL`), e a CORTESIA
+ * nunca tem comprador: quem recebe o convite não preencheu formulário nenhum
+ * — o nome dele está no INGRESSO. Com o `JOIN` comum, o pedido sumia da
+ * consulta e esta rota respondia **"Pedido não encontrado"** pro link que o
+ * próprio sistema mandou, sem exceção, sem log e sem teste vermelho.
+ *
+ * Medido no banco antes do conserto: 8 pedidos vivos sem comprador (1
+ * cortesia, 3 de balcão, 4 online) — todos com 404 na cara de quem tinha o
+ * código na mão, enquanto um pedido igualzinho COM comprador abria em 200. O
+ * convidado do patrocinador caía nisso sempre, por construção.
  */
 import { q, q1 } from '../../utils/db'
 import { montarQr } from '../../utils/ingresso'
+import { CANAL_CORTESIA, eCortesia } from '../../utils/emissao'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -20,13 +50,13 @@ export default defineEventHandler(async (event) => {
 
   const o = await q1<any>(
     `SELECT o.id, o.code, o.status, o.face_cents, o.fee_cents, o.discount_cents,
-            o.total_cents, o.payment_method, o.installments, o.expires_at,
+            o.total_cents, o.payment_method, o.installments, o.expires_at, o.channel,
             o.created_at, o.paid_at, o.pix_payload, o.pix_qr_base64,
             c.name AS comprador, c.email,
             e.id AS event_id, e.name AS evento, e.slug, e.starts_at, e.ticket_noun,
             e.venue_name, e.city, e.state, e.banner_url
        FROM orders o
-       JOIN customers c ON c.id = o.customer_id
+       LEFT JOIN customers c ON c.id = o.customer_id
        JOIN events e ON e.id = o.event_id
       WHERE ${UUID.test(id) ? 'o.id = $1' : 'upper(o.code) = upper($1)'}`, [id])
   if (!o) throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado' })
@@ -56,7 +86,12 @@ export default defineEventHandler(async (event) => {
           ORDER BY s.sort_order, t.issued_at`, [o.id]))
         .map((t) => ({
           id: t.id, codigo: t.code, status: t.status, titular: t.holder_name,
-          cortesia: t.is_courtesy,
+          // `is_courtesy` sozinho é "fechou em zero"; a origem é quem decide.
+          // Aqui o pedido está na mão, então não há consulta a fazer — é a
+          // mesma conta de `SQL_E_CORTESIA`, feita em TypeScript.
+          cortesia: eCortesia(t.is_courtesy, o.channel),
+          /** saiu de graça, mas é VENDA: promoção de 100%, criança, lote R$ 0 */
+          gratuito: Boolean(t.is_courtesy) && !eCortesia(t.is_courtesy, o.channel),
           usadoEm: t.checked_in_at, setor: t.setor, lote: t.lote, tipo: t.tipo,
           sessao: t.sessao, sessaoInicio: t.sessao_inicio,
           qr: montarQr(t.code, o.event_id),
@@ -74,7 +109,19 @@ export default defineEventHandler(async (event) => {
     feeCents: Number(o.fee_cents),
     descontoCents: Number(o.discount_cents),
     totalCents: Number(o.total_cents),
-    comprador: { nome: o.comprador, email: mascarar(o.email) },
+    /**
+     * Do PEDIDO, não do ingresso — e as duas nunca são verdade juntas.
+     * `gratuito` é o que a tela precisa pra escrever "você não paga nada" sem
+     * chamar de cortesia a compra que a pessoa fez com o cupom dela.
+     */
+    cortesia: o.channel === CANAL_CORTESIA,
+    gratuito: Number(o.total_cents) === 0 && o.channel !== CANAL_CORTESIA,
+    // Sem comprador é ausência, não string vazia: `null` deixa a tela escolher
+    // o que escrever (no convite, o nome de quem recebe está no INGRESSO).
+    // E `mascarar(null)` estourava — o TypeError vinha só quando o pedido sem
+    // comprador finalmente chegasse aqui, que é o dia em que o JOIN parasse
+    // de esconder o caso.
+    comprador: { nome: o.comprador ?? null, email: o.email ? mascarar(o.email) : null },
     evento: {
       nome: o.evento, slug: o.slug, inicio: o.starts_at, substantivo: o.ticket_noun,
       local: o.venue_name, cidade: o.city, estado: o.state, banner: o.banner_url,

@@ -136,6 +136,56 @@ export function mesCurto(v: Entrada, vazio = VAZIO): string {
   return d ? d.toLocaleDateString('pt-BR', { month: 'short' }) : vazio
 }
 
+/** segunda-feira — o título que o passo de sessões do evento novo escreve. */
+export function diaDaSemana(v: Entrada, vazio = VAZIO): string {
+  const d = paraData(v)
+  return d ? d.toLocaleDateString('pt-BR', { weekday: 'long' }) : vazio
+}
+
+/* ------------------------------------------ campo <input datetime-local> -- */
+
+/**
+ * O que um `<input type="datetime-local">` aceita: `YYYY-MM-DDTHH:mm` no
+ * relógio de quem está olhando.
+ *
+ * As telas faziam isto de dois jeitos, os dois com `toISOString()` no meio:
+ *
+ *   new Date(iso).toISOString().slice(0, 16)                       // errado
+ *   new Date(d.getTime() - off).toISOString().slice(0, 16)         // "certo"
+ *
+ * O primeiro mostra o horário em UTC: um lote que abre 21h aparece 00h do dia
+ * seguinte no campo, e quem salvar sem mexer empurra o lote três horas pra
+ * frente sem ter digitado nada. O segundo acerta subtraindo o deslocamento
+ * antes de converter — só que ele usa o deslocamento de HOJE pra uma data que
+ * pode estar do outro lado de uma mudança de fuso, e é conta de ida e volta
+ * pra não sair do lugar.
+ *
+ * Aqui não há conversão nenhuma: os campos locais do `Date` são lidos direto,
+ * que é o mesmo que o navegador vai mostrar.
+ */
+export function paraCampoDataHora(v: Entrada, vazio = ''): string {
+  const d = paraData(v)
+  if (!d) return vazio
+  return `${diaLocal(d)}T${dois(d.getHours())}:${dois(d.getMinutes())}`
+}
+
+/**
+ * A volta: o texto do campo (hora LOCAL, sem fuso) vira o instante que o
+ * servidor guarda.
+ *
+ * `new Date('2026-10-17T21:00')` — sem `Z` e sem deslocamento — é hora local
+ * por definição da linguagem, então esta é a única direção em que
+ * `toISOString()` está certo: aqui o resultado é um INSTANTE, não um dia de
+ * calendário. O perigo mora em quem chama: `new Date('2026-10-17')`, sem a
+ * hora, nasce meia-noite UTC e volta 21h do dia anterior. Por isso a hora é
+ * obrigatória no formato e o vazio devolve `null` em vez de inventar um dia.
+ */
+export function deCampoDataHora(v: string | null | undefined): string | null {
+  if (!v) return null
+  const d = new Date(/\d{2}:\d{2}/.test(v) ? v : `${v}T00:00`)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
 /* ====================================================== dinheiro ========= */
 
 /**
@@ -174,16 +224,52 @@ export function reais(cents: number): string {
  * Lê texto em reais e devolve centavos INTEIROS. Sem `parseFloat`, sem
  * `Number(x) * 100` — os dígitos são somados como inteiro.
  *
+ * **Esta é a ÚNICA leitura de valor em reais do projeto.** `server/utils/
+ * dinheiro.ts` reexporta esta função; não existe uma segunda, e a razão está
+ * escrita abaixo.
+ *
  * Aceita o que um operador digita ou cola de verdade:
  *   "1.234,56" → 123456   (pt-BR: ponto é milhar, vírgula é decimal)
  *   "R$ 8,15"  → 815
  *   "500.00"   → 50000    (ponto decimal do teclado numérico: grupo final
  *                          com 2 casas não é milhar)
  *   "1.200"    → 120000   (grupo final com 3 casas é milhar — pt-BR)
+ *   "1.234.567"→ 123456700
  *   "8,5"      → 850
- *   ""         → 0
+ *   ""         → 0        (campo vazio é zero, não exceção na cara de quem digita)
+ *
+ * ## O que "1.200" significa, e por que
+ *
+ * Mil e duzentos reais — 120000 centavos. Ponto sem vírgula, com o último
+ * grupo de TRÊS dígitos, é separador de MILHAR: é assim que o teclado
+ * brasileiro, o Excel brasileiro e a tela da Zig escrevem, e é o que o
+ * operador do guichê lê. O `Number('1.200')` do JavaScript responde `1.2`
+ * porque ele fala en-US, e aí R$ 1.200,00 vira R$ 1,20 — mil vezes menos.
+ *
+ * Havia DUAS leituras no repositório e elas discordavam exatamente aqui:
+ * esta devolvia 120000 e a de `server/utils/dinheiro.ts` devolvia 120;
+ * "1.234.567" saía 123456700 de um lado e EXCEÇÃO do outro. A do servidor era
+ * quase código morto — e "quase" é o problema: no dia em que alguém a usasse,
+ * o mesmo texto mudaria de significado no meio do caminho, sem ninguém ver.
+ *
+ * A régua é o tamanho do último grupo depois do ponto: 3 dígitos = milhar,
+ * qualquer outro tamanho = casa decimal ("500.00" é R$ 500,00; "8.15" é
+ * R$ 8,15). A vírgula, quando existe, manda em tudo e o ponto vira milhar.
+ *
+ * ## Número em vez de texto
+ *
+ * Aceito, mas é o único ponto do caminho do dinheiro que toca float — e o
+ * estrago já aconteceu antes da chamada: `29.90` em binário é
+ * 29.899999999999999. Aqui só dá pra arredondar pro centavo mais próximo.
+ * Num número o ponto é SEMPRE decimal (não existe `1.200` de milhar em
+ * `number`), então esta ponta não passa pela régua de cima. Quem tem o valor
+ * em texto passa o texto.
  */
-export function paraCentavos(texto: string): number {
+export function paraCentavos(texto: string | number): number {
+  if (typeof texto === 'number') {
+    if (!Number.isFinite(texto)) throw new Error('valor não finito')
+    return Math.round(texto * 100)
+  }
   const limpo = String(texto ?? '').replace(/[^\d.,-]/g, '')
   if (!/\d/.test(limpo)) return 0
 

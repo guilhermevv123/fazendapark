@@ -65,29 +65,24 @@ function limpar() {
 /* ------------------------------------------------------------ período */
 
 /**
+ * A régua de período sai de `diaLocal` / `diaLocalMais` / `primeiroDiaDoMes`
+ * (`app/composables/formato.ts`), não de conta de data feita aqui.
+ *
  * `toISOString` fica de fora de propósito: ele converte pra UTC antes de
  * cortar, e às 21h de Brasília "hoje" já virou amanhã — o atalho traria o dia
- * errado justo no horário em que a bilheteria trabalha.
+ * errado justo no horário em que a bilheteria trabalha. Esta tela tinha um
+ * `isoLocal` próprio que acertava isso; a cópia saiu porque tela com fórmula
+ * de data própria é como as outras cinco começaram a errar.
  */
-const isoLocal = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-
 const ATALHOS = { hoje: 'Hoje', ontem: 'Ontem', semana: '7 dias', mes: 'Este mês', tudo: 'Tudo' } as const
 type Atalho = keyof typeof ATALHOS
 
 function faixaDo(qual: Atalho): [string, string] {
-  const hoje = new Date()
   if (qual === 'tudo') return ['', '']
-  if (qual === 'hoje') return [isoLocal(hoje), isoLocal(hoje)]
-  if (qual === 'ontem') {
-    const o = new Date(hoje); o.setDate(o.getDate() - 1)
-    return [isoLocal(o), isoLocal(o)]
-  }
-  if (qual === 'semana') {
-    const o = new Date(hoje); o.setDate(o.getDate() - 6)
-    return [isoLocal(o), isoLocal(hoje)]
-  }
-  return [isoLocal(new Date(hoje.getFullYear(), hoje.getMonth(), 1)), isoLocal(hoje)]
+  if (qual === 'hoje') return [diaLocal(), diaLocal()]
+  if (qual === 'ontem') return [diaLocalMais(-1), diaLocalMais(-1)]
+  if (qual === 'semana') return [diaLocalMais(-6), diaLocal()]
+  return [primeiroDiaDoMes(), diaLocal()]
 }
 
 function periodo(qual: Atalho) {
@@ -105,13 +100,18 @@ const atalhoAtivo = computed<Atalho | null>(() => {
 
 /* ------------------------------------------------------- como cada coisa lê */
 
-const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
-  { style: 'currency', currency: 'BRL' })
-
-const quandoLegivel = (d: string) => new Date(d).toLocaleString('pt-BR', {
-  day: '2-digit', month: '2-digit', year: '2-digit',
-  hour: '2-digit', minute: '2-digit', second: '2-digit',
-})
+/**
+ * Dinheiro e carimbo de hora saem do formatador único.
+ *
+ * O `brl` daqui era `(c / 100).toLocaleString('pt-BR', { style: 'currency' })`
+ * — divisão em float pra formatar, e o `R$` separado com espaço FINO
+ * (U+00A0), que faz dois valores idênticos na tela não serem iguais na
+ * comparação. O `quandoLegivel` era `new Date(d).toLocaleString(...)`: numa
+ * linha de auditoria com data pura ele imprime o dia ANTERIOR, porque
+ * `new Date('2026-09-07')` nasce meia-noite UTC. Nesta tela isso é grave — o
+ * segundo é a prova de quem mexeu, e de que dia.
+ */
+const quandoLegivel = (d: string) => dataHoraSegundo(d)
 
 /** nome de coluna/campo como o operador fala, não como o banco guarda */
 const ENTIDADE_LEGIVEL: Record<string, string> = {
@@ -148,7 +148,7 @@ const ACAO_GRAVE = new Set([
 function valorLegivel(campo: string, v: unknown): string {
   if (v === null || v === undefined || v === '') return '—'
   if (typeof v === 'boolean') return v ? 'sim' : 'não'
-  if (typeof v === 'number' && /cents$/i.test(campo)) return brl(v)
+  if (typeof v === 'number' && /cents$/i.test(campo)) return reais(v)
   if (typeof v === 'number' && /bps$/i.test(campo)) return `${(v / 100).toLocaleString('pt-BR')}%`
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)

@@ -63,6 +63,9 @@ import { tx } from '../../../../utils/db'
 import { gerarCodigo } from '../../../../utils/ingresso'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { ROTULO, type Papel } from '../../../../utils/papeis'
+import {
+  CANAL_CORTESIA, SQL_E_CORTESIA, SQL_ORIGEM_NAO_E_VENDA,
+} from '../../../../utils/emissao'
 
 /**
  * A trava do evento, como statement solto.
@@ -84,9 +87,9 @@ const SQL_TRAVA_EVENTO_CORTESIA = `
  * O que conta contra a cota — e o que NÃO conta.
  *
  * `tickets.is_courtesy` **não** quer dizer cortesia. `utils/emissao.ts` marca
- * a coluna em todo ingresso de pedido que fechou em zero
- * (`is_courtesy := pedido.total_cents === 0`): lote de R$ 0, evento gratuito,
- * cupom de 100%. Isso é venda, com comprador e CPF, e no canal `online`.
+ * a coluna em todo ingresso de pedido que fechou em zero: lote de R$ 0,
+ * evento gratuito, cupom de 100%. Isso é venda, com comprador e CPF, e no
+ * canal `online`.
  *
  * Contar pela marca fazia a venda gratuita comer, em silêncio, a vaga que o
  * produtor guardou pra imprensa — e, com a cota cheia, o gatilho da 017
@@ -94,22 +97,21 @@ const SQL_TRAVA_EVENTO_CORTESIA = `
  * pendurado em `aguardando_pagamento` e estoque preso em `reserved`).
  *
  * A régua é o PEDIDO: cortesia é o que esta rota emitiu, e ela grava
- * `orders.channel = 'cortesia'` — o mesmo recorte que o borderô já usa pra
- * manter cortesia fora da receita. Ingresso SEM pedido (INSERT na mão,
+ * `orders.channel = 'cortesia'`. Ingresso SEM pedido (INSERT na mão,
  * importação) continua contando, que é o caminho que a cota mais precisa
  * pegar.
  *
- * O mesmo recorte está no gatilho da 017 e em `cortesias.get.ts`. Os três
- * precisam recortar igual: se a tela contar de um jeito e a recusa de outro,
- * o operador vê "ainda cabem 3" e leva um 409.
+ * **A definição não mora mais aqui** — ela mora em `utils/emissao.ts`,
+ * encostada na linha que carimba a coluna, porque quem lê precisa achar a
+ * régua no mesmo lugar em que a marca nasce. Este nome continua exportado
+ * porque o borderô e `cortesias.get.ts` importam por ele; apagá-lo trocaria
+ * um arquivo de trilha alheia por um erro de import.
  *
- * Recebe o apelido da tabela em vez de fixar um: consulta que apelida
- * `tickets t` não enxerga `tickets.order_id`, e o erro só apareceria em
- * runtime, na consulta que ninguém exercitou.
+ * O mesmo recorte está no gatilho da 017. Todos precisam recortar igual: se a
+ * tela contar de um jeito e a recusa de outro, o operador vê "ainda cabem 3"
+ * e leva um 409.
  */
-export const eCortesiaMesmo = (apelido: string) => `
-  NOT EXISTS (SELECT 1 FROM orders o
-               WHERE o.id = ${apelido}.order_id AND o.channel <> 'cortesia')`
+export const eCortesiaMesmo = SQL_ORIGEM_NAO_E_VENDA
 
 /** e-mail em branco é ausência de e-mail, não e-mail inválido */
 const vazioVirouNulo = (v: unknown) =>
@@ -252,8 +254,8 @@ async function definirCota(eventoId: string, d: z.infer<typeof Cota>, autor: Aut
     const { rows: usados } = await c.query(
       `SELECT count(*)::int AS no_evento
          FROM tickets t
-        WHERE t.event_id = $1 AND t.is_courtesy AND t.status <> 'cancelado'
-          AND ${eCortesiaMesmo('t')}`, [eventoId])
+        WHERE t.event_id = $1 AND t.status <> 'cancelado'
+          AND ${SQL_E_CORTESIA('t')}`, [eventoId])
     const jaNoEvento = usados[0].no_evento
 
     // Teto abaixo do que já foi dado é promessa que o passado já quebrou: as
@@ -277,8 +279,8 @@ async function definirCota(eventoId: string, d: z.infer<typeof Cota>, autor: Aut
       const { rows } = await c.query(
         `SELECT l.id, l.name, l.courtesy_quota,
                 (SELECT count(*)::int FROM tickets t
-                  WHERE t.lot_id = l.id AND t.is_courtesy AND t.status <> 'cancelado'
-                    AND ${eCortesiaMesmo('t')}) AS ja
+                  WHERE t.lot_id = l.id AND t.status <> 'cancelado'
+                    AND ${SQL_E_CORTESIA('t')}) AS ja
            FROM lots l
            JOIN sectors s ON s.id = l.sector_id
           WHERE l.id = $1 AND s.event_id = $2
@@ -347,8 +349,8 @@ async function emitir(eventoId: string, d: z.infer<typeof Emissao>, autor: Autor
       `SELECT count(*)::int AS no_evento,
               count(*) FILTER (WHERE t.lot_id = $2)::int AS no_lote
          FROM tickets t
-        WHERE t.event_id = $1 AND t.is_courtesy AND t.status <> 'cancelado'
-          AND ${eCortesiaMesmo('t')}`,
+        WHERE t.event_id = $1 AND t.status <> 'cancelado'
+          AND ${SQL_E_CORTESIA('t')}`,
       [eventoId, d.loteId])
     const jaNoEvento = contagem[0].no_evento
     const jaNoLote = contagem[0].no_lote
@@ -401,11 +403,16 @@ async function emitir(eventoId: string, d: z.infer<typeof Emissao>, autor: Autor
     // a venda. Sem ele, a cortesia seria um ingresso solto sem quem emitiu.
     // Tudo zerado e `channel = 'cortesia'`: é isso que mantém a cortesia FORA
     // da receita no borderô e DENTRO da coluna de ocupação.
+    //
+    // Este `channel` é a ÚNICA coisa no sistema que diz "isto é cortesia" —
+    // é ele que `SQL_E_CORTESIA` lê, aqui, no borderô, em Participantes e no
+    // pedido do comprador. Por isso vem da constante, e não de um literal
+    // solto que um dia alguém troca em um arquivo só.
     const { rows: pedidos } = await c.query(
       `INSERT INTO orders (org_id, event_id, code, status, channel, payment_method,
                            face_cents, fee_cents, platform_cents, discount_cents,
                            total_cents, paid_at)
-       VALUES ($1,$2,$3,'pago','cortesia','cortesia',0,0,0,0,0,now())
+       VALUES ($1,$2,$3,'pago','${CANAL_CORTESIA}','cortesia',0,0,0,0,0,now())
        RETURNING id, code`,
       [lote.org_id, eventoId, `CRT-${gerarCodigo('X').slice(2)}`])
     const pedido = pedidos[0]

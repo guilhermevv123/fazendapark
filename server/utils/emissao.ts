@@ -14,11 +14,105 @@ import { confirmar } from './estoque'
 import { tx } from './db'
 import { gerarCodigo } from './ingresso'
 
+/* ===========================================================================
+ * O que é cortesia — e por que `tickets.is_courtesy` não responde isso
+ * ======================================================================== */
+
+/**
+ * O canal que a rota de cortesia grava no pedido. É ELE que define cortesia.
+ */
+export const CANAL_CORTESIA = 'cortesia'
+
+/**
+ * `tickets.is_courtesy` diz uma coisa só: **o pedido fechou em zero**.
+ *
+ * É o que a linha lá embaixo carimba (`fechouEmZero`), e é o que ela sempre
+ * carimbou. Três coisas diferentes fecham em zero e só UMA é cortesia:
+ *
+ *   | o que aconteceu                  | canal do pedido | é cortesia? |
+ *   |----------------------------------|-----------------|-------------|
+ *   | convite da imprensa/patrocinador | `cortesia`      | **sim**     |
+ *   | cupom/promoção de 100%           | `online`        | não, é VENDA|
+ *   | criança até 5 anos (lote R$ 0)   | `online`/balcão | não, é VENDA|
+ *
+ * Venda que deu zero tem comprador, CPF, pedido e nota — ela aparece em
+ * Vendas e em Participantes. Chamar isso de cortesia no borderô que o produtor
+ * leva pro sócio é dizer que ele deu de graça o que ele vendeu numa promoção.
+ *
+ * ## Por que a coluna não foi "consertada" pra dizer a verdade
+ *
+ * Porque carimbar certo daqui pra frente só conserta o FUTURO: as linhas que
+ * já existem continuariam marcadas, e quem lesse a coluna continuaria errando
+ * sobre elas — que é justamente "o que o sócio vai ler daqui a seis meses".
+ * A **origem** conserta os dois lados de graça: `orders.channel` sempre foi
+ * gravado, então o passado se distingue sozinho, sem migração e sem backfill
+ * inventado. Medido no banco antes de escrever isto: dos ingressos marcados
+ * hoje, nenhum precisou de chute — cada um tinha pedido com canal.
+ *
+ * Fica UM caso que ninguém consegue distinguir, e ele tem nome próprio
+ * (`SQL_CORTESIA_SEM_ORIGEM`): ingresso **sem pedido** — INSERT na mão,
+ * importação, ou pedido apagado (a FK é `ON DELETE SET NULL`). Aí não existe
+ * origem pra conferir, a régua da casa conta como cortesia (o lado seguro:
+ * entrada de graça que ninguém explica) e a leitura marca a linha pra tela
+ * poder dizer que aquilo ali não dá pra provar — em vez de fingir que dá.
+ *
+ * A régua mora aqui, encostada na caneta que carimba a coluna, e é importada
+ * por todo mundo que precisa dela (borderô, cortesias, participantes, pedido).
+ * Reescrever a condição no arquivo de quem lê é como a tela de Cortesias
+ * passou a dizer 2 e o borderô 3 sobre os mesmos ingressos.
+ */
+export const SQL_ORIGEM_NAO_E_VENDA = (apelido: string) => `
+  NOT EXISTS (SELECT 1 FROM orders origem_do_ingresso
+               WHERE origem_do_ingresso.id = ${apelido}.order_id
+                 AND origem_do_ingresso.channel <> '${CANAL_CORTESIA}')`
+
+/**
+ * A régua inteira: marca + origem. É o que conta como cortesia na casa.
+ *
+ * Recebe o apelido da tabela em vez de fixar um: consulta que apelida
+ * `tickets t` não enxerga `tickets.order_id`, e o erro só apareceria em
+ * runtime, na consulta que ninguém exercitou.
+ */
+export const SQL_E_CORTESIA = (apelido: string) =>
+  `(${apelido}.is_courtesy AND ${SQL_ORIGEM_NAO_E_VENDA(apelido)})`
+
+/**
+ * O outro lado da mesma moeda: saiu de graça e é VENDA.
+ *
+ * Escrito como a negação de `SQL_ORIGEM_NAO_E_VENDA`, e não como uma condição
+ * nova, pra que os dois recortes PARTICIONEM os ingressos marcados: nenhum
+ * ingresso pode cair nos dois nem sumir dos dois quando a régua mudar.
+ */
+export const SQL_E_VENDA_GRATUITA = (apelido: string) =>
+  `(${apelido}.is_courtesy AND NOT ${SQL_ORIGEM_NAO_E_VENDA(apelido)})`
+
+/** Marcado como gratuito e sem pedido: a origem não foi registrada. */
+export const SQL_CORTESIA_SEM_ORIGEM = (apelido: string) =>
+  `(${apelido}.is_courtesy AND ${apelido}.order_id IS NULL)`
+
+/**
+ * A MESMA régua de `SQL_E_CORTESIA`, pra quem já tem as duas colunas na mão
+ * e não vai consultar de novo (o caso de `GET /api/pedido/:id`, que já leu o
+ * pedido inteiro).
+ *
+ * Sem pedido devolve `true` pelo mesmo motivo do SQL: não há origem pra
+ * contradizer a marca. As duas precisam concordar — a tela do comprador e o
+ * relatório do produtor falando do mesmo ingresso não podem divergir.
+ */
+export function eCortesia(
+  marcadoGratuito: boolean, canalDoPedido: string | null | undefined,
+): boolean {
+  return Boolean(marcadoGratuito)
+    && (canalDoPedido == null || canalDoPedido === CANAL_CORTESIA)
+}
+
 export interface ResultadoEmissao {
   emitiu: boolean
   motivo?: string
   ingressos: number
   pedidoCode?: string
+  /** a régua da casa aplicada ao que acabou de sair — nunca o valor zero */
+  cortesia?: boolean
 }
 
 /**
@@ -80,6 +174,14 @@ export async function emitirNaTransacao(
   })))
 
   const prefixo = String(pedido.evento_slug || 'ING').replace(/[^a-zA-Z]/g, '').slice(0, 3) || 'ING'
+
+  // `is_courtesy` é "o pedido fechou em zero" — NÃO é "isto é cortesia". O
+  // nome da coluna mente; o nome da variável não pode mentir junto, senão a
+  // próxima pessoa lê `cortesia` aqui e carrega a confusão pro arquivo dela.
+  // Quem quer saber se é cortesia usa `eCortesia()` / `SQL_E_CORTESIA`, lá em
+  // cima, que olham a ORIGEM do pedido.
+  const fechouEmZero = Number(pedido.total_cents) === 0
+
   let n = 0
   for (const item of itens) {
     for (let k = 0; k < item.quantidade; k++) {
@@ -91,7 +193,7 @@ export async function emitirNaTransacao(
                  'valido',$10,$11,$12,$13)`,
         [pedido.org_id, pedido.event_id, item.session_id, orderId, item.id,
          item.sector_id, item.lotId, item.ticketTypeId,
-         gerarCodigo(prefixo), pedido.total_cents === 0,
+         gerarCodigo(prefixo), fechouEmZero,
          // O 1º ingresso fica no nome do comprador; os demais em branco pra
          // ele nomear depois. Nomear todos com o mesmo nome atrapalha a
          // portaria mais do que ajuda.
@@ -110,5 +212,10 @@ export async function emitirNaTransacao(
      VALUES ($1,'order',$2,'pago',$3::jsonb)`,
     [pedido.org_id, orderId, JSON.stringify({ ingressos: n })])
 
-  return { emitiu: true, ingressos: n, pedidoCode: pedido.code }
+  return {
+    emitiu: true, ingressos: n, pedidoCode: pedido.code,
+    // A pergunta respondida pela ORIGEM. Este caminho é o da VENDA (webhook do
+    // Asaas e balcão): mesmo fechando em zero, o que sai por aqui é venda.
+    cortesia: eCortesia(fechouEmZero, pedido.channel),
+  }
 }

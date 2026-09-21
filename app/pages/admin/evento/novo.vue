@@ -112,7 +112,9 @@ function novoTipo(l: Lote) {
 }
 
 /* -------------------------------------------------------------- preço --- */
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+// `reais` vem de `app/composables/formato.ts`. A cópia que morava aqui era
+// `(c / 100).toLocaleString('pt-BR', { style: 'currency' })`: divide centavo
+// em float pra formatar e separa o `R$` com espaço FINO (U+00A0).
 const taxaDe = (face: number) =>
   f.modoTaxaOnline === 'absorver' ? 0 : Math.round((face * f.taxaBps) / 10_000)
 const totalDe = (face: number) => face + taxaDe(face)
@@ -129,16 +131,36 @@ const redondoAberto = ref<Lote | null>(null)
 const redondoValor = ref(0)
 
 /* --------------------------------------------------------------- dias --- */
+
+/**
+ * Uma sessão por dia entre o início e o fim.
+ *
+ * O laço antigo montava `new Date(data + 'T12:00')` e cortava com
+ * `toISOString().slice(0, 10)`. O meio-dia era justamente o remendo que
+ * escondia o erro: com o deslocamento de −3h o meio-dia local ainda cai no
+ * mesmo dia em UTC, então no Brasil a conta "dava certo". Basta o navegador
+ * estar num fuso adiantado (+13 em Auckland no verão, +14 em Kiritimati) pra
+ * o meio-dia local virar a véspera em UTC e a grade inteira de sessões nascer
+ * um dia atrás — sem erro, sem log, só a data errada na tela.
+ *
+ * Aqui quem conta dia é `diaLocalMais`, que lê o relógio local, e a parada é
+ * por comparação de `YYYY-MM-DD`, que é exata como texto.
+ */
 watch(() => [f.porDias, f.inicioData, f.fimData], () => {
   if (!f.porDias || !f.inicioData || !f.fimData) return
   if (f.sessoes.length) return
+  const inicio = paraData(f.inicioData)
+  const fim = paraData(f.fimData)
+  if (!inicio || !fim) return // data pela metade não vira grade de sessão
+  const ultimo = diaLocal(fim)
   const dias: string[] = []
-  for (let d = new Date(f.inicioData + 'T12:00'); d <= new Date(f.fimData + 'T12:00'); d.setDate(d.getDate() + 1)) {
-    dias.push(d.toISOString().slice(0, 10))
-    if (dias.length > 60) break
+  for (let i = 0; i <= 60; i++) {
+    const dia = diaLocalMais(i, inicio)
+    if (dia > ultimo) break
+    dias.push(dia)
   }
   f.sessoes = dias.map((data) => ({
-    titulo: new Date(data + 'T12:00').toLocaleDateString('pt-BR', { weekday: 'long' }),
+    titulo: diaDaSemana(data),
     data, inicio: f.inicioHora, fim: f.fimHora,
   }))
 })
@@ -185,9 +207,11 @@ function validar(p: number): string[] {
     if (!f.inicioData) e.push('Informe a data de início.')
     if (!f.fimData) e.push('Informe a data de término.')
     if (f.inicioData && f.fimData) {
-      const ini = new Date(`${f.inicioData}T${f.inicioHora}`)
-      const fim = new Date(`${f.fimData}T${f.fimHora}`)
-      if (fim <= ini) e.push('O término tem que ser depois do início.')
+      // `paraData` e não `new Date(...)`: é a mesma porta que o resto da tela
+      // usa, e ela é quem sabe que data sem hora é dia de calendário LOCAL.
+      const ini = paraData(`${f.inicioData}T${f.inicioHora}`)
+      const fim = paraData(`${f.fimData}T${f.fimHora}`)
+      if (ini && fim && fim <= ini) e.push('O término tem que ser depois do início.')
     }
     if (f.encerramento === 'data' && !f.encerraData) {
       e.push('Informe a data de encerramento das vendas.')
@@ -207,9 +231,16 @@ function voltar() { erros.value = []; passo.value--; window.scrollTo({ top: 0 })
 const sair = () => navigateTo('/admin')
 
 /* ------------------------------------------------------------ gravar ---- */
-function iso(data: string, hora: string) {
-  return new Date(`${data}T${hora || '00:00'}`).toISOString()
-}
+
+/**
+ * Data + hora digitadas (relógio de quem está criando o evento) → o instante
+ * que o servidor guarda. `deCampoDataHora` mora em `app/composables/formato.ts`
+ * e é o único lugar do projeto que faz esta conversão: sem a hora, o
+ * `new Date('2026-10-17')` que existia aqui nasceria meia-noite UTC e o evento
+ * começaria às 21h do dia ANTERIOR.
+ */
+const iso = (data: string, hora: string) =>
+  deCampoDataHora(`${data}T${hora || '00:00'}`)
 
 async function publicar() {
   salvando.value = true

@@ -7,8 +7,30 @@
  *
  * Por isso a busca varre o portador (nome/documento do ingresso) E o comprador
  * — o pai compra os seis e só o nome dele está no pedido.
+ *
+ * ## O selo "CORTESIA" desta lista
+ *
+ * Ele vinha de `tickets.is_courtesy`, que **não** quer dizer cortesia: a
+ * coluna é marcada em todo ingresso de pedido que fechou em zero. Quem
+ * comprou com cupom de 100% e a criança de 4 anos que entra de graça saíam
+ * aqui com o mesmo selo do convidado do patrocinador — e o KPI "Cortesias" do
+ * topo somava os três. A portaria não se importa, mas o número desta tela é o
+ * mesmo que o produtor compara com o borderô, e lá a régua já era a certa: as
+ * duas telas discordavam sobre os mesmos ingressos.
+ *
+ * A régua é a ORIGEM do pedido (`utils/emissao.ts`), e agora esta lista diz
+ * três coisas em vez de uma:
+ *
+ *   - `cortesia` — saiu de graça pela porta da cortesia;
+ *   - `gratuito` — saiu de graça e é VENDA (promoção de 100%, criança);
+ *   - `origemNaoRegistrada` — marcado, mas sem pedido pra provar de onde veio
+ *     (INSERT na mão, importação, pedido apagado). Não dá pra distinguir, e a
+ *     linha diz isso em vez de fingir certeza.
  */
 import { q, q1 } from '../../../../utils/db'
+import {
+  SQL_CORTESIA_SEM_ORIGEM, SQL_E_CORTESIA, SQL_E_VENDA_GRATUITA,
+} from '../../../../utils/emissao'
 
 const PAGINA = 50
 
@@ -45,7 +67,10 @@ export default defineEventHandler(async (event) => {
   const p = Math.max(1, Number(pagina) || 1)
 
   const linhas = await q<any>(
-    `SELECT t.id, t.code, t.status, t.is_courtesy, t.holder_name, t.holder_email,
+    `SELECT t.id, t.code, t.status, t.holder_name, t.holder_email,
+            ${SQL_E_CORTESIA('t')}        AS cortesia,
+            ${SQL_E_VENDA_GRATUITA('t')}  AS gratuito,
+            ${SQL_CORTESIA_SEM_ORIGEM('t')} AS origem_nao_registrada,
             t.holder_document, t.issued_at, t.checked_in_at,
             s.name AS setor, l.name AS lote, tt.name AS tipo,
             o.code AS pedido, o.id AS pedido_id, o.channel,
@@ -67,7 +92,11 @@ export default defineEventHandler(async (event) => {
   const t = await q1<any>(
     `SELECT count(*)::int AS total,
             count(*) FILTER (WHERE t.status = 'usado')::int AS entraram,
-            count(*) FILTER (WHERE t.is_courtesy)::int AS cortesias
+            count(*) FILTER (WHERE ${SQL_E_CORTESIA('t')})::int AS cortesias,
+            count(*) FILTER (WHERE ${SQL_E_CORTESIA('t')}
+                               AND t.status = 'cancelado')::int AS cortesias_canceladas,
+            count(*) FILTER (WHERE ${SQL_E_VENDA_GRATUITA('t')})::int AS gratuitos,
+            count(*) FILTER (WHERE ${SQL_CORTESIA_SEM_ORIGEM('t')})::int AS sem_origem
        FROM tickets t
        LEFT JOIN orders o ON o.id = t.order_id
        LEFT JOIN customers c ON c.id = o.customer_id
@@ -79,11 +108,45 @@ export default defineEventHandler(async (event) => {
   return {
     evento: { id: ev.id, nome: ev.name },
     setores: setores.map((s) => ({ id: s.id, nome: s.name })),
-    resumo: { total: t.total, entraram: t.entraram, cortesias: t.cortesias },
+    resumo: {
+      total: t.total, entraram: t.entraram, cortesias: t.cortesias,
+      /**
+       * Quantas das `cortesias` acima estão CANCELADAS — e por que esse
+       * número precisa sair daqui.
+       *
+       * Esta lista mostra ingresso de toda situação, cancelado inclusive, e
+       * por isso `total` e `cortesias` contam o cancelado junto: o rodapé tem
+       * que fechar com as linhas de cima. O resto da casa conta a outra
+       * pergunta — "quantas ocupam lugar hoje" — e recorta `status <>
+       * 'cancelado'`: o borderô (`E_CORTESIA` lá), a tela de Cortesias
+       * ("ocupando"), a recusa de cota em `cortesias.post.ts` e o gatilho da
+       * 017. Quatro dizem 2 e esta dizia 3, medido no evento semeado, com o
+       * MESMO denominador (641 ingressos emitidos nas duas telas).
+       *
+       * Mudar o recorte aqui trocaria de lugar a contradição: o rodapé diria
+       * 2 com três selos CORTESIA na tela. Então a saída é a mesma que a tela
+       * de Cortesias já usa e que a casa manda usar — **nomear a diferença**:
+       *
+       *     cortesias − cortesiasCanceladas === o número do borderô
+       *
+       * Sem este campo não existe conta que ligue as duas telas, e o produtor
+       * que abre as duas lado a lado tem que escolher em qual acreditar.
+       */
+      cortesiasCanceladas: t.cortesias_canceladas,
+      /** venda que fechou em zero: promoção de 100%, criança, lote de R$ 0 */
+      gratuitos: t.gratuitos,
+      /**
+       * Quantas das `cortesias` acima não têm pedido pra provar a origem. É o
+       * número que autoriza a tela a dizer "N dessas não dá pra distinguir" —
+       * calar isso é o que faz um total virar certeza que ele não tem.
+       */
+      cortesiasSemOrigem: t.sem_origem,
+    },
     pagina: p,
     paginas: Math.max(1, Math.ceil(t.total / PAGINA)),
     participantes: linhas.map((r) => ({
-      id: r.id, codigo: r.code, status: r.status, cortesia: r.is_courtesy,
+      id: r.id, codigo: r.code, status: r.status, cortesia: r.cortesia,
+      gratuito: r.gratuito, origemNaoRegistrada: r.origem_nao_registrada,
       nome: r.holder_name, email: r.holder_email, documento: r.holder_document,
       emitidoEm: r.issued_at, entrouEm: r.checked_in_at, validadoPor: r.validado_por,
       setor: r.setor, lote: r.lote, tipo: r.tipo,

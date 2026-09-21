@@ -47,6 +47,21 @@ const declaracoes = ref<Record<string, DeclaracaoDeMeia>>({})
 
 const quantidade = (lote: any, v: any) => quantidades.value[chaveDaLinha(lote.id, v.tipoId)] ?? 0
 
+/**
+ * Esta linha é meia-entrada — ou seja, precisa do motivo antes de seguir?
+ *
+ * Quem responde é o SERVIDOR, em `ehMeia`, que sai da coluna gerada
+ * `ticket_types.kind` (db/015) — a mesma régua que o checkout usa pra exigir o
+ * motivo. `pedeDeclaracaoDeMeia` fica só como rede pra payload de build
+ * antiga: ela deduzia "é meia" de `exigeDocumento`, e errava no ingresso de
+ * preço cheio COM documento (nominal, `discount_bps = 0`). O resultado medido
+ * era a tela pedir o motivo, o comprador escolher, e o checkout devolver 422
+ * `meia_em_inteira` no último clique — a tela então reenviava sem a declaração
+ * e a compra passava, mas depois de um formulário que nunca precisou existir.
+ */
+const pedeMeia = (v: any): boolean =>
+  typeof v?.ehMeia === 'boolean' ? v.ehMeia : pedeDeclaracaoDeMeia(v)
+
 function ajustar(lote: any, v: any, delta: number) {
   const k = chaveDaLinha(lote.id, v.tipoId)
   const novo = ajustarQuantidade(quantidades.value[k] ?? 0, delta, lote, v)
@@ -58,7 +73,7 @@ function ajustar(lote: any, v: any, delta: number) {
     // A declaração nasce vazia junto com a primeira unidade: é ela que o
     // bloco de meia-entrada edita, e `v-model` em objeto que ainda não existe
     // não grava nada (e não avisa).
-    if (pedeDeclaracaoDeMeia(v) && !declaracoes.value[k]) {
+    if (pedeMeia(v) && !declaracoes.value[k]) {
       declaracoes.value[k] = { motivo: '', documento: '' }
     }
   }
@@ -93,7 +108,7 @@ const linhas = computed<LinhaDoPedido[]>(() => {
           unitFaceCents: v.faceCents,
           unitTaxaCents: v.taxaCents,
           unitTotalCents: v.totalCents,
-          pedeMeia: pedeDeclaracaoDeMeia(v),
+          pedeMeia: pedeMeia(v),
           declaracao: declaracoes.value[k] ?? null,
         })
       }
@@ -103,7 +118,30 @@ const linhas = computed<LinhaDoPedido[]>(() => {
 })
 
 const totais = computed(() => totaisDoCarrinho(linhas.value))
-const pendencias = computed(() => pendenciasDoCarrinho(linhas.value))
+
+/**
+ * O teto do PEDIDO inteiro, somando todas as linhas.
+ *
+ * O teto por linha (`maxPorCompra`) não fecha esta conta: num evento com
+ * `events.max_per_order = 6`, 6 inteiras e 6 meias passam cada uma no seu
+ * teto, o botão "Pagar" acendia, e o comprador só lia "Cada pedido leva no
+ * máximo 6 ingressos e você escolheu 12" depois de digitar nome, e-mail e CPF
+ * — medido no navegador. O número vem do servidor (`evento.maxPorPedido`), que
+ * é o MESMO que o checkout confere, padrão incluído.
+ */
+const excedeuOPedido = computed(() => {
+  const teto = Number(data.value?.evento?.maxPorPedido ?? 0)
+  return teto > 0 && totais.value.n > teto
+})
+const pendencias = computed(() => {
+  const saida = pendenciasDoCarrinho(linhas.value)
+  if (excedeuOPedido.value) {
+    const teto = Number(data.value.evento.maxPorPedido)
+    saida.push(`Cada pedido leva no máximo ${teto} ingressos e você escolheu ${totais.value.n}. `
+      + `Tire ${totais.value.n - teto} da lista — ou faça o resto em outra compra.`)
+  }
+  return saida
+})
 const podePagar = computed(() =>
   totais.value.n > 0 && !pendencias.value.length && data.value?.evento?.vendasAbertas)
 
@@ -124,16 +162,50 @@ const SELO: Record<string, string> = {
 const aVenda = (lote: any) => lote.situacao === 'disponivel' || lote.situacao === 'ultimas'
 
 /**
- * O que dizer embaixo do preço sobre estoque e mínimo — ou '' quando não há o
+ * Quem apertou o teto desta linha, em texto — ou '' quando foi a prateleira.
+ *
+ * `tetoPor` vem do servidor (`tetoDeCompra`, em server/api/e/[slug].get.ts) e é
+ * uma PALAVRA, não a configuração do produtor. Existe porque `maxPorCompra`
+ * deixou de ser só estoque: ele agora já desconta o teto do pedido e os tetos
+ * por CPF que o checkout confere. Sem esta frase o número cai e ninguém
+ * descobre por quê — e, pior, `impedimentoDaLinha` culparia o ESTOQUE.
+ */
+function porQueOTetoCaiu(lote: any, v: any): string {
+  const por = v?.tetoPor ?? lote?.tetoPor
+  const teto = tetoDaLinha(lote, v)
+  if (por === 'pedido') return `Este evento leva no máximo ${teto} por pedido`
+  if (por === 'cpf') return `Cada CPF leva no máximo ${teto} desta opção`
+  return ''
+}
+
+/**
+ * O que dizer embaixo do preço sobre teto e mínimo — ou '' quando não há o
  * que dizer. Botão travado sem motivo na tela vira chamado de "o site não
- * deixa comprar": o `+` de um lote com mínimo 4 e 2 na prateleira fica
- * desligado pra sempre, e sem esta frase ninguém descobre por quê.
+ * deixa comprar": o `+` de um lote com mínimo 4 e 2 compráveis fica desligado
+ * pra sempre, e sem esta frase ninguém descobre por quê.
+ *
+ * A frase de `impedimentoDaLinha` (composable) culpa a PRATELEIRA — "e só
+ * restam N". Ela só é verdade quando quem apertou o teto foi o estoque; num
+ * lote com 500 lugares e teto de 2 por CPF ela dizia "só restam 2", que é
+ * mentira sobre o estoque. Quem sabe o motivo verdadeiro é o servidor; o
+ * composable segue mandando no botão, que é o que ele acerta.
  */
 function observacaoDaLinha(lote: any, v: any): string {
   if (!aVenda(lote) || v.esgotado) return ''
-  const impedimento = impedimentoDaLinha(lote, v)
-  if (impedimento) return impedimento
   const min = minimoDaLinha(lote)
+  const teto = tetoDaLinha(lote, v)
+  const porque = porQueOTetoCaiu(lote, v)
+  const impedimento = impedimentoDaLinha(lote, v)
+
+  if (impedimento) {
+    if (!porque) return impedimento
+    return min > teto
+      ? `${porque}, e o mínimo desta compra é ${min} — não dá para levar este agora`
+      : porque
+  }
+  // Os dois recados juntos quando os dois valem: o "+" pula de 0 pro mínimo e
+  // para no teto, e o comprador precisa das duas pontas pra entender o salto.
+  if (porque) return min > 1 ? `Mínimo de ${min} por compra. ${porque}` : porque
   return min > 1 ? `Mínimo de ${min} por compra` : ''
 }
 
@@ -315,7 +387,7 @@ useHead(() => ({
                   server/utils/meia-entrada.ts — a mesma que o checkout usa pra
                   recusar.
                 -->
-                <div v-if="pedeDeclaracaoDeMeia(v) && quantidade(lote, v) > 0"
+                <div v-if="pedeMeia(v) && quantidade(lote, v) > 0"
                      class="mt-3 rounded-card border border-linha bg-fundo-cinza p-3">
                   <p class="text-xs font-bold text-tinta-rotulo">
                     Meia-entrada: quem tem direito?

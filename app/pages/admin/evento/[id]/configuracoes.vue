@@ -26,15 +26,16 @@ const salvando = ref(false)
 // Os dois conversores nascem ANTES de quem os usa: `carregar()` roda na mesma
 // linha do watch (`immediate: true`), e um `const` declarado depois ainda está
 // na zona morta — a tela inteira caía em 500 antes de pintar um pixel.
-const paraCampo = (iso: string | null) => {
-  if (!iso) return ''
-  const d = new Date(iso)
-  // toISOString devolve UTC e o input datetime-local é hora local: sem este
-  // deslocamento, um evento das 18h aparece como 21h no formulário.
-  const off = d.getTimezoneOffset() * 60_000
-  return new Date(d.getTime() - off).toISOString().slice(0, 16)
-}
-const deCampo = (v: string) => (v ? new Date(v).toISOString() : null)
+//
+// Eles agora só chamam `paraCampoDataHora` / `deCampoDataHora`, de
+// `app/composables/formato.ts`. O que morava aqui era a ida e volta por UTC:
+// converter com `toISOString()` e descontar o `getTimezoneOffset()` ANTES pra
+// o deslocamento se cancelar. Funciona — usando o deslocamento de HOJE numa
+// data que pode estar do outro lado de uma troca de fuso — e é a fórmula que,
+// copiada sem o desconto pras outras telas, botava o evento das 18h no campo
+// como 21h.
+const paraCampo = (iso: string | null) => paraCampoDataHora(iso)
+const deCampo = (v: string) => deCampoDataHora(v)
 
 /** cópia editável + o original, pra saber o que mudou */
 const f = reactive<any>({})
@@ -138,20 +139,31 @@ const adiando = ref(false)
 const acaoErro = ref('')
 const resultado = ref<any>(null)
 
-const brl = (c: number) =>
-  (Number(c || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+// `brl` saiu: era `(Number(c) / 100).toLocaleString('pt-BR', { style:
+// 'currency' })`, com o `R$` de espaço fino. Quem formata é `reais`.
+const brl = (c: number) => reais(Number(c || 0))
 
-/** sugere a data nova uma semana à frente da atual, pra ninguém digitar do zero */
+/**
+ * Sugere a data nova uma semana à frente da atual, pra ninguém digitar do zero.
+ *
+ * A soma é em milissegundos sobre o INSTANTE que veio do servidor, e o
+ * resultado vai direto pro campo: antes ele dava três voltas
+ * (`new Date(...)` → `.toISOString()` → `paraCampo` → `new Date` de novo),
+ * e cada volta por UTC é uma chance de sair um dia fora do lugar.
+ */
 watch(data, (d) => {
   if (!d?.comecaEm || novaComecaEm.value) return
   const semana = 7 * 86_400_000
-  novaComecaEm.value = paraCampo(new Date(new Date(d.comecaEm).getTime() + semana).toISOString())
-  novaTerminaEm.value = paraCampo(new Date(new Date(d.terminaEm).getTime() + semana).toISOString())
+  const comeca = paraData(d.comecaEm)
+  const termina = paraData(d.terminaEm)
+  if (comeca) novaComecaEm.value = paraCampoDataHora(new Date(comeca.getTime() + semana))
+  if (termina) novaTerminaEm.value = paraCampoDataHora(new Date(termina.getTime() + semana))
 }, { immediate: true })
 
 const diasAteOEvento = computed<number | null>(() => {
-  if (!data.value?.comecaEm) return null
-  return (new Date(data.value.comecaEm).getTime() - Date.now()) / 86_400_000
+  const comeca = paraData(data.value?.comecaEm)
+  if (!comeca) return null
+  return (comeca.getTime() - Date.now()) / 86_400_000
 })
 
 /**
@@ -496,7 +508,7 @@ async function adiarEvento() {
             <dt>Ingressos</dt><dd class="text-right text-tinta">{{ data.ingressos }}</dd>
             <dt>Criado em</dt>
             <dd class="text-right text-tinta">
-              {{ new Date(data.criadoEm).toLocaleDateString('pt-BR') }}
+              {{ dataCurta(data.criadoEm) }}
             </dd>
           </dl>
         </section>
@@ -519,7 +531,7 @@ async function adiarEvento() {
       </p>
       <p v-else-if="data.status === 'adiado'" class="faixa-aviso mt-3">
         Este evento está <strong>adiado</strong> para
-        {{ new Date(data.comecaEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }}.
+        {{ dataHora(data.comecaEm) }}.
         Os ingressos continuam valendo na data nova.
       </p>
 

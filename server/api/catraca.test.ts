@@ -158,10 +158,105 @@ describe('catraca', () => {
     expect(cookie, 'login do porteiro falhou — o teste ficaria verde à toa').toBeTruthy()
   }, 20_000)
 
+  /**
+   * A validação de verdade, do começo ao fim, com o status HTTP conferido.
+   *
+   * Um verificador mediu esta rota devolvendo **500 "bind message supplies 8
+   * parameters, but prepared statement requires 9"** durante edição ao vivo:
+   * alguém tinha mexido no `SQL_GRAVA_ENTRADA` e a chamada ficou com um
+   * parâmetro a menos. Nenhum teste da suíte olhava o STATUS — todos liam
+   * `corpo.resultado`, que num 500 vem `undefined`, e `undefined !== 'ok'`
+   * dava a mensagem de falha errada ("a porta respondeu undefined"), mandando
+   * quem investigasse procurar na lógica em vez de na chamada.
+   *
+   * Este caso confere as três coisas na ordem em que quebram: HTTP 200, o
+   * carimbo no ingresso, e a linha no livro de entradas (que é quem usa o SQL
+   * de 8 parâmetros).
+   */
+  it('a porta responde 200 e grava as duas linhas — sem 500 de parâmetro', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const codigo = 'ZZT-CATR-HTTP'
+    await semearIngresso(codigo, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
+
+    const { status, corpo } = await ler(montarQr(codigo, EVENTO_CASA), EVENTO_CASA, 'PORTAO-HTTP')
+    expect(status, `a porta devolveu ${status}: ${JSON.stringify(corpo)}`).toBe(200)
+    expect(corpo.resultado).toBe('ok')
+
+    const t = await ingresso(codigo)
+    expect(t.status).toBe('usado')
+
+    // o livro de entradas é quem executa o SQL_GRAVA_ENTRADA: sem esta linha
+    // um erro de parâmetro ali passaria com o carimbo já dado
+    const [linha] = await sql(
+      `SELECT e.gate, e.people FROM entries e JOIN tickets t ON t.id = e.ticket_id
+        WHERE t.code = $1`, [codigo])
+    expect(linha, 'a leitura não virou linha no livro de entradas').toBeTruthy()
+    expect(linha.gate).toBe('PORTAO-HTTP')
+  }, 20_000)
+
+  /**
+   * A porta devolve o retrato do público, e ele ANDA a cada leitura.
+   *
+   * Furo medido em 21/09 com o leitor aberto no navegador: os três KPIs do
+   * topo ("Pessoas dentro", "Já entraram", "Comparecimento") só eram
+   * preenchidos pela rota de sincronização, que com rede boa roda uma única
+   * vez — na montagem da página. Lido um ingresso pelo campo, a tela respondeu
+   * "PODE ENTRAR" e os três números ficaram em `0 / 0 / 0%` com o servidor já
+   * dizendo `pessoas: 1`. Nada lança exceção: o painel só para, parecendo
+   * atualizado.
+   *
+   * O teste é o do painel, não o do texto: lê DOIS ingressos e exige que o
+   * retorno da segunda leitura conte mais gente que o da primeira, e que os
+   * dois batam com o livro no banco naquele instante.
+   */
+  it('cada leitura devolve o retrato do público, e ele anda', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const um = 'ZZT-CATR-PUB1'
+    const dois = 'ZZT-CATR-PUB2'
+    await semearIngresso(um, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
+    await semearIngresso(dois, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
+
+    const livro = async () => {
+      const [l] = await sql(
+        `SELECT count(DISTINCT ticket_id)::int AS ingressos,
+                COALESCE(sum(people),0)::int   AS pessoas
+           FROM entries WHERE event_id = $1`, [EVENTO_CASA])
+      return l
+    }
+
+    const r1 = await ler(montarQr(um, EVENTO_CASA), EVENTO_CASA, 'PORTAO-PUB')
+    expect(r1.corpo.resultado, JSON.stringify(r1.corpo)).toBe('ok')
+    expect(r1.corpo.publico,
+      'a porta respondeu sem o retrato: os KPIs da tela congelam na abertura')
+      .toBeTruthy()
+    const b1 = await livro()
+    expect(r1.corpo.publico.ingressos).toBe(b1.ingressos)
+    expect(r1.corpo.publico.pessoas).toBe(b1.pessoas)
+
+    const r2 = await ler(montarQr(dois, EVENTO_CASA), EVENTO_CASA, 'PORTAO-PUB')
+    expect(r2.corpo.resultado, JSON.stringify(r2.corpo)).toBe('ok')
+    expect(r2.corpo.publico.ingressos,
+      'o retrato não andou entre duas leituras — é o painel parado de novo')
+      .toBe(r1.corpo.publico.ingressos + 1)
+    expect(r2.corpo.publico.aptos,
+      'o denominador sumiu do retrato que a porta devolve').toBeGreaterThan(0)
+
+    // A recusa também repinta: o portão vizinho continua contando gente, e é
+    // olhando uma recusa que o operador levanta a cabeça pra tela.
+    const r3 = await ler(montarQr(um, EVENTO_CASA), EVENTO_CASA, 'PORTAO-PUB')
+    expect(r3.corpo.resultado).toBe('ja_usado')
+    expect(r3.corpo.publico?.ingressos,
+      'a leitura recusada devolveu a tela sem retrato')
+      .toBe(r2.corpo.publico.ingressos)
+  }, 30_000)
+
   it('QR assinado entra, e o carimbo diz quem liberou', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
-    const { corpo } = await ler(montarQr(COD_OK, EVENTO_CASA))
+    const { status, corpo } = await ler(montarQr(COD_OK, EVENTO_CASA))
+    expect(status, `a porta devolveu ${status}: ${JSON.stringify(corpo)}`).toBe(200)
     expect(corpo.resultado, `a porta respondeu ${corpo.resultado}`).toBe('ok')
 
     // read-back: a resposta pode dizer ok e o banco não ter mudado nada.

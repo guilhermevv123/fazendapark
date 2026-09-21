@@ -25,6 +25,10 @@
  *    perder credibilidade e passar a ser ignorada justo no dia em que a
  *    divergência for de verdade.
  *
+ * 4. **Olhar não é conferir.** Abrir a tela LÊ; só um ato explícito
+ *    (`?registrar=1`, o botão "Registrar conferência") grava uma linha em
+ *    `reconciliation_runs`. Ver o porquê em `querRegistrar` lá embaixo.
+ *
  * A comparação mora em `utils/reconciliacao.ts` (pura, testável sem rede); a
  * régua do que é "pedido com dinheiro" é `PEDIDO_VIVO()` de `utils/liquido.ts`,
  * a mesma do borderô e do teto do saque.
@@ -34,7 +38,7 @@ import { ligado as simuladoLigado } from '../../utils/gateway-simulado'
 import {
   CATALOGO, SQL_AVISOS_GUARDADOS, SQL_EXTRATO_SIMULADO, SQL_PEDIDOS_DO_PERIODO,
   SQL_PEDIDOS_POR_CHAVE, ambienteDaConfig, buscadorDoAsaas, comparar, conferirPorId,
-  lerCobranca, lerJanela, listarCobrancas, pedidoDaLinha,
+  diaLocal, lerCobranca, lerJanela, listarCobrancas, pedidoDaLinha, vereditoDaConferencia,
   type CobrancaDoExtrato, type PedidoNosso,
 } from '../../utils/reconciliacao'
 
@@ -42,6 +46,18 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** quantas linhas a resposta carrega de cada lista — o contador nunca é cortado */
 const TETO_DA_LISTA = 300
+
+/**
+ * O cabeçalho que só o clique na tela manda.
+ *
+ * `reconciliation_runs` é um livro de atos de dinheiro, e este handler é um
+ * GET. O cookie é `SameSite=Lax`, que ainda viaja numa NAVEGAÇÃO de topo
+ * vinda de outro site — um link "clique aqui" bastaria pra carimbar
+ * conferências no nome de quem clicou. Navegação de topo não consegue mandar
+ * cabeçalho nenhum; `fetch` do nosso próprio JavaScript consegue. Por isso o
+ * registro exige os dois: o parâmetro E o cabeçalho.
+ */
+const CABECALHO_DA_TELA = 'x-diamond-conferencia'
 
 export default defineEventHandler(async (event) => {
   const sessao = (event.context as any).sessao
@@ -163,7 +179,10 @@ export default defineEventHandler(async (event) => {
     .map((d) => d.cobrancaId)
     .filter((id): id is string => !!id)
   const avisos = idsParaOlhar.length
-    ? await q<any>(SQL_AVISOS_GUARDADOS, [idsParaOlhar])
+    // a cerca de organização vai DENTRO da consulta: `payment_events` não tem
+    // `org_id`, e a lista de ids não pode ser a única defesa (ver o comentário
+    // de `SQL_AVISOS_GUARDADOS`)
+    ? await q<any>(SQL_AVISOS_GUARDADOS, [idsParaOlhar, orgId])
     : []
   const avisoPorCobranca = new Map(avisos.map((a) => [a.external_id, a]))
 
@@ -183,30 +202,63 @@ export default defineEventHandler(async (event) => {
     }
   })
 
-  /* ------------------------------------------------------- a conferência anterior */
-  const anterior = await q1<any>(
+  const t = resultado.totais
+
+  /* --------------------------------------------- grava o ATO, e só o ato
+   *
+   * Isto aqui gravava uma linha em TODA leitura. Com `useFetch`, uma única
+   * abertura da tela grava duas (servidor + hidratação): 14 linhas viravam 16
+   * em duas chamadas, medido. O efeito é o cartão "última conferência em ..."
+   * mostrando VOCÊ de cinco segundos atrás — o contrário exato da pergunta
+   * que a tabela existe pra responder, que é "quando foi a última vez que
+   * isso foi conferido DE VERDADE". Um livro que se preenche sozinho a cada
+   * relance não é memória, é ruído: some com o dia em que alguém olhou mesmo.
+   *
+   * Agora olhar lê, e conferir é um ato: o botão da tela manda `registrar=1`
+   * com o cabeçalho de lá, e só esse par grava.
+   */
+  const pediuRegistro = String(busca.registrar ?? '') === '1'
+  const daTela = getRequestHeader(event, CABECALHO_DA_TELA) === '1'
+  const querRegistrar = pediuRegistro && daTela
+
+  let registro: { gravado: boolean; quando: string | null; porque: string | null } =
+    { gravado: false, quando: null, porque: null }
+
+  if (querRegistrar) {
+    const gravada = await q<any>(
+      `INSERT INTO reconciliation_runs
+         (org_id, event_id, period_start, period_end, source, environment,
+          ran_by, ran_by_email, orders_count, orders_cents, gateway_count, gateway_cents,
+          webhook_missing, charge_missing, amount_mismatch, duplicate_charge, unchecked, error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       RETURNING created_at`,
+      [orgId, eventoId, janela.de, janela.ate, fonte, ambiente,
+       sessao.usuarioId ?? null, sessao.email ?? null,
+       t.pedidos, t.nossoCents, t.cobrancas, t.gatewayCents,
+       t.webhookPerdido, t.semCobranca, t.valorDiferente, t.cobrancaRepetida, t.naoConferidos,
+       erroDaFonte])
+      // Conferência que falha porque o registro dela falhou é o pior dos dois
+      // mundos: o operador fica sem a resposta E sem o log.
+      .catch((e) => {
+        console.error('[reconciliacao] não gravei a conferência:', e?.message)
+        registro.porque = 'A conferência rodou, mas não consegui gravar o registro dela. '
+          + 'O resultado abaixo vale; o histórico desta vez não ficou.'
+        return []
+      })
+    if (gravada?.[0]) {
+      registro = { gravado: true, quando: gravada[0].created_at, porque: null }
+    }
+  } else if (pediuRegistro) {
+    registro.porque = 'O pedido de registro não veio da tela — nada foi gravado.'
+  }
+
+  /* --------------------------------- a última conferência REGISTRADA (não esta) */
+  const ultima = await q1<any>(
     `SELECT created_at, ran_by_email, source, period_start, period_end,
-            webhook_missing, charge_missing, amount_mismatch, unchecked
+            webhook_missing, charge_missing, amount_mismatch, duplicate_charge, unchecked
        FROM reconciliation_runs
       WHERE org_id = $1
       ORDER BY created_at DESC LIMIT 1`, [orgId])
-
-  /* --------------------------------------------- grava o ato (memória, não verdade) */
-  const t = resultado.totais
-  await q(
-    `INSERT INTO reconciliation_runs
-       (org_id, event_id, period_start, period_end, source, environment,
-        ran_by, ran_by_email, orders_count, orders_cents, gateway_count, gateway_cents,
-        webhook_missing, charge_missing, amount_mismatch, unchecked, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-    [orgId, eventoId, janela.de, janela.ate, fonte, ambiente,
-     sessao.usuarioId ?? null, sessao.email ?? null,
-     t.pedidos, t.nossoCents, t.cobrancas, t.gatewayCents,
-     t.webhookPerdido, t.semCobranca, t.valorDiferente, t.naoConferidos,
-     erroDaFonte])
-    // Conferência que falha porque o registro dela falhou é o pior dos dois
-    // mundos: o operador fica sem a resposta E sem o log.
-    .catch((e) => console.error('[reconciliacao] não gravei a conferência:', e?.message))
 
   return {
     periodo: { de: janela.de, ate: janela.ate, dias: janela.dias },
@@ -222,6 +274,16 @@ export default defineEventHandler(async (event) => {
       truncado,
       erro: erroDaFonte,
     },
+    // O veredito em uma palavra e num tom — é o que impede a tela de pintar
+    // "0 divergências" de verde quando a verdade é "não conferi nada".
+    veredito: vereditoDaConferencia({
+      fonte,
+      completa: extratoCompleto && !erroDaFonte,
+      erro: erroDaFonte,
+      naoConferidos: t.naoConferidos,
+      divergencias: t.webhookPerdido + t.semCobranca + t.valorDiferente + t.cobrancaRepetida,
+    }),
+    registro,
     totais: {
       pedidos: t.pedidos,
       nossoCents: t.nossoCents,
@@ -232,6 +294,7 @@ export default defineEventHandler(async (event) => {
       webhookPerdido: t.webhookPerdido,
       semCobranca: t.semCobranca,
       valorDiferente: t.valorDiferente,
+      cobrancaRepetida: t.cobrancaRepetida,
       naoConferidos: t.naoConferidos,
       // o tamanho do que NÃO foi conferido, em dinheiro: é ele que impede a
       // tela de pôr a "Diferença" em vermelho quando ninguém conferiu nada
@@ -244,16 +307,22 @@ export default defineEventHandler(async (event) => {
     naoConferidos: resultado.naoConferidos.slice(0, TETO_DA_LISTA),
     tetoDaLista: TETO_DA_LISTA,
     catalogo: CATALOGO,
-    anterior: anterior
+    // "conferência anterior" virou "última conferência REGISTRADA": o nome
+    // antigo prometia que alguém tinha conferido antes, e quem gravava a linha
+    // era a própria abertura da tela.
+    ultimaConferencia: ultima
       ? {
-          quando: anterior.created_at,
-          por: anterior.ran_by_email,
-          fonte: anterior.source,
-          de: anterior.period_start,
-          ate: anterior.period_end,
-          divergencias: Number(anterior.webhook_missing) + Number(anterior.charge_missing)
-            + Number(anterior.amount_mismatch),
-          naoConferidos: Number(anterior.unchecked),
+          quando: ultima.created_at,
+          por: ultima.ran_by_email,
+          fonte: ultima.source,
+          // `period_start` é `date` no banco e volta como `Date` à meia-noite
+          // LOCAL; serializado cru vira "2026-09-01T03:00:00.000Z" e a tela
+          // mostraria 31/08. Dia de calendário sai como dia de calendário.
+          de: ultima.period_start ? diaLocal(new Date(ultima.period_start)) : null,
+          ate: ultima.period_end ? diaLocal(new Date(ultima.period_end)) : null,
+          divergencias: Number(ultima.webhook_missing) + Number(ultima.charge_missing)
+            + Number(ultima.amount_mismatch) + Number(ultima.duplicate_charge ?? 0),
+          naoConferidos: Number(ultima.unchecked),
         }
       : null,
   }

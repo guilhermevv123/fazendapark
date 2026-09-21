@@ -54,7 +54,7 @@
 import type { Pool, PoolClient } from 'pg'
 import { db, q, q1 } from './db'
 import { PEDIDO_VIVO } from './liquido'
-import { estornar, type ConfigAsaas } from './asaas'
+import { buscarCobranca, estornar, valorEstornadoCents, type ConfigAsaas } from './asaas'
 
 /** Conexão OU pool: a reserva é um comando só e roda bem nos dois. */
 type Executor = Pool | PoolClient
@@ -76,6 +76,10 @@ export interface LinhaEstorno {
   status: StatusDoEstorno
   attempts: number
   max_attempts: number
+  /** recibo do gateway. Preenchido = o dinheiro JÁ saiu por esta linha. */
+  gateway_refund_id: string | null
+  /** quanto o gateway confirmou que devolveu. > 0 = o dinheiro JÁ saiu. */
+  refunded_cents: number
 }
 
 const brl = (c: number) =>
@@ -303,7 +307,17 @@ export const SQL_ENFILEIRA_ESTORNO_DE_UM_PEDIDO = `
  *    está com o cliente na linha;
  *  • `status = 'estornando' AND claimed_at < now() - 5 min` resgata a linha que
  *    ficou presa porque o processo morreu no meio — sem isso um kill -9 come o
- *    estorno pra sempre;
+ *    estorno pra sempre. A carência vale TAMBÉM no pedido por id: furar ela
+ *    aqui seria o financeiro clicando em cima de uma execução viva, que é
+ *    exatamente o jeito de mandar o dinheiro duas vezes;
+ *  • **`status = 'falhou'` só pelo id.** Este ramo faltava, e sem ele o
+ *    comentário acima era mentira: quem estourou `max_attempts` virava
+ *    'falhou' e nenhum "tentar de novo" alcançava a linha — o botão respondia
+ *    "nada a fazer" e o dinheiro do comprador ficava preso pra sempre, com a
+ *    linha parada na tela dizendo o erro de ontem. A reserva por id é a única
+ *    porta: ela não entra na varredura automática (que continua só em
+ *    'na_fila' e no resgate dos 5 minutos), então um erro permanente não vira
+ *    laço infinito contra o gateway.
  *  • `SKIP LOCKED` faz o segundo trabalhador pegar OUTRA linha em vez de
  *    esperar por esta.
  */
@@ -317,7 +331,8 @@ export const SQL_RESERVA_ESTORNO = `
     SELECT id FROM refund_jobs
      WHERE ($2::uuid IS NULL OR id = $2::uuid)
        AND ( (status = 'na_fila' AND (available_at <= now() OR $2::uuid IS NOT NULL))
-          OR (status = 'estornando' AND claimed_at < now() - interval '5 minutes') )
+          OR (status = 'estornando' AND claimed_at < now() - interval '5 minutes')
+          OR (status = 'falhou' AND $2::uuid IS NOT NULL) )
      ORDER BY available_at
      FOR UPDATE SKIP LOCKED
      LIMIT 1
@@ -399,15 +414,48 @@ export interface PedidoDeEstorno {
 /** O que o trabalhador chama pra mandar o dinheiro de volta. */
 export type Estornador = (p: PedidoDeEstorno) => Promise<{ id?: string | null }>
 
+/** O que o gateway já devolveu DESTA cobrança, somando tudo que não foi cancelado. */
+export interface ConferenciaDeEstorno {
+  devolvidoCents: number
+  reciboId: string | null
+}
+
+/**
+ * A pergunta "este estorno já saiu?" — a parede que falta quando o recibo não
+ * pôde ser gravado. Lançar é a resposta "não dá pra saber", e quem chama trata
+ * como "não mande de novo" (ver `processarUmEstorno`).
+ */
+export type Conferidor = (p: PedidoDeEstorno) => Promise<ConferenciaDeEstorno>
+
 let estornadorInjetado: Estornador | null = null
+let conferidorInjetado: Conferidor | null = null
 
 /**
  * Troca o estornador em tempo de execução. Existe por dois motivos: o teste
  * precisa de um que FALHA de propósito (pra exercitar a nova tentativa), e
  * trocar o Asaas por um segundo provedor depois não pode exigir mexer na fila.
+ *
+ * O segundo parâmetro troca junto a CONFERÊNCIA (o "já saiu?"), porque os dois
+ * falam com o mesmo gateway e trocar um sem o outro deixaria a parede olhando
+ * pro provedor errado. Omitir volta pro conferidor de verdade.
  */
-export function usarEstornador(e: Estornador | null) {
+export function usarEstornador(e: Estornador | null, c: Conferidor | null = null) {
   estornadorInjetado = e
+  conferidorInjetado = c
+}
+
+/** A configuração do Asaas da organização do pedido, ou o erro que diz o que fazer. */
+async function configDaOrg(orgId: string): Promise<ConfigAsaas> {
+  const org = await q1<any>(
+    `SELECT asaas_api_key, asaas_env, asaas_wallet FROM organizations WHERE id = $1`, [orgId])
+  const cfg: ConfigAsaas = {
+    apiKey: org?.asaas_api_key, environment: org?.asaas_env, walletId: org?.asaas_wallet,
+  }
+  if (!cfg.apiKey) {
+    throw new Error('esta organização está sem o Asaas configurado — '
+      + 'cadastre a chave em Configurações da organização e mande tentar de novo')
+  }
+  return cfg
 }
 
 /** O estornador de verdade: a chave do Asaas é a da organização do pedido. */
@@ -416,20 +464,31 @@ const estornarNoAsaas: Estornador = async (p) => {
   // estornar — e o prefixo `sim_` é justamente o que deixa isso auditável.
   if (p.paymentId.startsWith('sim_')) return { id: `sim_refund_${p.orderId}` }
 
-  const org = await q1<any>(
-    `SELECT asaas_api_key, asaas_env, asaas_wallet FROM organizations WHERE id = $1`, [p.orgId])
-  const cfg: ConfigAsaas = {
-    apiKey: org?.asaas_api_key, environment: org?.asaas_env, walletId: org?.asaas_wallet,
-  }
-  if (!cfg.apiKey) {
-    throw new Error('esta organização está sem o Asaas configurado — '
-      + 'cadastre a chave em Configurações da organização e mande tentar de novo')
-  }
-  const r: any = await estornar(cfg, p.paymentId, p.valorCents)
+  const r: any = await estornar(await configDaOrg(p.orgId), p.paymentId, p.valorCents)
   return { id: r?.id ?? null }
 }
 
+/**
+ * Quanto o gateway já devolveu desta cobrança — a pergunta antes de mandar de
+ * novo. A cobrança carrega `refundedValue` (acumulado) e a lista `refunds[]`;
+ * `valorEstornadoCents` já sabe ler as duas formas, inclusive descartando o
+ * estorno CANCELADO.
+ */
+const conferirNoAsaas: Conferidor = async (p) => {
+  if (p.paymentId.startsWith('sim_')) return { devolvidoCents: 0, reciboId: null }
+
+  const cobranca: any = await buscarCobranca(await configDaOrg(p.orgId), p.paymentId)
+  const lista = Array.isArray(cobranca?.refunds) ? cobranca.refunds : []
+  const ultimo = [...lista].reverse()
+    .find((r: any) => String(r?.status ?? '').toUpperCase() !== 'CANCELLED')
+  return {
+    devolvidoCents: valorEstornadoCents(cobranca) ?? 0,
+    reciboId: ultimo?.id ? String(ultimo.id) : null,
+  }
+}
+
 const estornarAgora = (p: PedidoDeEstorno) => (estornadorInjetado ?? estornarNoAsaas)(p)
+const conferirAgora = (p: PedidoDeEstorno) => (conferidorInjetado ?? conferirNoAsaas)(p)
 
 /* ------------------------------------------------------------- processar */
 
@@ -442,6 +501,8 @@ export interface ResultadoEstorno {
   tentativa: number
   /** o outro caminho (webhook) já tinha contado este dinheiro */
   jaContado?: boolean
+  /** o dinheiro já tinha saído numa tentativa anterior: nada foi mandado agora */
+  adotado?: boolean
   erro?: string
 }
 
@@ -472,6 +533,35 @@ export function esperaSegundos(tentativa: number): number {
  * Do jeito que está, a falha possível é a oposta: dinheiro devolvido e linha
  * ainda 'estornando', que o resgate de 5 minutos reprocessa e o `WHERE` de
  * `SQL_MARCA_PEDIDO_ESTORNADO` impede de contar duas vezes.
+ *
+ * ## A parte que o `WHERE` NÃO segurava: o gateway chamado duas vezes
+ *
+ * `SQL_MARCA_PEDIDO_ESTORNADO` impede o dinheiro de ser CONTADO duas vezes no
+ * pedido. Não impede o dinheiro de SAIR duas vezes. Enquanto a chamada ao
+ * gateway e a gravação estiveram dentro do mesmo `try`, uma falha na gravação
+ * (pool cheio, banco fora, lock preso) era tratada como falha do gateway: a
+ * linha voltava pra fila e a tentativa seguinte chamava `estornar()` de novo,
+ * com o dinheiro da primeira já na conta do comprador. Devolução em dobro, de
+ * verdade, sem nada vermelho em lugar nenhum. A API de estorno do Asaas não
+ * tem chave de idempotência — quem tem que lembrar somos nós.
+ *
+ * Três paredes, e cada uma cobre o buraco da anterior:
+ *
+ * 1. **O recibo é gravado ANTES do resto**, numa transação minúscula que só
+ *    toca `refund_jobs` (`anotarRecibo`). Ela não encosta em `orders`, então
+ *    não espera lock de ninguém: é a escrita com a maior chance de passar
+ *    quando o resto já está engasgando.
+ * 2. **Recibo na linha = não chama o gateway.** A retentativa vê
+ *    `gateway_refund_id`/`refunded_cents` e vai direto fechar o registro.
+ * 3. **Sem recibo, mas com tentativa anterior, PERGUNTA antes de mandar.** É a
+ *    mesma regra da fila de saque (`executarPayoutReivindicado`): sem um "não
+ *    existe" claro do gateway, não se cria. Se a pergunta não puder ser feita,
+ *    a linha volta pra fila com o erro escrito — nunca um segundo estorno no
+ *    escuro.
+ *
+ * E a falha na gravação parou de ser tratada como falha do gateway: quando o
+ * dinheiro saiu, a linha NÃO volta pra fila. Fica 'estornando' com o recibo, e
+ * o resgate dos 5 minutos volta pra fechar só o registro.
  */
 export async function processarUmEstorno(
   trabalhador = 'padrao', id?: string | null,
@@ -498,20 +588,30 @@ export async function processarUmEstorno(
   // acontece antes dela.
   const agora = await q1<{ total_cents: string; refunded_cents: string }>(
     `SELECT total_cents, refunded_cents FROM orders WHERE id = $1`, [linha.order_id])
-  const falta = agora
-    ? Number(agora.total_cents) - Number(agora.refunded_cents)
-    : Number(linha.amount_cents)
+  const jaNoPedido = agora ? Number(agora.refunded_cents) : 0
+  const falta = agora ? Number(agora.total_cents) - jaNoPedido : Number(linha.amount_cents)
   const valor = Math.max(0, Math.min(Number(linha.amount_cents), falta))
+
+  const pedidoDeEstorno: PedidoDeEstorno = {
+    jobId: linha.id, orgId: linha.org_id, orderId: linha.order_id,
+    paymentId: linha.asaas_payment_id ?? '', valorCents: valor, tentativa: linha.attempts,
+  }
+
+  // ------------------------------- parede 2: o dinheiro já saiu por esta linha
+  // Recibo gravado (ou valor confirmado) numa tentativa anterior que não
+  // conseguiu fechar o registro. Chamar o gateway aqui é devolver em dobro.
+  const reciboGuardado = linha.gateway_refund_id
+  const confirmadoAntes = Number(linha.refunded_cents) || 0
+  if (reciboGuardado || confirmadoAntes > 0) {
+    return await fecharLinha(linha, confirmadoAntes || valor, reciboGuardado, 'estornado', true)
+  }
 
   // Já voltou tudo por outra porta (webhook, estorno manual no painel do
   // Asaas). A linha fecha sem conversar com o gateway: mandar um estorno de
   // zero é um erro do outro lado, e insistir é girar em brasa.
   if (valor <= 0) {
-    await gravarDevolucao(linha, 0, null, 'estornado')
-    return {
-      id: linha.id, ok: true, status: 'estornado', pedidoId: linha.order_id,
-      valorCents: 0, tentativa: linha.attempts, jaContado: true,
-    }
+    const r = await fecharLinha(linha, 0, null, 'estornado', false)
+    return { ...r, jaContado: true }
   }
 
   // ---------------------------------------- dinheiro que não passou por aqui
@@ -519,38 +619,118 @@ export async function processarUmEstorno(
   // não tem de onde tirar pra mandar de novo (ver utils/liquido.ts). A linha
   // continua na lista com o nome certo — quem devolve é o produtor, na mão.
   if (!linha.asaas_payment_id) {
-    const jaContado = await gravarDevolucao(linha, valor, null, 'na_mao')
-    return {
-      id: linha.id, ok: true, status: 'na_mao', pedidoId: linha.order_id,
-      valorCents: valor, tentativa: linha.attempts, jaContado,
+    return await fecharLinha(linha, valor, null, 'na_mao', false)
+  }
+
+  // ------------------------- parede 3: retentativa PERGUNTA antes de mandar
+  // `attempts` é somado pela própria reserva, então `> 1` quer dizer "esta
+  // linha já esteve na mão de alguém". É o único caso em que o dinheiro pode
+  // ter saído sem ter sobrado registro — e é a janela inteira da devolução em
+  // dobro. Sem uma resposta do gateway, não se manda de novo.
+  if (linha.attempts > 1) {
+    let conferido: ConferenciaDeEstorno
+    try {
+      conferido = await conferirAgora(pedidoDeEstorno)
+    } catch (e: any) {
+      return await devolverAFila(linha, valor,
+        `Não consegui confirmar no gateway se a devolução de ${brl(valor)} já saiu, `
+        + `e por isso NÃO mandei de novo: ${e?.message ?? e}`)
+    }
+    if (conferido.devolvidoCents >= jaNoPedido + valor) {
+      return await fecharLinha(linha, valor, conferido.reciboId, 'estornado', true)
     }
   }
 
+  let recibo: { id?: string | null }
   try {
-    const recibo = await estornarAgora({
-      jobId: linha.id, orgId: linha.org_id, orderId: linha.order_id,
-      paymentId: linha.asaas_payment_id, valorCents: valor, tentativa: linha.attempts,
-    })
-    const jaContado = await gravarDevolucao(linha, valor, recibo?.id ?? null, 'estornado')
+    recibo = await estornarAgora(pedidoDeEstorno)
+  } catch (e: any) {
+    return await devolverAFila(linha, valor, legivel(e, valor))
+  }
+
+  // ------------------------------------------------ o dinheiro SAIU. Daqui
+  // pra baixo nada volta pra fila: o que falta é registro, não devolução.
+  await anotarRecibo(linha.id, recibo?.id ?? null, valor).catch(() => {})
+  return await fecharLinha(linha, valor, recibo?.id ?? null, 'estornado', false)
+}
+
+/**
+ * Parede 1: o recibo entra na linha ANTES de qualquer coisa que possa demorar.
+ *
+ * Transação de um comando só, e só em `refund_jobs`. Não encosta em `orders`
+ * de propósito — é justamente o lock dessa tabela que pode estar preso quando
+ * a gravação grande falha. `COALESCE` porque recibo não se reescreve.
+ *
+ * `refunded_cents` entra junto e vale como marca mesmo quando o gateway
+ * responde sem id: "o gateway confirmou que devolveu tanto" é o que a
+ * retentativa precisa saber pra não mandar de novo.
+ */
+async function anotarRecibo(jobId: string, reciboId: string | null, valor: number) {
+  await q(
+    `UPDATE refund_jobs
+        SET gateway_refund_id = COALESCE(gateway_refund_id, $2),
+            refunded_cents = GREATEST(refunded_cents, $3),
+            claimed_at = now()
+      WHERE id = $1`, [jobId, reciboId, valor])
+}
+
+/** Volta pra fila com espera, ou desiste no teto. Só pra falha do GATEWAY. */
+async function devolverAFila(
+  linha: LinhaEstorno, valor: number, erro: string,
+): Promise<ResultadoEstorno> {
+  const desiste = linha.attempts >= linha.max_attempts
+  await q(
+    `UPDATE refund_jobs
+        SET status = $2, last_error = $3, claimed_at = NULL,
+            available_at = CASE WHEN $2 = 'na_fila'
+                                THEN now() + make_interval(secs => $4)
+                                ELSE available_at END
+      WHERE id = $1`,
+    [linha.id, desiste ? 'falhou' : 'na_fila', erro, esperaSegundos(linha.attempts)])
+
+  return {
+    id: linha.id, ok: false, status: desiste ? 'falhou' : 'na_fila',
+    pedidoId: linha.order_id, valorCents: valor, tentativa: linha.attempts, erro,
+  }
+}
+
+/**
+ * Fecha o registro do dinheiro que já saiu (ou que nunca vai sair por aqui).
+ *
+ * Falhar aqui NÃO é falhar a devolução: o dinheiro está com o comprador. A
+ * linha fica 'estornando' com o recibo e o erro escrito, e o resgate dos 5
+ * minutos volta pra fechar — sem tocar no gateway, por causa da parede 2.
+ * Voltar pra fila aqui era o defeito: a fila chama o gateway de novo.
+ */
+async function fecharLinha(
+  linha: LinhaEstorno, valor: number, reciboId: string | null,
+  status: 'estornado' | 'na_mao', adotado: boolean,
+): Promise<ResultadoEstorno> {
+  try {
+    const jaContado = await gravarDevolucao(linha, valor, reciboId, status)
     return {
-      id: linha.id, ok: true, status: 'estornado', pedidoId: linha.order_id,
+      id: linha.id, ok: true, status, pedidoId: linha.order_id,
       valorCents: valor, tentativa: linha.attempts, jaContado,
+      ...(adotado ? { adotado: true } : {}),
     }
   } catch (e: any) {
-    const erro = legivel(e, valor)
-    const desiste = linha.attempts >= linha.max_attempts
+    const cru = String(e?.message ?? e)
+    const erro = reciboId || adotado || status === 'estornado'
+      ? `A devolução de ${brl(valor)} saiu no gateway`
+        + (reciboId ? ` (recibo ${reciboId})` : '')
+        + `, mas o registro não fechou: ${cru}. `
+        + 'O dinheiro NÃO sai de novo — a fila volta sozinha só para gravar.'
+      : `Não consegui registrar a devolução de ${brl(valor)}: ${cru}`
+    // `claimed_at` pro passado: o resgate dos 5 minutos alcança esta linha na
+    // próxima varredura em vez de esperar mais um ciclo inteiro.
     await q(
       `UPDATE refund_jobs
-          SET status = $2, last_error = $3, claimed_at = NULL,
-              available_at = CASE WHEN $2 = 'na_fila'
-                                  THEN now() + make_interval(secs => $4)
-                                  ELSE available_at END
-        WHERE id = $1`,
-      [linha.id, desiste ? 'falhou' : 'na_fila', erro, esperaSegundos(linha.attempts)])
-
+          SET last_error = $2, claimed_at = now() - interval '5 minutes'
+        WHERE id = $1`, [linha.id, erro]).catch(() => {})
     return {
-      id: linha.id, ok: false, status: desiste ? 'falhou' : 'na_fila',
-      pedidoId: linha.order_id, valorCents: valor, tentativa: linha.attempts, erro,
+      id: linha.id, ok: false, status: 'estornando', pedidoId: linha.order_id,
+      valorCents: valor, tentativa: linha.attempts, erro,
+      ...(adotado ? { adotado: true } : {}),
     }
   }
 }
@@ -561,6 +741,12 @@ export async function processarUmEstorno(
  * Devolve `true` quando o pedido já não estava mais 'pago' — ou seja, quando o
  * webhook do Asaas chegou primeiro com este mesmo estorno. Nesse caso o job
  * fecha do mesmo jeito (o dinheiro saiu), mas nada é somado de novo.
+ *
+ * `lock_timeout` não é enfeite: sem ele, uma linha de pedido travada por outra
+ * transação prende ESTA conexão do pool pelo tempo que o outro lado quiser.
+ * Numa devolução de milhares de pedidos isso é o pool inteiro parado — e o
+ * erro que o timeout produz é tratado pelo chamador como "falta registro", não
+ * como "falta devolver", que é a diferença entre esperar e pagar duas vezes.
  */
 async function gravarDevolucao(
   linha: LinhaEstorno, valor: number, reciboId: string | null,
@@ -569,11 +755,12 @@ async function gravarDevolucao(
   const c = await db().connect()
   try {
     await c.query('BEGIN')
+    await c.query(`SET LOCAL lock_timeout = '10s'`)
     const pedido = await c.query(SQL_MARCA_PEDIDO_ESTORNADO, [linha.order_id, valor])
     const jaContado = pedido.rowCount === 0
     await c.query(
       `UPDATE refund_jobs
-          SET status = $2, refunded_cents = $3, gateway_refund_id = $4,
+          SET status = $2, refunded_cents = $3, gateway_refund_id = COALESCE($4, gateway_refund_id),
               done_at = now(), claimed_at = NULL, last_error = NULL
         WHERE id = $1`,
       [linha.id, status, valor, reciboId])

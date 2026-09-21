@@ -32,6 +32,34 @@ import { q, q1 } from '../../../../utils/db'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
 
+/**
+ * `de` e `ate` chegam como DIA (`2026-09-21`), e dia é coisa de calendário
+ * local — não de UTC.
+ *
+ * `new Date('2026-09-21')` é MEIA-NOITE UTC, ou seja 21h do dia ANTERIOR na
+ * Bahia. O botão "Hoje" mandava a data certa e a rota abria a janela três
+ * horas cedo demais: medido no evento semeado às 02h47 de 21/09, o painel
+ * dizia R$ 11.228,00 de "hoje" contra R$ 6.732,00 de verdade — 64 pedidos da
+ * noite de ontem (21h–24h) entravam no dia de hoje, e a própria curva do
+ * painel mostrava DOIS dias dentro de um filtro de um dia só.
+ *
+ * O fim do período já era lido em hora local (`...T23:59:59.999`, sem `Z`).
+ * Era só o começo que falava UTC — e janela com as duas pontas em fusos
+ * diferentes não erra por igual: ela cresce.
+ *
+ * Data impossível (`?de=ontem`) vira `null` e a rota cai no padrão, em vez de
+ * mandar `Invalid Date` pro banco e devolver erro 500 pra quem só digitou
+ * errado na URL.
+ */
+function diaLocal(texto: string, horas: string): Date | null {
+  const dia = String(texto).slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return null
+  const d = new Date(`${dia}T${horas}`)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+const inicioDoDiaLocal = (texto: string) => diaLocal(texto, '00:00:00.000')
+const fimDoDiaLocal = (texto: string) => diaLocal(texto, '23:59:59.999')
+
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
   const { de, ate } = getQuery(event) as { de?: string; ate?: string }
@@ -44,8 +72,8 @@ export default defineEventHandler(async (event) => {
   // criação do evento parece razoável e não é: basta um pedido com data
   // anterior (importação, migração, ajuste manual) pra o total da tela ficar
   // menor que a soma da tabela logo abaixo dela, sem nenhum aviso.
-  const inicio = de ? new Date(de) : new Date(0)
-  const fim = ate ? new Date(`${String(ate).slice(0, 10)}T23:59:59.999`) : new Date()
+  const inicio = de ? inicioDoDiaLocal(de) ?? new Date(0) : new Date(0)
+  const fim = ate ? fimDoDiaLocal(ate) ?? new Date() : new Date()
   const p = [id, inicio, fim]
 
   // A régua do período, uma vez só. `PEDIDO_VIVO` no lugar de `status =
@@ -95,11 +123,31 @@ export default defineEventHandler(async (event) => {
     // o comprador levou o ingresso e parte do dinheiro voltou depois. Deixá-lo
     // fora fazia as partes do funil não somarem o total criado, e o pedido
     // sumia das três colunas sem aparecer em nenhuma.
+    //
+    // O MESMO BURACO ESTAVA ABERTO PRO ESTORNO TOTAL — e pra mais quatro.
+    //
+    // As três colunas cobriam `pago`/`estornado_parcial`, `expirado`/
+    // `cancelado`/`falhou` e `aguardando_pagamento`. O `CHECK` da tabela
+    // permite ONZE status: `estornado`, `em_analise`, `rascunho`, `chargeback`
+    // e `disputa` não caíam em nenhuma, e a rosca da tela divide por
+    // `finalizados + abandonados + abertos`. Medido numa fixture de 6 pedidos
+    // com 1 estornado por inteiro: a rosca somava 5 e `/relatorios` dizia 6
+    // criados. Duas telas, dois números, e as porcentagens da rosca calculadas
+    // sobre uma população que não é a do evento.
+    //
+    // Agora vem `criados` (o total de verdade) e cada status tem balde. O que
+    // sobrar cai em `outros`, que é o balde que NÃO PODE ser esquecido quando
+    // alguém acrescentar um status novo ao `CHECK`: a soma das partes volta a
+    // fechar sozinha em vez de o pedido sumir em silêncio.
     q1<any>(
-      `SELECT COUNT(*) FILTER (WHERE ${PEDIDO_VIVO()})::int AS finalizados,
+      `SELECT COUNT(*)::int AS criados,
+              COUNT(*) FILTER (WHERE ${PEDIDO_VIVO()})::int AS finalizados,
               COUNT(*) FILTER (WHERE status = 'estornado_parcial')::int AS com_estorno,
+              COUNT(*) FILTER (WHERE status = 'estornado')::int AS devolvidos,
               COUNT(*) FILTER (WHERE status IN ('expirado','cancelado','falhou'))::int AS abandonados,
-              COUNT(*) FILTER (WHERE status = 'aguardando_pagamento')::int AS abertos
+              COUNT(*) FILTER (WHERE status IN ('aguardando_pagamento','em_analise','rascunho'))::int
+                AS abertos,
+              COUNT(*) FILTER (WHERE status IN ('chargeback','disputa'))::int AS contestados
          FROM orders WHERE event_id = $1 AND created_at BETWEEN $2 AND $3`, p),
 
     q<any>(
@@ -158,17 +206,76 @@ export default defineEventHandler(async (event) => {
     q1<any>(SQL_PUBLICO, [id]),
   ])
 
-  // Cortesias: pedido que virou ingresso com total zero. Conta como ingresso,
-  // não como venda.
+  // Cortesia é o que a CASA deu — o pedido que nasceu na rota de cortesia
+  // (`channel = 'cortesia'`), a mesma régua da tela de Cortesias e do borderô.
+  //
+  // Era `total_cents = 0`, e isso põe VENDA GRATUITA na coluna de cortesia:
+  // lote de R$ 0, cupom de 100%. Venda que fechou em zero é venda — aparece em
+  // Vendas e em Participantes, e contá-la aqui inflava a cortesia do painel
+  // contra a tela que existe pra controlar cortesia. Duas telas, dois números,
+  // mesma pergunta.
+  //
+  // A unidade é a mesma do `ingressos` logo acima (item do pedido), porque
+  // este número é a decomposição DELE: emitidos = pagos + cortesias. Misturar
+  // ingresso e item aqui faria a soma não fechar com o próprio KPI ao lado.
   const cortesias = await q1<any>(
     `SELECT COALESCE(SUM(oi.n),0)::int AS n
        FROM orders o
        LEFT JOIN LATERAL (SELECT SUM(quantity)::int AS n FROM order_items WHERE order_id = o.id) oi ON true
-      WHERE o.event_id = $1 AND ${vivoNoPeriodo} AND o.total_cents = 0`, p)
+      WHERE o.event_id = $1 AND ${vivoNoPeriodo} AND o.channel = 'cortesia'`, p)
+
+  // A RÉGUA DA DEVOLUÇÃO — a mesma do borderô, escrita igual nos dois lugares.
+  //
+  // "Quanto foi devolvido ao comprador" é TODO `refunded_cents`, em qualquer
+  // status. O pedido estornado POR INTEIRO é devolução tanto quanto o parcial;
+  // ele só não tem mais líquido a apurar, e por isso cai fora de `PEDIDO_VIVO`.
+  // Recortar a devolução pelos vivos escondia o estorno total de todas as
+  // telas: medido, R$ 20,00 apareciam de devolução num evento que devolveu
+  // R$ 240,00.
+  //
+  // Por isso são DOIS números com nomes diferentes, e nenhum deles some:
+  //
+  //   estornadoCents          — tudo que voltou pro comprador (qualquer status)
+  //   estornadoNoLiquidoCents — a parte que está descontada do líquido, que é
+  //                             só a dos pedidos vivos. É ela que fecha
+  //                             `cobrado − plataforma − devolvido = líquido`;
+  //                             usar o total aí faria a conta da tela não bater
+  //                             com ela mesma.
+  const devolvido = await q1<any>(
+    `SELECT COALESCE(SUM(refunded_cents),0)::bigint AS total
+       FROM orders
+      WHERE event_id = $1 AND paid_at BETWEEN $2 AND $3`, p)
 
   const emitidos = Number(totais.ingressos)
   const gratis = Number(cortesias?.n ?? 0)
   const pedidos = Number(totais.pedidos)
+
+  /**
+   * O FUNIL FECHA POR CONSTRUÇÃO.
+   *
+   * `outros` é o resto da subtração, não mais um `FILTER`: status que ninguém
+   * previu entra aqui em vez de evaporar. As cinco partes somam `criados`
+   * SEMPRE, e é isso que a rosca da tela divide — a versão anterior dividia
+   * por `finalizados + abandonados + abertos` e desenhava porcentagens de uma
+   * população menor que a do evento toda vez que um pedido era estornado por
+   * inteiro.
+   */
+  const baldes = {
+    finalizados: Number(funil?.finalizados ?? 0),
+    devolvidos: Number(funil?.devolvidos ?? 0),
+    abandonados: Number(funil?.abandonados ?? 0),
+    abertos: Number(funil?.abertos ?? 0),
+    contestados: Number(funil?.contestados ?? 0),
+  }
+  const criados = Number(funil?.criados ?? 0)
+  const funilDoPeriodo = {
+    criados,
+    ...baldes,
+    // o pedido com estorno parcial já está dentro de `finalizados`; este
+    // número é o detalhe dele, não um balde
+    comEstorno: Number(funil?.com_estorno ?? 0),
+    outros: criados - Object.values(baldes).reduce((s, n) => s + n, 0),
+  }
 
   return {
     periodo: { de: inicio.toISOString(), ate: fim.toISOString() },
@@ -178,7 +285,11 @@ export default defineEventHandler(async (event) => {
       faceCents: Number(totais.face),
       taxaCents: Number(totais.taxa),
       descontoCents: Number(totais.desconto),
-      estornadoCents: Number(totais.estornado),
+      // tudo que voltou pro comprador, inclusive o pedido estornado por
+      // inteiro — a régua está explicada na consulta lá em cima
+      estornadoCents: Number(devolvido?.total ?? 0),
+      // a parte da devolução que já está descontada do líquido
+      estornadoNoLiquidoCents: Number(totais.estornado),
       // o que sobra pro produtor — mesma conta do borderô e dos financeiros
       liquidoCents: Number(totais.liquido),
       hojeCents: Number(hoje?.cobrado ?? 0),
@@ -188,16 +299,27 @@ export default defineEventHandler(async (event) => {
       pedidosComEstorno: Number(totais.com_estorno),
       ingressos: emitidos,
       pagos: emitidos - gratis,
-      cortesias: gratis,
-      // ATENÇÃO ao nome: este `ticketMedioCents` é por INGRESSO, e o
-      // `ticketMedioCents` de `/relatorios` é por PEDIDO. Os dois rótulos na
-      // tela estão certos ("Ticket médio por ingresso" aqui, "Ticket médio ·
-      // por pedido" lá), mas o MESMO campo da API quer dizer duas coisas —
-      // medido no evento semeado: R$ 43,47 aqui e R$ 88,00 lá. Quem for somar
-      // as duas rotas num relatório novo tem que escolher uma; trocar a conta
-      // de um lado sozinho faz a tela mentir, e `relatorios.test.ts` prende as
-      // duas onde estão até alguém unificar o nome (o que mexe no .vue).
-      ticketMedioCents: emitidos ? Math.round(Number(totais.cobrado) / emitidos) : 0,
+      // EMITIDAS, não "ocupando lugar" — e o nome diz qual das duas é.
+      //
+      // Este número é a decomposição de `ingressos` (item do pedido): tudo que
+      // saiu, inclusive a cortesia que depois foi cancelada. O borderô responde
+      // a outra pergunta com a MESMA palavra — `totais.cortesias` lá é
+      // cortesia de pé, que come cota (medido no evento semeado: 3 aqui, 2 lá).
+      // Dois campos `cortesias` em duas rotas querendo dizer coisas diferentes
+      // é a armadilha do `ticketMedioCents` de novo; aqui ela morre no nome.
+      cortesiasEmitidas: gratis,
+      // O nome DIZ a régua, porque "ticket médio" não é uma conta só: dividir
+      // por pedido e dividir por ingresso dão números bem diferentes (medido
+      // no evento semeado: R$ 87,28 por pedido contra R$ 43,13 por ingresso) e
+      // os dois são legítimos. O campo chamava-se `ticketMedioCents` aqui e
+      // `ticketMedioCents` em `/relatorios` querendo dizer coisas OPOSTAS —
+      // armadilha armada pro primeiro relatório que lesse as duas rotas e
+      // somasse os dois campos de mesmo nome.
+      //
+      // Os dois saem daqui agora, cada um com o nome da sua régua, e a tela
+      // escolhe qual mostrar em vez de adivinhar.
+      ticketMedioPorIngressoCents: emitidos ? Math.round(Number(totais.cobrado) / emitidos) : 0,
+      ticketMedioPorPedidoCents: pedidos ? Math.round(Number(totais.cobrado) / pedidos) : 0,
       ingressosPorPedido: pedidos ? Number((emitidos / pedidos).toFixed(2)) : 0,
     },
     // quem passou pela catraca — pessoa, não ingresso emitido
@@ -212,12 +334,7 @@ export default defineEventHandler(async (event) => {
       dia: d.dia, cobradoCents: Number(d.cobrado), liquidoCents: Number(d.liquido),
       ingressos: Number(d.ingressos),
     })),
-    funil: {
-      finalizados: Number(funil?.finalizados ?? 0),
-      comEstorno: Number(funil?.com_estorno ?? 0),
-      abandonados: Number(funil?.abandonados ?? 0),
-      abertos: Number(funil?.abertos ?? 0),
-    },
+    funil: funilDoPeriodo,
     porForma: porForma.map((f) => ({
       forma: f.forma, cobradoCents: Number(f.cobrado), liquidoCents: Number(f.liquido), n: f.n,
     })),

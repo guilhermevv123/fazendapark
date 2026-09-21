@@ -20,7 +20,10 @@
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { q, q1, tx } from '../utils/db'
-import { SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA, SQL_PRIMEIRA_ENTRADA } from '../utils/catraca'
+import {
+  meiaDoIngresso, retratoDoPublico, SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA,
+  SQL_PRIMEIRA_ENTRADA, SQL_PUBLICO,
+} from '../utils/catraca'
 import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingresso'
 
 const Entrada = z.object({
@@ -68,15 +71,40 @@ export default defineEventHandler(async (event) => {
   // de um evento real de outra empresa.
   if (!eventoDaCasa) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
 
+  /**
+   * Grava a leitura no log E devolve o retrato do público junto.
+   *
+   * O retrato vem daqui, e não de uma segunda chamada da tela, por causa de um
+   * furo medido em 21/09 com o leitor aberto: os três KPIs do topo ("Pessoas
+   * dentro", "Já entraram", "Comparecimento") só eram preenchidos pela rota de
+   * sincronização, que com rede boa roda UMA vez, na montagem da página. O
+   * operador lia um ingresso, a tela respondia "PODE ENTRAR", e os três
+   * números continuavam nos valores da abertura — medido: servidor com
+   * `pessoas = 1`, tela mostrando `0`. Um painel que não anda é pior que
+   * painel nenhum: ele parece atualizado.
+   *
+   * Vem em TODA leitura registrada (inclusive a recusada) de propósito: o
+   * portão vizinho também está contando gente, e uma recusa aqui é um momento
+   * em que o operador olha a tela. Só a consulta ("só conferir") não paga esse
+   * preço — ela devolve antes, sem registrar nada.
+   *
+   * `Promise.all` com o INSERT porque a fila anda: a consulta do retrato não
+   * pode somar latência à decisão da porta. E é o MESMO `SQL_PUBLICO` da
+   * sincronização — dois retratos calculados em lugares diferentes é como os
+   * números voltam a discordar.
+   */
   const registrar = async (resultado: ResultadoCheckin, ticketId: string | null, codigo: string) => {
-    await q(
-      `INSERT INTO checkins (event_id, ticket_id, code_lido, resultado, gate, operator_id)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [eventId, ticketId, codigo.slice(0, 120), resultado, gate ?? null, operador])
+    const [, publico] = await Promise.all([
+      q(`INSERT INTO checkins (event_id, ticket_id, code_lido, resultado, gate, operator_id)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [eventId, ticketId, codigo.slice(0, 120), resultado, gate ?? null, operador]),
+      q1<any>(SQL_PUBLICO, [eventId]),
+    ])
     return {
       ok: resultado === 'ok',
       resultado,
       mensagem: MENSAGEM_CHECKIN[resultado],
+      publico: retratoDoPublico(publico),
     }
   }
 
@@ -94,8 +122,17 @@ export default defineEventHandler(async (event) => {
   }
 
   const ingresso = await q1<any>(
+    // `half_*` entra aqui porque a portaria é quem PEDE o documento. Sem estes
+    // três campos o operador lia só o nome do tipo ("Meia-entrada") e ficava
+    // sem saber qual papel pedir — com a fila na frente, que é o problema que
+    // a migração 015 existe pra resolver e que morria na borda da consulta.
+    // `tt.kind` vem junto porque a meia do BALCÃO nasce sem `half_reason` e
+    // sem texto congelado (o gatilho da 015 só derruba a venda online sem
+    // motivo). Sem a espécie, esse ingresso volta a chegar na porta sem dizer
+    // que é meia — o mesmo furo, por outra porta.
     `SELECT t.id, t.status, t.event_id, t.holder_name, t.checked_in_at,
-            s.name AS setor, l.name AS lote, tt.name AS tipo,
+            t.half_reason, t.half_document, t.half_document_required,
+            s.name AS setor, l.name AS lote, tt.name AS tipo, tt.kind AS especie,
             es.starts_at AS sessao_inicio, es.ends_at AS sessao_fim
        FROM tickets t
        JOIN sectors s ON s.id = t.sector_id
@@ -170,6 +207,9 @@ function dadosDoIngresso(i: any) {
     setor: i.setor,
     lote: i.lote,
     tipo: i.tipo,
+    // null quando o ingresso é inteira — a tela só mostra o bloco quando há
+    // algo a pedir. Ver `meiaDoIngresso` em utils/catraca.ts.
+    meia: meiaDoIngresso(i),
   }
 }
 

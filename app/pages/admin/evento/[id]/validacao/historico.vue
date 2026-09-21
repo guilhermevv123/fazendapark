@@ -46,17 +46,36 @@ const { data, pending, error: falha, refresh } = await useFetch<any>(
  *
  * `server: false`: é uma requisição POST autenticada que só interessa depois
  * que a tela está na mão de alguém.
+ *
+ * O erro é CAPTURADO e mostrado porque esta leitura pode ser negada de
+ * verdade: `utils/papeis.ts` dá a área `portaria` ao master, à operação e à
+ * portaria — e NÃO ao financeiro. Sem ler a falha, quem é do financeiro abria
+ * esta tela e via "Pessoas dentro —" com a legenda "lendo o livro de
+ * entradas…" para sempre: um 403 disfarçado de carregamento, que é a falha
+ * muda de sempre (nada no console, nada vermelho, só a tela mentindo).
  */
-const { data: livro } = await useFetch<any>('/api/portaria/sincronizar', {
-  method: 'POST',
-  body: { eventId: id, fila: [], comLista: false },
-  server: false,
+const { data: livro, error: falhaDoLivro } = await useFetch<any>(
+  '/api/portaria/sincronizar', {
+    method: 'POST',
+    body: { eventId: id, fila: [], comLista: false },
+    server: false,
+  })
+
+/** o que escrever debaixo do card quando o livro não veio */
+const porqueSemLivro = computed(() => {
+  if (!falhaDoLivro.value) return 'lendo o livro de entradas…'
+  const f = falhaDoLivro.value as any
+  return f?.data?.statusMessage || f?.statusMessage
+    || 'não foi possível ler o livro de entradas'
 })
 
 const conflitos = computed<any[]>(() => livro.value?.conflitos ?? [])
 
 const hora = (v: string | null) =>
   v ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' }) : '—'
+
+/** 0,5% e não "0.5%" */
+const pct = (v: number) => Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 })
 
 const SELO: Record<string, string> = {
   ok: 'selo-ok', ja_usado: 'selo-alerta', fora_da_sessao: 'selo-alerta',
@@ -122,6 +141,9 @@ useHead({ title: 'Histórico de leituras' })
             · {{ livro.publico.offline }} sem rede
           </template>
         </p>
+        <p v-else class="mt-1 text-xs" :class="falhaDoLivro ? 'text-erro' : 'text-tinta-fraca'">
+          {{ porqueSemLivro }}
+        </p>
       </div>
       <div class="card">
         <p class="rotulo-kpi">Leituras</p>
@@ -137,11 +159,18 @@ useHead({ title: 'Histórico de leituras' })
           {{ data.resumo.recusadas }}
         </p>
       </div>
+      <!-- Comparecimento sai do LIVRO, junto com "Pessoas dentro" — e não do
+           carimbo do ingresso, que é trava e não ledger. Com as duas fontes
+           lado a lado esta tela mostrava "2 pessoas dentro" e "0%" ao mesmo
+           tempo. Ver `retratoDoPublico` em server/utils/catraca.ts. -->
       <div class="card">
         <p class="rotulo-kpi">Comparecimento</p>
-        <p class="numero-kpi mt-1">{{ data.resumo.comparecimentoPct }}%</p>
-        <p class="mt-1 text-xs text-tinta-fraca">
-          {{ data.resumo.entraram }} de {{ data.resumo.aptos }}
+        <p class="numero-kpi mt-1">{{ livro ? `${pct(livro.publico.comparecimentoPct)}%` : '—' }}</p>
+        <p class="mt-1 text-xs" :class="falhaDoLivro ? 'text-erro' : 'text-tinta-fraca'">
+          <template v-if="livro">
+            {{ livro.publico.ingressos }} de {{ livro.publico.aptos }} ingressos aptos
+          </template>
+          <template v-else>{{ porqueSemLivro }}</template>
         </p>
       </div>
     </div>

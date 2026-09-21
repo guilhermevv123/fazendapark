@@ -6,11 +6,17 @@
  *   2. ingresso emitido tem QR que só o servidor consegue assinar;
  *   3. a mesma pessoa não entra duas vezes, nem com dois leitores simultâneos;
  *   4. estorno depois de pago devolve estoque e cancela ingresso — menos o que
- *      já entrou no parque.
+ *      já entrou no parque;
+ *   5. **cortesia não é sinônimo de zero** — três pedidos fecham em zero e só
+ *      um é cortesia; quem confunde os três põe venda na coluna de entrada
+ *      gratuita do borderô que o produtor leva pro sócio.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { db, q, q1, tx } from './db'
-import { emitirIngressos } from './emissao'
+import {
+  SQL_CORTESIA_SEM_ORIGEM, SQL_E_CORTESIA, SQL_E_VENDA_GRATUITA,
+  eCortesia, emitirIngressos,
+} from './emissao'
 import { reservar } from './estoque'
 import { lerQr, montarQr } from './ingresso'
 
@@ -208,4 +214,381 @@ describe('estorno depois de pago', () => {
     expect(mapa.usado).toBe(1)        // entrou: continua como usado, é prejuízo a cobrar
     expect(mapa.cancelado).toBe(2)
   })
+})
+
+/* ===========================================================================
+ * CORTESIA × VENDA QUE FECHOU EM ZERO
+ *
+ * Três pedidos fecham em R$ 0,00 e `tickets.is_courtesy` carimba os três
+ * igual, porque a coluna diz "fechou em zero" e não "é cortesia":
+ *
+ *   1. convite do patrocinador          canal `cortesia`  → É cortesia
+ *   2. cupom/promoção de 100%           canal `online`    → é VENDA
+ *   3. criança até 5 anos (lote R$ 0)   canal `online`    → é VENDA
+ *
+ * Quem lê a marca chama os três de cortesia. Custa duas coisas ao mesmo tempo:
+ * o borderô que o produtor leva pro sócio joga venda na coluna de entrada
+ * gratuita (e a receita da promoção some da explicação), e o comprador que usou
+ * o cupom dele recebe um ingresso escrito CORTESIA na própria tela do pedido.
+ *
+ * O caso abaixo emite os três pelo caminho de verdade e exige que só o
+ * primeiro conte como cortesia — no SQL compartilhado, na lista da portaria e
+ * na tela do comprador. Arranque a origem de `SQL_E_CORTESIA` (ou devolva
+ * `t.is_courtesy` a qualquer um dos dois leitores) e ele fica vermelho.
+ * ======================================================================== */
+
+const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
+
+describe('cortesia não é "o pedido fechou em zero"', () => {
+  let setorZero = '', setorOrfao = '', setorCancelada = '', codigoOrfao = ''
+  let noAr = false
+  let cookie = ''
+  type Caso = {
+    id: string; code: string; ingresso: string; loteId: string
+    /** o que `emitirIngressos` respondeu — só existe em quem passou por ele */
+    emissao?: Awaited<ReturnType<typeof emitirIngressos>>
+  }
+  let cortesia: Caso, promocao: Caso, crianca: Caso
+
+  const novoLote = async (setor: string, nome: string, precoCents: number) =>
+    (await q1<any>(
+      `INSERT INTO lots (sector_id, name, price_cents, quantity, max_per_order)
+       VALUES ($1, $2 || ' ' || gen_random_uuid(), $3, 50, 10) RETURNING id`,
+      [setor, nome, precoCents]))!.id
+
+  /**
+   * Uma VENDA que fecha em zero, emitida pelo caminho de verdade —
+   * `emitirIngressos`, o mesmo que o webhook do Asaas chama. É ele que carimba
+   * `is_courtesy`, então é por ele que o defeito tem que passar: montar o
+   * ingresso na mão provaria só o que o próprio teste escreveu.
+   *
+   * `face = desconto` cobre os dois casos de uma vez: com face 4000 é a
+   * promoção de 100%; com face 0 é o lote gratuito da criança.
+   */
+  async function vendaQueFechaEmZero(
+    nome: string, faceCents: number, tipoNome: string | null,
+  ): Promise<Caso> {
+    const loteId = await novoLote(setorZero, nome, faceCents)
+    const tipoId = tipoNome
+      ? (await q1<any>(`INSERT INTO ticket_types (lot_id, name, quantity)
+                        VALUES ($1,$2,50) RETURNING id`, [loteId, tipoNome]))!.id
+      : null
+    const ped = (await q1<any>(
+      `INSERT INTO orders (org_id, event_id, customer_id, code, status, channel,
+                           payment_method, face_cents, fee_cents, platform_cents,
+                           discount_cents, total_cents, expires_at)
+       VALUES ($1,$2,$3,'P'||substr(gen_random_uuid()::text,1,8),
+               'aguardando_pagamento','online','pix',$4,0,0,$4,0,
+               now() + interval '20 minutes')
+       RETURNING id, code`, [orgId, eventId, customerId, faceCents]))!
+    await q(
+      `INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity,
+                                unit_face_cents, unit_fee_cents, unit_total_cents)
+       VALUES ($1,$2,$3,1,$4,0,0)`, [ped.id, loteId, tipoId, faceCents])
+    await tx((c) => reservar(c, [{ lotId: loteId, quantidade: 1 }]))
+
+    // Fixture quebrada é erro, não asserção: `expect` aqui dentro morre no
+    // `beforeAll` e leva o describe inteiro pra "skipped", que passa batido
+    // em quem lê só o rodapé. O que É invariante está nos `it` abaixo.
+    const r = await emitirIngressos(ped.id)
+    if (!r.emitiu) throw new Error(`fixture ${nome}: a emissão não rodou — ${r.motivo}`)
+
+    const t = (await q1<any>(
+      `SELECT code FROM tickets WHERE order_id = $1`, [ped.id]))!
+    return { id: ped.id, code: ped.code, ingresso: t.code, loteId, emissao: r }
+  }
+
+  /** A cortesia de verdade, montada como `cortesias.post.ts` monta. */
+  async function cortesiaInstitucional(setor = setorZero, nome = 'ZZ Convite'): Promise<Caso> {
+    const loteId = await novoLote(setor, nome, 4000)
+    const ped = (await q1<any>(
+      `INSERT INTO orders (org_id, event_id, code, status, channel, payment_method,
+                           face_cents, fee_cents, platform_cents, discount_cents,
+                           total_cents, paid_at)
+       VALUES ($1,$2,'CRT-'||substr(gen_random_uuid()::text,1,8),'pago',
+               'cortesia','cortesia',0,0,0,0,0,now())
+       RETURNING id, code`, [orgId, eventId]))!
+    const item = (await q1<any>(
+      `INSERT INTO order_items (order_id, lot_id, quantity,
+                                unit_face_cents, unit_fee_cents, unit_total_cents)
+       VALUES ($1,$2,1,0,0,0) RETURNING id`, [ped.id, loteId]))!
+    const t = (await q1<any>(
+      `INSERT INTO tickets (org_id, event_id, order_id, order_item_id, sector_id,
+                            lot_id, code, qr_secret, status, is_courtesy, holder_name)
+       VALUES ($1,$2,$3,$4,$5,$6,'CRT-'||encode(gen_random_bytes(5),'hex'),
+               encode(gen_random_bytes(16),'hex'),'valido',true,'Jornal da Cidade')
+       RETURNING code`, [orgId, eventId, ped.id, item.id, setor, loteId]))!
+    await q(`UPDATE lots SET sold = sold + 1 WHERE id = $1`, [loteId])
+    return { id: ped.id, code: ped.code, ingresso: t.code, loteId }
+  }
+
+  beforeAll(async () => {
+    setorZero = (await q1<any>(`INSERT INTO sectors (event_id, name)
+      VALUES ($1,'ZZ Zero') RETURNING id`, [eventId]))!.id
+    setorOrfao = (await q1<any>(`INSERT INTO sectors (event_id, name)
+      VALUES ($1,'ZZ Sem Pedido') RETURNING id`, [eventId]))!.id
+    // Setor só dela: a cortesia CANCELADA é o que separa o número desta tela
+    // do número do borderô, e os casos acima conferem total por setor — se
+    // ela caísse no setor de outro caso, mexeria no total dele.
+    setorCancelada = (await q1<any>(`INSERT INTO sectors (event_id, name)
+      VALUES ($1,'ZZ Cortesia Cancelada') RETURNING id`, [eventId]))!.id
+
+    cortesia = await cortesiaInstitucional()
+    promocao = await vendaQueFechaEmZero('ZZ Promoção 100%', 4000, null)
+    crianca = await vendaQueFechaEmZero('ZZ Infantil', 0, 'Criança até 5 anos')
+
+    // O ingresso que NINGUÉM consegue classificar: sem pedido. Importação,
+    // INSERT na mão, ou pedido apagado (a FK é ON DELETE SET NULL).
+    const loteOrfao = await novoLote(setorOrfao, 'ZZ Órfão', 4000)
+    codigoOrfao = (await q1<any>(
+      `INSERT INTO tickets (org_id, event_id, sector_id, lot_id, code, qr_secret,
+                            status, is_courtesy, holder_name)
+       VALUES ($1,$2,$3,$4,'ORF-'||encode(gen_random_bytes(5),'hex'),
+               encode(gen_random_bytes(16),'hex'),'valido',true,'ZZ Sem Origem')
+       RETURNING code`, [orgId, eventId, setorOrfao, loteOrfao]))!.code
+
+    // A cortesia que foi DADA e depois cancelada. Ela devolveu o lugar, então
+    // o borderô e a tela de Cortesias não a contam mais; esta lista conta,
+    // porque mostra ingresso cancelado junto com o resto. É a diferença que o
+    // caso lá embaixo obriga a ter nome.
+    const cancelada = await cortesiaInstitucional(setorCancelada, 'ZZ Cortesia Cancelada')
+    await q(`UPDATE tickets SET status='cancelado', canceled_at=now() WHERE code = $1`,
+      [cancelada.ingresso])
+    await q(`UPDATE lots SET sold = GREATEST(sold - 1, 0) WHERE id = $1`, [cancelada.loteId])
+
+    // Sessão própria, na org da fixture: a cerca de tenant recusa o evento de
+    // outro produtor, e sem isso a lista viria 404 e o caso passaria à toa.
+    const email = `emissao.cortesia.${crypto.randomUUID()}@teste.invalido`
+    await q(
+      `INSERT INTO users (org_id, name, email, password_hash, role, papel)
+       SELECT $1,'ZZ Dona Emissão',$2,password_hash,'master','master'
+         FROM users WHERE email = 'dono@fazendapark.com.br'`, [orgId, email])
+    try {
+      const r = await fetch(`${BASE}/api/auth/entrar`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, senha: 'diamond123' }),
+        signal: AbortSignal.timeout(5000),
+      })
+      cookie = (r.headers.getSetCookie?.() ?? [])
+        .map((c) => c.split(';')[0]).find((c) => c.startsWith('dt_sessao=')) ?? ''
+      noAr = Boolean(cookie)
+    } catch { noAr = false }
+  }, 60_000)
+
+  /**
+   * A marca está nos três — é ela que engana. Se este caso cair, alguém mudou
+   * o que `emissao.ts` carimba, e os casos abaixo pararam de provar a
+   * distinção (passariam sem a origem, por não haver mais o que confundir).
+   */
+  it('os três fecham em zero e os três recebem a marca `is_courtesy`', async () => {
+    const marcas = await q<any>(
+      `SELECT code, is_courtesy FROM tickets WHERE code = ANY($1)`,
+      [[cortesia.ingresso, promocao.ingresso, crianca.ingresso]])
+    expect(marcas.length).toBe(3)
+    for (const m of marcas) {
+      expect(m.is_courtesy, `${m.code} não recebeu a marca — o teste perdeu o sentido`).toBe(true)
+    }
+  })
+
+  /**
+   * A própria emissão já responde, e responde pela ORIGEM: o caminho de
+   * `emitirIngressos` é o da VENDA (webhook do Asaas, balcão). Fechar em zero
+   * não muda o que ele é.
+   */
+  it('a emissão de uma venda não se declara cortesia nem fechando em zero', () => {
+    expect(promocao.emissao!.cortesia, 'a promoção de 100% saiu como cortesia').toBe(false)
+    expect(crianca.emissao!.cortesia, 'a criança de 4 anos saiu como cortesia').toBe(false)
+  })
+
+  it('só o convite conta como cortesia; promoção e criança são VENDA', async () => {
+    const linhas = await q<any>(
+      `SELECT t.code,
+              ${SQL_E_CORTESIA('t')}         AS cortesia,
+              ${SQL_E_VENDA_GRATUITA('t')}   AS gratuito,
+              ${SQL_CORTESIA_SEM_ORIGEM('t')} AS sem_origem
+         FROM tickets t WHERE t.code = ANY($1)`,
+      [[cortesia.ingresso, promocao.ingresso, crianca.ingresso]])
+    const por = Object.fromEntries(linhas.map((l) => [l.code, l]))
+
+    expect(por[cortesia.ingresso].cortesia, 'o convite do patrocinador deixou de ser cortesia').toBe(true)
+    expect(por[promocao.ingresso].cortesia, 'a promoção de 100% foi contada como cortesia').toBe(false)
+    expect(por[crianca.ingresso].cortesia, 'a criança de 4 anos foi contada como cortesia').toBe(false)
+
+    expect(por[promocao.ingresso].gratuito).toBe(true)
+    expect(por[crianca.ingresso].gratuito).toBe(true)
+    expect(por[cortesia.ingresso].gratuito, 'a cortesia entrou também como venda gratuita').toBe(false)
+
+    // Os dois recortes PARTICIONAM o que saiu de graça: nenhum ingresso pode
+    // cair nos dois nem sumir dos dois — é assim que a soma das colunas de uma
+    // tela continua batendo com o total dela.
+    for (const l of linhas) {
+      expect(l.cortesia !== l.gratuito, `${l.code} caiu nos dois recortes (ou em nenhum)`).toBe(true)
+      expect(l.sem_origem, `${l.code} tem pedido e mesmo assim saiu como "sem origem"`).toBe(false)
+    }
+  })
+
+  it('a régua em TypeScript responde igual à de SQL', async () => {
+    const linhas = await q<any>(
+      `SELECT t.code, t.is_courtesy, o.channel, ${SQL_E_CORTESIA('t')} AS no_sql
+         FROM tickets t LEFT JOIN orders o ON o.id = t.order_id
+        WHERE t.code = ANY($1)`,
+      [[cortesia.ingresso, promocao.ingresso, crianca.ingresso, codigoOrfao]])
+    expect(linhas.length).toBe(4)
+    for (const l of linhas) {
+      expect(eCortesia(l.is_courtesy, l.channel),
+        `${l.code}: a tela do comprador e o relatório do produtor discordariam`)
+        .toBe(l.no_sql)
+    }
+  })
+
+  it('ingresso sem pedido não dá pra distinguir — e a leitura diz isso', async () => {
+    const l = (await q1<any>(
+      `SELECT ${SQL_E_CORTESIA('t')} AS cortesia,
+              ${SQL_CORTESIA_SEM_ORIGEM('t')} AS sem_origem
+         FROM tickets t WHERE t.code = $1`, [codigoOrfao]))!
+    // Conta como cortesia: é o lado seguro (entrada de graça que ninguém
+    // explica). Mas vai marcado, pra tela poder dizer que ali não há prova.
+    expect(l.cortesia).toBe(true)
+    expect(l.sem_origem, 'o ingresso sem pedido passou como cortesia provada').toBe(true)
+  })
+
+  it('a lista da portaria conta cortesia e venda gratuita em colunas separadas', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const r = await fetch(
+      `${BASE}/api/admin/evento/${eventId}/participantes?setor=${setorZero}`,
+      { headers: { cookie } })
+    const d: any = await r.json()
+    expect(r.status, `a lista não abriu: ${d.statusMessage ?? d.message ?? ''}`).toBe(200)
+
+    expect(d.resumo.total, 'a fixture dos três casos mudou de tamanho').toBe(3)
+    expect(d.resumo.cortesias,
+      'a lista contou venda gratuita como cortesia — o KPI do topo mente pro produtor').toBe(1)
+    expect(d.resumo.gratuitos, 'a venda que fechou em zero sumiu da tela').toBe(2)
+    expect(d.resumo.cortesiasSemOrigem).toBe(0)
+
+    const por = Object.fromEntries(d.participantes.map((p: any) => [p.codigo, p]))
+    expect(por[cortesia.ingresso].cortesia).toBe(true)
+    expect(por[cortesia.ingresso].gratuito).toBe(false)
+    for (const c of [promocao.ingresso, crianca.ingresso]) {
+      expect(por[c].cortesia, `${c} saiu com o selo CORTESIA sendo venda`).toBe(false)
+      expect(por[c].gratuito).toBe(true)
+      expect(por[c].origemNaoRegistrada).toBe(false)
+    }
+  }, 30_000)
+
+  it('a lista marca o ingresso sem pedido como origem não registrada', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const r = await fetch(
+      `${BASE}/api/admin/evento/${eventId}/participantes?setor=${setorOrfao}`,
+      { headers: { cookie } })
+    const d: any = await r.json()
+    expect(r.status).toBe(200)
+    expect(d.resumo.cortesias).toBe(1)
+    expect(d.resumo.cortesiasSemOrigem,
+      'a tela não tem como avisar que essa não dá pra distinguir').toBe(1)
+    expect(d.participantes[0].codigo).toBe(codigoOrfao)
+    expect(d.participantes[0].origemNaoRegistrada).toBe(true)
+  }, 30_000)
+
+  /**
+   * O convite do patrocinador não tem comprador: `cortesias.post.ts` grava o
+   * pedido sem `customer_id` (quem recebe não preencheu formulário nenhum, o
+   * nome dele está no INGRESSO). A rota fazia `JOIN customers`, o pedido sumia
+   * da consulta e o convidado lia "Pedido não encontrado" no link que o
+   * próprio sistema mandou. Nada estourava: um JOIN come linha sem par em
+   * silêncio.
+   */
+  it('o link do convite abre — pedido sem comprador não some no JOIN', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const semComprador = await q1<any>(
+      `SELECT customer_id FROM orders WHERE id = $1`, [cortesia.id])
+    expect(semComprador!.customer_id,
+      'a cortesia passou a ter comprador — o caso deixou de exercitar o JOIN').toBe(null)
+
+    const r = await fetch(`${BASE}/api/pedido/${cortesia.code}`)
+    const d: any = await r.json()
+    expect(r.status,
+      `o convidado levou "${d.statusMessage ?? d.message ?? ''}" no link do próprio convite`)
+      .toBe(200)
+    expect(d.comprador.nome, 'inventou um comprador que não existe').toBe(null)
+    expect(d.comprador.email).toBe(null)
+    expect(d.ingressos.length, 'abriu, mas sem o ingresso — o QR do convite não aparece').toBe(1)
+    expect(d.ingressos[0].codigo).toBe(cortesia.ingresso)
+  }, 30_000)
+
+  /**
+   * O MESMO evento, as MESMAS cortesias, duas telas que o produtor abre lado
+   * a lado — e dois números.
+   *
+   * Medido no evento semeado, no mesmo instante: Participantes dizia
+   * `cortesias: 3` e o borderô `cortesias: 2`, com o denominador idêntico
+   * (641 ingressos emitidos dos dois lados). A diferença é uma cortesia
+   * CANCELADA: ela devolveu o lugar, então some da ocupação (borderô, tela de
+   * Cortesias, cota, gatilho da 017) e fica nesta lista, que mostra ingresso
+   * de toda situação.
+   *
+   * Nenhum dos dois está errado — o que faltava era a conta que liga os dois.
+   * Enquanto ela não existia, o produtor que abria as duas telas tinha que
+   * escolher em qual acreditar, e é assim que um borderô vira discussão com o
+   * sócio. Agora a diferença tem nome (`cortesiasCanceladas`) e a igualdade
+   * abaixo é a régua:
+   *
+   *     cortesias − cortesiasCanceladas === cortesias do borderô
+   *
+   * Apague o campo, ou volte a contar cancelada no borderô, e este caso cai.
+   */
+  it('o número de cortesias de Participantes fecha com o do borderô', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const ler = async (rota: string) => {
+      const r = await fetch(`${BASE}/api/admin/evento/${eventId}/${rota}`, { headers: { cookie } })
+      const d: any = await r.json()
+      expect(r.status, `${rota} não abriu: ${d.statusMessage ?? d.message ?? ''}`).toBe(200)
+      return d
+    }
+    const [lista, bordero] = await Promise.all([ler('participantes'), ler('bordero')])
+
+    // Sem o mesmo denominador a comparação não vale nada: se as duas telas
+    // estivessem olhando conjuntos diferentes de ingressos, qualquer número
+    // fecharia por acaso.
+    expect(lista.resumo.total,
+      'as duas telas deixaram de olhar o mesmo conjunto de ingressos')
+      .toBe(bordero.totais.ingressosEmitidos)
+
+    // A fixture tem exatamente três marcadas como cortesia pela régua da casa
+    // (convite, órfão sem pedido, e a cancelada) e UMA delas está cancelada.
+    expect(lista.resumo.cortesias, 'a fixture das cortesias mudou de tamanho').toBe(3)
+    expect(lista.resumo.cortesiasCanceladas,
+      'a tela não tem como explicar por que o borderô mostra um número menor').toBe(1)
+
+    expect(lista.resumo.cortesias - lista.resumo.cortesiasCanceladas,
+      'Participantes e borderô discordam sobre quantas cortesias este evento deu')
+      .toBe(bordero.totais.cortesias)
+  }, 30_000)
+
+  it('a tela do comprador não escreve CORTESIA num ingresso que ele comprou', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const ler = async (code: string) => {
+      const r = await fetch(`${BASE}/api/pedido/${code}`)
+      const d: any = await r.json()
+      expect(r.status, `${code}: ${d.statusMessage ?? d.message ?? ''}`).toBe(200)
+      return d
+    }
+
+    const convite = await ler(cortesia.code)
+    expect(convite.cortesia).toBe(true)
+    expect(convite.gratuito).toBe(false)
+    expect(convite.ingressos[0].cortesia).toBe(true)
+    expect(convite.ingressos[0].gratuito).toBe(false)
+
+    for (const [nome, caso] of [['promoção de 100%', promocao], ['criança', crianca]] as const) {
+      const d = await ler(caso.code)
+      expect(d.cortesia, `o pedido de ${nome} se diz cortesia`).toBe(false)
+      expect(d.gratuito, `o pedido de ${nome} não se diz gratuito`).toBe(true)
+      expect(d.ingressos.length).toBe(1)
+      expect(d.ingressos[0].cortesia,
+        `o comprador de ${nome} recebeu um ingresso escrito CORTESIA`).toBe(false)
+      expect(d.ingressos[0].gratuito).toBe(true)
+    }
+  }, 30_000)
 })

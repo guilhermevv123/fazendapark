@@ -15,7 +15,19 @@ const id = route.params.id as string
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   `/api/admin/evento/${id}/cupons`)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+/*
+ * Data e dinheiro saem de `app/composables/formato.ts`. Esta tela tinha as
+ * duas cópias, e a de data ERRAVA:
+ *
+ *   comecaEm: new Date(c.comecaEm).toISOString().slice(0, 16)
+ *
+ * `toISOString()` converte pra UTC antes de cortar, e o `datetime-local` lê
+ * hora local. Medido: cupom que começa 21:00 do dia 20 abria no formulário
+ * como 00:00 do dia 21. Quem clicasse "Salvar" sem tocar no campo empurrava o
+ * cupom três horas pra frente — e é justamente a faixa da noite de venda.
+ * `paraCampoDataHora` lê os campos locais do `Date`, sem conversão nenhuma.
+ */
+
 const erro = ref('')
 const salvando = ref(false)
 
@@ -50,14 +62,14 @@ function abrir(c?: any) {
     valor: c ? (c.tipo === 'percentual' ? c.valor / 100 : c.valor / 100) : 10,
     maxUsos: c?.maxUsos ?? null,
     maxPorCliente: c?.maxPorCliente ?? 1,
-    comecaEm: c?.comecaEm ? new Date(c.comecaEm).toISOString().slice(0, 16) : '',
-    terminaEm: c?.terminaEm ? new Date(c.terminaEm).toISOString().slice(0, 16) : '',
+    comecaEm: paraCampoDataHora(c?.comecaEm),
+    terminaEm: paraCampoDataHora(c?.terminaEm),
     loteIds: [...(c?.loteIds ?? [])],
     ativo: c?.ativo ?? true,
   })
 }
 
-const deCampo = (v: string) => (v ? new Date(v).toISOString() : null)
+const deCampo = (v: string) => deCampoDataHora(v)
 
 async function salvar() {
   // percentual → bps; fixo → centavos. Os dois multiplicam por 100, mas por
@@ -100,8 +112,10 @@ const descricao = (c: any) =>
 function situacao(c: any) {
   if (!c.ativo) return { texto: 'DESATIVADO', classe: 'selo-neutro' }
   const agora = Date.now()
-  if (c.comecaEm && new Date(c.comecaEm).getTime() > agora) return { texto: 'AGENDADO', classe: 'selo-alerta' }
-  if (c.terminaEm && new Date(c.terminaEm).getTime() < agora) return { texto: 'EXPIRADO', classe: 'selo-neutro' }
+  const comeca = paraData(c.comecaEm)
+  const termina = paraData(c.terminaEm)
+  if (comeca && comeca.getTime() > agora) return { texto: 'AGENDADO', classe: 'selo-alerta' }
+  if (termina && termina.getTime() < agora) return { texto: 'EXPIRADO', classe: 'selo-neutro' }
   if (c.maxUsos && c.usos >= c.maxUsos) return { texto: 'ESGOTADO', classe: 'selo-erro' }
   return { texto: 'ATIVO', classe: 'selo-ok' }
 }
@@ -175,8 +189,8 @@ useHead({ title: 'Códigos promocionais' })
               {{ reais(c.descontoDadoCents) }}
             </td>
             <td class="px-3 py-3 text-xs text-tinta-suave">
-              <template v-if="c.comecaEm">de {{ new Date(c.comecaEm).toLocaleDateString('pt-BR') }}</template>
-              <template v-if="c.terminaEm"> até {{ new Date(c.terminaEm).toLocaleDateString('pt-BR') }}</template>
+              <template v-if="c.comecaEm">de {{ dataCurta(c.comecaEm) }}</template>
+              <template v-if="c.terminaEm"> até {{ dataCurta(c.terminaEm) }}</template>
               <template v-if="!c.comecaEm && !c.terminaEm">sem prazo</template>
             </td>
             <td class="px-3 py-3">

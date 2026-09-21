@@ -37,7 +37,12 @@ const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
 const SLUG = 'zz-checkout-limites'
 
 let orgId: string, eventId: string, sectorId: string, lotId: string, tipoId: string
+/** Um DIA com lotação — é ele que faz o gatilho da migração 016 disparar. */
+let sessaoId: string, setorDoDiaId: string, loteDoDiaId: string
 let noAr = false
+
+/** Lotação do dia da fixture. Dois lugares: cabe um casal, não cabe um trio. */
+const LOTACAO_DO_DIA = 2
 
 /** CPF sintético que passa no dígito verificador. */
 function cpf(): string {
@@ -88,6 +93,22 @@ beforeAll(async () => {
     `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps)
      VALUES ($1, 'Inteira', 500, 0) RETURNING id`, [lotId]))!.id
 
+  // Um dia com lotação, e um setor amarrado a ele: é assim que o parque vende
+  // "quinta-feira" em vez de "um ingresso qualquer". O teto do dia mora em
+  // `event_sessions.capacity` e quem o faz valer é o gatilho do banco.
+  sessaoId = (await q1<any>(
+    `INSERT INTO event_sessions (event_id, title, starts_at, ends_at, capacity, sort_order)
+     VALUES ($1, 'Dia cheio', now() + interval '10 days',
+             now() + interval '10 days' + interval '8 hours', $2, 1)
+     RETURNING id`, [eventId, LOTACAO_DO_DIA]))!.id
+  setorDoDiaId = (await q1<any>(
+    `INSERT INTO sectors (event_id, session_id, name) VALUES ($1, $2, 'Dia') RETURNING id`,
+    [eventId, sessaoId]))!.id
+  loteDoDiaId = (await q1<any>(
+    `INSERT INTO lots (sector_id, name, price_cents, quantity, max_per_order, channels)
+     VALUES ($1, 'Passaporte do dia', 8000, 500, 50, '{online}') RETURNING id`,
+    [setorDoDiaId]))!.id
+
   try {
     const r = await fetch(`${BASE}/api/e/${SLUG}`, { signal: AbortSignal.timeout(3000) })
     noAr = r.ok
@@ -111,7 +132,9 @@ beforeEach(async () => {
   await q(`DELETE FROM orders WHERE org_id = $1`, [orgId])
   await q(`DELETE FROM promo_codes WHERE event_id = $1`, [eventId])
   await q(`UPDATE lots SET sold = 0, reserved = 0, limit_by_document = false,
-                           max_per_document = NULL WHERE id = $1`, [lotId])
+                           max_per_document = NULL WHERE id = ANY($1::uuid[])`,
+    [[lotId, loteDoDiaId]])
+  await q(`UPDATE event_sessions SET capacity = $2 WHERE id = $1`, [sessaoId, LOTACAO_DO_DIA])
   await q(`UPDATE ticket_types SET sold = 0, max_per_customer = NULL WHERE id = $1`, [tipoId])
   await q(`UPDATE events SET max_per_customer = NULL, max_per_order = NULL,
                              sales_end_at = NULL, sales_end_minutes_after = NULL,
@@ -635,5 +658,171 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     expect(r.status).toBe(409)
     const depois = await q1<any>(`SELECT sold, reserved FROM lots WHERE id = $1`, [lotId])
     expect(depois).toEqual(antes)
+  })
+})
+
+/**
+ * O dia que lotou, e o cupom conferido antes do cartão.
+ *
+ * Os dois defeitos aqui são da mesma família — o servidor SABIA a resposta e
+ * o comprador não recebia. Num, a resposta vinha vestida de erro de servidor;
+ * no outro, vinha tarde demais.
+ */
+describe('recusas que o comprador consegue entender', () => {
+  const pular = () => {
+    if (!noAr) console.warn('  (pulado: servidor fora do ar em ' + BASE + ')')
+    return !noAr
+  }
+
+  /**
+   * O teto do dia é conferido por GATILHO no banco (migração 016), que avisa
+   * com `RAISE ... USING ERRCODE = '23514'`. Para o `pg`, isso chega igual a
+   * uma violação de CHECK — e o checkout, que só conhecia CHECKs de verdade,
+   * deixava a exceção subir crua: o comprador levava **HTTP 500 "Server
+   * Error"** ao tentar comprar 3 lugares num dia com 2.
+   *
+   * O recado já existia, escrito em português dentro do gatilho, dizendo o
+   * dia, quanto sobrou e o que fazer. Ninguém nunca leu.
+   */
+  it('dia lotado responde o recado do dia — não "Server Error"', async () => {
+    if (pular()) return
+
+    const cabe = await comprar({ itens: [{ lotId: loteDoDiaId, quantidade: LOTACAO_DO_DIA }] })
+    expect(cabe.status, cabe.recado).toBe(200)
+
+    await q(`DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE org_id = $1)`,
+      [orgId])
+    await q(`DELETE FROM tickets WHERE order_id IN (SELECT id FROM orders WHERE org_id = $1)`,
+      [orgId])
+    await q(`DELETE FROM orders WHERE org_id = $1`, [orgId])
+    await q(`UPDATE lots SET sold = 0, reserved = 0 WHERE id = $1`, [loteDoDiaId])
+
+    const estoura = await comprar({
+      itens: [{ lotId: loteDoDiaId, quantidade: LOTACAO_DO_DIA + 1 }],
+    })
+    // ← 500 aqui é o defeito: o servidor tinha a frase certa na mão
+    expect(estoura.status).toBe(409)
+    expect(estoura.recado).toMatch(/não comporta mais 3 pessoa\(s\)/)
+    expect(estoura.recado).toMatch(/restam 2 de 2 lugares/)
+    expect(estoura.recado).not.toMatch(/Server Error|constraint|23514/)
+    expect(estoura.corpo.data?.tipo).toBe('sessao')
+  })
+
+  /**
+   * Conferir o cupom ANTES de pagar. Até aqui o comprador só descobria que o
+   * código não servia depois de nome, e-mail, CPF e forma de pagamento — e o
+   * código quase sempre veio de um story ou de um promoter, ou seja, a chance
+   * de estar errado é alta.
+   *
+   * A trava que importa não é "existe uma rota": é que a rota responde com a
+   * MESMA régua do checkout. Uma segunda validação "só pra tela" envelhece
+   * sozinha e passa a dizer sim onde a cobrança diz não.
+   */
+  it('cupom bom é conferido antes de pagar — sem cobrar e sem gastar o uso', async () => {
+    if (pular()) return
+    const codigo = await novoCupom({ value: 1000 })  // 10%
+
+    const r = await post('/api/cupom/conferir', {
+      eventSlug: SLUG, codigo, documento: cpf(),
+      itens: [{ lotId, quantidade: 1 }],
+    })
+    const corpo = await r.json()
+
+    expect(r.status).toBe(200)
+    expect(corpo.ok).toBe(true)
+    // 10% de uma face de 10000 centavos — em centavos inteiros
+    expect(corpo.descontoCents).toBe(1000)
+    expect(corpo.parcial).toBe(false)
+
+    // Conferir NÃO é reservar: nada gravado, nada consumido.
+    const cupom = await q1<any>(
+      `SELECT uses FROM promo_codes WHERE event_id = $1 AND code = $2`, [eventId, codigo])
+    expect(Number(cupom!.uses)).toBe(0)
+    const pedidos = await q1<any>(`SELECT count(*)::int AS n FROM orders WHERE org_id = $1`, [orgId])
+    expect(pedidos!.n).toBe(0)
+  })
+
+  it('o desconto é calculado com o preço do BANCO, não com o que o navegador manda',
+    async () => {
+      if (pular()) return
+      const codigo = await novoCupom({ value: 1000 })
+
+      const r = await post('/api/cupom/conferir', {
+        eventSlug: SLUG, codigo, documento: cpf(),
+        // preço inventado pelo cliente: aceitar isto seria deixar o comprador
+        // escolher quanto o desconto dele vale
+        itens: [{ lotId, quantidade: 1, faceCents: 9_000_000, precoCents: 9_000_000 }],
+      })
+      const corpo = await r.json()
+      expect(corpo.ok).toBe(true)
+      expect(corpo.descontoCents).toBe(1000)
+    })
+
+  it('cupom ruim dá a MESMA frase na conferência e no checkout', async () => {
+    if (pular()) return
+    const codigo = await novoCupom({ ends_at: new Date(Date.now() - 86_400_000) })
+    const documento = cpf()
+
+    const conferencia = await (await post('/api/cupom/conferir', {
+      eventSlug: SLUG, codigo, documento, itens: [{ lotId, quantidade: 1 }],
+    })).json()
+
+    const cobranca = await comprar({
+      itens: [{ lotId, quantidade: 1 }], cupom: codigo,
+      comprador: { nome: 'Comprador de Teste', email: `c.${Date.now()}@exemplo.com`, documento },
+    })
+
+    expect(conferencia.ok).toBe(false)
+    expect(conferencia.motivo).toBe('vencido')
+    expect(cobranca.status).toBe(409)
+    // ← duas frases diferentes pro mesmo cupom é a assinatura de duas réguas
+    expect(conferencia.recado).toBe(cobranca.recado)
+  })
+
+  /**
+   * Sem CPF a conferência ainda responde — o comprador digita o cupom antes
+   * do CPF, e travar até o CPF existir devolveria o problema ao lugar de onde
+   * ele saiu. O que ela NÃO pode fazer é dar um sim que não vale: a única
+   * regra pulada é "uma vez por pessoa", e a resposta diz isso em `parcial`.
+   */
+  it('sem CPF a conferência responde, mas se declara PARCIAL', async () => {
+    if (pular()) return
+    const codigo = await novoCupom({ max_per_customer: 1 })
+    const documento = cpf()
+
+    // a pessoa já usou o cupom
+    expect((await comprar({
+      itens: [{ lotId, quantidade: 1 }], cupom: codigo,
+      comprador: { nome: 'Comprador de Teste', email: `c.${Date.now()}@exemplo.com`, documento },
+    })).status).toBe(200)
+
+    const semCpf = await (await post('/api/cupom/conferir', {
+      eventSlug: SLUG, codigo, itens: [{ lotId, quantidade: 1 }],
+    })).json()
+    expect(semCpf.ok).toBe(true)
+    // ← sem o aviso, a tela pintaria de verde um cupom que a cobrança recusa
+    expect(semCpf.parcial).toBe(true)
+
+    const comCpf = await (await post('/api/cupom/conferir', {
+      eventSlug: SLUG, codigo, documento, itens: [{ lotId, quantidade: 1 }],
+    })).json()
+    expect(comCpf.ok).toBe(false)
+    expect(comCpf.recado).toMatch(/já usou/)
+  })
+
+  it('evento fechado não tem cupom bom — e responde a frase da porta', async () => {
+    if (pular()) return
+    const codigo = await novoCupom()
+    await q(`UPDATE events SET starts_at = now() - interval '2 days',
+                               ends_at = now() - interval '1 day' WHERE id = $1`, [eventId])
+
+    const conferencia = await (await post('/api/cupom/conferir', {
+      eventSlug: SLUG, codigo, documento: cpf(), itens: [{ lotId, quantidade: 1 }],
+    })).json()
+    const cobranca = await comprar({ itens: [{ lotId, quantidade: 1 }], cupom: codigo })
+
+    expect(conferencia.ok).toBe(false)
+    expect(conferencia.motivo).toBe('venda_fechada')
+    expect(conferencia.recado).toBe(cobranca.recado)
   })
 })

@@ -951,3 +951,421 @@ describe('adiar o evento', () => {
     }
   }, 20_000)
 })
+
+/* ==========================================================================
+ * AS TRÊS PAREDES DA DEVOLUÇÃO EM DOBRO
+ * ======================================================================= */
+
+/**
+ * O `try` do estornador embrulhava a chamada ao gateway E a gravação. Falhando
+ * a gravação DEPOIS de o dinheiro ter saído, o `catch` devolvia a linha pra
+ * fila — e a próxima tentativa chamava `estornar()` de novo. Sem chave de
+ * idempotência no gateway, isso é devolução em dobro de verdade: o comprador
+ * recebe duas vezes e o produtor fica no prejuízo, sem nenhum vermelho em
+ * lugar nenhum.
+ *
+ * A saída tem o mesmo desenho do saque (`executarPayoutReivindicado`), três
+ * paredes:
+ *
+ *  1. o recibo entra na linha ANTES do que pode demorar;
+ *  2. linha com recibo (ou com valor confirmado) nunca mais fala com o gateway;
+ *  3. toda retentativa PERGUNTA ao gateway antes de mandar — e sem resposta
+ *     clara, não manda.
+ */
+describe('a devolução não sai duas vezes', () => {
+  const P_DOBRA   = '0000c020-0000-4000-8000-0000000000d1'
+  const P_PRESO   = '0000c020-0000-4000-8000-0000000000d2'
+  const P_MUDO    = '0000c020-0000-4000-8000-0000000000d3'
+  const P_FALHOU  = '0000c020-0000-4000-8000-0000000000d4'
+
+  /**
+   * Linha de fila que só a reserva POR ID alcança: `available_at` no futuro
+   * mantém o trabalhador de fundo do servidor de dev (que usa o estornador de
+   * VERDADE) fora do caminho.
+   */
+  const enfileirar = (pedido: string, valor: number) =>
+    q1<any>(
+      `INSERT INTO refund_jobs (org_id, event_id, order_id, reason, amount_cents,
+                                asaas_payment_id, available_at)
+       VALUES ($1,$2,$3,'evento_cancelado',$4,$5, now() + interval '1 hour')
+       RETURNING id`, [ORG, EVENTO, pedido, valor, `sim_${pedido.slice(-6)}`])
+
+  beforeAll(async () => {
+    await reporEvento()
+  })
+
+  /**
+   * O repro medido: a gravação falha DEPOIS do gateway.
+   *
+   * A falha é forçada do jeito que ela acontece em produção — a linha do
+   * pedido travada por outra transação. Com `lock_timeout = '10s'` isso vira
+   * erro em vez de conexão pendurada, e é exatamente o caminho que o defeito
+   * usava pra voltar pra fila.
+   */
+  it('gravação que falha depois do gateway NÃO manda o dinheiro de novo', async () => {
+    await semear({ id: P_DOBRA, codigo: 'ZZD-DOBRA', face: 50_000, fee: 0, plataforma: 0 })
+    const linha = await enfileirar(P_DOBRA, 50_000)
+
+    let chamadasAoGateway = 0
+    // O conferidor responde "não achei devolução nenhuma": é o pior caso pra
+    // parede 3 — ela não pode ser a única coisa segurando a dobra.
+    C.usarEstornador(
+      async () => { chamadasAoGateway++; return { id: `re_dobra_${chamadasAoGateway}` } },
+      async () => ({ devolvidoCents: 0, reciboId: null }))
+
+    const travador = await banco.db().connect()
+    let primeira: any
+    try {
+      await travador.query('BEGIN')
+      await travador.query(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, [P_DOBRA])
+
+      primeira = await C.processarUmEstorno('teste-dobra', linha.id)
+      // Reestaciona a linha ANTES de qualquer afirmação. `fecharLinha` deixa
+      // `claimed_at` cinco minutos atrás de propósito (pro resgate alcançar na
+      // varredura seguinte) — e o trabalhador de fundo do SERVIDOR DE DEV, que
+      // varre a cada 15 s, pegaria esta linha no meio do caso. Parada em
+      // 'na_fila' com espera no futuro, só a reserva por id chega nela.
+      await q(`UPDATE refund_jobs SET status = 'na_fila',
+                      available_at = now() + interval '1 hour' WHERE id = $1`, [linha.id])
+    } finally {
+      await travador.query('ROLLBACK').catch(() => {})
+      travador.release()
+    }
+
+    expect(chamadasAoGateway, 'o gateway nem foi chamado — o repro não reproduziu').toBe(1)
+    expect(primeira!.ok, 'a gravação travada não falhou: o caso não prova nada').toBe(false)
+    expect(primeira!.status,
+      'a linha voltou pra fila depois de o dinheiro sair — a próxima tentativa devolve em dobro')
+      .toBe('estornando')
+    expect(primeira!.erro, 'a mensagem não avisa que o dinheiro JÁ saiu')
+      .toMatch(/saiu no gateway/i)
+
+    // Parede 1: o recibo ficou guardado mesmo com a gravação grande falhando.
+    const naFila = await q1<any>(`SELECT * FROM refund_jobs WHERE id = $1`, [linha.id])
+    // A fixture tem id fixo e o banco é compartilhado: duas rodadas da suíte ao
+    // mesmo tempo apagam o fixture uma da outra. Dizer isso é melhor do que
+    // estourar um TypeError e mandar procurar defeito onde não tem.
+    expect(naFila, 'a linha da fila sumiu no meio do caso — outra rodada da suíte está '
+      + 'usando o mesmo banco e apagou o fixture').not.toBeNull()
+    expect(naFila.gateway_refund_id,
+      'o recibo do gateway se perdeu: a próxima tentativa não tem como saber que já saiu')
+      .toBe('re_dobra_1')
+    expect(Number(naFila.refunded_cents),
+      'nem o valor confirmado ficou: a parede 2 fica sem marca nenhuma quando o gateway '
+      + 'responde sem id de recibo').toBe(50_000)
+
+    // Parede 2: a retentativa fecha o registro SEM tocar no gateway.
+    const segunda = await C.processarUmEstorno('teste-dobra', linha.id)
+    expect(chamadasAoGateway,
+      'a retentativa chamou o gateway de novo: o comprador recebeu duas vezes').toBe(1)
+    expect(segunda!.ok, 'a retentativa não conseguiu fechar o registro').toBe(true)
+    expect(segunda!.status).toBe('estornado')
+
+    const o = await pedidoNoBanco(P_DOBRA)
+    expect(Number(o.refunded_cents), 'o pedido não fechou com o valor devolvido').toBe(50_000)
+    expect(Number(o.refunded_cents),
+      'devolveu mais do que entrou').toBeLessThanOrEqual(Number(o.total_cents))
+
+    C.usarEstornador(null)
+  }, 40_000)
+
+  /**
+   * A parede 3 sozinha: linha que já esteve na mão de alguém (`attempts > 1`)
+   * e não guardou recibo — o caso do processo morto entre a resposta do
+   * gateway e qualquer gravação. A única fonte de verdade é o gateway.
+   */
+  it('retentativa pergunta ao gateway antes de mandar, e adota o que já saiu', async () => {
+    await semear({ id: P_PRESO, codigo: 'ZZD-PRESO', face: 30_000, fee: 0, plataforma: 0 })
+    const linha = await enfileirar(P_PRESO, 30_000)
+    // como se a tentativa anterior tivesse morrido: contada, sem recibo
+    await q(`UPDATE refund_jobs SET attempts = 1, status = 'na_fila' WHERE id = $1`, [linha.id])
+
+    let mandou = 0
+    let perguntou = 0
+    C.usarEstornador(
+      async () => { mandou++; return { id: 're_nao_devia' } },
+      async () => {
+        perguntou++
+        // o gateway responde: o dinheiro JÁ saiu na tentativa que morreu
+        return { devolvidoCents: 30_000, reciboId: 're_que_ja_existia' }
+      })
+    try {
+      const r = await C.processarUmEstorno('teste-preso', linha.id)
+      expect(perguntou, 'mandou sem perguntar: é a janela inteira da devolução em dobro')
+        .toBe(1)
+      expect(mandou, 'o gateway recebeu um segundo estorno do mesmo dinheiro').toBe(0)
+      expect(r!.ok).toBe(true)
+      expect(r!.adotado, 'fechou como se tivesse mandado agora').toBe(true)
+    } finally {
+      C.usarEstornador(null)
+    }
+
+    const o = await pedidoNoBanco(P_PRESO)
+    expect(Number(o.refunded_cents), 'não contou o dinheiro que o gateway confirmou ter saído')
+      .toBe(30_000)
+    const naFila = await filaDoPedido(P_PRESO)
+    expect(naFila.gateway_refund_id, 'perdeu o recibo que o gateway devolveu')
+      .toBe('re_que_ja_existia')
+  }, 40_000)
+
+  /** gateway mudo na retentativa: sem resposta clara, NÃO manda. */
+  it('gateway sem resposta na retentativa não vira "manda de novo"', async () => {
+    await semear({ id: P_MUDO, codigo: 'ZZD-MUDO', face: 20_000, fee: 0, plataforma: 0 })
+    const linha = await enfileirar(P_MUDO, 20_000)
+    await q(`UPDATE refund_jobs SET attempts = 1, status = 'na_fila' WHERE id = $1`, [linha.id])
+
+    let mandou = 0
+    C.usarEstornador(
+      async () => { mandou++; return { id: 're_nao_devia' } },
+      async () => { throw new Error('ETIMEDOUT api.asaas.com') })
+    try {
+      const r = await C.processarUmEstorno('teste-mudo', linha.id)
+      expect(mandou,
+        'o gateway não respondeu e a fila mandou o estorno assim mesmo — é a dobra')
+        .toBe(0)
+      expect(r!.ok).toBe(false)
+      expect(r!.erro).toMatch(/NÃO mandei de novo/i)
+    } finally {
+      C.usarEstornador(null)
+    }
+
+    const o = await pedidoNoBanco(P_MUDO)
+    expect(o.status, 'marcou estornado sem saber se o dinheiro saiu').toBe('pago')
+    expect(Number(o.refunded_cents)).toBe(0)
+  }, 40_000)
+
+  /* ------------------------------------------------------------------------
+   * A porta do financeiro: a linha em 'falhou'
+   * --------------------------------------------------------------------- */
+
+  /**
+   * O comentário da reserva prometia "pedido por id fura a espera: o
+   * financeiro apertando tentar de novo está com o cliente na linha". A
+   * condição não tinha ramo nenhum pra 'falhou' — quem estourava
+   * `max_attempts` virava 'falhou' e NENHUM id alcançava a linha. O dinheiro
+   * do comprador ficava preso pra sempre, visível na tela e sem botão.
+   */
+  it('linha em "falhou" é alcançada pelo id, e só pelo id', async () => {
+    await semear({ id: P_FALHOU, codigo: 'ZZD-FALHOU', face: 15_000, fee: 0, plataforma: 0 })
+    const linha = await enfileirar(P_FALHOU, 15_000)
+    // o fim da linha: tentou até o teto e desistiu
+    await q(
+      `UPDATE refund_jobs SET status = 'falhou', attempts = max_attempts,
+              available_at = now() - interval '1 day',
+              last_error = 'o banco recusou a devolução'
+        WHERE id = $1`, [linha.id])
+
+    // a varredura automática NÃO pode pegar: erro permanente viraria laço
+    // infinito contra o gateway
+    const varrida = await q(C.SQL_RESERVA_ESTORNO, ['varredura', null])
+    expect(varrida.find?.((l: any) => l.id === linha.id) ?? undefined,
+      'a varredura automática pegou uma linha em "falhou" — laço infinito contra o gateway')
+      .toBeUndefined()
+
+    // ... e a reserva POR ID alcança
+    const porId = await q(C.SQL_RESERVA_ESTORNO, ['financeiro', linha.id])
+    expect(porId.length,
+      'o "tentar de novo" do financeiro não alcança a linha em "falhou": o dinheiro do '
+      + 'comprador fica preso pra sempre').toBe(1)
+    expect(porId[0].status).toBe('estornando')
+
+    // e o caminho inteiro funciona: devolve de verdade quando reaberta
+    await q(`UPDATE refund_jobs SET status = 'falhou', attempts = max_attempts WHERE id = $1`,
+      [linha.id])
+    C.usarEstornador(async () => ({ id: 're_financeiro' }),
+      async () => ({ devolvidoCents: 0, reciboId: null }))
+    try {
+      const r = await C.processarUmEstorno('financeiro', linha.id)
+      expect(r, 'a reserva por id devolveu nada').not.toBeNull()
+      expect(r!.ok, `não devolveu: ${r!.erro}`).toBe(true)
+    } finally {
+      C.usarEstornador(null)
+    }
+    const o = await pedidoNoBanco(P_FALHOU)
+    expect(Number(o.refunded_cents)).toBe(15_000)
+  }, 40_000)
+
+  /**
+   * A carência dos 5 minutos continua valendo MESMO no pedido por id: clicar
+   * em cima de uma execução viva é o jeito mais direto de pagar duas vezes.
+   */
+  /**
+   * A porta, do lado de fora. O ramo em 'falhou' só serve se existir alguém que
+   * passe um id — e até agora NENHUMA rota chamava `processarUmEstorno` com id.
+   * A tranca é a área "dinheiro" de `utils/papeis.ts`, que o prefixo
+   * `/api/admin/financeiro` já carrega: quem aperta este botão manda dinheiro
+   * sair da conta.
+   */
+  it('a rota do financeiro reabre a linha em "falhou" — e operação não entra', async () => {
+    const { decidirAcesso } = await import('./papeis')
+    const rota = '/api/admin/financeiro/estornos'
+    expect(decidirAcesso('financeiro', rota).liberado,
+      'o financeiro não alcança o próprio botão de tentar de novo').toBe(true)
+    expect(decidirAcesso('master', rota).liberado).toBe(true)
+    expect(decidirAcesso('operacao', rota).liberado,
+      'operação, que por definição não tem caixa, pode mandar dinheiro sair').toBe(false)
+    expect(decidirAcesso('portaria', rota).liberado).toBe(false)
+    expect(decidirAcesso('operacao', '/api/admin/financeiro/entregas').liberado,
+      'reprocessar entrega emite ingresso e mexe em dinheiro devolvido').toBe(false)
+
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const alvo = '0000c020-0000-4000-8000-0000000000d6'
+    await semear({ id: alvo, codigo: 'ZZD-PORTA', face: 12_000, fee: 0, plataforma: 0 })
+    const linha = await enfileirar(alvo, 12_000)
+    await q(
+      `UPDATE refund_jobs SET status = 'falhou', attempts = max_attempts,
+              last_error = 'o banco recusou a devolução'
+        WHERE id = $1`, [linha.id])
+
+    const r = await chamar('/api/admin/financeiro/estornos', { estornoId: linha.id })
+    expect(r.status, `a rota recusou: ${r.mensagem}`).toBe(200)
+    expect(r.corpo.ok, `não devolveu: ${JSON.stringify(r.corpo)}`).toBe(true)
+
+    const o = await pedidoNoBanco(alvo)
+    expect(Number(o.refunded_cents),
+      'a linha em "falhou" continuou presa: o dinheiro do comprador não voltou')
+      .toBe(12_000)
+
+    // e o ato fica gravado: quem mandou dinheiro sair tem nome
+    const marca = await q1<any>(
+      `SELECT action, entity_id FROM audit_log
+        WHERE entity = 'estorno' AND entity_id = $1 ORDER BY id DESC LIMIT 1`,
+      [linha.id]).catch(() => null)
+    expect(marca?.action,
+      'mandou dinheiro sair sem deixar quem mandou gravado').toBe('tentar_de_novo')
+  }, 40_000)
+
+  it('o id não fura a carência de quem está sendo processado agora', async () => {
+    const alvo = '0000c020-0000-4000-8000-0000000000d5'
+    await semear({ id: alvo, codigo: 'ZZD-VIVA', face: 10_000, fee: 0, plataforma: 0 })
+    const linha = await enfileirar(alvo, 10_000)
+    await q(`UPDATE refund_jobs SET status = 'estornando', claimed_at = now(),
+                    claimed_by = 'trabalhador-vivo' WHERE id = $1`, [linha.id])
+
+    const r = await q(C.SQL_RESERVA_ESTORNO, ['financeiro-ansioso', linha.id])
+    expect(r.length,
+      'o "tentar de novo" furou a carência e entrou em cima de uma execução viva')
+      .toBe(0)
+  }, 30_000)
+})
+
+/* ==========================================================================
+ * A VARREDURA DO FINANCEIRO PARA NA PRODUTORA DE QUEM APERTOU
+ * ======================================================================= */
+
+/**
+ * As duas rotas novas do financeiro aceitam corpo VAZIO — "dá um empurrão na
+ * fila / na varredura". O trabalhador de fundo faz isso e pode: ele é do
+ * PROCESSO, não tem dono, e cada linha resolve com a chave do Asaas dela.
+ * Um clique, não: quem clica é uma pessoa de UMA produtora.
+ *
+ * Medido antes da cerca, logado como dono da Fazenda Park:
+ *
+ *   POST /api/admin/financeiro/estornos  {}  → `{"status":"estornado",
+ *     "pedidoId":"…dd…a1","valorCents":55000}` — R$ 550,00 SAÍRAM da conta de
+ *     uma produtora vizinha, pedido dela para 'estornado', sem auditoria
+ *     nenhuma (o ramo sem id não registra autor).
+ *   POST /api/admin/financeiro/entregas  {}  → devolveu a entrega pendurada
+ *     da vizinha, com o id do pedido dela e o erro dela.
+ *
+ * O `middleware/02.tenant` não pega isto: ele cerca caminho com id de recurso
+ * na URL, e aqui não tem nem id.
+ */
+describe('o empurrão na fila não atravessa a cerca da produtora', () => {
+  const VIZ_ORG   = '0000c020-0000-4000-8000-0000000000f1'
+  const VIZ_EVT   = '0000c020-0000-4000-8000-0000000000f2'
+  const VIZ_SETOR = '0000c020-0000-4000-8000-0000000000f3'
+  const VIZ_LOTE  = '0000c020-0000-4000-8000-0000000000f4'
+  const VIZ_PED   = '0000c020-0000-4000-8000-0000000000f5'
+  const VIZ_CHAVE = 'evt_zz_vizinha_pendurada'
+
+  beforeAll(async () => {
+    await q(`DELETE FROM payment_events WHERE gateway_event_id = $1`, [VIZ_CHAVE])
+    await q(`INSERT INTO organizations (id, name, slug)
+             VALUES ($1,'ZZ VIZINHA','zz-vizinha-cancelamento')
+             ON CONFLICT (id) DO NOTHING`, [VIZ_ORG])
+    await q(
+      `INSERT INTO events (id, org_id, name, slug, starts_at, ends_at, fee_bps, status)
+       VALUES ($1,$2,'ZZ EVENTO VIZINHA','zz-evento-vizinha',
+               now() + interval '30 days', now() + interval '31 days', 1000, 'ativo')
+       ON CONFLICT (id) DO NOTHING`, [VIZ_EVT, VIZ_ORG])
+    await q(`INSERT INTO sectors (id, event_id, name) VALUES ($1,$2,'ZZ SETOR VIZINHA')
+             ON CONFLICT (id) DO NOTHING`, [VIZ_SETOR, VIZ_EVT])
+    await q(`INSERT INTO lots (id, sector_id, name, price_cents, quantity, sold)
+             VALUES ($1,$2,'ZZ LOTE VIZINHA',10000,100,5)
+             ON CONFLICT (id) DO NOTHING`, [VIZ_LOTE, VIZ_SETOR])
+    await q(
+      `INSERT INTO orders (id, org_id, event_id, code, status, channel,
+                           face_cents, fee_cents, platform_cents, total_cents,
+                           refunded_cents, asaas_payment_id, paid_at, installments)
+       VALUES ($1,$2,$3,'ZZ-VIZINHA-1','pago','online',
+               50000,5000,5000,55000,0,'sim_zz_vizinha',now(),1)
+       ON CONFLICT (id) DO NOTHING`, [VIZ_PED, VIZ_ORG, VIZ_EVT])
+    await q(
+      `INSERT INTO refund_jobs (org_id, event_id, order_id, reason, amount_cents,
+                                asaas_payment_id, status)
+       VALUES ($1,$2,$3,'evento_cancelado',55000,'sim_zz_vizinha','na_fila')
+       ON CONFLICT (order_id) DO NOTHING`, [VIZ_ORG, VIZ_EVT, VIZ_PED])
+    // entrega pendurada já madura: passa da carência, então a varredura sem
+    // cerca alcançaria mesmo
+    await q(
+      `INSERT INTO payment_events (provider, gateway_event_id, external_id, event_name,
+                                   order_id, payload, created_at)
+       VALUES ('asaas',$1,'sim_zz_vizinha','PAYMENT_PARTIALLY_REFUNDED',$2,
+               $3::jsonb, now() - interval '2 hours')`,
+      [VIZ_CHAVE, VIZ_PED, JSON.stringify({
+        id: VIZ_CHAVE, event: 'PAYMENT_PARTIALLY_REFUNDED',
+        payment: { id: 'sim_zz_vizinha', value: 550, status: 'PARTIALLY_REFUNDED',
+                   externalReference: VIZ_PED },
+      })])
+  }, 40_000)
+
+  afterAll(async () => {
+    await q(`DELETE FROM payment_events WHERE gateway_event_id = $1`, [VIZ_CHAVE]).catch(() => {})
+    await q(`DELETE FROM refund_jobs WHERE order_id = $1`, [VIZ_PED]).catch(() => {})
+    await q(`DELETE FROM orders WHERE id = $1`, [VIZ_PED]).catch(() => {})
+    await q(`DELETE FROM lots WHERE id = $1`, [VIZ_LOTE]).catch(() => {})
+    await q(`DELETE FROM sectors WHERE id = $1`, [VIZ_SETOR]).catch(() => {})
+    await q(`DELETE FROM events WHERE id = $1`, [VIZ_EVT]).catch(() => {})
+    await q(`DELETE FROM organizations WHERE id = $1`, [VIZ_ORG]).catch(() => {})
+  })
+
+  it('o empurrão na fila de devolução não manda o dinheiro da vizinha', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const r = await chamar('/api/admin/financeiro/estornos', {})
+    expect(r.status, `a rota caiu: ${r.mensagem}`).toBe(200)
+
+    const tocou = (r.corpo.estornos ?? []).some((e: any) => e.pedidoId === VIZ_PED)
+    expect(tocou,
+      'a devolução da produtora vizinha voltou na resposta de quem não é dono dela')
+      .toBe(false)
+
+    const linha = await filaDoPedido(VIZ_PED)
+    expect(linha.status,
+      'o clique de uma produtora mandou sair o dinheiro da outra — e sem auditoria nenhuma')
+      .toBe('na_fila')
+    const pedidoViz = await pedidoNoBanco(VIZ_PED)
+    expect(Number(pedidoViz.refunded_cents),
+      'o pedido da vizinha foi marcado como devolvido por quem não é dono dele').toBe(0)
+  }, 40_000)
+
+  it('a varredura de entregas penduradas não alcança a da vizinha', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const r = await chamar('/api/admin/financeiro/entregas', {})
+    expect(r.status, `a rota caiu: ${r.mensagem}`).toBe(200)
+
+    const tocou = (r.corpo.entregas ?? []).some((e: any) => e.pedidoId === VIZ_PED)
+    expect(tocou,
+      'a entrega pendurada da vizinha apareceu — com id do pedido e erro dela — '
+      + 'pra quem não é dono dela').toBe(false)
+
+    const pendente = await q1<any>(
+      `SELECT processed_at FROM payment_events WHERE gateway_event_id = $1`, [VIZ_CHAVE])
+    expect(pendente.processed_at,
+      'reprocessou a entrega da vizinha: reprocessar emite ingresso e mexe em '
+      + 'refunded_cents dela').toBeNull()
+  }, 40_000)
+})

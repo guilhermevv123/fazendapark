@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-01',
   modules: ['@nuxtjs/tailwindcss'],
@@ -20,6 +22,18 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { asyncContext: true, tasks: true },
+
+    // O plugin que liga as filas de fundo, registrado NA MÃO.
+    //
+    // A pasta `server/plugins/` é varrida automaticamente, e no build ela é —
+    // medido: o `.output` sobe as duas filas no boot, sem rota nenhuma. Em
+    // `nuxt dev` a varredura passou a não pegar o arquivo depois de um
+    // recarregamento, e o efeito é o defeito de volta e mudo: a fila não anda
+    // e nada avisa. Uma linha explícita custa menos que descobrir isso de
+    // novo. O caminho é absoluto de propósito: `~/` aponta pro `app/` no Nuxt
+    // 4, e um alias errado aqui falha do mesmo jeito silencioso.
+    plugins: [fileURLToPath(new URL('./server/plugins/00.filas.ts', import.meta.url))],
+
     // De minuto em minuto: é o intervalo que faz a prateleira voltar antes de
     // a próxima pessoa desistir. Mais espaçado que isso e o lugar fica preso
     // tempo suficiente pra virar venda perdida numa noite de pico.

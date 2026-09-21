@@ -151,9 +151,11 @@ export type TipoDivergencia =
   | 'sem_cobranca_no_asaas'
   /** os dois sabem do pagamento, e os valores não batem */
   | 'valor_diferente'
+  /** mais de um pedido nosso aponta para a MESMA cobrança do gateway */
+  | 'cobranca_repetida'
 
 export interface Acao {
-  chave: 'reprocessar_evento' | 'conferir_pedido' | 'conferir_valor'
+  chave: 'reprocessar_evento' | 'conferir_pedido' | 'conferir_valor' | 'conferir_duplicidade'
   rotulo: string
   comoFazer: string
 }
@@ -196,6 +198,22 @@ export const CATALOGO: Record<TipoDivergencia, {
         + 'causas comuns: o pedido foi marcado como pago por fora do gateway, ou o id gravado '
         + 'aqui é de outra conta/ambiente (chave de sandbox conferida contra produção acusa '
         + 'TODAS as linhas assim). Até resolver, não inclua este valor numa transferência.',
+    },
+  },
+  cobranca_repetida: {
+    rotulo: 'A mesma cobrança em mais de um pedido',
+    gravidade: 'grave',
+    oQueE: 'Dois ou mais pedidos daqui apontam para a MESMA cobrança do Asaas. O dinheiro '
+      + 'entrou uma vez só e a plataforma conta ele uma vez por pedido: o relatório, o borderô '
+      + 'e o teto do saque ficam maiores do que o extrato — e o saque tira a diferença do caixa '
+      + 'da plataforma.',
+    acao: {
+      chave: 'conferir_duplicidade',
+      rotulo: 'Achar o pedido que ficou com o id de outro',
+      comoFazer: 'Abra os pedidos desta linha e veja no painel do Asaas de quem é a cobrança: o '
+        + 'campo externalReference dela guarda o id do pedido que a criou. O outro pedido está '
+        + 'com o id de cobrança alheio — corrija o PEDIDO, nunca apague a cobrança, que é do '
+        + 'comprador que pagou. Até resolver, não inclua este valor numa transferência.',
     },
   },
   valor_diferente: {
@@ -281,6 +299,8 @@ export interface ResultadoDaComparacao {
     webhookPerdido: number
     semCobranca: number
     valorDiferente: number
+    /** a mesma cobrança reivindicada por mais de um pedido nosso */
+    cobrancaRepetida: number
     naoConferidos: number
     /**
      * O que não foi conferido, EM DINHEIRO.
@@ -305,10 +325,21 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
   const ausentesConfirmadas = e.ausentesConfirmadas ?? new Set<string>()
   const naoPerguntadas = e.naoPerguntadas ?? new Set<string>()
 
-  const porCobranca = new Map<string, PedidoNosso>()
+  // Uma cobrança pode ter MAIS DE UM dono aqui: `orders.asaas_payment_id` só
+  // passou a ser único na migração 025, e id errado digitado à mão continua
+  // possível em pedido antigo. Guardar um pedido por cobrança (`Map<string,
+  // PedidoNosso>`) fazia o segundo dono sumir do laço do gateway, cair no
+  // último ramo do nosso laço — o que diz "a cobrança existe e NÃO tem
+  // dinheiro" — e sair como GRAVE com a frase que se contradiz sozinha: o
+  // Asaas diz "RECEIVED" e a linha afirma que o dinheiro não entrou.
+  const porCobranca = new Map<string, PedidoNosso[]>()
   const porPedido = new Map<string, PedidoNosso>()
   for (const p of e.pedidos) {
-    if (p.cobrancaId) porCobranca.set(p.cobrancaId, p)
+    if (p.cobrancaId) {
+      const donos = porCobranca.get(p.cobrancaId)
+      if (donos) donos.push(p)
+      else porCobranca.set(p.cobrancaId, [p])
+    }
     porPedido.set(p.id, p)
   }
 
@@ -325,12 +356,36 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
   /** pedidos já julgados pelo laço do gateway — o nosso laço não repete */
   const julgados = new Set<string>()
 
+  /**
+   * "Não conferido" é uma lista de PEDIDOS, não de tentativas.
+   *
+   * Duas cobranças podem apontar para o mesmo pedido — a que ele gravou em
+   * `asaas_payment_id` e a que o gateway criou com o `externalReference` dele
+   * (PIX pedido de novo, por exemplo). Se as duas vierem sem valor no extrato,
+   * o laço de baixo empilha o MESMO pedido duas vezes: o KPI conta 2 onde
+   * existe 1, `naoConferidosCents` soma o pedido duas vezes — e é esse número
+   * que a tela usa pra dizer o tamanho do que não olhou, então ele fica maior
+   * que o caixa — e `conferidos` (vivos − não conferidos) chega a ficar
+   * NEGATIVO. Um pedido entra uma vez, com o primeiro motivo que apareceu.
+   */
+  const jaSemConferir = new Set<string>()
+  const semConferir = (n: NaoConferido) => {
+    if (jaSemConferir.has(n.pedidoId)) return
+    jaSemConferir.add(n.pedidoId)
+    naoConferidos.push(n)
+  }
+
   let gatewayCents = 0
 
   /* ------------------------------------------------- 1. o lado do gateway */
   for (const c of e.extrato) {
-    const pedido = porCobranca.get(c.id)
-      ?? (c.referenciaExterna ? porPedido.get(c.referenciaExterna) : undefined)
+    // Todos os pedidos que reivindicam esta cobrança: os que gravaram o id
+    // dela e o que ela aponta por `externalReference`. Dois nomes diferentes
+    // para a mesma cobrança continuam sendo dois donos.
+    const donos = [...(porCobranca.get(c.id) ?? [])]
+    const porReferencia = c.referenciaExterna ? porPedido.get(c.referenciaExterna) : undefined
+    if (porReferencia && !donos.some((p) => p.id === porReferencia.id)) donos.push(porReferencia)
+    const pedido = donos[0]
 
     if (!c.temDinheiro) {
       // Cobrança sem dinheiro (pendente, vencida, apagada, estornada por
@@ -343,7 +398,38 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
     const doGateway = (c.valorCents ?? 0) - c.estornadoCents
     gatewayCents += doGateway
 
-    if (pedido) julgados.add(pedido.id)
+    for (const p of donos) julgados.add(p.id)
+
+    // ---------------------------------------------- a mesma cobrança em dois pedidos
+    if (donos.length > 1) {
+      // O dinheiro entrou UMA vez; do nosso lado ele é contado uma vez por
+      // pedido vivo. A diferença da linha é o tamanho exato do que a
+      // plataforma inventou — e é ela que não pode entrar numa transferência.
+      const vivos = donos.filter((p) => p.vivo)
+      const nosso = vivos.reduce((s, p) => s + p.totalCents - p.estornadoCents, 0)
+      const lista = donos.map((p) => `${p.codigo} (${p.status})`).join(', ')
+      divergencias.push(montar('cobranca_repetida', {
+        cobrancaId: c.id,
+        pedidoId: pedido!.id,
+        pedidoCodigo: pedido!.codigo,
+        eventoId: pedido!.eventoId,
+        evento: pedido!.evento,
+        nossoStatus: pedido!.status,
+        statusNoGateway: c.statusCru,
+        nossoCents: vivos.length ? nosso : null,
+        gatewayCents: doGateway,
+        diferencaCents: doGateway - nosso,
+        quando: c.pagoEm ?? pedido!.pagoEm,
+        explicacao: `${donos.length} pedidos apontam para esta mesma cobrança: ${lista}. `
+          + (vivos.length > 1
+            ? `O Asaas pagou uma vez e a plataforma está contando ${vivos.length} vezes.`
+            : vivos.length === 1
+              ? 'Só um deles está pago aqui; o outro ficou com o id de cobrança alheio.'
+              : 'Nenhum deles está pago aqui, e não dá pra saber qual dos dois o comprador '
+                + 'pagou — reprocessar o aviso às cegas emite ingresso do pedido errado.'),
+      }))
+      continue
+    }
 
     // ---------------------------------------------- webhook perdido
     if (!pedido || !pedido.vivo) {
@@ -375,7 +461,7 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
 
     // ---------------------------------------------- valor diferente
     if (c.valorCents == null) {
-      naoConferidos.push({
+      semConferir({
         pedidoId: pedido.id, pedidoCodigo: pedido.codigo, cobrancaId: c.id,
         eventoId: pedido.eventoId, nossoCents: pedido.totalCents - pedido.estornadoCents,
         motivo: 'o extrato não trouxe o valor desta cobrança',
@@ -443,7 +529,7 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
       // que este arquivo existe pra não fazer.
       const naoPerguntada = !!p.cobrancaId && naoPerguntadas.has(p.cobrancaId)
       if (!confirmadaAusente && (naoPerguntada || !e.extratoCompleto)) {
-        naoConferidos.push({
+        semConferir({
           pedidoId: p.id, pedidoCodigo: p.codigo, cobrancaId: p.cobrancaId,
           eventoId: p.eventoId, nossoCents: nosso,
           motivo: naoPerguntada
@@ -472,10 +558,17 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
       continue
     }
 
-    // A cobrança existe e NÃO tem dinheiro (pendente, vencida, apagada,
-    // estornada por inteiro) — e o pedido aqui está vivo.
+    // A cobrança existe — e aqui ela é, quase sempre, a que NÃO tem dinheiro
+    // (pendente, vencida, apagada, estornada por inteiro) com o pedido vivo
+    // deste lado.
+    //
+    // O `temDinheiro` só cai neste ramo quando o laço do gateway já deu o
+    // dinheiro desta cobrança a OUTRO pedido: é a cobrança repetida chegando
+    // por um caminho diferente. Escrever a frase de "não entrou" em cima de um
+    // `RECEIVED` é a linha se contradizendo dentro dela mesma — a tela diz o
+    // status do gateway e, ao lado, que o dinheiro não entrou.
     const doGateway = (c.valorCents ?? 0) - c.estornadoCents
-    divergencias.push(montar('sem_cobranca_no_asaas', {
+    divergencias.push(montar(c.temDinheiro ? 'cobranca_repetida' : 'sem_cobranca_no_asaas', {
       cobrancaId: c.id || p.cobrancaId,
       pedidoId: p.id,
       pedidoCodigo: p.codigo,
@@ -489,7 +582,10 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
       quando: p.pagoEm,
       explicacao: c.apagada
         ? 'O pedido está pago aqui e a cobrança foi APAGADA no Asaas.'
-        : `O pedido está pago aqui e o Asaas diz "${c.statusCru}": o dinheiro não entrou.`,
+        : c.temDinheiro
+          ? `O Asaas diz "${c.statusCru}" nesta cobrança, e ela já está contada em outro `
+            + 'pedido daqui: o mesmo dinheiro está sendo somado duas vezes.'
+          : `O pedido está pago aqui e o Asaas diz "${c.statusCru}": o dinheiro não entrou.`,
     }))
   }
 
@@ -508,10 +604,71 @@ export function comparar(e: EntradaDaComparacao): ResultadoDaComparacao {
       webhookPerdido: conta('webhook_perdido'),
       semCobranca: conta('sem_cobranca_no_asaas'),
       valorDiferente: conta('valor_diferente'),
+      cobrancaRepetida: conta('cobranca_repetida'),
       naoConferidos: naoConferidos.length,
       naoConferidosCents: naoConferidos.reduce((s, n) => s + n.nossoCents, 0),
     },
   }
+}
+
+/* ================================== o que a tela pode AFIRMAR no fim das contas */
+
+export interface Veredito {
+  /** dá pra dizer, em voz alta, que os dois lados foram comparados? */
+  conferido: boolean
+  /** a frase curta que fica colada no número — nunca vazia */
+  selo: string
+  /** o tom da tela: `ok` só quando conferiu de verdade e fechou */
+  tom: 'ok' | 'alerta' | 'erro'
+}
+
+/**
+ * O veredito da conferência, numa palavra e num tom.
+ *
+ * Existe porque o número maior da tela mentia calado. Sem credencial do Asaas
+ * o extrato vem vazio, nenhuma comparação acontece, e "Divergências 0" era
+ * pintado de VERDE (`text-ok`, medido em `rgb(18,128,92)`) ao lado de "213
+ * pedido(s) não conferidos" em 12px cinza. Quem passa o olho lê o verde: a
+ * tela de conferência dizia "está tudo certo" sobre o que ela não olhou.
+ *
+ * A régua é simples e não tem meio-termo: só o extrato do Asaas DE VERDADE,
+ * inteiro, sem erro e sem pedido sobrando autoriza a palavra "fecha". Gateway
+ * simulado não é o Asaas — é o que sobrou de webhook guardado nesta máquina —
+ * e por isso nunca sai `ok`, nem com zero divergência.
+ */
+export function vereditoDaConferencia(e: {
+  fonte: 'asaas' | 'simulado' | 'indisponivel'
+  completa: boolean
+  erro: string | null
+  naoConferidos: number
+  divergencias: number
+}): Veredito {
+  if (e.erro) {
+    return { conferido: false, tom: 'erro', selo: 'Nada foi conferido: o Asaas não respondeu' }
+  }
+  if (e.fonte === 'indisponivel') {
+    return { conferido: false, tom: 'erro', selo: 'Nada foi conferido: não há extrato nenhum' }
+  }
+  if (e.fonte === 'simulado') {
+    return {
+      conferido: false,
+      tom: 'alerta',
+      selo: 'Gateway simulado — isto NÃO é o extrato do Asaas',
+    }
+  }
+  if (!e.completa || e.naoConferidos > 0) {
+    return {
+      conferido: false,
+      tom: 'alerta',
+      selo: e.naoConferidos > 0
+        ? `Conferência incompleta: ${e.naoConferidos} pedido(s) sem conferir`
+        : 'Conferência incompleta: o período não foi lido inteiro',
+    }
+  }
+  if (e.divergencias > 0) {
+    return { conferido: true, tom: 'erro', selo: `${e.divergencias} divergência(s) no período` }
+  }
+  return { conferido: true, tom: 'ok', selo: 'Conferido contra o extrato do Asaas: os dois lados fecham' }
 }
 
 /** Preenche rótulo, gravidade e ação a partir do catálogo — num lugar só. */
@@ -617,12 +774,30 @@ export const SQL_EXTRATO_SIMULADO = `
  * O aviso do gateway que está guardado aqui pra cada cobrança — é o que
  * transforma "reprocessar este evento" de conselho em instrução: a linha diz
  * se o payload existe, quantas tentativas já levou e qual foi o erro.
+ *
+ * `payment_events` não tem `org_id`, e esta era a ÚNICA consulta do arquivo
+ * que atravessava a tabela sem a cerca que as outras usam. Não vazava porque
+ * os ids vinham de consultas já cercadas — ou seja, a defesa morava em quem
+ * chamava. Defesa que depende do chamador não é defesa: basta a próxima
+ * chamada nascer com uma lista de ids de outra procedência (um filtro na URL,
+ * um reprocessamento em lote) pra a linha de outro produtor aparecer aqui,
+ * com o erro e o payload dele. A cerca agora é da consulta.
+ *
+ * O `EXISTS` em vez de `JOIN`: é uma semijunção, então cobrança repetida (a
+ * que a migração 025 passou a barrar, mas que pedido antigo ainda pode ter)
+ * não multiplica linha por baixo do `DISTINCT ON`. Os dois caminhos de posse
+ * contam — o pedido que gravou o id da cobrança e o pedido que o próprio
+ * webhook carimbou em `order_id` — porque a cobrança pode ter sido achada por
+ * `externalReference`, sem o id nunca ter ido parar no pedido.
  */
 export const SQL_AVISOS_GUARDADOS = `
   SELECT DISTINCT ON (pe.external_id)
          pe.external_id, pe.id, pe.event_name, pe.processed_at, pe.attempts, pe.error
     FROM payment_events pe
    WHERE pe.provider = 'asaas' AND pe.external_id = ANY($1::text[])
+     AND EXISTS (SELECT 1 FROM orders o
+                  WHERE o.org_id = $2
+                    AND (o.asaas_payment_id = pe.external_id OR o.id = pe.order_id))
    ORDER BY pe.external_id, pe.created_at DESC`
 
 /** Converte a linha do banco no formato que a comparação lê. */

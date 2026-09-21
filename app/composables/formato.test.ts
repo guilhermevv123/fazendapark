@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  centavosDigitados, centavosParaTexto, diaLocal, diaLocalMais,
+  centavosDigitados, centavosParaTexto, dataHoraSegundo, deCampoDataHora,
+  diaDaSemana, diaLocal, diaLocalMais, paraCampoDataHora,
   paraCentavos, paraData, primeiroDiaDoMes, reais,
 } from './formato'
 
@@ -351,6 +352,235 @@ describe('as telas consertadas não refazem a conta na mão', () => {
       expect(leia(t).length, t).toBeGreaterThan(100)
       // o stripper não pode engolir a tela inteira: se engolir, as travas
       // acima passam a testar string vazia e ficam verdes por acidente
+      expect(codigoDe(t).replace(/\s/g, '').length, `${t} sem comentário`)
+        .toBeGreaterThan(leia(t).replace(/\s/g, '').length / 3)
+    }
+  })
+})
+
+/* ======================= as cinco telas que sobraram (furo C) ============ */
+
+/**
+ * As cinco telas que ainda calculavam dia com `toISOString()`.
+ *
+ * Cada caso abaixo roda num INSTANTE FIXO, às 23h de America/Sao_Paulo — o
+ * horário em que o parque está vendendo e o único em que o defeito aparece.
+ * Ao meio-dia todos esses testes ficam verdes com o bug inteiro no lugar; é
+ * por isso que o fuso e a hora são forçados, e não herdados da máquina.
+ *
+ * Cada caso roda a conta ANTIGA junto com a nova e prova que as duas dão
+ * respostas diferentes. Sem isso, o teste diria "a nova está certa" sem
+ * nunca ter mostrado que a velha estava errada.
+ */
+describe('as cinco telas de data — 23h em America/Sao_Paulo', () => {
+  const fusoOriginal = process.env.TZ
+  const devolverFuso = () => {
+    if (fusoOriginal === undefined) delete process.env.TZ
+    else process.env.TZ = fusoOriginal
+  }
+
+  /**
+   * Roda `caso` num fuso e num instante fixos.
+   *
+   * O `Date` do relógio de parede nasce DEPOIS do `process.env.TZ`, e não
+   * antes: `new Date(2026, 8, 21, 23, 30)` é hora LOCAL, então construído no
+   * fuso da máquina ele vira outro instante. Foi o que aconteceu na primeira
+   * versão deste helper — as 23h viraram 20h30 e o caso passou a não exercitar
+   * mais nada.
+   */
+  function em(tz: string, parede: [number, number, number, number, number], caso: () => void) {
+    process.env.TZ = tz
+    const [ano, mes, dia, hora, minuto] = parede
+    const quando = new Date(ano, mes, dia, hora, minuto, 0)
+    vi.useFakeTimers()
+    vi.setSystemTime(quando)
+    try { caso() } finally {
+      vi.useRealTimers()
+      devolverFuso()
+    }
+  }
+
+  /** 21/09/2026 às 23h30 no fuso do parque. Em UTC já é dia 22. */
+  const NOITE: [number, number, number, number, number] = [2026, 8, 21, 23, 30]
+
+  afterEach(() => { vi.useRealTimers(); devolverFuso() })
+
+  it('a máquina está mesmo às 23h de um fuso a oeste — senão nada disto testa', () => {
+    em('America/Sao_Paulo', NOITE, () => {
+      const agora = new Date()
+      expect(agora.getHours()).toBe(23)
+      expect(agora.getTimezoneOffset()).toBe(180)        // UTC−3
+      expect(agora.toISOString().slice(0, 10)).toBe('2026-09-22') // ← o dia errado
+    })
+  })
+
+  /* --------------------------------------------------- admin/auditoria.vue */
+
+  it('auditoria: os atalhos de período pegam HOJE, não amanhã', () => {
+    em('America/Sao_Paulo', NOITE, () => {
+      // é o que `faixaDo()` da tela devolve agora
+      expect(diaLocal()).toBe('2026-09-21')
+      expect(diaLocalMais(-1)).toBe('2026-09-20')
+      expect(diaLocalMais(-6)).toBe('2026-09-15')
+      expect(primeiroDiaDoMes()).toBe('2026-09-01')
+      // e a conta que estava espalhada pelas telas, no MESMO instante:
+      expect(new Date().toISOString().slice(0, 10)).toBe('2026-09-22')
+    })
+  })
+
+  it('auditoria: o carimbo de "quem mexeu" não imprime o dia anterior', () => {
+    em('America/Sao_Paulo', NOITE, () => {
+      // dia de calendário vindo do banco (::date vira "YYYY-MM-DD" no JSON)
+      expect(dataHoraSegundo('2026-09-21')).toBe('21/09/2026 00:00:00')
+      // o `new Date(d).toLocaleString(...)` que a tela fazia, no mesmo valor:
+      expect(new Date('2026-09-21').toLocaleString('pt-BR', {
+        day: '2-digit', month: '2-digit', year: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      })).toContain('20/09/26') // ← véspera, e é a prova de quem mexeu
+      // instante completo continua sendo o instante, no fuso de quem lê
+      expect(dataHoraSegundo('2026-09-22T02:30:07.000Z')).toBe('21/09/2026 23:30:07')
+    })
+  })
+
+  /* ------------------------------------------- admin/evento/novo.vue ------ */
+
+  it('evento novo: uma sessão por dia, sem dia a mais nem a menos', () => {
+    em('America/Sao_Paulo', NOITE, () => {
+      const inicio = paraData('2026-10-17')!
+      const ultimo = diaLocal(paraData('2026-10-19')!)
+      const dias: string[] = []
+      for (let i = 0; i <= 60; i++) {
+        const dia = diaLocalMais(i, inicio)
+        if (dia > ultimo) break
+        dias.push(dia)
+      }
+      expect(dias).toEqual(['2026-10-17', '2026-10-18', '2026-10-19'])
+      expect(diaDaSemana('2026-10-17')).toBe('sábado')
+    })
+  })
+
+  it('evento novo: num fuso adiantado o laço antigo nascia um dia atrás', () => {
+    // O laço velho ancorava ao meio-dia (`new Date(data + 'T12:00')`) e cortava
+    // com `toISOString()`. No Brasil o meio-dia local ainda cai no mesmo dia em
+    // UTC — o remendo escondia o defeito. Em Kiritimati (UTC+14) não esconde.
+    em('Pacific/Kiritimati', [2026, 9, 17, 23, 30], () => {
+      const velho = new Date('2026-10-17T12:00').toISOString().slice(0, 10)
+      expect(velho).toBe('2026-10-16')                     // ← a véspera
+      expect(diaLocal(paraData('2026-10-17')!)).toBe('2026-10-17')
+      expect(diaLocal(paraData('2026-10-17')!)).not.toBe(velho)
+    })
+  })
+
+  it('evento novo: data + hora digitadas viram o instante certo', () => {
+    em('America/Sao_Paulo', NOITE, () => {
+      // 17/10 às 21h no parque = 18/10 00h em UTC
+      expect(deCampoDataHora('2026-10-17T21:00')).toBe('2026-10-18T00:00:00.000Z')
+      // e sem hora nenhuma o `new Date` cru cairia na véspera às 21h
+      expect(new Date('2026-10-17').toISOString()).toBe('2026-10-17T00:00:00.000Z')
+      expect(paraData('2026-10-17')!.getHours()).toBe(0)
+      expect(paraData('2026-10-17')!.getDate()).toBe(17)
+    })
+  })
+
+  /* ---------- evento/[id]/configuracoes.vue · ingressos/{index,cupons}.vue */
+
+  it('cupom e lote: o campo mostra a hora que a pessoa marcou, não a de UTC', () => {
+    em('America/Sao_Paulo', NOITE, () => {
+      // o cupom/lote começa 20/09 às 21h no parque; no banco é 21/09 00h UTC
+      const doBanco = '2026-09-21T00:00:00.000Z'
+      expect(paraCampoDataHora(doBanco)).toBe('2026-09-20T21:00')
+      // a conta que as duas telas faziam, no MESMO valor:
+      expect(new Date(doBanco).toISOString().slice(0, 16)).toBe('2026-09-21T00:00')
+      expect(paraCampoDataHora(doBanco))
+        .not.toBe(new Date(doBanco).toISOString().slice(0, 16))
+    })
+  })
+
+  it('cupom e lote: abrir o formulário e salvar sem tocar não mexe na hora', () => {
+    // Este é o estrago de verdade do defeito acima: o operador abre pra mudar
+    // o nome, clica em salvar, e o cupom anda TRÊS HORAS — para dentro da
+    // noite de venda. A volta tem que devolver o mesmo instante.
+    em('America/Sao_Paulo', NOITE, () => {
+      for (const iso of [
+        '2026-09-21T00:00:00.000Z', '2026-09-20T23:59:00.000Z',
+        '2026-12-31T02:00:00.000Z', '2026-01-01T03:00:00.000Z',
+      ]) {
+        expect(deCampoDataHora(paraCampoDataHora(iso)), `ida e volta de ${iso}`).toBe(iso)
+        // e o caminho velho NÃO devolvia o mesmo instante
+        expect(new Date(new Date(iso).toISOString().slice(0, 16)).toISOString())
+          .not.toBe(iso)
+      }
+    })
+  })
+
+  it('campo vazio continua vazio — nem "Invalid Date" nem dia inventado', () => {
+    em('America/Sao_Paulo', NOITE, () => {
+      expect(paraCampoDataHora(null)).toBe('')
+      expect(paraCampoDataHora('')).toBe('')
+      expect(deCampoDataHora('')).toBeNull()
+      expect(deCampoDataHora(null)).toBeNull()
+      expect(deCampoDataHora('nao é data')).toBeNull()
+    })
+  })
+})
+
+/**
+ * A trava de fonte das cinco telas.
+ *
+ * Os casos acima provam que o formatador único acerta. Esta lista prova que
+ * as telas PASSAM por ele — é a diferença entre "a função está certa" e "cada
+ * tela tem a sua", que é a classe de bug deste projeto inteiro.
+ *
+ * Lista separada da de cima porque as regras são outras: estas cinco têm
+ * `input type="number"` em campo de PORCENTAGEM (desconto em bps, taxa em
+ * bps), que não é dinheiro e é legítimo.
+ */
+const TELAS_DE_DATA = [
+  'app/pages/admin/auditoria.vue',
+  'app/pages/admin/evento/novo.vue',
+  'app/pages/admin/evento/[id]/configuracoes.vue',
+  'app/pages/admin/evento/[id]/ingressos/cupons.vue',
+  'app/pages/admin/evento/[id]/ingressos/index.vue',
+]
+
+describe('as cinco telas passam pelo formatador único', () => {
+  it('nenhuma chama toISOString — é ele que vira amanhã às 21h', () => {
+    expect(TELAS_DE_DATA.filter((t) => codigoDe(t).includes('toISOString'))).toEqual([])
+  })
+
+  it('nenhuma formata data na mão (toLocaleDate/TimeString, dateStyle, timeStyle)', () => {
+    expect(TELAS_DE_DATA.filter((t) =>
+      /toLocale(Date|Time)String|Intl\.DateTimeFormat|dateStyle|timeStyle/.test(codigoDe(t))))
+      .toEqual([])
+  })
+
+  /**
+   * O `toLocaleString` sozinho escapava das duas regras acima — e era
+   * exatamente ele que a auditoria usava (`new Date(d).toLocaleString('pt-BR',
+   * { day, month, year, hour, minute, second })`). Medido por mutação:
+   * devolvendo aquela linha, esta lista continuava VERDE.
+   *
+   * O `toLocaleString` cru sobre NÚMERO segue liberado: é o separador de
+   * milhar de contagem e de porcentagem, e essas telas têm os dois.
+   */
+  it('nem pelo toLocaleString: Date que vira texto na mão não passa', () => {
+    const culpadas = TELAS_DE_DATA.filter((t) => {
+      const src = codigoDe(t)
+      return /new\s+Date\([^)]*\)\s*\.toLocale/.test(src)
+        || /toLocaleString\([^)]*\{[^}]*\b(day|month|year|weekday|hour|minute|second)\s*:/.test(src)
+    })
+    expect(culpadas).toEqual([])
+  })
+
+  it('nenhuma remonta o R$ na mão — é de lá que vem o espaço fino', () => {
+    expect(TELAS_DE_DATA.filter((t) =>
+      /style:\s*'currency'|style:\s*"currency"|Intl\.NumberFormat/.test(codigoDe(t))))
+      .toEqual([])
+  })
+
+  it('e as cinco existem de verdade, com código dentro', () => {
+    for (const t of TELAS_DE_DATA) {
+      expect(leia(t).length, t).toBeGreaterThan(100)
       expect(codigoDe(t).replace(/\s/g, '').length, `${t} sem comentário`)
         .toBeGreaterThan(leia(t).replace(/\s/g, '').length / 3)
     }

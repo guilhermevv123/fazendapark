@@ -29,13 +29,15 @@
  * com ids próprios, apagada no fim — nada do evento semeado é tocado.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { q, q1 } from './db'
+import type { PoolClient } from 'pg'
+import { db, q, q1 } from './db'
 import { PEDIDO_VIVO } from './liquido'
 import { traduzirStatus } from './asaas'
 import {
-  CATALOGO, MAX_CONSULTAS_POR_ID, SQL_EXTRATO_SIMULADO, SQL_PEDIDOS_DO_PERIODO, STATUS_VIVOS,
-  cobrancaTemDinheiro, comparar, conferirPorId, lerCobranca, lerJanela, listarCobrancas,
-  pedidoDaLinha, type CobrancaDoExtrato, type PedidoNosso,
+  CATALOGO, MAX_CONSULTAS_POR_ID, SQL_AVISOS_GUARDADOS, SQL_EXTRATO_SIMULADO,
+  SQL_PEDIDOS_DO_PERIODO, STATUS_VIVOS, cobrancaTemDinheiro, comparar, conferirPorId,
+  diaLocal, lerCobranca, lerJanela, listarCobrancas, pedidoDaLinha, vereditoDaConferencia,
+  type CobrancaDoExtrato, type PedidoNosso,
 } from './reconciliacao'
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
@@ -50,6 +52,42 @@ const EMAIL = 'dono.reconciliacao@teste.invalido'
 
 let noAr = false
 let cookie = ''
+
+/**
+ * Pula o caso quando o servidor de dev não está no ar — e pula DE VERDADE.
+ *
+ * Isto era `if (!noAr) return void console.warn(...)`, e o vitest conta esse
+ * retorno como ✓. Medido: com `BASE_TESTE` apontando pra uma porta morta,
+ * este arquivo imprimiu **53 passed em 344ms** sem bater uma vez na rota — os
+ * três casos que provam que "olhar não grava conferência" entre eles. Numa
+ * corrida de MUTAÇÃO é a pior resposta possível: dá a invariante por provada
+ * exatamente quando ela foi arrancada, e o relatório fica idêntico ao de uma
+ * corrida que provou tudo. `ctx.skip()` sai contado como PULADO, que é o que
+ * se lê de longe. Mesma decisão de `api/admin/evento/[id]/pdv/venda.test.ts`.
+ */
+const PORQUE_PULOU = 'servidor de dev fora do ar ou respondendo 500 (porta 3100)'
+function seForaDoArPula(ctx: { skip: (motivo?: string) => void }) {
+  if (!noAr) ctx.skip(PORQUE_PULOU)
+}
+
+/**
+ * Uma corrida deste arquivo de cada vez.
+ *
+ * O `beforeAll` semeia a organização ZZ e o `afterAll` a APAGA — e o DELETE
+ * cai em cascata até os pedidos, o usuário e a sessão dele. Com duas corridas
+ * ao mesmo tempo (o normal aqui: vários agentes rodando a suíte no mesmo
+ * banco), o `afterAll` de uma derruba a fixture da outra NO MEIO das
+ * asserções. Medido: numa corrida da suíte inteira este arquivo deu 8
+ * vermelhos e, isolado, os mesmos 54 casos passaram três vezes seguidas — o
+ * vermelho não falava do código. Vermelho que não fala do código é o que
+ * ensina a ignorar vermelho.
+ *
+ * `pg_advisory_lock` é de SESSÃO: morre junto com a conexão, então corrida
+ * interrompida não deixa trava presa. Fica com prazo e frase, em vez de
+ * bloquear pra sempre. Mesma decisão de `api/admin/evento/[id]/pdv/venda.test.ts`.
+ */
+const TRAVA_DESTE_ARQUIVO = 902_2200
+let travaDono: PoolClient | null = null
 
 /* ------------------------------------------------------------- fixture */
 
@@ -121,6 +159,16 @@ const limparPedidos = () =>
   q(`DELETE FROM orders WHERE org_id IN ($1,$2)`, [ORG, VIZINHA])
 
 beforeAll(async () => {
+  travaDono = await db().connect()
+  const prazo = Date.now() + 25_000
+  while (!(await travaDono.query(
+    'SELECT pg_try_advisory_lock($1) AS ok', [TRAVA_DESTE_ARQUIVO])).rows[0].ok) {
+    if (Date.now() > prazo) {
+      throw new Error('outra corrida deste arquivo ainda está de pé — rode de novo em instantes')
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+
   for (const [org, nome] of [[ORG, 'zz-reconciliacao'], [VIZINHA, 'zz-reconciliacao-vizinha']]) {
     await q(`INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$2)
              ON CONFLICT (id) DO NOTHING`, [org, nome])
@@ -153,14 +201,26 @@ beforeAll(async () => {
   })
   cookie = (r.headers.getSetCookie?.() ?? [])
     .map((c) => c.split(';')[0]).find((c) => c.startsWith('dt_sessao=')) ?? ''
-}, 30_000)
+}, 40_000)
 
 afterAll(async () => {
-  // a organização leva junto eventos, pedidos e usuários (ON DELETE CASCADE);
-  // os avisos são apagados na mão porque `payment_events` não tem org
-  await q(`DELETE FROM payment_events WHERE gateway_event_id LIKE 'zz-rec-%'`)
-  await q(`DELETE FROM reconciliation_runs WHERE org_id IN ($1,$2)`, [ORG, VIZINHA])
-  await q(`DELETE FROM organizations WHERE id IN ($1,$2)`, [ORG, VIZINHA])
+  try {
+    // a organização leva junto eventos, pedidos e usuários (ON DELETE CASCADE);
+    // os avisos são apagados na mão porque `payment_events` não tem org
+    await q(`DELETE FROM payment_events WHERE gateway_event_id LIKE 'zz-rec-%'`)
+    await q(`DELETE FROM reconciliation_runs WHERE org_id IN ($1,$2)`, [ORG, VIZINHA])
+    await q(`DELETE FROM organizations WHERE id IN ($1,$2)`, [ORG, VIZINHA])
+  } finally {
+    // solta a trava mesmo se a limpeza falhar, senão a próxima corrida espera
+    // os 25 segundos inteiros por causa de um erro que já passou
+    if (travaDono) {
+      try {
+        await travaDono.query('SELECT pg_advisory_unlock($1)', [TRAVA_DESTE_ARQUIVO])
+      } catch { /* conexão já morreu: a trava morreu junto */ }
+      travaDono.release()
+      travaDono = null
+    }
+  }
 })
 
 /* ==================================================== 1. a régua é uma só */
@@ -559,6 +619,33 @@ describe('o que a conferência não olhou não vira acusação', () => {
     expect(r.totais.diferencaCents).toBe(-15_000)
   })
 
+  it('o mesmo pedido não entra DUAS vezes em "não conferido"', () => {
+    // Duas cobranças apontando para o MESMO pedido e nenhuma delas com valor
+    // no extrato: a de cima pelo `asaas_payment_id` gravado no pedido, a de
+    // baixo pelo `externalReference` que o próprio pedido criou. Acontece
+    // quando o comprador pede um PIX novo e o gateway emite a segunda cobrança
+    // com a mesma referência.
+    const r = comparar({
+      pedidos: [nosso({ codigo: 'DUPNC', totalCents: 9_900 })],
+      extrato: [
+        cobranca({ id: 'sim_DUPNC', valorReais: null }),
+        cobranca({ id: 'sim_DUPNC_2', valorReais: null, referencia: 'id-DUPNC' }),
+      ],
+      extratoCompleto: true,
+    })
+    // ← sem a trava, o pedido é empilhado uma vez por cobrança: o KPI "não
+    //   conferidos" conta 2 onde existe 1 pedido, `naoConferidosCents` soma
+    //   R$ 198,00 de um pedido de R$ 99,00 — o tamanho do silêncio fica maior
+    //   que o caixa — e `conferidos` (vivos − não conferidos) vira NEGATIVO,
+    //   "-1 pedido(s) conferidos" na tela.
+    expect(r.naoConferidos.map((n) => n.pedidoCodigo)).toEqual(['DUPNC'])
+    expect(r.totais.naoConferidos).toBe(1)
+    expect(r.totais.naoConferidosCents,
+      'o dinheiro não conferido foi contado duas vezes').toBe(9_900)
+    expect(r.totais.conferidos, 'contagem de conferidos ficou negativa')
+      .toBeGreaterThanOrEqual(0)
+  })
+
   it('no webhook perdido a coluna "nosso" não inventa dinheiro do pedido morto', () => {
     const r = comparar({
       pedidos: [nosso({ codigo: 'N', status: 'expirado', vivo: false, totalCents: 6_600 })],
@@ -672,8 +759,16 @@ describe('a rota de reconciliação', () => {
     fetch(`${BASE}/api/admin/reconciliacao${busca}`,
       { headers: { cookie, origin: BASE } })
 
-  it('acha as três divergências pelo aviso guardado e grava a conferência', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  /** o mesmo GET, com o cabeçalho que só o clique na tela manda */
+  const registrar = (busca: string) =>
+    fetch(`${BASE}/api/admin/reconciliacao${busca}`,
+      { headers: { cookie, origin: BASE, 'x-diamond-conferencia': '1' } })
+
+  const conferenciasGravadas = async () => Number((await q1<any>(
+    `SELECT count(*)::int AS n FROM reconciliation_runs WHERE org_id = $1`, [ORG]))?.n ?? 0)
+
+  it('acha as três divergências pelo aviso guardado e grava a conferência', async (ctx) => {
+    seForaDoArPula(ctx)
     expect(cookie, 'login falhou — o teste ficaria verde à toa').toBeTruthy()
 
     await limparPedidos()
@@ -727,18 +822,87 @@ describe('a rota de reconciliação', () => {
     expect(perdido.aviso?.erro).toMatch(/banco fora/)
     expect(perdido.acao.rotulo).toBeTruthy()
 
-    // e a conferência ficou registrada: é o que responde "quando bateu?"
+    // sem extrato do Asaas de verdade, o veredito não deixa a tela se dizer
+    // conferida — é ele que decide a cor do número maior
+    expect(corpo.veredito.conferido).toBe(false)
+    expect(corpo.veredito.tom).not.toBe('ok')
+
+    // e a conferência ficou registrada QUANDO alguém registrou: é o que
+    // responde "quando bateu?". A leitura de cima não gravou nada.
+    const so_olhou = await conferenciasGravadas()
+    const depois = await registrar(
+      `?de=${dia(new Date(Date.now() - 3 * 86_400_000))}&ate=${dia(hoje)}&registrar=1`)
+    expect(depois.status).toBe(200)
+    expect((await depois.json()).registro.gravado).toBe(true)
+    expect(await conferenciasGravadas()).toBe(so_olhou + 1)
+
     const registro = await q1<any>(
-      `SELECT source, webhook_missing, charge_missing, amount_mismatch, ran_by_email
+      `SELECT source, webhook_missing, charge_missing, amount_mismatch, duplicate_charge,
+              ran_by_email
          FROM reconciliation_runs WHERE org_id = $1 ORDER BY created_at DESC LIMIT 1`, [ORG])
     expect(registro?.source).toBe('simulado')
     expect(registro?.ran_by_email).toBe(EMAIL)
     expect([registro?.webhook_missing, registro?.charge_missing, registro?.amount_mismatch])
       .toEqual([1, 1, 1])
+    expect(registro?.duplicate_charge).toBe(0)
   }, 40_000)
 
-  it('não mostra pedido de outra organização', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('OLHAR não grava conferência nenhuma', async (ctx) => {
+    seForaDoArPula(ctx)
+    expect(cookie, 'login falhou — o teste ficaria verde à toa').toBeTruthy()
+
+    const antes = await conferenciasGravadas()
+    // duas leituras porque é o que UMA abertura de tela faz com `useFetch`:
+    // uma no servidor e outra na hidratação. Medido: 14 linhas viraram 16.
+    await chamar('?de=2026-09-01&ate=2026-09-30')
+    await chamar('?de=2026-09-01&ate=2026-09-30')
+    // ← com o INSERT no caminho da leitura, o cartão "última conferência em…"
+    //   passa a mostrar VOCÊ de cinco segundos atrás, e o livro perde o único
+    //   dado que ele tinha pra dar: quando alguém conferiu de verdade.
+    expect(await conferenciasGravadas(),
+      'abrir a tela gravou conferência no livro').toBe(antes)
+  }, 30_000)
+
+  it('registrar sem o cabeçalho da tela não grava, e diz por quê', async (ctx) => {
+    seForaDoArPula(ctx)
+    const antes = await conferenciasGravadas()
+    // uma navegação vinda de outro site leva o cookie (SameSite=Lax) e NÃO
+    // consegue mandar cabeçalho: não pode carimbar conferência em nome de
+    // quem clicou
+    const r = await chamar('?de=2026-09-01&ate=2026-09-30&registrar=1')
+    expect(r.status).toBe(200)
+    const corpo = await r.json()
+    expect(corpo.registro.gravado).toBe(false)
+    expect(corpo.registro.porque, 'falha muda: não gravou e não disse nada').toBeTruthy()
+    expect(await conferenciasGravadas()).toBe(antes)
+  }, 30_000)
+
+  it('o registro explícito carimba autor, período e fonte — uma linha por clique', async (ctx) => {
+    seForaDoArPula(ctx)
+    const antes = await conferenciasGravadas()
+    const r = await registrar('?de=2026-09-01&ate=2026-09-30&registrar=1')
+    const corpo = await r.json()
+    expect(corpo.registro.gravado).toBe(true)
+    expect(corpo.registro.quando).toBeTruthy()
+    expect(await conferenciasGravadas()).toBe(antes + 1)
+
+    const linha = await q1<any>(
+      `SELECT ran_by_email, period_start, period_end, source
+         FROM reconciliation_runs WHERE org_id = $1 ORDER BY created_at DESC LIMIT 1`, [ORG])
+    expect(linha?.ran_by_email).toBe(EMAIL)
+    expect(linha?.source).toBe('simulado')
+    // o período guardado é o da tela, em dia de calendário
+    expect(diaLocal(new Date(linha!.period_start))).toBe('2026-09-01')
+    expect(diaLocal(new Date(linha!.period_end))).toBe('2026-09-30')
+    // o cartão de memória volta com o dia de calendário, e não com o instante
+    // UTC que faria "01/09" aparecer como 31/08
+    expect(corpo.ultimaConferencia?.de).toBe('2026-09-01')
+    expect(corpo.ultimaConferencia?.ate).toBe('2026-09-30')
+    expect(corpo.ultimaConferencia?.por).toBe(EMAIL)
+  }, 30_000)
+
+  it('não mostra pedido de outra organização', async (ctx) => {
+    seForaDoArPula(ctx)
     await limparPedidos()
     const ontem = new Date(Date.now() - 86_400_000).toISOString().slice(0, 19).replace('T', ' ')
     await pedido({ codigo: 'ZZ-REC-ALHEIO', org: VIZINHA, evento: EVENTO_VIZINHO,
@@ -749,20 +913,199 @@ describe('a rota de reconciliação', () => {
     expect(corpo.divergencias).toEqual([])
   }, 20_000)
 
-  it('evento de outra organização no filtro responde 404, e não o dado', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('evento de outra organização no filtro responde 404, e não o dado', async (ctx) => {
+    seForaDoArPula(ctx)
     // O middleware de organização cerca `/api/admin/evento/:id` pela URL —
     // aqui o evento vem como FILTRO, e a cerca é da rota.
     const r = await chamar(`?eventoId=${EVENTO_VIZINHO}`)
     expect(r.status).toBe(404)
   }, 20_000)
 
-  it('período invertido devolve frase, não erro de banco', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('período invertido devolve frase, não erro de banco', async (ctx) => {
+    seForaDoArPula(ctx)
     const r = await chamar('?de=2026-09-30&ate=2026-09-01')
     expect(r.status).toBe(400)
     expect((await r.json()).statusMessage ?? '').toMatch(/data inicial é depois/i)
   }, 20_000)
+})
+
+/* ============================ 8. a mesma cobrança em mais de um pedido */
+
+describe('duas vendas na mesma cobrança', () => {
+  it('a segunda venda é NOMEADA, e não vira frase que se contradiz', () => {
+    const r = comparar({
+      pedidos: [
+        nosso({ codigo: 'DUP-A', totalCents: 10_000 }),
+        nosso({ codigo: 'DUP-B', cobrancaId: 'sim_DUP-A', totalCents: 10_000 }),
+      ],
+      extrato: [cobranca({ id: 'sim_DUP-A', valorReais: 100 })],
+      extratoCompleto: true,
+    })
+
+    // ← com um pedido por cobrança no mapa, a segunda venda sumia do laço do
+    //   gateway, caía no último ramo do nosso laço — o que existe pra cobrança
+    //   SEM dinheiro — e saía como GRAVE dizendo: o Asaas diz "RECEIVED", o
+    //   dinheiro não entrou. As duas metades da frase se negam.
+    expect(r.divergencias.map((d) => d.tipo), JSON.stringify(r.divergencias, null, 1))
+      .toEqual(['cobranca_repetida'])
+    const d = r.divergencias[0]
+    expect(d.gravidade).toBe('grave')
+    expect(d.explicacao, 'a linha precisa nomear os DOIS pedidos').toContain('DUP-A')
+    expect(d.explicacao).toContain('DUP-B')
+    expect(d.acao.chave).toBe('conferir_duplicidade')
+    // o dinheiro entrou uma vez e está contado duas: a linha fecha sozinha
+    expect(d.gatewayCents).toBe(10_000)
+    expect(d.nossoCents).toBe(20_000)
+    expect(d.diferencaCents).toBe(-10_000)
+    expect(r.totais.cobrancaRepetida).toBe(1)
+  })
+
+  it('nenhuma linha diz que o dinheiro não entrou numa cobrança RECEBIDA', () => {
+    // A varredura é de propósito mais larga que o caso de cima: a frase
+    // impossível pode nascer de qualquer ramo que misture "o gateway recebeu"
+    // com "o dinheiro não entrou".
+    const cenarios = [
+      comparar({
+        pedidos: [nosso({ codigo: 'X1' }), nosso({ codigo: 'X2', cobrancaId: 'sim_X1' })],
+        extrato: [cobranca({ id: 'sim_X1', valorReais: 100 })], extratoCompleto: true,
+      }),
+      comparar({
+        pedidos: [
+          nosso({ codigo: 'Y1', status: 'expirado', vivo: false }),
+          nosso({ codigo: 'Y2', cobrancaId: 'sim_Y1' }),
+        ],
+        extrato: [cobranca({ id: 'sim_Y1', valorReais: 100, status: 'CONFIRMED' })],
+        extratoCompleto: true,
+      }),
+      comparar({
+        pedidos: [nosso({ id: 'ped-Z', codigo: 'Z1' }), nosso({ codigo: 'Z2', cobrancaId: 'sim_Z1' })],
+        extrato: [cobranca({ id: 'sim_Z1', valorReais: 100, referencia: 'ped-Z' })],
+        extratoCompleto: true,
+      }),
+    ]
+    for (const r of cenarios) {
+      for (const d of r.divergencias) {
+        const recebida = d.statusNoGateway === 'RECEIVED' || d.statusNoGateway === 'CONFIRMED'
+        expect(recebida && /dinheiro não entrou/.test(d.explicacao),
+          `linha que se contradiz: "${d.explicacao}"`).toBe(false)
+      }
+    }
+  })
+
+  it('o banco não deixa mais duas vendas apontarem pra mesma cobrança', async () => {
+    await limparPedidos()
+    await pedido({ codigo: 'ZZ-REC-UNICO-1', total: 10_000, cobranca: 'sim_ZZ_UNICO',
+                   pagoEm: '2026-09-10' })
+    // ← sem o índice único de db/025 a segunda venda entra, o webhook escolhe
+    //   `rows[0]` no escuro e o mesmo dinheiro é somado duas vezes no borderô
+    await expect(
+      pedido({ codigo: 'ZZ-REC-UNICO-2', total: 10_000, cobranca: 'sim_ZZ_UNICO',
+               pagoEm: '2026-09-10' }),
+    ).rejects.toThrow(/orders_asaas_payment_unico|duplicate key|duplicada/i)
+
+    // e a venda em dinheiro (sem cobrança) continua podendo repetir o NULL
+    await pedido({ codigo: 'ZZ-REC-GAVETA-1', total: 5_000, cobranca: null })
+    await pedido({ codigo: 'ZZ-REC-GAVETA-2', total: 5_000, cobranca: null })
+    expect((await q<any>(
+      `SELECT code FROM orders WHERE org_id = $1 AND asaas_payment_id IS NULL`, [ORG])).length)
+      .toBe(2)
+  })
+})
+
+/* ================= 9. o aviso guardado é cercado pela organização, na consulta */
+
+describe('o aviso guardado não atravessa a cerca do produtor', () => {
+  it('a consulta não devolve o aviso de outro produtor nem quando perguntam por ele', async () => {
+    await limparPedidos()
+    await q(`DELETE FROM payment_events WHERE gateway_event_id LIKE 'zz-rec-%'`)
+
+    await pedido({ id: '0000a220-0000-4000-8000-000000000301', codigo: 'ZZ-REC-AV-MINHA',
+                   total: 3_300, pagoEm: '2026-09-10' })
+    await pedido({ id: '0000a220-0000-4000-8000-000000000302', codigo: 'ZZ-REC-AV-VIZINHA',
+                   org: VIZINHA, evento: EVENTO_VIZINHO, total: 9_900, pagoEm: '2026-09-10' })
+    await aviso({ chave: 'zz-rec-av-1', cobranca: 'sim_ZZ-REC-AV-MINHA',
+                  pedidoId: '0000a220-0000-4000-8000-000000000301',
+                  status: 'RECEIVED', valorReais: 33 })
+    await aviso({ chave: 'zz-rec-av-2', cobranca: 'sim_ZZ-REC-AV-VIZINHA',
+                  pedidoId: '0000a220-0000-4000-8000-000000000302',
+                  status: 'RECEIVED', valorReais: 99, erro: 'erro interno do vizinho' })
+
+    const ids = ['sim_ZZ-REC-AV-MINHA', 'sim_ZZ-REC-AV-VIZINHA']
+    const linhas = await q<any>(SQL_AVISOS_GUARDADOS, [ids, ORG])
+    // ← sem a cerca DENTRO da consulta, quem manda a lista de ids manda no que
+    //   sai: o payload, o erro e a trilha de webhook do vizinho aparecem nesta
+    //   tela. Defesa que mora no chamador não é defesa.
+    expect(linhas.map((l: any) => l.external_id),
+      'o aviso do vizinho entrou nesta conferência').toEqual(['sim_ZZ-REC-AV-MINHA'])
+
+    // e a cerca vale dos dois lados: o vizinho enxerga o dele
+    const doVizinho = await q<any>(SQL_AVISOS_GUARDADOS, [ids, VIZINHA])
+    expect(doVizinho.map((l: any) => l.external_id)).toEqual(['sim_ZZ-REC-AV-VIZINHA'])
+  })
+
+  it('o aviso que só o order_id liga ao pedido continua aparecendo', async () => {
+    await limparPedidos()
+    await q(`DELETE FROM payment_events WHERE gateway_event_id LIKE 'zz-rec-%'`)
+    // cobrança achada por externalReference: o id nunca foi parar no pedido
+    await pedido({ id: '0000a220-0000-4000-8000-000000000311', codigo: 'ZZ-REC-AV-REF',
+                   total: 3_300, cobranca: null, pagoEm: '2026-09-10' })
+    await aviso({ chave: 'zz-rec-av-ref', cobranca: 'pay_so_no_evento',
+                  pedidoId: '0000a220-0000-4000-8000-000000000311',
+                  status: 'RECEIVED', valorReais: 33 })
+
+    const linhas = await q<any>(SQL_AVISOS_GUARDADOS, [['pay_so_no_evento'], ORG])
+    // ← uma cerca só por `asaas_payment_id` calaria justamente a linha que
+    //   transforma "reprocessar o aviso" de conselho em instrução
+    expect(linhas.map((l: any) => l.external_id)).toEqual(['pay_so_no_evento'])
+  })
+})
+
+/* ================== 10. sem extrato de verdade a tela não se diz conferida */
+
+describe('o veredito da conferência', () => {
+  it('gateway simulado NUNCA fecha, nem com zero divergência', () => {
+    const v = vereditoDaConferencia({
+      fonte: 'simulado', completa: false, erro: null, naoConferidos: 0, divergencias: 0,
+    })
+    // ← medido na tela antes do conserto: "Divergências 0" em text-ok,
+    //   rgb(18,128,92), com 213 de 213 pedidos sem conferir. O verde é uma
+    //   afirmação, e a afirmação era falsa.
+    expect(v.conferido, 'o gateway simulado não é o extrato do Asaas').toBe(false)
+    expect(v.tom).not.toBe('ok')
+    expect(v.selo).toMatch(/simulado/i)
+  })
+
+  it('pedido sem conferir derruba o "fecha" mesmo com o Asaas de verdade', () => {
+    const v = vereditoDaConferencia({
+      fonte: 'asaas', completa: true, erro: null, naoConferidos: 3, divergencias: 0,
+    })
+    expect(v.conferido).toBe(false)
+    expect(v.selo).toMatch(/3 pedido/)
+  })
+
+  it('erro do gateway e falta de fonte são o tom mais forte', () => {
+    expect(vereditoDaConferencia({ fonte: 'asaas', completa: false, erro: 'HTTP 401',
+                                   naoConferidos: 0, divergencias: 0 }).tom).toBe('erro')
+    expect(vereditoDaConferencia({ fonte: 'indisponivel', completa: false, erro: null,
+                                   naoConferidos: 0, divergencias: 0 }).tom).toBe('erro')
+  })
+
+  it('só o extrato do Asaas inteiro e sem sobra autoriza dizer que fecha', () => {
+    const v = vereditoDaConferencia({
+      fonte: 'asaas', completa: true, erro: null, naoConferidos: 0, divergencias: 0,
+    })
+    expect(v.conferido).toBe(true)
+    expect(v.tom).toBe('ok')
+  })
+
+  it('conferiu de verdade e achou divergência não é verde', () => {
+    const v = vereditoDaConferencia({
+      fonte: 'asaas', completa: true, erro: null, naoConferidos: 0, divergencias: 2,
+    })
+    expect(v.conferido).toBe(true)
+    expect(v.tom).toBe('erro')
+    expect(v.selo).toMatch(/2 divergência/)
+  })
 })
 
 /* ------------------------------------------------------------ vocabulário */

@@ -170,30 +170,61 @@ export function somarPedido(
   }
 }
 
-/** Formata centavos pra exibição. Só na borda — nunca no meio de conta. */
-export function reais(cents: number): string {
-  inteiro(cents, 'cents')
-  return (cents / 100).toLocaleString('pt-BR', {
-    style: 'currency', currency: 'BRL', minimumFractionDigits: 2,
-  })
-}
-
-/** Lê "R$ 1.234,56" / "1234,56" / "1234.56" e devolve centavos. */
-export function paraCentavos(texto: string | number): number {
-  if (typeof texto === 'number') {
-    if (!Number.isFinite(texto)) throw new Error('valor não finito')
-    return Math.round(texto * 100)
-  }
-  const limpo = String(texto).replace(/[^\d,.-]/g, '').trim()
-  if (!limpo) return 0
-  // pt-BR: ponto é milhar, vírgula é decimal
-  const normal = limpo.includes(',')
-    ? limpo.replace(/\./g, '').replace(',', '.')
-    : limpo
-  const n = Number(normal)
-  if (!Number.isFinite(n)) throw new Error(`valor inválido: ${texto}`)
-  return Math.round(n * 100)
-}
+/* ------------------------------------------------- a borda de exibição ---
+ *
+ * `reais` e `paraCentavos` NÃO são implementados aqui. Eles moram em
+ * `app/composables/formato.ts` e este arquivo só reexporta, pra que exista
+ * uma leitura e uma escrita de valor em reais no projeto inteiro — não duas.
+ *
+ * Havia duas, e elas discordavam de um fator de MIL. Medido antes do
+ * conserto:
+ *
+ *   entrada       | app/composables/formato | server/utils/dinheiro (aqui)
+ *   "1.200"       | 120000  (R$ 1.200,00)   | 120  (R$ 1,20)
+ *   "1.234.567"   | 123456700               | EXCEÇÃO "valor inválido"
+ *
+ * A daqui chamava `Number('1.200')`, que responde `1.2` porque o JavaScript
+ * fala en-US. Nenhuma rota usava esta cópia — era quase código morto, e
+ * "quase" é o perigo: no dia em que alguém importasse, o mesmo texto mudaria
+ * de significado entre a tela e o servidor sem exceção, sem log e sem teste
+ * vermelho. A régua escrita ("1.200" é mil e duzentos, porque o último grupo
+ * depois do ponto tem três dígitos) está no comentário da implementação.
+ *
+ * O `reais` de cá também era uma segunda ESCRITA: saía do
+ * `toLocaleString('pt-BR', { style: 'currency' })`, que separa o `R$` com
+ * espaço FINO (U+00A0) — o espaço que faz duas strings idênticas na tela não
+ * serem iguais na comparação, armadilha que o CLAUDE.md descreve. Hoje ele é
+ * o do composable: espaço NORMAL, divisão inteira, e valor não finito sai
+ * `R$ ?` em vez de derrubar quem chama.
+ *
+ * ## O QUE ESTA UNIFICAÇÃO NÃO ALCANÇOU — leia antes de confiar no parágrafo
+ * ## acima
+ *
+ * Trocar a implementação daqui NÃO mudou nenhum texto que sai do servidor,
+ * porque nenhum arquivo do servidor importa `reais` deste módulo. Quatro
+ * deles escrevem o `R$` por conta própria, cada um com uma cópia da mesma
+ * linha e cada um com um nome diferente — que é justamente por que um
+ * `grep "function reais"` não acha nenhuma delas:
+ *
+ *   server/utils/email.ts:399        const reais = (c) => (c / 100).toLocale…
+ *   server/utils/cancelamento.ts:85  const brl   = (c) => (c / 100).toLocale…
+ *   server/utils/saque.ts:78         const brl   = (c) => (c / 100).toLocale…
+ *   server/utils/asaas.ts:1185       const real  = (c) => (c / 100).toLocale…
+ *
+ * Medido nas quatro, contra o formatador único:
+ *
+ *   centavos | daqui (composable) | as quatro cópias | iguais?
+ *   3000     | "R$ 30,00" (U+0020)| "R$ 30,00" (U+00A0) | NÃO
+ *   NaN      | "R$ ?"             | "R$ NaN"            | NÃO
+ *
+ * Ou seja: o e-mail de ingresso que o comprador recebe ainda leva o espaço
+ * fino, e ainda imprime `R$ NaN` quando o número chega torto — o comprador lê
+ * "Pedido 1234 · R$ NaN" e liga pro guichê. Nenhum desses quatro arquivos
+ * pertence à trilha que fez esta unificação; a varredura que impede uma
+ * QUINTA cópia de nascer está em `dinheiro.test.ts`, com a lista das quatro
+ * escrita por extenso.
+ */
+export { paraCentavos, reais } from '../../app/composables/formato'
 
 function inteiro(v: number, nome: string) {
   if (!Number.isInteger(v)) throw new Error(`${nome} precisa ser inteiro (recebeu ${v})`)

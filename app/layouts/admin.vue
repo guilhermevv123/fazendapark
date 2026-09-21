@@ -4,6 +4,8 @@
  * As medidas e cores vieram do getComputedStyle do painel de origem, não de
  * estimativa por print — ver comentário no tailwind.config.js.
  */
+import { ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
+
 const route = useRoute()
 const eventoId = computed(() => route.params.id as string | undefined)
 const base = computed(() => (eventoId.value ? `/admin/evento/${eventoId.value}` : '/admin'))
@@ -42,16 +44,93 @@ async function sair() {
 // a barra de abas que mostra as mesmas telas no alto da página.
 type Item = GrupoDoEvento
 
-const itens = computed<Item[]>(() => eventoId.value
+const itensDoPainel = computed<Item[]>(() => eventoId.value
   ? menuDoEvento(eventoId.value)
   : [
       { nome: 'Eventos', icone: 'calendario', para: '/admin' },
       { nome: 'Organizações', icone: 'pessoas', para: '/admin/organizacoes' },
       { nome: 'Equipe', icone: 'pessoas', para: '/admin/equipe' },
       { nome: 'Financeiro', icone: 'financeiro', para: '/admin/financeiro' },
+      // As duas telas de conferência do dinheiro existiam sem NENHUM caminho
+      // até elas: nenhuma página linkava, o menu não listava, e a única
+      // maneira de abrir era digitar o endereço. Tela que ninguém acha não
+      // protege ninguém — é o mesmo motivo por que a auditoria foi feita.
+      { nome: 'Auditoria', icone: 'busca', para: '/admin/auditoria' },
+      { nome: 'Reconciliação', icone: 'carteira', para: '/admin/reconciliacao' },
       { nome: 'Configurações', icone: 'config', para: '/admin/configuracoes' },
       { nome: 'Suporte', icone: 'suporte', para: '/admin/suporte' },
     ])
+
+/**
+ * O papel de quem está logado — o MESMO que o servidor usa pra trancar a rota
+ * (`users.papel`), agora que `/api/auth/eu` devolve a coluna certa.
+ */
+const papel = computed<Papel | null>(() => {
+  const p = eu.value?.usuario?.papel
+  return ehPapel(p) ? p : null
+})
+
+/**
+ * O menu filtrado pelo papel.
+ *
+ * **Esconder item NÃO é a proteção** — quem tranca é o `middleware/03.papel.ts`,
+ * e ele continua respondendo 403 pra quem digitar o endereço na mão. Isto aqui
+ * é só pra não desenhar porta fechada na parede: medido antes, a sessão de
+ * portaria recebia o menu inteiro no HTML ("Eventos, Organizações, Equipe,
+ * Financeiro, Configurações, Suporte") e cada clique terminava em recusa.
+ *
+ * A régua vem de `server/utils/papeis.ts`, a MESMA que decide a rota. Uma
+ * segunda lista aqui envelheceria sozinha: a tela nova entraria numa e não na
+ * outra, e o menu passaria a esconder o que o servidor libera (tela que
+ * "sumiu") ou a oferecer o que ele nega (item morto de novo).
+ *
+ * Enquanto o papel não chegou, nada é listado: o `middleware/admin.global.ts`
+ * já mandou pro login quem não tem sessão, então este estado dura o tempo da
+ * primeira resposta — e listar por otimismo é oferecer porta fechada.
+ */
+const itens = computed<Item[]>(() => {
+  const p = papel.value
+  if (!p) return []
+  return itensDoPainel.value.flatMap<Item>((i) => {
+    if (!i.filhos) return podeAbrirPagina(p, i.para) ? [i] : []
+    const filhos = i.filhos.filter((f) => podeAbrirPagina(p, f.para))
+    // grupo sem nenhuma tela visível não vira cabeçalho vazio
+    if (!filhos.length) return []
+    // `para` do grupo fica como está: ele não navega (só abre a lista) e é o
+    // que acende a barra lateral quando a rota atual está dentro do assunto.
+    return [{ ...i, filhos }]
+  })
+})
+
+/** Só depois de saber o papel é que "nenhum item" quer dizer alguma coisa. */
+const semNenhumaTela = computed(() => !!papel.value && itens.value.length === 0)
+
+/**
+ * A MESMA pergunta do menu, pros links que não moram no menu.
+ *
+ * Esta tela desenha caminho em três lugares, não um: a lateral, a trilha do
+ * topo e o ícone de suporte ao lado do avatar. Filtrar só a lateral deixou as
+ * outras duas prometendo exatamente as portas que ela tinha acabado de tirar
+ * da parede. Medido no HTML servido, DEPOIS da lateral já estar filtrada:
+ *
+ * - portaria em `/admin/evento/<id>/validacao` (lateral com um item só, mais a
+ *   frase "seu acesso é só o leitor de entrada") continuava recebendo no topo
+ *   `EVENTOS → /admin` e o ícone de suporte → `/admin/suporte`. As duas telas
+ *   respondem 403 pra ela em `/api/admin/eventos` — e a lista de eventos não
+ *   mostra a recusa: mostra **"Nenhum evento aqui ainda."**, que é uma
+ *   mentira. Quem está no portão lê "o parque não tem evento", não "não é seu
+ *   acesso", e o chamado que chega é "o sistema apagou o evento".
+ * - operação em qualquer tela do evento recebia na trilha o nome do evento
+ *   ligado a `/admin/evento/<id>/dashboard` — a MESMA tela que a lateral
+ *   esconde dela de propósito (dashboard é faturamento do dia, área
+ *   `dinheiro`). O menu tirava com uma mão e a trilha devolvia com a outra,
+ *   uma linha acima.
+ *
+ * Esconder continua não sendo proteção — quem tranca é o
+ * `middleware/03.papel.ts`. Isto é só a régua de `papeis.ts` valendo nos três
+ * lugares da tela, e não em um.
+ */
+const podeAbrir = (para: string) => !!papel.value && podeAbrirPagina(papel.value, para)
 
 const ativo = (para: string) => route.path === para || route.path.startsWith(para + '/')
 
@@ -74,9 +153,20 @@ function alternar(i: Item) {
   else abertos.value.push(i.nome)
 }
 
+/**
+ * A trilha continua dizendo ONDE a pessoa está — o texto nunca some, porque
+ * ele é o contexto da tela. O que some é o LINK, quando o destino é uma tela
+ * que o papel não abre: vira texto simples, igual ao último degrau, que nunca
+ * foi link. Some o clique que termina em 403, fica a orientação.
+ */
 const trilha = computed(() => {
-  const t: { texto: string; para?: string }[] = [{ texto: 'EVENTOS', para: '/admin' }]
-  if (evento.value?.nome) t.push({ texto: evento.value.nome.toUpperCase(), para: `${base.value}/dashboard` })
+  const degrau = (texto: string, para: string) =>
+    ({ texto, para: podeAbrir(para) ? para : undefined })
+
+  const t: { texto: string; para?: string }[] = [degrau('EVENTOS', '/admin')]
+  if (evento.value?.nome) {
+    t.push(degrau(evento.value.nome.toUpperCase(), `${base.value}/dashboard`))
+  }
   const ultima = route.path.split('/').filter(Boolean).pop()
   // 'admin' e o próprio id não são página: viram ruído na trilha.
   if (ultima && ultima !== 'admin' && ultima !== eventoId.value) {
@@ -107,6 +197,17 @@ const situacao: Record<string, { texto: string; classe: string }> = {
                 class="flex items-center gap-3 px-4 py-3 text-[15px] text-white/80 hover:text-white">
         <IconeMenu nome="voltar" /> Voltar
       </NuxtLink>
+
+      <!--
+        Papel sem nenhuma tela de painel (hoje: a portaria, cuja única área é
+        o leitor de entrada, que mora dentro de um evento). Uma linha que diz
+        o motivo, porque lateral vazia é lida como "o sistema quebrou" por
+        quem está com fila na frente.
+      -->
+      <p v-if="semNenhumaTela" class="px-4 py-4 text-[13px] leading-snug text-white/60">
+        Seu acesso é só o leitor de entrada. Peça a um master da sua organização
+        o link do portão.
+      </p>
 
       <ul class="mt-1 flex-1 overflow-y-auto">
         <li v-for="i in itens" :key="i.para">
@@ -163,7 +264,10 @@ const situacao: Record<string, { texto: string; classe: string }> = {
           <button type="button" class="hover:text-tinta" aria-label="Notificações">
             <IconeMenu nome="sino" />
           </button>
-          <NuxtLink to="/admin/suporte" class="hover:text-tinta" aria-label="Suporte">
+          <!-- mesmo catálogo da lateral: o atalho só existe pra quem abre a
+               tela de suporte (ver `podeAbrir`, acima) -->
+          <NuxtLink v-if="podeAbrir('/admin/suporte')" to="/admin/suporte"
+                    class="hover:text-tinta" aria-label="Suporte">
             <IconeMenu nome="chat" />
           </NuxtLink>
           <div class="relative">
@@ -181,7 +285,9 @@ const situacao: Record<string, { texto: string; classe: string }> = {
               <template v-if="eu?.usuario">
                 <p class="px-3 py-2 text-xs text-tinta-fraca">
                   {{ eu.usuario.email }}<br>
-                  <span class="text-tinta-suave">acesso: {{ eu.usuario.papel }}</span>
+                  <!-- o rótulo vem pronto da rota: quem escreve "Operação" é
+                       o servidor, com a mesma palavra da tela de equipe -->
+                  <span class="text-tinta-suave">acesso: {{ eu.usuario.papelRotulo ?? eu.usuario.papel }}</span>
                 </p>
                 <hr class="border-linha">
                 <button type="button"

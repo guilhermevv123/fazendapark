@@ -33,7 +33,18 @@ const id = route.params.id as string
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   `/api/admin/evento/${id}/ingressos`)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+/*
+ * Data e dinheiro saem de `app/composables/formato.ts`. As duas cópias que
+ * moravam aqui tinham o mesmo defeito das outras telas — e a de data era a
+ * que aparecia:
+ *
+ *   paraCampo = (iso) => new Date(iso).toISOString().slice(0, 16)
+ *
+ * `toISOString()` converte pra UTC antes de cortar e o `datetime-local` lê
+ * hora LOCAL. Medido: lote que abre 21:00 do dia 20 vinha pro formulário como
+ * 00:00 do dia 21. Salvar sem tocar no campo empurrava a abertura do lote três
+ * horas — a noite de venda inteira.
+ */
 const erro = ref('')
 const salvando = ref(false)
 
@@ -82,8 +93,10 @@ const totais = computed(() => {
 function disponibilidade(l: any) {
   if (!l.visivel) return { texto: 'Oculto', classe: 'selo-neutro' }
   const agora = Date.now()
-  if (l.abreEm && new Date(l.abreEm).getTime() > agora) return { texto: 'Em breve', classe: 'selo-alerta' }
-  if (l.expiraEm && new Date(l.expiraEm).getTime() < agora) return { texto: 'Encerrado', classe: 'selo-neutro' }
+  const abre = paraData(l.abreEm)
+  const expira = paraData(l.expiraEm)
+  if (abre && abre.getTime() > agora) return { texto: 'Em breve', classe: 'selo-alerta' }
+  if (expira && expira.getTime() < agora) return { texto: 'Encerrado', classe: 'selo-neutro' }
   if (l.disponivel <= 0) return { texto: 'Esgotado', classe: 'selo-erro' }
   return { texto: 'À venda', classe: 'selo-ok' }
 }
@@ -139,9 +152,9 @@ const loteForm = reactive({
   abreEm: '', expiraEm: '', visivel: true,
 })
 /** ISO com fuso → 'YYYY-MM-DDTHH:mm' que o input datetime-local entende. */
-const paraCampo = (iso: string | null) => (iso ? new Date(iso).toISOString().slice(0, 16) : '')
-/** E a volta: sem o fuso o banco grava em UTC e o lote abre 3h fora da hora. */
-const deCampo = (v: string) => (v ? new Date(v).toISOString() : null)
+const paraCampo = (iso: string | null) => paraCampoDataHora(iso)
+/** E a volta: hora local digitada → o instante que o banco guarda. */
+const deCampo = (v: string) => deCampoDataHora(v)
 
 function abrirLote(setorId: string, l?: any) {
   Object.assign(loteForm, {
@@ -430,9 +443,9 @@ useHead({ title: 'Ingressos' })
                 <td class="px-3 py-3">
                   <p class="font-medium text-tinta">{{ lote.nome }}</p>
                   <p v-if="lote.abreEm || lote.expiraEm" class="text-xs text-tinta-fraca">
-                    <template v-if="lote.abreEm">abre {{ new Date(lote.abreEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }}</template>
+                    <template v-if="lote.abreEm">abre {{ dataHora(lote.abreEm) }}</template>
                     <template v-if="lote.abreEm && lote.expiraEm"> · </template>
-                    <template v-if="lote.expiraEm">fecha {{ new Date(lote.expiraEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }}</template>
+                    <template v-if="lote.expiraEm">fecha {{ dataHora(lote.expiraEm) }}</template>
                   </p>
                 </td>
 
@@ -654,7 +667,7 @@ useHead({ title: 'Ingressos' })
           <select id="ss" v-model="setorForm.sessaoId" class="campo">
             <option value="">Todas</option>
             <option v-for="s in data.sessoes" :key="s.id" :value="s.id">
-              {{ s.titulo ?? new Date(s.inicio).toLocaleDateString('pt-BR') }}
+              {{ s.titulo ?? dataCurta(s.inicio) }}
             </option>
           </select>
         </div>
