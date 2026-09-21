@@ -1,0 +1,328 @@
+{
+    "header": {
+        "title": "Equipe",
+        "accessManagement": {
+            "tab": "Gestão de acessos",
+            "description": "Gerencie e visualize informações de membros do seu time e suas atividades."
+        }
+    },
+    "userPermissionsList": {
+        "permission": "{{count}} permissão",
+        "permissions": "{{count}} permissões",
+        "permissionsCount": "{{count}} {{count === 1 ? 'permissão' : 'permissões'}",
+        "permissionsRatio": "{{count}}/{{total}} permissões",
+        "fetchError": "Erro ao buscar permissões do perfil",
+        "tickets": {
+            "title": "Gestão de Ingressos",
+            "description": "Ingressos, Códigos Promocionais, Promoters e mais"
+        },
+        "finance": {
+            "title": "Gestão Financeira",
+            "description": "Dashboard, relatórios de vendas, transferências e mais"
+        },
+        "eventSettings": {
+            "title": "Configurações do Evento",
+            "description": "Informações do evento, configurações de venda e mais"
+        },
+        "sales": {
+            "title": "Vendas",
+            "description": "Extrato de vendas, participantes, transferências e mais"
+        },
+        "validation": {
+            "title": "Validação e Acessos",
+            "description": "Relatório de acessos, localizadores e operações de validação"
+        },
+        "organization": {
+            "title": "Gestão da Organização",
+            "description": "Organizações e gestão de colaboradores"
+        },
+        "permissionLabels": {
+            "viewTickets": "Visualizar listagem de ingressos, cortesias e passaportes",
+            "editTickets": "Criar e editar opções de ingressos, cortesias e passaportes",
+            "viewPromoCodes": "Visualizar códigos promocionais e promoters",
+            "editPromoCodes": "Criar e editar opções de códigos promocionais e promoters",
+            "viewDashboard": "Visualizar dashboard, relatórios de vendas e borderô",
+            "viewTransfers": "Visualizar listagem de transferências financeiras",
+            "requestTransfer": "Solicitar e exportar transferências financeiras",
+            "manageRefunds": "Lançar despesas e exportar borderô",
+            "viewEventInfo": "Visualizar informações do evento",
+            "editEventInfo": "Editar informações do evento",
+            "viewSalesSettings": "Visualizar configurações de venda",
+            "editSalesSettings": "Editar configurações de venda",
+            "viewIntegrations": "Visualizar e configurar integrações",
+            "editSeatMap": "Visualizar e editar mapa de assentos",
+            "viewDetailedExtract": "Visualizar extrato detalhado e detalhes de vendas",
+            "viewParticipants": "Visualizar participantes e ingressos transferidos",
+            "exportParticipants": "Exportar participantes, validar via QR Code e resetar checkins",
+            "exportTransferVoucher": "Exportar e cancelar transferências de ingressos",
+            "resendVoucher": "Baixar e reenviar ingressos para participantes",
+            "configureForm": "Ver e configurar formulário de inscrição",
+            "viewAccessReport": "Visualizar relatório de acessos e localizadores",
+            "createLocalizers": "Criar e exportar localizadores",
+            "viewOrgList": "Visualizar listagem de organizações",
+            "editOrgInfo": "Editar informações da organização",
+            "viewAuditLog": "Visualizar listagem de colaboradores",
+            "manageCollaborators": "Adicionar e editar colaboradores",
+            "manageEvents": "Pode criar novos eventos"
+        }
+    },
+    "userStatus": {
+        "active": "Ativo",
+        "pending": "Pendente",
+        "removed": "Removido",
+        "expired": "Expirado",
+        "inactive": "Inativo"
+    },
+    "userType": {
+        "admin": "Admin",
+        "finance": "Financeiro",
+        "marketing": "Marketing",
+        "operational": "Gestão de Evento",
+        "org-management": "Gestão Organizacional",
+        "support": "Suporte",
+        "access": "Acesso",
+        "view": "Visualização",
+        "master": "Admin Principal",
+        "many": "Múltiplos",
+        "notFound": "Não encontrado",
+        "god": "Backoffice"
+    },
+    "userTypeDescription": {
+        "admin": "Possui acesso geral ao sistema. Pode ver e realizar todas as ações.",
+        "finance": "Pode ver relatórios financeiros, dados de vendas e solicitar saques.",
+        "marketing": "Pode alterar informações do site do evento e fazer integrações.",
+        "operational": "Pode gerenciar todo o evento, exceto funções financeiras.",
+        "org-management": "Pode gerenciar a organização e todo o evento, exceto funções financeiras.",
+        "support": "Visualiza os dados de pedidos e participantes.",
+        "access": "Faz a gestão de acessos e visualiza detalhes de compras e participantes.",
+        "view": "Pode visualizar todos os dados do evento, mas não pode alterar nada.",
+        "master": "Possui acesso geral ao sistema. Pode ver e realizar todas as ações.",
+        "notFound": "Descrição não encontrada."
+    },
+    "teamTable": {
+        "columns": {
+            "colaborator": "Colaborador",
+            "userType": "Perfil de acesso",
+            "eventCount": "Eventos com acesso",
+            "lastActivityAt": "Último acesso em",
+            "status": "Status",
+            "actions": "Ações"
+        },
+        "allEvents": "Todos os eventos",
+        "eventsOne": "{{count}} evento",
+        "events": "{{count}} eventos",
+        "lastActivityAt": "{{date}}, às {{time}}",
+        "message": {
+            "empty": {
+                "title": "Nenhum colaborador encontrado",
+                "description": "Nenhum colaborador adicionado ainda.",
+                "descriptionWithSearch": "Nenhum colaborador corresponde ao termo buscado."
+            },
+            "error": {
+                "title": "Ops, algo deu errado",
+                "description": "Não foi possível carregar os usuários. Por favor, tente novamente mais tarde.",
+                "sortCleared": "Não foi possível ordenar por esta coluna."
+            }
+        }
+    },
+    "controlBar": {
+        "searchPlaceholder": "Buscar pelo nome ou e-mail do colaborador",
+        "filterByEvent": "Filtrar por evento",
+        "filterByLevel": "Filtrar por nível",
+        "filterByStatus": "Filtrar por status",
+        "exportButton": "Exportar",
+        "addCollaboratorButton": "Adicionar colaborador",
+        "exportError": "Erro ao exportar dados, por favor tente novamente."
+    },
+    "actions": {
+        "resendInvite": "Reenviar convite",
+        "edit": "Ver detalhes",
+        "cancelInvite": "Cancelar convite",
+        "removeAccess": "Remover acesso",
+        "reactivate": "Reativar usuário",
+        "removeAccessConfirmation": {
+            "title": "Tem certeza que deseja remover {{name}} da sua equipe?",
+            "content1": "Ao confirmar a remoção,",
+            "content1a": "perde o acesso aos eventos da sua organização",
+            "content2": "Se precisar adicioná-lo novamente no futuro, você pode refazer o convite.",
+            "confirmButtonText": "Remover colaborador",
+            "cancelButtonText": "Cancelar",
+            "success": "O colaborador foi removido com sucesso.",
+            "successDescription": "{{name}} não faz mais parte da equipe {{orgName}}.",
+            "error": "Erro ao remover acesso, por favor tente novamente.",
+            "INVALID_USER_STATE": "Não é possível remover o colaborador no estado atual.",
+            "ACCESS_DENIED": "Você não tem permissão para remover este colaborador.",
+            "USER_NOT_FOUND": "Colaborador não encontrado.",
+            "USER_ALREADY_REMOVED": "Este colaborador já foi removido."
+        },
+        "reactivateUserConfirmation": {
+            "title": "Tem certeza que deseja reativar {{name}}?",
+            "content1": "Ao confirmar a reativação,",
+            "content1a": "volta a ter acesso aos eventos de",
+            "content2": "Um e-mail será enviado para {{email}} com o link para definir uma nova senha. O acesso só é retomado depois que a nova senha for criada.",
+            "confirmButtonText": "Reativar colaborador",
+            "cancelButtonText": "Cancelar",
+            "success": "O colaborador foi reativado com sucesso.",
+            "successDescription": "{{name}} voltou para a equipe e recebeu um e-mail em {{email}} para redefinir a senha.",
+            "error": "Erro ao reativar o colaborador, por favor tente novamente.",
+            "not_inactive": "Este colaborador não está inativo.",
+            "not_found": "Colaborador não encontrado.",
+            "forbidden": "Você não tem permissão para reativar este colaborador."
+        },
+        "cancelInvitation": {
+            "title": "O convite de {{email}} foi cancelado e ele não aparece mais na sua lista de equipe",
+            "description": "Ainda que o link do convite seja acessado, os acessos não serão concedidos."
+        },
+        "resendInvitation": {
+            "title": "O convite foi reenviado!",
+            "description": "Oriente o convidado a acessar o link enviado para o e-mail inserido",
+            "error": {
+                "default": "Erro ao reenviar convite, por favor tente novamente.",
+                "email_rate_limit_reached": "O convite foi enviado recentemente. Por favor, espere alguns minutos antes de tentar novamente."
+            },
+            "confirmButtonText": "Reenviar convite",
+            "cancelButtonText": "Cancelar",
+            "titleContent": "Reenviar convite para {{name}}",
+            "content": "Um convite será reenviado para {{name}} retornar à equipe de {{organizationName}}.",
+            "content2": "A qualquer momento você poderá cancelar o convite ou remover novamente o colaborador da sua equipe. Deseja adicionar novamente?"
+        },
+        "cancelInvitationConfirmation": {
+            "title": "Cancelar convite para {{name}}",
+            "content": "Ao cancelar, o link enviado para",
+            "content2": "no e-mail",
+            "content3": "não terá mais validade e ele não poderá acessar os eventos da sua organização",
+            "content4": "Se precisar adicioná-lo novamente no futuro, você pode refazer o convite.",
+            "cancelButtonText": "Cancelar",
+            "confirmButtonText": "Cancelar convite",
+            "error": "Erro ao cancelar convite, por favor tente novamente.",
+            "INVALID_USER_STATE": "Não é possível cancelar o convite no estado atual.",
+            "ACCESS_DENIED": "Você não tem permissão para cancelar este convite.",
+            "USER_NOT_FOUND": "Usuário não encontrado.",
+            "USER_ALREADY_REMOVED": "Este convite já foi cancelado."
+        }
+    },
+    "colaboratorDetails": {
+        "lastActivity": "Última atividade em {{date}}",
+        "joinedTime": "Entrou no time {{date}}",
+        "copyEmail": "Email copiado!",
+        "removedAt": "Acesso removido em {{date}} às {{time}}",
+        "expiredInvite": "O convite não foi aceito no prazo. Se desejar, envie o convite novamente.",
+        "pendingInvite": "Convite enviado em 23/05/2025 às 16:34"
+    },
+    "userDrawer": {
+        "edit": {
+            "title": "Editar colaborador",
+            "resendInvite": "Reenviar convite",
+            "buttonText": "Salvar alterações",
+            "removeAccess": "Remover acesso",
+            "cancelInvite": "Cancelar convite",
+            "userNotFound": "Usuário não encontrado",
+            "submitSuccess": "As alterações foram salvas com sucesso!",
+            "submitSuccessDescription": "As novas configurações de permissão já estão aplicadas.",
+            "submitError": "Erro ao salvar alterações, por favor tente novamente.",
+            "ORG_ADMIN_PERMISSION_IN_EVENT_ROLE": "Não é possível atribuir esse perfil de acesso em eventos pré-selecionados. Retorne e escolha a opção para todos os eventos da organização."
+        },
+        "title": "Adicionar colaborador",
+        "sendInviteButtonText": "Enviar convite",
+        "nextButtonText": "Avançar",
+        "cancelButtonText": "Cancelar",
+        "backButtonText": "Voltar",
+        "submitSuccess": "Convite enviado",
+        "submitSuccessTitle": "O convite para se juntar ao time foi enviado!",
+        "submitSuccessDescription1": "Oriente",
+        "submitSuccessDescription2": "a acessar o e-mail enviado para",
+        "submitSuccessDescription3": "ou compartilhe o link disponível no campo abaixo.",
+        "submitSuccessLinkLabel": "Link de convite",
+        "submitSuccessConfirmButtonText": "Concluir",
+        "submitError": "Erro ao enviar convite, por favor tente novamente.",
+        "EMAIL_ALREADY_USED_IN_ORG": "Este e-mail já está associado a um membro desta organização.",
+        "ORG_ADMIN_PERMISSION_IN_EVENT_ROLE": "Não é possível atribuir esse perfil de acesso em eventos pré-selecionados. Retorne e escolha a opção para todos os eventos da organização.",
+        "steps": {
+            "basicInfo": "Identificação",
+            "permissions": "Permissões",
+            "review": "Revisão"
+        },
+        "permissions": {
+            "title": "Configure as permissões",
+            "description": "Configure os perfis de permissão que {{name}} terá em cada evento.",
+            "alertTitle": "O cadastro será feito para a organização {{name}}.",
+            "alertMessage": "Se necessário, adicione o colaborador a outra organização alterando o seletor da página principal.",
+            "permissionModelLabel": "Modelo de permissão",
+            "permissionModelHelperText": "Selecione o modelo de permissão adequado.",
+            "selectEventLabel": "Selecione o evento",
+            "selectEventsPlaceholder": "Selecione os eventos",
+            "eventGroup": {
+                "active": "Eventos ativos",
+                "upcoming": "Próximos eventos",
+                "closed": "Eventos encerrados",
+                "others": "Outros"
+            },
+            "accessTypeByEventLabel": "Perfil de acesso por evento",
+            "noEventsSelected": "Ainda não há eventos selecionados",
+            "accessTypeGeneralLabel": "Perfil de acesso geral",
+            "allEventsLabel": "Todos os eventos",
+            "allEventsCount": "{{count}} existentes + eventos futuros",
+            "generalLabel": "Geral",
+            "generalDescription": "Acesso a todos os eventos da organização com o mesmo perfil.",
+            "specificLabel": "Por evento",
+            "specificDescription": "Selecione eventos e perfis de acesso específicos para cada.",
+            "requiredEventsError": "Selecione pelo menos um evento",
+            "masterAlertTitle": "Como dono da organização, {{name}} tem acesso irrestrito a todos os eventos e ações.",
+            "allowEventsLabel": "Permitir acesso a quais eventos?"
+        },
+        "review": {
+            "title": "Revise as informações para enviar o convite",
+            "description": "Ao finalizar, o convite será enviado para o e-mail informado e o link de aceite será válido por 7 dias.",
+            "accessTypeLabel": "Perfil de acesso",
+            "allEventsLabel": "Todos os eventos"
+        },
+        "basicInfo": {
+            "title": "Sobre quem está entrando na equipe",
+            "description": "Enviaremos um convite para o e-mail informado abaixo. Pode ser necessário criar uma conta no painel.",
+            "nameLabel": "Nome",
+            "namePlaceholder": "Digite o nome",
+            "emailLabel": "E-mail",
+            "emailPlaceholder": "Digite o e-mail",
+            "userNotFoundTitle": "Será enviado um link de cadastro para esse e-mail",
+            "userFoundTitle": "Usuário cadastrado no sistema",
+            "userAlreadyExistsTitle1": "Este e-mail já está cadastrado como parte da sua equipe.",
+            "userAlreadyExistsTitle2": "Você pode editá-lo aqui.",
+            "errorValidatingEmail": "Erro ao validar e-mail, por favor tente novamente.",
+            "errors": {
+                "required": "Este campo é obrigatório",
+                "typeError": "Este campo é obrigatório",
+                "email": "E-mail inválido"
+            }
+        }
+    },
+    "eventAccessType": {
+        "noPermissionsAssigned": "Esse perfil não possui permissões associadas ainda.",
+        "defineProfile": "Definir perfil",
+        "title": "Permissões por perfil",
+        "confirmButtonText": "Concluir",
+        "description": "Defina o perfil de acesso de",
+        "forAllEvents": "para todos os eventos",
+        "forEvent": "para o evento",
+        "accessTypeLabel": "Perfil de acesso",
+        "selectTypePlaceholder": "Selecionar um tipo",
+        "verifyPermissionsLabel": "Verifique as permissões do perfil selecionado",
+        "specificSessionsLabel": "Permitir acesso para sessões específicas",
+        "selectSessionsLabel": "Selecionar sessões",
+        "selectSessionsPlaceholder": "Selecione as sessões",
+        "requiredSessionsError": "Selecione pelo menos uma sessão",
+        "requiredAccessTypeError": "Selecione o perfil de acesso",
+        "requiredError": "Selecione o perfil de acesso"
+    },
+    "error": {
+        "errorTitle": "Ops, algo deu errado",
+        "errorDescription": "Não foi possível carregar as informações de acesso. Por favor, tente novamente mais tarde.",
+        "noOrganizationsTitle": "Sem permissão de acesso",
+        "noOrganizationsDescription": "Você não tem permissão para gerenciar colaboradores em nenhuma organização.\nEntre em contato com um administrador para solicitar acesso.",
+        "selectOrganizationPlaceholder": "Digite o nome da organização",
+        "godSelectOrganizationPlaceholder": "Digite o nome da organização",
+        "noOrganizationSelectedDescription": "Digite o nome da organização para ver colaboradores vinculados",
+        "organizationNotFound": "Organização não encontrada. Selecione uma organização válida.",
+        "organization_doesnt_exist": "A organização selecionada não existe ou não está mais disponível. Por favor, selecione outra organização.",
+        "user_cant_access": "Você não tem permissão para acessar os colaboradores desta organização. Por favor, selecione outra organização ou entre em contato com um administrador."
+    }
+}

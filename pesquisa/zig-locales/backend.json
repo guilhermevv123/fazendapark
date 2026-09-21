@@ -1,0 +1,11 @@
+{
+  "onlineSales": "vendas online",
+  "online": "online",
+  "posSales": "vendas pdv",
+  "boxOfficePos": "pdv ticketeira",
+  "producerPos": "pdv produtor",
+  "promoter": "promoter",
+  "ERR_SAME_CODE": "Este evento já possui um {{param}} com este código.",
+  "ERR_SAME_USER": "Este comissário já está cadastrado neste evento.",
+  "SESSION_HAS_ORDERS": "Existem vendas nessa sessão, não é possível deletar"
+}

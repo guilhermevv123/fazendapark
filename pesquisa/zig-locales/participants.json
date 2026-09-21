@@ -1,0 +1,78 @@
+{
+  "tag": {
+    "mainTitle": "Etiquetas",
+    "title": "Configurar etiqueta",
+    "description": "Personalize a etiqueta que será colada no crachá de identificação dos participantes.",
+    "size": "Tamanho",
+    "width": "Largura",
+    "height": "Altura",
+    "widthPlaceholder": "Insira a largura",
+    "heightPlaceholder": "Insira a altura",
+    "chooseInfo": "Escolha até 3 informações para exibir",
+    "selectInfo": "Selecione até três informações",
+    "preview": "Pré-visualização",
+    "printTest": "Imprimir teste",
+    "save": "Salvar",
+    "limitExceeded": "Não é possível adicionar mais de três opções",
+    "showQrCode": "QR Code para validação de entrada",
+    "saveSuccess": "Configurações da etiqueta salvas com sucesso!",
+    "saveError": "Não foi possível salvar as configurações. Tente novamente."
+  },
+  "header": {
+    "title": "Participantes",
+    "subtitle": "Listagem detalhada de participantes inseridos nas compras realizadas.",
+    "exportList": "Exportar Lista"
+  },
+  "loading": {
+    "title": "aguarde...",
+    "text": "estamos carregando a lista de participantes :)"
+  },
+  "subheader": {
+    "participantsList": "Lista de participantes",
+    "subscriptionForm": "Formulário de Inscrição",
+    "tag": "Etiquetas"
+  },
+  "participantsTab": {
+    "qrCode": "Validação via Qrcode",
+    "resetCheckins": "Resetar checkins",
+    "searchByCodeOrName": "Pesquise pelo código ou nome",
+    "search": "Pesquisar",
+    "table": {
+      "code": "Cod. Ingresso",
+      "name": "Nome",
+      "ticketType": "Tipo de Ingresso",
+      "lot": "Lote",
+      "sector": "Setor",
+      "session": "Sessão",
+      "checkin": "Checkin",
+      "tag": "Etiqueta",
+      "checkinUnavailable": "Check-in indisponível",
+      "checkinAvailable": "Realizar Check-in",
+      "resultsPerPage": "Resultados por Página:",
+      "displayingItems": "Exibindo {{count}} de {{total}}",
+      "page": "Página {{page}} de {{total}}"
+    },
+    "checkinUnavailable": "Check-in indisponível",
+    "checkinAvailable": "Realizar Check-in"
+  },
+  "subscriptionTab": {
+    "title": "Campos do formulário de inscrição",
+    "subtitle": "Esses são os campos que participantes preenchem antes de comprar seus ingressos.",
+    "addCustomField": "Acicionar campo personalizado",
+    "alert": {
+      "title": "Zig Recomenda",
+      "text": "Para taxas de conversão maiores e uma experiência de compra mais rápida, utilize apenas as perguntas essenciais para a compra dos ingressos do seu evento."
+    },
+    "participantInfo": {
+      "title": "Informações do participante",
+      "name": "Nome",
+      "namePlaceholder": "Nome do participante",
+      "lastName": "Sobrenome",
+      "lastNamePlaceholder": "Sobrenome do participante",
+      "email": "E-mail",
+      "emailPlaceholder": "E-mail do participante"
+    },
+    "selectReason": "Selecione o motivo",
+    "loadFieldsError": "Não foi possível carregar os campos."
+  }
+}

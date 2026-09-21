@@ -1,0 +1,299 @@
+{
+  "header": {
+    "title": "Organizações",
+    "text": "Controle e crie organizações para gerenciar os grupos de seus eventos.",
+    "button-text": "Criar organização"
+  },
+  "loading": {
+    "title": "aguarde...",
+    "text": "estamos carregando a lista de organizações :)"
+  },
+  "search": {
+    "placeholder": "Pesquise por nome, CPF, CNPJ ou ID da organização",
+    "button-text": "Pesquisar",
+    "filter": {
+      "title": "Filtrar por categoria",
+      "all": "Todos",
+      "producer": "Produtor Autônomo",
+      "company": "Empresa de eventos",
+      "establishment": "Estabelecimento"
+    }
+  },
+  "toast": {
+    "success": {
+      "active": "Organização ativada com sucesso.",
+      "inactive": "Organização desativada com sucesso."
+    },
+    "error": {
+      "route": "Rota não encontrada."
+    }
+  },
+  "table": {
+    "header": {
+      "name": "Nome",
+      "slug": "Slug",
+      "category": "Categoria",
+      "logo": "Logo",
+      "actions": "Ações"
+    },
+    "body": {
+      "inactive": "organização inativa",
+      "active": "organização ativa",
+      "tip": {
+        "edit": "Editar",
+        "list": "Lista de eventos"
+      }
+    }
+  },
+  "pagination": {
+    "results": "Resultados por Página:",
+    "displaying": "Exibindo {{currentPageTotal}} de {{total}}",
+    "page": "Página {{currentPage}} de {{totalPages}}"
+  },
+  "configuration": {
+    "header": {
+      "text": "Tela de configurações de organização"
+    },
+    "first-step": {
+      "info": "Informações básicas",
+      "toast": {
+        "error": {
+          "fillAllFields": "Por favor preencha todos os campos para atrelar o produtor!",
+          "userAlreadyLinked": "Usuário já atrelado a organização!",
+          "userAlreadyLinkedProducer": "O usuário já atrelado como produtor vinculado!",
+          "userAlreadyOwn": "Este usuário já é o proprietário da organização."
+        }
+      },
+      "zipCode": "CEP",
+      "searchingZipCode": "Buscando CEP...",
+      "dontKnowMyZipCode": "Não sei o CEP",
+      "address": "Rua / avenida / logradouro",
+      "number": "Número",
+      "neighborhood": "Bairro",
+      "city": "Cidade",
+      "state": "Estado",
+      "complement": "Complemento (opcional)",
+      "navigation-text": "Geral",
+      "form": {
+        "header": {
+          "title": "1. Informações básicas.",
+          "text": " Principais informações da organização."
+        },
+        "categories": {
+          "autonomous-producer": "Produtor autônomo",
+          "event-company": "Empresa de eventos",
+          "establishment": "Estabelecimento",
+          "fixed-location": "Casa Fixa"
+        },
+        "upload-type": {
+          "banner": "banner",
+          "thumb": "thumb"
+        },
+        "card": {
+          "header": {
+            "info": "Informações",
+            "comercial-and-atendant": "Comercial e atendimento"
+          },
+          "section": {
+            "title": {
+              "owner-producer": "Produtor responsável",
+              "linked-producer": "Produtores vinculados",
+              "settings": "Configurações"
+            },
+            "text": {
+              "owner-producer": "Informações do proprietário da organização",
+              "linked-producer": "Lista de produtores vinculados a esta organização."
+            }
+          },
+          "field-label": {
+            "name": "Nome",
+            "slug": "Slug",
+            "category": "Categoria",
+            "owner-document": "CPF responsável",
+            "social-name": "Razão Social",
+            "document": "CNPJ",
+            "phone": "Telefone",
+            "email": "Email",
+            "last-name": "Sobrenome",
+            "seller-name": "Vendedor que fechou o contrato",
+            "attendant-name": "Atendente responsável",
+            "regional-name": "Regional responsável",
+            "event-frequency": "Frequência dos eventos (em dias)",
+            "currency": "Moeda de venda",
+            "timezone": "Fuso Horário",
+            "trust-level": "Nível de confiança da organização"
+          },
+          "tip": {
+            "trust-level": "Essa classificação altera algumas condições no limite de transferência da organização."
+          },
+          "trust-level-options": {
+            "high": "Alto",
+            "medium": "Médio",
+            "low": "Baixo"
+          },
+          "placeholder": {
+            "name": "Nome da organização",
+            "owner-document": "CPF",
+            "email": "Name@exemplo.com",
+            "social-name": "Razão social",
+            "seller-name": "Nome do vendedor",
+            "attendant-name": "Nome do atendente",
+            "regional-name": "Nome da regional",
+            "event-frequency": "Quantidade de dias",
+            "currency": "Moeda de venda",
+            "timezone": "Fuso Horário",
+            "category": "Selecione"
+          },
+          "button": {
+            "add-producer": "Adicionar produtor",
+            "save": "Salvar alterações",
+            "next": "Prosseguir"
+          },
+          "validation": {
+            "required": {
+              "name": "O nome é obrigatório.",
+              "category": "A categoria é obrigatória.",
+              "email": "O email é obrigatório.",
+              "lastName": "O sobrenome é obrigatório.",
+              "socialName": "A razão social é obrigatória.",
+              "document": "O CNPJ é obrigatório.",
+              "ownerDocument": "O documento deve ser informado.",
+              "trust-level": "O nível de confiança da organização é obrigatório."
+            },
+            "valid": {
+              "document": "Informe um documento válido."
+            },
+            "frequency": "A frequência de eventos deve ser maior ou igual a 1 dia."
+          },
+          "subacquirer": {
+            "title": "Subadquirência",
+            "description1": "Captura os pagamentos de todos os eventos desta organização sob a estrutura de subadquirência da Zig Tecnologia.",
+            "description2": "Vale para PDV e marketplace, e passa a valer apenas para vendas feitas a partir da ativação.",
+            "incompleteData": "Preencha os dados cadastrais da organização (razão social, CNPJ, endereço, cidade, UF, CEP e telefone) para ativar a subadquirência."
+          }
+        }
+      }
+    },
+    "second-step": {
+      "info": "Contas bancárias",
+      "toast": {
+        "error": "É necessário ter ao menos 1 conta bancária!"
+      },
+      "header": {
+        "title": "2. Contas bancárias.",
+        "text": " Lista de contas bancárias atreladas a organização."
+      },
+      "card": {
+        "empty": "Não existe nenhuma conta bancária cadastrada",
+        "add-account": "Você está adicionando uma conta bancária a organização",
+        "safe-data": "Seus dados estão seguros.",
+        "button": {
+          "add-account": "Adicionar conta",
+          "next": "Prosseguir",
+          "save": "Salvar alterações"
+        }
+      }
+    },
+    "third-step": {
+      "info": "Condições comerciais"
+    },
+    "create": {
+      "title": "Criar organização",
+      "success": {
+        "title": "Criado!",
+        "text": "Organização criada com sucesso!"
+      },
+      "not-allowed": {
+        "title": "A criação de organizações é feita pelo módulo de contratos",
+        "description": "Para criar uma nova organização, utilize o módulo de contratos ou entre em contato com o suporte."
+      }
+    },
+    "edit": {
+      "title": "Edição de organização",
+      "success": {
+        "title": "Alterado!",
+        "text": "Alterações efetuadas com sucesso!"
+      }
+    },
+    "bankAccount": {
+      "title": "Adicionar uma nova conta",
+      "type": {
+        "checking": "Corrente",
+        "savings": "Poupança"
+      },
+      "label": {
+        "holderName": "Nome completo / Nome fantasia",
+        "holderDocument": "Documento (CPF/CNPJ)",
+        "transferBank": "Selecione o banco",
+        "accountType": "Tipo da Conta",
+        "agency": "Agência",
+        "account": "Conta",
+        "digit": "Dígito",
+        "pixCheck": "Deseja adicionar uma chave pix para essa conta",
+        "pixKeyType": "Tipo da chave",
+        "pixKey": "Chave PIX"
+      },
+      "placeholder": {
+        "holderName": "Digite seu nome completo",
+        "holderDocument": "Digite o documento",
+        "transferBank": "Banco",
+        "noDigit": "Sem dígito",
+        "pixKeyType": "Selecione o tipo da chave",
+        "pixKey": "Digite sua chave PIX"
+      },
+      "options": {
+        "phone": "Telefone",
+        "document": "CPF/CNPJ",
+        "email": "E-mail",
+        "random": "Aleatória"
+      },
+      "alert": {
+        "title": "Atenção!",
+        "text": "Você está adicionando uma nova conta na organização"
+      },
+      "validation": {
+        "required": {
+          "holderName": "O nome é obrigatório.",
+          "holderDocument": "O documento é obrigatório.",
+          "transferBank": "É necessário selecionar um banco.",
+          "accountType": "É necessário selecionar o tipo da conta.",
+          "agency": "A agência é obrigatória.",
+          "account": "A conta é obrigatória.",
+          "digit": "O dígito é obrigatório.",
+          "pixKey": "É necessário selecionar o tipo da chave.",
+          "pixKeyType": {
+            "key": "A chave deve ser informada.",
+            "phone": "O telefone deve ser informado.",
+            "email": "O e-mail deve ser informado.",
+            "document": "O documento deve ser informado.",
+            "random": "Deve ser informado uma chave aleatóra válida.",
+            "default": "A chave PIX é obrigatória."
+          },
+          "bank": " É necessário selecionar um banco."
+        },
+        "bankAccountMinLength": "A quantidade mínima de uma conta bancária é 2",
+        "bankAccountMaxLength": "A quantidade máxima de uma conta bancária é 12",
+        "agencyMinLength": "A agência deve ter no mínimo 4 caracteres.",
+        "valid": {
+          "document": "Informe um documento válido.",
+          "pixKeyType": {
+            "phone": "Deve ser informado um telefone válido.",
+            "randomLength": "A chave aleatória deve ter entre 32 e 36 caracteres.",
+            "randomAlphanumeric": "A chave aleatória deve ser composta por caracteres alfanuméricos e pode conter hífens.",
+            "email": "Deve ser informado um e-mail válido."
+          }
+        }
+      },
+      "toast": {
+        "success": {
+          "add": "Conta adicionada!",
+          "update": "Dados da conta atualizados!"
+        }
+      },
+      "button": {
+        "add": "Adicionar conta",
+        "update": "Atualizar dados da conta"
+      }
+    }
+  }
+}

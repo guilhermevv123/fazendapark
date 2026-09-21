@@ -1,0 +1,397 @@
+{
+  "title": "Fechamentos",
+  "subtitle": "Lançamentos de despesas operacionais e fechamentos financeiros de eventos e sessões.",
+  "breadcrumb": "EVENTOS",
+  "tabs": {
+    "operational": "Operacional",
+    "financial": "Financeiro"
+  },
+  "filters": {
+    "search": "Buscar por nome do evento ou organização",
+    "status": "Status",
+    "statusOpen": "Abertos",
+    "allStatuses": "Todos os status",
+    "selectPeriod": "Selecionar período",
+    "clear": "Limpar",
+    "apply": "Aplicar"
+  },
+  "cards": {
+    "open": "Abertos",
+    "inProgress": "Em andamento",
+    "finished": "Finalizados",
+    "inReview": "Em revisão",
+    "toPay": "Finalizado",
+    "paid": "Pagos",
+    "pending": "Pendente"
+  },
+  "list": {
+    "event": "Evento",
+    "organization": "Organização",
+    "session": "Sessão",
+    "responsible": "Responsável",
+    "date": "Data",
+    "launches": "Lançamentos",
+    "launchSingular": "Lançamento",
+    "launchPlural": "Lançamentos",
+    "status": "Status",
+    "totalDeductions": "Total em deduções",
+    "tpvTotal": "TPV Total",
+    "viewBordero": "Ver Borderô",
+    "noResults": "Nenhum fechamento encontrado",
+    "loading": "Carregando...",
+    "operationalStatus": {
+      "operational_open": "Fechamento operacional",
+      "event_closed": "Evento encerrado"
+    }
+  },
+  "pagination": {
+    "previous": "Anterior",
+    "next": "Próximo"
+  },
+  "batchActions": {
+    "selectAllLabel": "Selecionar todos",
+    "selectAll": "Selecionar todos ({{count}})",
+    "exportReports": "Exportar relatórios",
+    "finalizeBatch": "Finalizar lançamentos ({{count}})"
+  },
+  "batchModal": {
+    "title": "Finalizar lançamentos de {{count}} eventos",
+    "description": "Ao confirmar, os eventos selecionados serão alterados para o status FINALIZADO e estarão aptos para fechamento financeiro. Deseja confirmar?",
+    "confirm": "Finalizar lançamentos ({{count}})"
+  },
+  "detail": {
+    "back": "Voltar",
+    "titlePrefix": "Fechamento",
+    "exportReport": "Exportar relatório",
+    "loading": "Carregando...",
+    "notFound": "Fechamento não encontrado.",
+    "exportInDevelopment": "Exportação de relatório em desenvolvimento",
+    "expensesTitle": "Despesas Operacionais",
+    "addExpenses": "Lançar despesas",
+    "table": {
+      "category": "CATEGORIA",
+      "type": "CARGO / TIPO",
+      "quantity": "QUANTIDADE",
+      "total": "TOTAL",
+      "responsible": "RESPONSÁVEL",
+      "notApplicable": "Não aplicável",
+      "responsibleParties": {
+        "client": "Produção",
+        "zig": "Zig"
+      },
+      "remove": "Remover",
+      "edit": "Editar"
+    },
+    "approvalBanner": {
+      "title": "O fechamento foi aprovado pelo time financeiro",
+      "meta": "Aprovação realizada em {{date}} por {{name}}."
+    },
+    "metadata": {
+      "date": "Data",
+      "session": "ID Sessão",
+      "organization": "Organização",
+      "responsible": "Responsável"
+    },
+    "emptyState": {
+      "title": "Ainda não existem despesas lançadas para o evento",
+      "description": "Lance uma despesa para iniciar o fechamento operacional.",
+      "button": "Lançar despesas"
+    },
+    "financialLaunches": {
+      "title": "Lançamentos Financeiros",
+      "button": "Lançar valores",
+      "paidTooltip": "Não é possível alterar porque o evento já foi pago.",
+      "emptyState": {
+        "title": "Nenhum lançamento financeiro foi lançado",
+        "description": "Lance um valor para iniciar o fechamento financeiro."
+      }
+    },
+    "adjustmentsTable": {
+      "category": "CATEGORIA",
+      "identification": "IDENTIFICAÇÃO",
+      "type": "TIPO",
+      "value": "VALOR",
+      "remove": "Remover",
+      "edit": "Editar",
+      "categories": {
+        "advanced": "Advanced",
+        "general": "Lançamentos gerais"
+      },
+      "types": {
+        "deduction": "Dedução",
+        "credit": "Crédito"
+      }
+    },
+    "operationalExpenses": {
+      "title": "Despesas Operacionais",
+      "viewDetails": "Ver detalhes",
+      "closedBanner": "Fechamento operacional finalizado sem despesas lançadas.",
+      "emptyState": {
+        "title": "Nenhuma despesa operacional foi lançada"
+      },
+      "inProgressAlert": {
+        "title": "Em fechamento operacional",
+        "description": "Aguarde a finalização do time de operações para finalizar o fechamento financeiro."
+      }
+    },
+    "summary": {
+      "title": "Resumo de Lançamentos",
+      "total": "Total Geral",
+      "totalTooltip": "Valor líquido após créditos, deduções e despesas operacionais.",
+      "financialLaunches": "Lançamentos Financeiros",
+      "operationalExpenses": "Despesas Operacionais",
+      "deductions": "Deduções",
+      "credits": "Créditos",
+      "finalize": "Finalizar lançamentos",
+      "finalizing": "Finalizando...",
+      "finalized": "Lançamentos finalizados",
+      "finalizeTooltip": "É necessário finalizar o fechamento operacional.",
+      "waitingPayment": "Aguardando pagamento",
+      "paid": "Pago"
+    },
+    "activityLog": {
+      "title": "Histórico de atividades",
+      "empty": "Nenhuma atividade realizada",
+      "fallback": "Atividade registrada",
+      "statusChanged": "Mudou o status para {{status}}",
+      "launchesRecorded": "{{count}} lançamentos realizados",
+      "expense_added": "Realizou um lançamento",
+      "expense_updated": "Atualizou uma despesa",
+      "expense_deleted": "Removeu um lançamento",
+      "created": "Mudou status para 'Em Andamento'",
+      "operational_finalized": "Mudou o status para Finalizado",
+      "financial_pending": "Mudou o status para Em Revisão",
+      "financial_finalized": "Mudou o status para Finalizado",
+      "payment_confirmed": "Confirmou o pagamento",
+      "adjustment_added": "Adicionou um ajuste",
+      "adjustment_updated": "Atualizou um ajuste",
+      "adjustment_deleted": "Removeu um ajuste"
+    },
+    "confirmModal": {
+      "title": "Confirmar finalização dos lançamentos",
+      "description": "Essa ação não pode ser desfeita, e após o envio, não é possível editar as despesas lançadas ou fazer novos envios.",
+      "confirm": "Confirmar finalização",
+      "loading": "Finalizando..."
+    },
+    "financialConfirmModal": {
+      "title": "Confirmar finalização de lançamentos financeiros",
+      "description": "Essa ação não pode ser desfeita, e após o envio, não é possível editar as despesas lançadas ou fazer novos envios. Tem certeza que deseja finalizar?",
+      "confirm": "Confirmar finalização",
+      "cancel": "Cancelar"
+    },
+    "receiptUpload": {
+      "title": "Anexar comprovante",
+      "description": "PDF, JPG, JPEG ou PNG (máx. 10 MB)"
+    }
+  },
+  "drawer": {
+    "title": "Lançar Despesas",
+    "titleEdit": "Editar Despesa",
+    "sectionTitle": "Lançamentos Operacionais",
+    "sectionDescription": "Adicione despesas envolvidas na realização operacional do evento.",
+    "sectionDescriptionEdit": "Edite os dados da despesa operacional.",
+    "category": "Categoria",
+    "type": "Tipo",
+    "role": "Cargo",
+    "dailyRateType": "Tipo de diária",
+    "dailyRateTypes": {
+      "operation": "Operação",
+      "setup": "Setup"
+    },
+    "identification": "Identificação",
+    "observation": "Observação (opcional)",
+    "quantity": "Quantidade",
+    "unitValue": "Valor unitário",
+    "totalValue": "Valor total",
+    "responsibleParty": "Responsável pela despesa",
+    "responsiblePartyDescription": "O valor será descontado do saldo a receber da produção caso selecionada.",
+    "responsibleParties": {
+      "client": "Produção do evento",
+      "zig": "Zig"
+    },
+    "infoNotes": {
+      "fieldTeam": "Horas extras devem ser lançadas na categoria 'Outros'"
+    },
+    "cancel": "Cancelar",
+    "submit": "Lançar despesa",
+    "submitEdit": "Atualizar despesa",
+    "selectPlaceholder": "Selecione...",
+    "categoryPlaceholder": "Selecione a categoria",
+    "placeholders": {
+      "identification": "Identifique o lançamento (Ex: Item perdido, alimentação...)",
+      "observation": "Adicione um detalhe sobre a despesa",
+      "expense-meals": "Ex.: 5 marmitex do restaurante Mais Sabor",
+      "expense-lodging": "Ex.: 3 diárias no hotel Ibis",
+      "expense-logistics": "Ex.: Envio de equipamentos para local do evento",
+      "expense-transportation": "Ex.: Transporte do staff para o evento",
+      "expense-losses-and-damages": "Identifique o item perdido ou avariado",
+      "expense-other": "Identifique o lançamento (Ex: Item perdido, alimentação...)",
+      "fallback": "Adicione uma descrição"
+    },
+    "validation": {
+      "categoryRequired": "Categoria é obrigatória",
+      "typeRequired": "Tipo é obrigatório",
+      "roleRequired": "Cargo é obrigatório",
+      "dailyRateTypeRequired": "Tipo de diária é obrigatório",
+      "descriptionRequired": "Identificação é obrigatória",
+      "quantityMin": "Quantidade deve ser maior que 0",
+      "valueMin": "Valor deve ser maior ou igual a 0",
+      "unitValueMin": "Valor unitário deve ser maior que 0",
+      "responsiblePartyRequired": "Selecione o responsável pela despesa"
+    }
+  },
+  "expenseOptions": {
+    "groups": {
+      "expense-meals": "Alimentação",
+      "equipment": "Equipamentos",
+      "field-team": "Equipe de campo",
+      "expense-lodging": "Hospedagem",
+      "expense-logistics": "Logística",
+      "expense-losses-and-damages": "Perdas e avarias",
+      "expense-transportation": "Transporte",
+      "expense-other": "Outros",
+      "operational-expenses": "Despesas operacionais",
+      "financial-launches": "Lançamentos Financeiros"
+    },
+    "slugs": {
+      "field-team-coordinator": "Coordenador",
+      "field-team-head": "Líder",
+      "field-team-supervisor": "Supervisor",
+      "field-team-technician": "Técnico",
+      "field-team-trainee": "Aprendiz",
+      "field-team-coordinator-setup-daily-rate": "Diária de setup — Coordenador",
+      "field-team-head-setup-daily-rate": "Diária de setup — Líder",
+      "field-team-supervisor-setup-daily-rate": "Diária de setup — Supervisor",
+      "field-team-technician-setup-daily-rate": "Diária de setup — Técnico",
+      "field-team-trainee-setup-daily-rate": "Diária de setup — Aprendiz",
+      "field-team-operation-responsibility": "Responsabilidade — Operação",
+      "field-team-setup-responsibility": "Responsabilidade — Setup",
+      "field-team-charge-extra-daily-rates": "Cobrança de diárias extras",
+      "equipment-self-service-case": "Case de self-service",
+      "equipment-access-control": "Controle de acesso",
+      "equipment-self-service-structure": "Estrutura de self-service",
+      "equipment-printer": "Impressora",
+      "equipment-notebook": "Notebook",
+      "equipment-lollipop": "Lollipop",
+      "equipment-power-bank": "Power bank",
+      "equipment-tablet": "Tablet",
+      "equipment-ticket-validator": "Validador de ingresso",
+      "smartpos-unit-cost": "Custo unitário SmartPOS",
+      "bucket-cost": "Custo de bucket",
+      "mobile-cashier-cost": "Custo de caixa móvel",
+      "ticket-pos-monthly-cost": "Custo mensal POS de ingressos",
+      "operational-cost-package": "Pacote operacional",
+      "expense-lodging": "Hospedagem",
+      "expense-transportation": "Transporte",
+      "expense-meals": "Alimentação",
+      "expense-logistics": "Logística",
+      "expense-losses-and-damages": "Perdas e avarias",
+      "expense-other": "Outros",
+      "equipment": "Equipamentos",
+      "field-team": "Equipe de campo"
+    }
+  },
+  "status": {
+    "operational": {
+      "open": "Aberto",
+      "in_progress": "Em andamento",
+      "operational_closed": "Finalizado"
+    },
+    "financial": {
+      "not_started": "Não iniciado",
+      "pending": "Em revisão",
+      "closed": "Finalizado",
+      "paid": "Pago"
+    }
+  },
+  "tooltips": {
+    "eventName": "Nome e ID do Evento",
+    "organization": "Nome e ID da Organização",
+    "contractId": "Número do contrato",
+    "lastEditedBy": "Último usuário a atualizar",
+    "eventDate": "Data do Evento",
+    "sessionDate": "Data da Sessão",
+    "eventStatus": {
+      "active": "Evento Ativo",
+      "postponed": "Evento Adiado",
+      "offline": "Evento Offline",
+      "cancelled": "Evento Cancelado",
+      "draft": "Evento em rascunho",
+      "in-operational-closing": "Evento em fechamento operacional"
+    }
+  },
+  "toast": {
+    "expenseAdded": "Despesa lançada com sucesso - O valor foi adicionado ao fechamento.",
+    "expenseUpdated": "Despesa atualizada com sucesso.",
+    "expenseRemoved": "Despesa removida com sucesso.",
+    "adjustmentAdded": "Lançamento criado com sucesso.",
+    "adjustmentUpdated": "Lançamento atualizado com sucesso.",
+    "adjustmentRemoved": "Lançamento removido com sucesso.",
+    "finalized": "Lançamentos finalizados com sucesso",
+    "batchFinalized": "Lançamentos finalizados com sucesso em lote",
+    "operationalFinalized": {
+      "title": "Lançamentos operacionais finalizados",
+      "description": "O status foi alterado para ‘finalizado’."
+    },
+    "financialFinalized": {
+      "title": "Lançamentos financeiros finalizados",
+      "description": "O status foi alterado para ‘finalizado’."
+    },
+    "paymentConfirmed": "Pagamento confirmado com sucesso.",
+    "paymentReceiptRemoved": {
+      "title": "Recibo removido.",
+      "description": "Envie um novo recibo para confirmar o pagamento novamente."
+    }
+  },
+  "errors": {
+    "generic": "Ocorreu um erro ao processar a despesa.",
+    "closingNotFound": "Fechamento não encontrado.",
+    "expenseNotFound": "Despesa não encontrada.",
+    "adjustmentNotFound": "Lançamento não encontrado."
+  },
+  "adjustmentDrawer": {
+    "title": "Lançar Despesas",
+    "titleEdit": "Editar lançamento",
+    "sectionTitle": "Lançamentos Financeiros",
+    "sectionDescription": "Despesas ou ajustes financeiros do evento, que serão abatidas ou somados ao saldo a receber do produtor.",
+    "category": "Categoria",
+    "categoryPlaceholder": "Selecione a categoria",
+    "type": "Tipo de lançamento",
+    "name": "Nome de identificação",
+    "namePlaceholder": "Nome do lançamento",
+    "description": "Descrição",
+    "descriptionOptional": "Descrição (opcional)",
+    "descriptionPlaceholder": "Identifique o lançamento",
+    "descriptionCounter": "{{count}} / 200 CARACTERES",
+    "value": "Valor",
+    "submit": "Lançar despesa",
+    "submitEdit": "Salvar alterações",
+    "cancel": "Cancelar",
+    "categories": {
+      "general": "Lançamentos gerais",
+      "advanced": "Advanced"
+    },
+    "types": {
+      "deduction": {
+        "label": "Dedução / custo",
+        "description": "Reduz do valor a receber do produtor."
+      },
+      "credit": {
+        "label": "Crédito",
+        "description": "Aumenta o valor a receber do produtor."
+      }
+    },
+    "validation": {
+      "categoryRequired": "Categoria é obrigatória",
+      "typeRequired": "Tipo é obrigatório",
+      "nameRequired": "Nome é obrigatório",
+      "descriptionRequired": "Descrição é obrigatória",
+      "descriptionMax": "Descrição deve ter no máximo 200 caracteres",
+      "valueRequired": "Valor é obrigatório",
+      "valueMin": "Valor deve ser maior que 0"
+    }
+  },
+  "modal": {
+    "title": "Eventos para finalizar"
+  }
+}

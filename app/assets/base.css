@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+
+body {
+  background: theme('colors.fundo.DEFAULT');
+  color: theme('colors.tinta.corpo');
+  font-family: theme('fontFamily.corpo');
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Lato em tudo que é título, KPI e menu — é assim no painel de origem. */
+.titulo { font-family: theme('fontFamily.titulo'); }
+
+@layer components {
+  /* Card: branco, borda fina, raio 8, SEM sombra. A ausência de sombra é
+     escolha do sistema de origem; adicionar uma muda a leitura da tela toda. */
+  .card {
+    @apply rounded-card border border-linha bg-fundo-card p-4;
+  }
+  .rotulo-kpi { @apply titulo text-sm font-bold text-tinta; }
+  .numero-kpi { @apply titulo text-2xl font-bold text-tinta tabular-nums; }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-card px-4 py-2
+           text-base font-bold transition-colors disabled:cursor-not-allowed;
+  }
+  .btn-primario  { @apply btn bg-acao text-white hover:bg-acao-escuro disabled:bg-tinta-fraca; }
+  .btn-secundario{ @apply btn border border-linha-forte bg-white text-tinta hover:bg-fundo-cinza; }
+  /* Ação que destrói: cancelar transferência, fechar caixa, desativar guichê.
+     Sólido e vermelho porque precisa parecer diferente do botão de salvar
+     ANTES do clique — depois não adianta. */
+  .btn-erro      { @apply btn bg-erro text-white hover:brightness-110 disabled:bg-tinta-fraca; }
+
+  /* Faixa de erro de formulário. Existe como classe porque escrita à mão em
+     cada tela ela vira `border-perigo`/`bg-perigo-fraco` — nomes que o
+     Tailwind não conhece, não gera, e a mensagem aparece SEM COR nenhuma.
+     Nada quebra, nada aparece no console: só some o vermelho. */
+  .faixa-erro  { @apply rounded-card border border-erro bg-erro-claro p-3 text-sm text-erro; }
+  .faixa-aviso { @apply rounded-card border border-linha bg-fundo-cinza p-3 text-sm text-tinta-corpo; }
+  /* Chip de filtro: o selecionado ganha fundo claro + borda azul forte. */
+  .chip        { @apply btn border border-linha-forte bg-white font-normal text-tinta hover:bg-fundo-cinza; }
+  .chip-ativo  { @apply btn border border-acao-forte bg-acao-claro font-normal text-tinta; }
+
+  /* Campo e rótulo com as medidas do painel de origem: borda #CED4DA,
+     raio 8, 41px de altura (8px/12px de recheio), e o rótulo em Lato 12
+     negrito #4F6C7C — não é o mesmo cinza do texto de apoio. */
+  .campo {
+    @apply w-full rounded-card border border-linha-campo bg-white px-3 py-2
+           text-tinta-corpo placeholder:text-tinta-fraca
+           focus:border-acao focus:outline-none focus:ring-2 focus:ring-acao/20;
+  }
+  .rotulo {
+    @apply titulo mb-1 block text-xs font-bold text-tinta-rotulo;
+  }
+
+  /* Cabeçalho de bloco do módulo de criação: Roboto 20 negrito + apoio 12. */
+  .titulo-bloco { @apply text-xl font-bold text-tinta-corpo; }
+  .apoio-bloco  { @apply mt-1 text-xs text-tinta-corpo/80; }
+
+  .selo       { @apply inline-flex items-center rounded px-2 py-0.5 text-xs font-bold; }
+  .selo-ok    { @apply selo bg-ok-claro text-ok; }
+  .selo-alerta{ @apply selo bg-alerta-claro text-alerta; }
+  .selo-erro  { @apply selo bg-erro-claro text-erro; }
+  .selo-neutro{ @apply selo bg-fundo-cinza text-tinta-suave; }
+}
+
+*:focus-visible { outline: 2px solid theme('colors.acao.DEFAULT'); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

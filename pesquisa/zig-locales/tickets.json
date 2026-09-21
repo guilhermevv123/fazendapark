@@ -1,0 +1,1807 @@
+{
+  "passports": {
+    "loading": "Aguarde! estamos carregando os dados do evento...",
+    "total": "Quantidade Total:",
+    "alert": {
+      "title": "Error {{error}}!",
+      "error": "Não foi possível carregar os grupos, tente novamente.",
+      "passport": "Não foi possível carregar os passaportes, tente novamente.",
+      "tickets": "Não foi possível carregar os ingressos, tente novamente."
+    },
+    "header": {
+      "title": "Passaportes / Grupos",
+      "text": "Detalhamento de passaportes / grupos de ingressos disponíveis.",
+      "button": "Criar passaporte"
+    },
+    "emptyState": {
+      "title": "Ainda não tem nada por aqui",
+      "description": "Crie seu primeiro passaporte / grupo e gerencie nessa página.",
+      "button": "Criar passaporte / grupo",
+      "descriptionNoPermission": "Não existem passaportes ou grupos criados para esse evento ainda."
+    },
+    "drawer": {
+      "title": "Criar passaporte / grupo",
+      "createLot": "Criar lote para o passaporte {{passport}}",
+      "editPassport": "Editar passaporte / grupo",
+      "saveButton": "Criar passaporte",
+      "editButton": "Editar passaporte",
+      "createBatchButton": "Criar lote",
+      "basic": {
+        "title": "Insira as informações do passaporte / grupo",
+        "description": "Configure as opções para criar seu passaporte.",
+        "name": "Nome",
+        "namePlaceholder": "Exemplo: Passaporte Todos os Dias",
+        "category": "Categoria",
+        "categoryPlaceholder": "Selecione a categoria",
+        "seats": "Mapa de assentos"
+      },
+      "lot": {
+        "title": "Insira as informações do lote",
+        "description": "Configure as opções para criar seu lote de ingressos.",
+        "name": "Nome do lote",
+        "quantity": "Quantidade",
+        "endDate": "Data de encerramento (opcional)",
+        "endDatePlaceholder": "DD/MM/AAAA HH:mm",
+        "min": "Mínimo por compra (opcional)",
+        "max": "Máximo por compra (opcional)",
+        "salesChannels": "Canais de venda",
+        "salesChannelsPlaceholder": "Selecione os canais de venda"
+      },
+      "tickets": {
+        "title": "Vincule os ingressos ao passaporte / grupo",
+        "description": "Escolha quais ingressos serão incluídos nesse passaporte / grupo.",
+        "session": "Selecione a sessão",
+        "sessionPlaceholder": "Selecionar sessões",
+        "tickets": "Selecione os ingressos",
+        "ticketsPlaceholder": "Selecionar ingressos",
+        "quantity": "Quantidade",
+        "price": "Preço",
+        "includedTickets": "ingressos inclusos",
+        "includedTicket": "ingresso incluso",
+        "addTicket": "Adicionar",
+        "allTicketsSelected": "Todos os ingressos dessa sessão já foram incluídos no passaporte",
+        "emptyTickets": "Não existem ingressos criados para essa sessão",
+        "noTickets": "Não existem ingressos criados",
+        "addTicketTooltip": "Selecione primeiro uma sessão e os ingressos",
+        "ticketTooltip": "Selecione primeiro uma sessão",
+        "emptyTicketDescription": "Ainda não foi adicionado nenhum ingresso ao passaporte"
+      },
+      "errors": {
+        "loading": "Erro carregando os passaportes, tente novamente.",
+        "passport": "Erro ao buscar o passaporte, tente novamente.",
+        "required": "O campo é obrigatório",
+        "min": "O campo deve ter pelo menos 1 caracter",
+        "sessionId": "Selecione ao menos uma sessão",
+        "types": "Selecione ao menos um ingresso",
+        "category": "Selecione a categoria",
+        "loadingError": "Erro ao carregar os dados, tente novamente.",
+        "sessionTickets": "Erro ao carregar os ingressos da sessão, tente novamente.",
+        "defaultError": "Erro salvando os dados, tente novamente.",
+        "DUPLICATED_NAME": "Nome de lote duplicado. Altere o nome para continuar.",
+        "GENERIC_ERROR": "Erro salvando os dados, tente novamente.",
+        "sessionAddError": "É necessário adicionar ingressos ao passaporte.",
+        "numbers": {
+          "required": "O campo é obrigatório",
+          "min": "O valor deve ser maior que 0",
+          "typeError": "O campo é obrigatório",
+          "amountLessThanBatch": "A quantidade do ingresso não pode ser maior que a quantidade do lote",
+          "greaterThanMinOrBatch": "O valor deve ser maior que o mínimo e menor que a quantidade do lote.",
+          "greaterThanQuantity": "O valor deve ser menor que a quantidade do lote."
+        },
+        "array": {
+          "required": "Selecione pelo menos uma opção",
+          "min": "Selecione pelo menos uma opção"
+        }
+      },
+      "alerts": {
+        "createSector": "Passaporte criado com sucesso!",
+        "createSectorDescription": "{{name}} já está disponível na lista.",
+        "editSector": "Passaporte editado com sucesso!",
+        "createLot": "Lote criado com sucesso!",
+        "editLot": "Lote editado com sucesso!",
+        "loadLot": "Erro ao carregar dados do lote, tente novamente."
+      }
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Essa é a página inicial das suas vendas de ingresso.",
+    "noSales": "Nenhuma venda realizada",
+    "notInformed": "Não informada",
+    "cards": {
+      "totalSold": {
+        "title": "Total de vendas",
+        "producerReceipt": "Pagamentos via plataforma",
+        "moneyReceipt": "Pagamentos em dinheiro",
+        "tooltip": "Soma das vendas transacionadas pela plataforma + vendas em dinheiro, já descontando as taxas da compra."
+      },
+      "average": {
+        "title": "Ticket Médio",
+        "buyingAverage": "Tickets médios de compras confirmadas (Não considera cortesia)"
+      },
+      "emittedTickets": {
+        "title": "Ingressos Emitidos",
+        "sold_zero": "$Nenhum ingresso vendido",
+        "sold": "{{count}} ingresso vendido",
+        "sold_other": "{{count}} ingressos vendidos",
+        "courtesy_zero": "nenhuma cortesia emitida",
+        "courtesy": "{{count}} cortesia emitida",
+        "courtesy_other": "{{count}} cortesias emitidas"
+      },
+      "pendingTickets": {
+        "title": "Ingressos Pendentes",
+        "description": "Total de ingressos no carrinho, aguardando pagamento ou análise pelo time de fraude"
+      },
+      "available": {
+        "title": "Disponível para transferir",
+        "negativeAvailableSubtitle": "Você ultrapassou o valor disponivel em {{availableAmount}}",
+        "zeroAvailableSubtitle": "Não há valores disponíveis para solicitação de transferências.",
+        "preApproved": "Todas as solicitações de transferência passam por análise interna",
+        "tooltip": "É calculado a partir do total líquido menos o valor retido e o valor de transferências. O prazo para pagamento de transferências é de até dois dias úteis."
+      }
+    },
+    "salesByTicket": {
+      "title": "Vendas por ingresso",
+      "tooltip": {
+        "title": "Vendas por ingressos",
+        "description": "Somatório do valor de ingressos vendidos no evento."
+      },
+      "salesTotal": "Total em vendas",
+      "ticketsTotal": "Total em ingressos",
+      "absorvedFees": "Taxa absorvidas"
+    },
+    "salesByOrigin": {
+      "title": "Vendas por origem"
+    },
+    "defaultsOriginRecepits": {
+      "title": "Vendas online",
+      "type": "Online"
+    }
+  },
+  "configuration": {
+    "header": {
+      "title": "Ingressos",
+      "text": "Crie, configure e gerencie os ingressos pagos e gratuitos do seu evento.",
+      "button-text": "Criar Setor"
+    },
+    "loading": "Aguarde! estamos carregando os dados do evento",
+    "alert": {
+      "title": "Error: {{error}}!",
+      "error-lots": "Não foi possível carregar os Lotes, tente novamente.",
+      "error-tickets": "Não foi possível carregar os ingressos, tente novamente."
+    },
+    "total": "Quantidade Total",
+    "lots": {
+      "turningLots": "Lotes viram automaticamente",
+      "attention": "Atenção!",
+      "error": "Não foi possível atualizar a configuração de lotes, tente novamente."
+    }
+  },
+  "promotionalCode": {
+    "actions": "Ações",
+    "all": "Todas",
+    "status": "Status",
+    "copyToClipboard": "Código copiado!",
+    "statusCol": {
+      "ativo": "ativo",
+      "expirado": "expirado",
+      "esgotado": "esgotado",
+      "aguardando": "aguardando"
+    },
+    "filterByValue": "Buscar por nome do código",
+    "deleteDiscountTitle": "Excluir código promocional",
+    "deleteDiscountButton": "Excluir código",
+    "cancelButton": "Cancelar",
+    "deleteDiscountText": "Ao confirmar, o código {{code}} será excluído de forma permanente, então essa ação não pode ser desfeita. Deseja excluir o código mesmo assim?",
+    "editPromotionalCode": "Editar Descontos",
+    "linkComissioned": "Vincular Comissários",
+    "promoCode": "Código promocional",
+    "subtitle": "Detalhamento e criação de códigos promocionais.",
+    "title": "Códigos promocionais",
+    "type": "Tipo",
+    "usedQuantity": "Quantidade Utilizada",
+    "discount": "Desconto",
+    "newPromotionalCode": {
+      "title": "Criar código promocional",
+      "unique": "Único",
+      "multiple": "Em lote",
+      "disabled": "Você precisa esperar a importação em andamento ser finalizada para solicitar novamente."
+    },
+    "emptyTable": {
+      "title": "Ainda não tem nada por aqui",
+      "text": "Acompanhe aqui assim que as primeiras ações forem registradas no painel.",
+      "button": "Criar código promocional"
+    },
+    "modalCodeComissarios": {
+      "success": "Alterações salvas com sucesso!",
+      "linkSuccess": "Código atrelado a todos os comissários!",
+      "linkDiscount": "Vincular Desconto a Comissário",
+      "linkAll": "Associar Todos",
+      "link": "Salvar"
+    },
+    "actionDropdown": {
+      "edit": "Editar",
+      "delete": "Excluir",
+      "apply": "Ver evento com código aplicado",
+      "link": "Vincular a Promoter",
+      "deleteHelperText": "Não é possível excluir porque o código já foi ou está sendo aplicado em uma venda, mesmo que não finalizada."
+    },
+    "codeManagerDrawer": {
+      "unique": {
+        "name": "Único",
+        "title": "Configure o código e as regras de aplicação"
+      },
+      "multiple": {
+        "name": "Em lote",
+        "descriptionautomatic": "Reduza seu trabalho gerando automaticamente a quantidade desejada de códigos promocionais com caracteres aleatórios.",
+        "descriptionsheet": "Se você já tem o nome dos seus códigos, utilize essa opção anexando uma planilha com eles. As configurações devem ser a mesma para todos.",
+        "title1": "Escolha como gerar os múltiplos códigos",
+        "title2": "Configure as regras de aplicação",
+        "batchModeLabel": "Gerar códigos",
+        "disabled": "Você precisa esperar a importação em andamento ser finalizada para solicitar novamente.",
+        "automatic": {
+          "name": "Automaticamente",
+          "automaticPrefix": "Nome base do cupom (opcional)",
+          "automaticPrefixError": "Máximo 8 caracteres",
+          "automaticAmount": "Quantidade de códigos a gerar",
+          "automaticAmountPlaceholder": "Insira a quantidade",
+          "example": "Exemplo"
+        },
+        "sheet": {
+          "name": "Via planilha",
+          "file": "Importe a planilha (.XLS)",
+          "tips": {
+            "title": "Dicas importantes",
+            "1": "Não utilize caracteres especiais (Ex. !@#$%-_¨*).",
+            "2": "Cada linha representa o nome de um código.",
+            "3": "Códigos duplicados serão considerados apenas uma vez.",
+            "4": "Você pode gerar até 2000 códigos de uma única vez.",
+            "5": "O código deve ter entre 1 e 12 caracteres."
+          }
+        },
+        "alert": {
+          "title": "Quase lá! Os códigos estão sendo criados",
+          "content": "Você receberá atualizações nessa página sobre o andamento da criação dos códigos em alguns instantes. Isso pode levar até 10 minutos.",
+          "confirmButton": "Concluir"
+        }
+      },
+      "editTitle": "Editar código promocional",
+      "createTitle": "Criar código promocional",
+      "editButton": "Salvar alterações",
+      "createButton": "Criar código",
+      "multipleButton": "Criar múltiplos códigos",
+      "deleteButton": "Excluir",
+      "deleteButtonHelperText": "Não é possível excluir porque o código já foi ou está sendo aplicado em uma venda, mesmo que não finalizada.",
+      "promoCodeForm": {
+        "allTickets": "Todos os ingressos",
+        "specificTickets": "Ingressos específicos",
+        "allSessions": "Todas as sessões",
+        "specificSessions": "Sessões específicas",
+        "code": "Código Promocional",
+        "codePlaceholder": "Digite o código (Ex. cupom10)",
+        "discount": "Desconto",
+        "discountPlaceholder": "Valor do desconto",
+        "startDate": "Data de início",
+        "endDate": "Data de término",
+        "amount": "Quantidade disponível",
+        "amountPlaceholder": "Digite a quantidade",
+        "unlimited": "Ilimitado",
+        "applyDiscountToAllSessions": "Aplicar o desconto a quais sessões?",
+        "applyDiscountToTickets": "Aplicar o desconto a quais ingressos?",
+        "selectTickets": "Selecione os ingressos",
+        "selectSessions": "Selecione as sessões",
+        "errors": {
+          "amount": {
+            "required": "A quantidade é obrigatória",
+            "min": "A quantidade mínima é 1",
+            "typeError": "Informe um número válido",
+            "integer": "Informe um número inteiro"
+          },
+          "code": {
+            "required": "O código promocional é obrigatório",
+            "min": "O código deve ter pelo menos 1 carácter"
+          },
+          "discount_type": {
+            "required": "O tipo de desconto é obrigatório"
+          },
+          "discount_value": {
+            "required": "O valor é obrigatório",
+            "discount-range": "O valor do desconto deve ser um número válido"
+          },
+          "end_date": {
+            "required": "A data de término é obrigatória",
+            "min": "A data de término deve ser maior que a data de início",
+            "typeError": "Data inválida"
+          },
+          "start_date": {
+            "required": "A data de início é obrigatória",
+            "typeError": "Data inválida"
+          },
+          "types": {
+            "min": "Selecione pelo menos um ingresso"
+          },
+          "discountTickets": {
+            "required": "Selecione para quais ingressos aplicar o desconto"
+          },
+          "applyDiscountToSession": {
+            "min": "Selecione pelo menos uma sessão"
+          },
+          "applyDiscountToAllSessions": {
+            "required": "Selecione para quais sessões aplicar o desconto"
+          }
+        },
+        "sessionsAlert": "Os códigos promocionais criados são válidos para todas as sessões do seu evento"
+      },
+      "advancedSettings": {
+        "title": "Configurações avançadas",
+        "applyDiscountToAll": "Aplicar desconto somente para cartões elegíveis",
+        "applyDiscountToAllDescription": "Ative para aplicar o cupom automaticamente a cartões que atendam aos critérios configurados.",
+        "binTitle": "Insira os BINs separados por vírgula ou quebra de linha",
+        "binTooltip": "Se o BIN do cartão for compatível com um dos listados abaixo, o cupom será aplicado.",
+        "binPlaceholder": "Ex.: 5538086, 556789, 550923...",
+        "errors": {
+          "bin_codes": {
+            "required": "É necessário inserir pelo menos um código BIN",
+            "min": "É necessário inserir pelo menos um código BIN",
+            "undefined": "Cada código BIN deve ser um número de 6 ou 7 dígitos"
+          }
+        }
+      },
+      "alerts": {
+        "editSuccess": "O código {{code}} foi atualizado com sucesso!",
+        "createSuccess": "O código {{code}} foi criado com sucesso!",
+        "automaticSuccess": "{{amount}} códigos criados com sucesso!",
+        "automaticError": "Erro ao criar os códigos",
+        "uniqueError": "Erro ao criar código",
+        "loadError": "Erro ao carregar dados do desconto",
+        "INVALID_NUMBER_OF_LINES": "O arquivo deve possuir entre 1 e 2000 linhas.",
+        "ONLY_ONE_COLUMN_ALLOWED": "O arquivo deve possuir apenas uma coluna.",
+        "HEADER_COLUMN_NOT_ALLOWED": "O arquivo não deve ter cabeçalho."
+      }
+    },
+    "alerts": {
+      "deleteSuccessTitle": "O código promocional foi excluído",
+      "deleteSuccessText": "O código {{code}} foi removido da lista."
+    },
+    "bannerTitle": {
+      "waiting": "Você tem {{amount}} códigos promocionais na fila de criação",
+      "success": "Os {{amount}} códigos promocionais estão prontos para serem usados!",
+      "error": "Infelizmente não foi possível gerar {{amount}} códigos promocionais"
+    },
+    "bannerText": {
+      "waiting": "Acompanhe nessa página o andamento da solicitação.",
+      "success": "Você já pode verificar todos os códigos na tabela abaixo.",
+      "error": "Verifique abaixo os códigos que foram gerados com sucesso."
+    }
+  },
+  "sortSectors": {
+    "sortingError": "Ocorreu um erro ao tentar ordernar os setores",
+    "sortingSuccess": "Setores ordenados com sucesso!",
+    "subtitle": "Aqui é o definido a ordem dos setores no site de vendas.",
+    "title": "Ordenar setores"
+  },
+  "sales": {
+    "detailedExtract": {
+      "title": "Extrato detalhado",
+      "subtitle": "Listagem detalhada de compras no evento.",
+      "notFoundRoute": "Rota não encontrada",
+      "loadingEventSales": "Estamos carregando as vendas do seu evento :)",
+      "searchByBuyerCodeMail": "Pesquise pelo comprador, código ou email",
+      "searchByStatus": "Pesquise pelo Status",
+      "selectStatus": "Selecione o status",
+      "searchByPaymentType": "Pesquise pelo tipo de pagamento",
+      "selectPaymentType": "Selecione o tipo de pagamento",
+      "orderCode": "Cod. Pedido",
+      "date": "Data",
+      "buyer": "Comprador",
+      "status": "Status",
+      "paymentType": "Forma de Pagamento",
+      "value": "Valor",
+      "paymentBillet": "Boleto",
+      "cash": "Dinheiro",
+      "creditCard": "Cartão de crédito",
+      "debitCard": "Cartão de débito",
+      "courtesy": "Cortesia",
+      "transactionInformation": "Informações da transação",
+      "ticketUpdated": "Ingresso atualizado com sucesso!",
+      "ticketUpdateError": "Erro ao atualizar o ingresso",
+      "surePartialRefund": "Você tem certeza que deseja estornar parcialmente esta venda?",
+      "sureRefund": "Você tem certeza que deseja estornar o valor de {{refundValue}} desta venda?",
+      "inputPassword": "Informe sua senha abaixo para prosseguir:",
+      "password": "Senha de acesso",
+      "setClientRefundValue": "Informe o valor que deverá ser estornado para o cliente:",
+      "cantUndoThisAction": "Você não poderá recuperar esta ação depois de processada!",
+      "reverseYes": "Sim, estornar pagamento!",
+      "attention": "Atenção",
+      "errorReversingSale": "Ocorreu um erro ao realizar o estorno. Tente novamente.",
+      "reverseSuccess": "Venda estornada junto a operadora!",
+      "invalidInformedValue": "O valor informado é inválido",
+      "valueShouldBeGreaterThanZero": "O valor informado deve ser maior que 0",
+      "valueShouldBeLessThanTotal": "O valor informado deve ser menor que o valor total da compra",
+      "passwordRequired": "É necessário informar a senha para concluir a ação",
+      "resendTickets": "Reenviar ingressos",
+      "editParticipant": "Editar participante do ingresso",
+      "transactionId": "ID Transação",
+      "chargeId": "ID Cobrança.",
+      "origin": "Origem",
+      "discount": "Desconto",
+      "notApplied": "Não aplicado",
+      "taxes": "Taxas",
+      "total": "Total",
+      "dateHour": "Data / hora",
+      "promoterId": "ID do promoter",
+      "promoterName": "Nome do promoter",
+      "dontHaveIt": "Não possui",
+      "card": "Cartão",
+      "buyerInformation": "Informações do comprador",
+      "name": "Nome",
+      "phone": "Telefone",
+      "instagram": "Instagram",
+      "email": "E-mail",
+      "facebook": "Facebook",
+      "twitter": "X (Twitter)",
+      "fraudAnalysisInformation": "Informações da análise de fraude",
+      "seeMore": "Acessar detalhes da análise",
+      "recommendation": "Recomendação",
+      "score": "Score",
+      "code": "Código",
+      "ticket": "Ingresso",
+      "checkin": "Checkin",
+      "actions": "Ações",
+      "orderTickets": "Ingressos da compra",
+      "seat": "Assento",
+      "group": "Grupo",
+      "notCheckedIn": "Não realizado",
+      "processing": "Processando...",
+      "totalRefund": "Estorno total",
+      "noTaxesRefund": "Estorno sem taxas",
+      "partialRefund": "Estorno parcial",
+      "cancelSale": "Cancelar venda",
+      "lastName": "Sobrenome",
+      "resendSuccess": "Ingresso reenviado com sucesso!",
+      "notProvided": "Não informado",
+      "feeSituation": {
+        "passThrough": "Repassada",
+        "absorbed": "Absorvida"
+      },
+      "refundInfo": {
+        "title": "Informações do estorno",
+        "requestedBy": "Solicitado por",
+        "origin": "Origem",
+        "refundDate": "Data/hora do estorno",
+        "notProvided": "Não informado",
+        "BACKOFFICE": "Backoffice",
+        "CLIENT": "Cliente",
+        "ADMIN": "Admin",
+        "pos": "PDV",
+        "site": "Site",
+        "app": "App",
+        "panel": "Painel",
+        "zigapp": "Aplicativo"
+      },
+      "buyerDocument": "CPF/CNPJ",
+      "insurance": {
+        "title": "Seguro Ingresso",
+        "insurance": "Contratado",
+        "insuranceNot": "Não contratado",
+        "insuranceValue": "Taxa do seguro",
+        "alertTitle": "Atenção: essa compra está protegida com seguro",
+        "alertContent": {
+          "1": "Prossiga com o estorno caso o evento tenha sido",
+          "2": "cancelado",
+          "3": "ou",
+          "4": "adiado",
+          "5": "Caso contrário, oriente o cliente a acionar o seguro contrato pela sua área do usuário."
+        },
+        "alertConfirmButton": "Avançar com estorno",
+        "alertCancelButton": "Voltar"
+      }
+    }
+  },
+  "promoters": {
+    "ownershipChange": "Mudança de titularidade",
+    "ticketsCheckins": "ingressos / checkins",
+    "courtesyCheckins": "cortesias / checkins",
+    "importingPromoters": "Importação de Promoters / Divulgadores",
+    "sendSheet": "Enviar planilha",
+    "cancel": "Cancelar",
+    "sheetWarn": "Atenção! A planilha deve possuir os exatos campos para realizarmos a importação!",
+    "payAttentionWarn": "Atenção! Observe a planilha, possivelmente fora do padrão.",
+    "sureDeleteWarning": "Você tem certeza que deseja apagar Promoter / Divulgador? Tudo vinculado a ele será apagado.",
+    "clickHere": "CLIQUE AQUI",
+    "toDownload": "para baixar a planilha de exemplo",
+    "copyLinkSuccess": "Link copiado com sucesso!",
+    "copyLinkError": "Erro ao copiar o link!",
+    "successCreate": "Comissário(s) criado(s) com sucesso!",
+    "deletedCommissioner": "Comissário apagado!",
+    "notPossibleDeleteWarn": "Comissário não pode ser apagado.Existem dados vinculados a ele.",
+    "title": "Promoters / Divulgadores",
+    "subtitle": "Detalhamento de dados e vendas de Promoters / Divulgadores.",
+    "importPromoters": "Importar Promoters / Divulgadores",
+    "createPromoter": "Criar Promoter / Divulgador",
+    "name": "Nome",
+    "email": "Email",
+    "discount": "Desconto",
+    "view": "Visualização",
+    "actions": "Ações",
+    "editPromoter": "Editar Promoter / Divulgador",
+    "copyPromoterLink": "Copiar link do Promoter / Divulgador",
+    "deletePromoter": "Remover Promoter / Divulgador",
+    "noPromoterFound": "Nenhum Promoter / Divulgador encontrado.",
+    "registeredCommissioner": "Comissário cadastrado com sucesso!",
+    "noDiscountApplied": "Nenhum desconto aplicado",
+    "errorMessage": {
+      "code": "Insira um código",
+      "first_name": "Insira o nome",
+      "email": "Insira um email",
+      "invalidEmail": "Insira um email válido"
+    },
+    "edit": "Editar",
+    "register": "Cadastrar",
+    "promoterAdvertiser": "Promoter / Divulgador",
+    "exampleMail": "exemplo@exemplo.com.br",
+    "code": "Código",
+    "discounts": "Descontos",
+    "cashSale": "Habilitar venda em dinheiro online?",
+    "availableQuantity": "Quantidade disponível",
+    "save": "Salvar",
+    "unlimited": "ilimitado",
+    "loading": "Carregando...",
+    "comissioners": "comissários",
+    "none": "Nenhum",
+    "eventLink": "Link do evento",
+    "organizationLink": "Link da organização",
+    "error": "Ocorreu um erro ao registrar o comissário."
+  },
+  "seatsmap": {
+    "eventDate": "Data do evento"
+  },
+  "courtesies": {
+    "table": {
+      "emptyTable": "Crie sua primeira cortesia e acompanhe nessa página",
+      "emptyTableNoneCreated": "Nenhuma cortesia criada ainda.",
+      "filters": {
+        "searchBy": "Buscar pelo nome do participante, referência ou e-mail do recebedor",
+        "filterBySector": "Filtrar por setores",
+        "emptyFilteredWarning": "O nome \"{{searchTerm}}\" não está relacionado a nenhuma cortesia. Tente outro nome.",
+        "emptyWarning": "Não foi possível encontrar cortesias com os filtros aplicados",
+        "allSectors": "Todos os setores"
+      },
+      "header": {
+        "receiver": "participante recebedor",
+        "status": "status",
+        "quantity": "Qtd.",
+        "generatedAt": "gerada em",
+        "code": "cód. pedido",
+        "description": "descrição",
+        "redemptionCode": "cód. resgate",
+        "generatedBy": "gerada por",
+        "actions": "ações",
+        "sector": "setor"
+      },
+      "redemptionCode": {
+        "empty": "Sem código",
+        "copy": "Copiar código",
+        "copied": "Código copiado!",
+        "copyError": "Não foi possível copiar o código."
+      },
+      "actions": {
+        "send": "Reenviar",
+        "download": "Baixar",
+        "activate": "Ativar",
+        "deactivate": "Desativar",
+        "sendSuccessText": "Cortesia reenviada para o email com sucesso!",
+        "sendErrorText": "Erro ao reenviar cortesia, por favor tente novamente.",
+        "warningTitle": "Atenção",
+        "warningText": "Você tem certeza que deseja reenviar a cortesia para o email?",
+        "confirmButtonText": "Confirmar",
+        "cancelButtonText": "Cancelar",
+        "warningActivateText": "Você tem certeza que deseja ativar a cortesia?",
+        "warningDeactivateText": "Você tem certeza que deseja desativar a cortesia?",
+        "warningCancelRedeemedText": "Essa cortesia já foi resgatada por {{email}}. Desativar agora vai invalidar o ingresso emitido para esse usuário. Tem certeza?",
+        "successActivateText": "Cortesia ativada com sucesso!",
+        "successDeactivateText": "Cortesia desativada com sucesso!",
+        "errorReloadingData": "Erro ao recarregar os dados, por favor tente novamente.",
+        "errorActivateText": "Erro ao ativar cortesia, por favor tente novamente.",
+        "errorDeactivateText": "Erro ao desativar cortesia, por favor tente novamente."
+      }
+    },
+    "alertBanner": {
+      "date": "{{date}} às {{time}}min",
+      "success": {
+        "titleOne": "A criação da cortesia foi processada e enviada!",
+        "title": "A criação das {{count}} cortesias foi processada e enviada!",
+        "description": "A importação em lote solicitada em {{date}} foi concluída. Verifique as cortesias geradas na tabela abaixo."
+      },
+      "error": {
+        "titleAll": "Suas cortesias não foram geradas",
+        "title": "{{count}} cortesias não foram geradas",
+        "titleOne": "{{count}} cortesia não foi gerada",
+        "description": "Houve um problema para gerar algumas cortesias da importação em lote solicitada em",
+        "descriptionAll": "Houve um problema para as cortesias da importação em lote solicitada em",
+        "button": "Clique aqui para verificar."
+      },
+      "waiting": {
+        "title": "Você tem {{count}} cortesias na fila de criação",
+        "titleOne": "Você tem 1 cortesia na fila de criação",
+        "description": "A importação em lote solicitada em {{date}} está em andamento. Acompanhe nessa página o andamento."
+      },
+      "codeBatchWaiting": {
+        "title": "Gerando {{count}} códigos de cortesia",
+        "description": "A geração em lote solicitada em {{date}} está em andamento. Você poderá baixar a planilha quando concluir."
+      },
+      "codeBatchReady": {
+        "title": "{{count}} códigos de cortesia prontos",
+        "description": "A geração em lote concluída em {{date}}. Baixe a planilha com todos os códigos.",
+        "downloadButton": "Baixar planilha de códigos"
+      }
+    },
+    "alert": {
+      "warningTitle": "Atenção!",
+      "successTitle": "Sucesso!",
+      "errorLoading": "Erro ao carregar as cortesias",
+      "errorFiltering": "Erro ao filtrar as cortesias",
+      "errorSorting": "Erro ao ordenar as cortesias",
+      "send": {
+        "warningText": "Você deseja enviar esta cortesia?",
+        "successText": "Cortesias enviadas para seu email com sucesso.",
+        "ok": "Ok"
+      }
+    },
+    "header": {
+      "title": "Cortesias",
+      "text": "Crie, configure e gerencie os ingressos pagos e gratuitos do seu evento.",
+      "button": {
+        "title": "Criar cortesias",
+        "courtesyForm": "Manualmente",
+        "courtesyUpload": "Via planilha",
+        "processing": "Processando cortesias. Por favor, aguarde."
+      }
+    },
+    "createCourtesy": "Criar cortesia",
+    "status": {
+      "active": "Ativa",
+      "inactive": "Desativada",
+      "code": {
+        "generated": "Gerada",
+        "pending_redemption": "Aguardando resgate",
+        "awaiting_confirmation": "Confirmando resgate",
+        "redeemed": "Resgatada",
+        "expired": "Expirada",
+        "cancelled": "Cancelada"
+      }
+    },
+    "options": {
+      "send": "Enviar",
+      "download": "Baixar",
+      "activate": "Ativar",
+      "deactivate": "Desativar"
+    },
+    "loading": "aguarde",
+    "placeholders": {
+      "sectors": "Todos os setores",
+      "nickname": "Buscar por nome de referência, do participante ou e-mail do recebedor",
+      "attendeeName": "Nome do participante",
+      "email": "Email do recebedor"
+    },
+    "sectors": {
+      "Todas": "Todos os setores",
+      "Geral": "Geral",
+      "Camarote": "Camarote"
+    },
+    "sessionFilter": {
+      "all": "Todas as sessões",
+      "selected": "Filtrando sessões"
+    },
+    "filterButton": {
+      "apply": "aplicar filtros",
+      "clear": "limpar filtros"
+    },
+    "columns": {
+      "status": "Status",
+      "attendeeName": "Nome do participante",
+      "email": "Email do recebedor",
+      "sector": "Setor",
+      "quantity": "Quantidade",
+      "generatedAt": "Gerada em",
+      "code": "Código",
+      "description": "Descrição",
+      "generatedBy": "Gerada por",
+      "printedAt": "Impressa em",
+      "identifier": "Identificador",
+      "actions": "Ações",
+      "session": "Sessão"
+    },
+    "emptyData": "Nenhuma cortesia gerada.",
+    "modalGenerator": {
+      "alert": {
+        "ongoing": {
+          "title": "A criação das cortesias está em andamento",
+          "text": "Você receberá um aviso por e-mail quando suas cortesias forem geradas e os participantes também serão informados. Caso não encontre o e-mail, verifique sua caixa de spam.",
+          "confirmButtonText": "Concluir"
+        },
+        "courtesyForm": {
+          "title": "Suas cortesias serão geradas e enviadas",
+          "content": "Ao continuar, suas cortesias serão criadas e enviadas para  os e-mails indicados no passo anterior.",
+          "confirmButton": "Confirmar e enviar",
+          "successSingle": "cortesia gerada com sucesso!",
+          "successMultiple": "cortesias geradas com sucesso!",
+          "error": "Erro ao gerar as cortesias",
+          "text": "As cortesias já podem ser resgatadas via código ou e-mail pelos participantes."
+        },
+        "courtesyUpload": {
+          "title": "Atenção: suas cortesias serão processadas e enviadas",
+          "content": "Isso pode levar algum tempo dependendo da quantidade de contatos importados. Suas cortesias serão automaticamente enviadas para os participantes listados após o processamento. Essa é uma ação irreversível. Deseja confirmar?",
+          "confirmButton": "Processar e enviar"
+        },
+        "courtesyCodeBatch": {
+          "title": "Gerar códigos de cortesia em lote",
+          "content": "Vamos criar a quantidade solicitada de códigos resgatáveis. Você receberá uma planilha com todos eles assim que o processamento terminar. Essa ação é irreversível — deseja confirmar?",
+          "confirmButton": "Gerar códigos",
+          "successTitle": "{{count}} códigos sendo gerados",
+          "successDescription": "Acompanhe o status no banner desta página. A planilha estará disponível para download assim que o lote concluir.",
+          "error": "Não foi possível iniciar a geração de códigos. Tente novamente."
+        },
+        "cancelButton": "Voltar",
+        "loadingText": "Processando...",
+        "codeResult": {
+          "title": "Códigos de cortesia gerados"
+        },
+        "post": {
+          "error": "Erro ao gerar as cortesias"
+        }
+      },
+      "codeResult": {
+        "titleSingle": "Código de cortesia gerado",
+        "titleMultiple": "Códigos de cortesia gerados",
+        "description": "Copie e entregue ao(s) destinatário(s). Cada código vale por uma operação e expira na data do evento.",
+        "button": {
+          "copy": "Copiar",
+          "copied": "Copiado!",
+          "copyAll": "Copiar todos",
+          "generateNew": "Gerar novo",
+          "close": "Concluir"
+        },
+        "toast": {
+          "copied": "Código copiado para a área de transferência.",
+          "copiedAll": "Todos os códigos copiados.",
+          "copyError": "Não foi possível copiar. Tente manualmente."
+        },
+        "aria": {
+          "token": "Código de cortesia",
+          "copy": "Copiar código"
+        }
+      },
+      "title": "Criar cortesias",
+      "submitButton": "Salvar cortesias ({{count}})",
+      "submitButtonBatch": "Salvar lote de cortesias",
+      "submitButtonCodeBatch": "Gerar códigos em lote",
+      "modalTypeButton": {
+        "insert": "Criar manualmente",
+        "import": "Importar planilha",
+        "codeBatch": "Códigos em lote"
+      },
+      "errors": {
+        "FILE_REQUIRED": "O arquivo é obrigatório e não está presente.",
+        "INVALID_FILE_TYPE": "O tipo de arquivo é inválido.",
+        "EMPTY_FILE": "O arquivo está vazio.",
+        "BATCH_LIMIT_EXCEEDED": "O arquivo excede o limite máximo de cortesias permitido.",
+        "INVALID_FILE_FORMAT": "O formato do arquivo é inválido.",
+        "INVALID_DATA": "Os dados fornecidos são inválidos.",
+        "EVENT_NOT_FOUND": "Evento não encontrado.",
+        "SECTOR_NOT_FOUND": "Setor não encontrado.",
+        "USER_NOT_FOUND": "Usuário não encontrado.",
+        "UNAUTHORIZED": "Você não está autenticado.",
+        "FORBIDDEN": "Você não tem permissão para realizar esta ação.",
+        "INTERNAL_ERROR": "Ocorreu um erro interno no servidor. Tente novamente.",
+        "DEFAULT_ERROR": "Ocorreu um erro inesperado. Tente novamente."
+      },
+      "successUpload": {
+        "title": "A criação das cortesias está em andamento",
+        "description1": "Você receberá um aviso por e-mail quando suas cortesias forem geradas e os participantes também serão informados.",
+        "description2": "Caso não encontre o e-mail, verifique sua caixa de spam.",
+        "closeButton": "Concluir"
+      },
+      "validation": {
+        "title": "Houve um problema ao gerar suas cortesias",
+        "titleCount": "{{count}} cortesias não geradas",
+        "titleCountOne": "1 cortesia não foi gerada",
+        "description3": "Tente novamente pela criação manual ou fale com o suporte.",
+        "line": "Linha",
+        "errors": "Erros",
+        "name": "Nome / E-mail",
+        "fileTitle": "Houve um erro e não foi possível gerar as cortesias abaixo",
+        "downloadFile": "Baixe a planilha",
+        "downloadingFile": "Baixando...",
+        "description": "Encontramos alguns problemas e as cortesias não foram geradas.",
+        "description2": "Corrija os erros listados abaixo e tente novamente.",
+        "closeButton": "Fechar",
+        "fields": {
+          "previous": "Na coluna",
+          "email": "e-mail",
+          "quantity": "quantidade",
+          "firstName": "nome",
+          "lastName": "sobrenome",
+          "description": "descrição",
+          "promoterCode": "código do promotor"
+        },
+        "invalid_format": "digite um valor válido.",
+        "too_small": "o valor mínimo aceitado é 1.",
+        "too_big": "o valor máximo permitido  é 50.",
+        "invalid_string": "remova caracteres inválidos ou símbolos não permitidos.",
+        "required": "este campo é obrigatório.",
+        "invalid_type": {
+          "_default": "remova caracteres ou símbolos especiais.",
+          "quantity": "use apenas números e remova caracteres ou símbolos especiais."
+        },
+        "custom": "não foi encontrado este promotor no evento."
+      }
+    },
+    "modalForm": {
+      "title": "Cortesia",
+      "step1": {
+        "title": "Escolha a forma de recebimento"
+      },
+      "step2": {
+        "title": "Preencha as informações das cortesias"
+      },
+      "actions": {
+        "expand": "Editar cortesia",
+        "collapse": "Recolher cortesia",
+        "remove": "Remover cortesia"
+      },
+      "label": {
+        "name": "Nome",
+        "lastName": "Sobrenome",
+        "sector": "Setor",
+        "quantity": "Quantidade",
+        "email": "E-mail para envio",
+        "emailOptional": "Vincular a um e-mail (opcional)",
+        "emailOptionalHint": "Se preenchido, o destinatário verá um banner de cortesia disponível ao logar no marketplace e qualquer outro usuário que tente resgatar precisará confirmar via OTP por e-mail.",
+        "description": "Descrição (controle interno)",
+        "syncToPromoter": "Vincular cortesia a promoter",
+        "syncToPromoterTooltip": "Quando vinculada, a cortesia será exibida no relatório do promoter, incluindo os check-ins relacionados a ela.",
+        "session": "Para qual sessão",
+        "mode": "Modo de distribuição"
+      },
+      "mode": {
+        "email": "E-mail",
+        "code": "Código de resgate",
+        "emailHint": "As cortesias serão enviadas para os e-mails informados.",
+        "codeHint": "Envie o código gerado para quem irá receber. O resgate é feito no site."
+      },
+      "placeholder": {
+        "sector": "Selecione o setor",
+        "quantity": "Quantidade",
+        "email": "Insira o endereço de e-mail",
+        "description": "Digite aqui a descrição",
+        "name": "Digite o nome",
+        "lastName": "Digite o sobrenome",
+        "syncToPromoter": "Selecione o promoter",
+        "session": "Selecione uma sessão"
+      },
+      "validation": {
+        "amount": {
+          "number": "Por favor, digite um número válido.",
+          "integer": "Por favor, digite um número inteiro.",
+          "required": "A quantidade é obrigatória",
+          "min": "A quantidade mínima permitida é {{number}}",
+          "max": "A quantidade máxima permitida é {{number}}"
+        },
+        "eventSector": "O setor é obrigatório.",
+        "email": {
+          "required": "O e-mail é obrigatório.",
+          "email": "Por favor, digite um e-mail válido."
+        },
+        "sector": {
+          "required": "O setor é obrigatório."
+        },
+        "session": {
+          "session-required-if-hasSessions": "A sessão é obrigatória"
+        },
+        "steward": {
+          "required-if-show-steward": "O promotor é obrigatório"
+        },
+        "sectorDisabled": "Você precisa selecionar uma sessão primeiro.",
+        "required": "A quantidade é obrigatória",
+        "min": "A quantidade mínima permitida é 1",
+        "max": "A quantidade máxima permitida é 50",
+        "session-required-if-hasSessions": "A sessão é obrigatória",
+        "required-if-show-steward": "O promotor é obrigatório"
+      },
+      "alert": {
+        "submit": {
+          "title": "Suas cortesias serão geradas e enviadas",
+          "text": "Ao continuar, suas cortesias serão criadas e enviadas para os e-mails indicados no passo anterior.",
+          "confirmButton": "Confirmar e enviar",
+          "cancelButton": "Voltar"
+        },
+        "processing": "Processando",
+        "loading": {
+          "title": "Carregando",
+          "text": "Isso pode levar alguns instantes"
+        },
+        "post": {
+          "title": "Suas cortesias serão geradas e enviadas",
+          "title2": "Suas cortesias serão processadas e enviadas",
+          "content": "Ao continuar, suas cortesias serão criadas e enviadas para os e-mails indicados no passo anterior.",
+          "content2": "Isso pode levar algum tempo dependendo da quantidade de contatos importados. Suas cortesias serão automaticamente enviadas para os participantes listados após o processamento. Essa é uma ação irreversível.",
+          "confirmButton": "Confirmar e enviar",
+          "confirmButton2": "Processar e enviar",
+          "cancelButton": "Voltar",
+          "successSingle": "cortesia gerada com sucesso!",
+          "successMultiple": "cortesias geradas com sucesso!",
+          "error": "Erro ao gerar cortesias, por favor tente novamente.",
+          "loadingText": "Carregando...",
+          "text": "Oriente quem as recebeu a acessar nosso site ou aplicativo, entrar na conta com o mesmo e-mail informado para criar a cortesia e verificar o ingresso na aba “Meus Ingressos”."
+        },
+        "addMoreCourtesies": "Adicionar mais cortesias",
+        "submitButton": "Gerar cortesias"
+      },
+      "datepicker": {
+        "sessions": "Sessões do dia",
+        "selectAll": "Selecionar todos"
+      }
+    },
+    "courtesyCodeBatch": {
+      "step1": {
+        "title": "Selecione o setor",
+        "description": "Os códigos serão emitidos para um único setor por vez.",
+        "labelSession": "Selecione a sessão",
+        "placeholderSector": "Selecione o setor"
+      },
+      "step2": {
+        "title": "Quantidade de códigos a gerar",
+        "description": "Informe quantos códigos resgatáveis você quer criar (máximo {{max}}).",
+        "quantityLabel": "Quantidade de códigos",
+        "quantityHelp": "Limite por lote: {{max}}.",
+        "ticketsPerCourtesyLabel": "Ingressos por código",
+        "ticketsPerCourtesyHelp": "Quantos ingressos cada código resgata. Mínimo 1, máximo 50."
+      },
+      "step3": {
+        "title": "Vincular a um e-mail (opcional)",
+        "description": "Se preenchido, todos os códigos do lote ficam ligados a este e-mail: o destinatário verá um banner de cortesia disponível ao logar no marketplace, e qualquer outro usuário que tente resgatar será obrigado a confirmar via código por e-mail.",
+        "emailLabel": "E-mail do destinatário",
+        "emailPlaceholder": "destinatario@exemplo.com",
+        "emailHelp": "Deixe em branco para emitir códigos sem vínculo a um destinatário."
+      },
+      "validation": {
+        "sectorDisabled": "Você precisa selecionar uma sessão primeiro.",
+        "required": "O campo é obrigatório",
+        "min": "O valor mínimo é 1",
+        "max": "O valor máximo permitido é {{max}}",
+        "integer": "Use apenas números inteiros",
+        "invalidEmail": "Informe um e-mail válido",
+        "session": {
+          "required": "É necessário selecionar pelo menos uma sessão"
+        }
+      }
+    },
+    "courtesyUploader": {
+      "step1": {
+        "title": "Baixe a planilha modelo",
+        "description": "Use este arquivo como base para cadastrar suas cortesias em lote.",
+        "button": "Baixar planilha"
+      },
+      "step2": {
+        "title": "Importe a planilha preenchida",
+        "description": "Preencha o arquivo com os dados das cortesias, salve e envie no campo abaixo."
+      },
+      "step3": {
+        "title": "Selecione o setor",
+        "description": "As cortesias em lote são geradas para um único setor por vez.",
+        "titleSession": "Selecione sessão e setor",
+        "descriptionSession": "As cortesias em lote são geradas para uma única sessão e setor por vez.",
+        "labelSession": "Selecione as sessões",
+        "placeholderSector": "Selecione o setor"
+      },
+      "step4": {
+        "title": "Escolha a forma de recebimento",
+        "modeEmail": "E-mail",
+        "modeCode": "Código de resgate",
+        "emailHint": "As cortesias serão enviadas para os e-mails informados.",
+        "codeHint": "Envie o código gerado para quem irá receber. O resgate é feito no site."
+      },
+      "validation": {
+        "sectorDisabled": "Você precisa selecionar uma sessão primeiro.",
+        "required": "O campo é obrigatório",
+        "session": {
+          "required": "É necessário selecionar pelo menos uma sessão"
+        }
+      }
+    }
+  },
+  "nominalTransfers": {
+    "status": {
+      "completed": "CONCLUÍDO",
+      "waiting": "AGUARDANDO",
+      "canceled": "CANCELADO",
+      "expired": "EXPIRADO"
+    },
+    "of": "de",
+    "resultsPerPage": "Resultados por página",
+    "page": "Página",
+    "header": {
+      "title": "Ingressos transferidos",
+      "subtitle": "Veja e gerencie os ingressos que foram transferidos entre participantes."
+    },
+    "subheader": {
+      "transfers": "Transferências realizadas",
+      "configuration": "Configurações"
+    },
+    "columns": {
+      "ticketCode": "COD. INGRESSO",
+      "originalOwner": "PARTICIPANTE ORIGEM",
+      "orderNumber": "Nº DO PEDIDO",
+      "sender": "ENVIADO POR",
+      "receiver": "RECEBIDO POR",
+      "receivedOn": "RECEBIDO EM",
+      "ticketType": "TIPO DE INGRESSO",
+      "status": "STATUS"
+    },
+    "emptyList": "Sem dados a serem exibidos",
+    "searchPlaceholder": "Busque por e-mail, código do pedido ou do ingresso",
+    "exportButton": "Exportar lista",
+    "detailsDrawer": {
+      "header": "Detalhes da transferência",
+      "cards": {
+        "seat": "Cadeira",
+        "sector": "Setor",
+        "session": "Sessão",
+        "price": "Preço"
+      },
+      "ownerSection": {
+        "sentBy": "Enviado por",
+        "receivedBy": "Recebido por",
+        "headerBuyer": "Participante comprador",
+        "name": "Nome",
+        "email": "E-mail",
+        "phone": "Telefone",
+        "receivedOn": "Recebido em",
+        "transferedOn": "Transferido em",
+        "completedOn": "Realizada em"
+      }
+    },
+    "modal": {
+      "title": "Cancelar transferência",
+      "content": "Ao cancelar a transferência, ",
+      "contentStrong": "o ingresso retorna para o último titular ",
+      "contentTwo": "e só será possível mudar a titularidade novamente ao repetir o processo de envio de transferência. Essa ação é irreversível.",
+      "button": {
+        "cancel": "Fechar",
+        "confirm": "Cancelar transferência"
+      },
+      "toast": "Transferência Cancelada"
+    },
+    "configuration": {
+      "title": "Permitir transferência de ingressos",
+      "text": "Ative para que os participantes possam transferir ingressos entre si.",
+      "enabled": "Ativo",
+      "disabled": "Inativo",
+      "courtesyTitle": "Permitir transferência de cortesias",
+      "courtesyText": "Ative para que os participantes possam transferir ingressos do tipo 'cortesia' entre si.",
+      "passportTitle": "Permitir transferência de passaportes",
+      "passportText": "Ative para que os participantes possam transferir ingressos do tipo 'passaporte' entre si.",
+      "tooltipSwitch": "Ative 'Permitir transferência de ingressos' para habilitar esta opção.",
+      "edit": "Editar",
+      "save": "Salvar",
+      "limitDate": "As transferências serão permitidas até {{date}} às {{time}}.",
+      "limitDatePast": "As transferências foram permitidas até {{date}} às {{time}}.",
+      "closedEvent": "Evento encerrado",
+      "closedEventText": "Este evento já foi encerrado, e a transferência de ingressos não pode mais ser ativada.",
+      "understood": "Entendi",
+      "transferDateRequired": "A data de transferência é obrigatória.",
+      "transferTimeRequired": "O horário de transferência é obrigatório.",
+      "success": "Data limite atualizada com sucesso!",
+      "error": {
+        "title": "Algo não saiu como planejado",
+        "description": "Por favor, aguarde um momento antes de tentar novamente. Se o problema continuar, entre em contato com nosso suporte."
+      },
+      "transferDateLabel": "Data limite para transferências",
+      "transferTimeLabel": "Horário limite para transferências",
+      "expired": {
+        "tickets": "Este evento já foi encerrado, e a transferência de ingressos não pode mais ser ativada.",
+        "courtesies": "Este evento já foi encerrado, e a transferência de cortesias não pode mais ser ativada.",
+        "passports": "Este evento já foi encerrado, e a transferência de passaportes não pode mais ser ativada."
+      },
+      "bulkTitle": "Transferência em massa",
+      "bulkText": "Ative para permitir que participantes transfiram ingressos em lote entre si.",
+      "bulkCourtesyText": "Ative para permitir que participantes transfiram cortesias em lote entre si.",
+      "bulkPassportText": "Ative para permitir que participantes transfiram passaportes em lote entre si.",
+      "bulkSuccess": "Transferência em massa atualizada com sucesso!"
+    }
+  },
+  "financialStatement": {
+    "byTicketType": "POR TIPO DE INGRESSO",
+    "soldTickets": "INGRESSOS VENDIDOS",
+    "byTypeTooltip": "Percentual das vendas que cada tipo de ingresso representa nas vendas totais.",
+    "bySectorTooltip": "Percentual das vendas que cada setor e tipo de ingresso representa nas vendas totais.",
+    "onlineWithdrawTooltip": "Valor cobrado após fechamento do evento por saque do saldo de vendas online para contas não cadastradas em contrato.",
+    "POSWithdrawTooltip": "Valor cobrado após fechamento do evento por saque do saldo de vendas físicas (PDV) para contas não cadastradas em contrato.",
+    "onlineCourtesyTooltip": "Valor cobrado após fechamento do evento relativo a emissão de cortesias online.",
+    "posCreditTaxTooltip": "Percentual do total transacionado na forma crédito em POS. Cobrado após fechamento do evento.",
+    "posDebitTaxTooltip": "Percentual do total transacionado na forma débito em POS. Cobrado após fechamento do evento.",
+    "posPixTaxTooltip": "Percentual do total transacionado na forma PIX  em POS. Cobrado após fechamento do evento.",
+    "ticketPrintTooltip": "Valor calculado por ingresso impresso no PDV. Cobrado após fechamento do evento.",
+    "courtesyPrintTooltip": "Valor monetário calculado por cortesia impressa no PDV. Cobrado após fechamento do evento.",
+    "canceledTicketPrintTooltip": "Valor monetário calculado por ingresso cancelado no PDV. Cobrado após fechamento do evento.",
+    "onlineAnticipationTooltip": "Taxa de antecipação para recebimento das vendas realizadas via cartão de crédito, PicPay e Click to Pay (crédito).",
+    "posAnticipationTooltip": "Taxa de antecipação para recebimento das vendas realizadas via cartão de crédito.",
+    "onlineCashTooltip": "Valor por ingresso em dinheiro emitida online. Cobrado quando o evento fecha.",
+    "anticipationCost": "CUSTO DE ANTECIPAÇÃO",
+    "anticipationValue": "VALOR ANTECIPADO",
+    "taxOrCost": "TAXA OU CUSTO",
+    "totalDiscount": "DESCONTO TOTAL",
+    "otherCosts": "CUSTOS",
+    "eventExpenses": "DESPESAS LANÇADAS",
+    "posAnticipation": "Antecipação (POS)",
+    "onlineAnticipation": "Antecipação (Online)",
+    "withdraw": "Saque",
+    "forThirdPartyOnline": "Online para terceiros",
+    "forThirdPartyPDV": "PDV para terceiros",
+    "onlineCourtesy": "Cortesia Online",
+    "onlineCashTicketSale": "Ingresso online em dinheiro (comissários)",
+    "posCredit": "Crédito (POS)",
+    "posDebit": "Débito (POS)",
+    "posPix": "PIX (POS)",
+    "paymentTax": "Taxas de Pagamento",
+    "ticketEmission": "Emissão de Ingressos",
+    "ticketPrinting": "Impressão de Ingressos",
+    "courtesyPrinting": "Impressão de Cortesia",
+    "canceledTicketPrinting": "Cancelamento de Ingresso Impresso",
+    "total": "Total",
+    "paid": "Pagos",
+    "paid_or_free": "Pagos / Gratuitos",
+    "free": "Gratuitos",
+    "fileName": "borderô",
+    "title": "Borderô",
+    "subtitle": "Acompanhe o relatório de fechamento financeiro do seu evento.",
+    "recordExpense": "Lançar despesa",
+    "export": "Exportar",
+    "sales": "Vendas",
+    "transfers": "Transferências",
+    "deductions": "Deduções",
+    "costsTotal": "Valor total de custos",
+    "costsTotalTooltip": "Soma dos custos de antecipação + outros custos",
+    "totalDeductionsTooltip": "Soma dos custos totais + despesas totais",
+    "otherExpenses": "Valor total de outras despesas",
+    "totalDeductions": "Valor total de deduções",
+    "recordedExpenses": "DESPESAS LANÇADAS",
+    "quantity": "QUANTIDADE",
+    "unitValue": "VALOR UNITÁRIO",
+    "totalValue": "TOTAL",
+    "totalValueTransfersCompleted": "Total de repasses já realizados",
+    "totalValueTransfersPending": "Valor pendente a receber",
+    "totalWithdrawalAvailable": "Saldo para retirada",
+    "transfersCompleted": "Repasses",
+    "identification": "FINALIDADE DO REPASSE",
+    "identificationTooltip": "Tipo de taxa a qual o repasse faz referência",
+    "requester": "REQUERENTE",
+    "beneficiary": "BENEFICIÁRIO",
+    "requestDate": "SOLICITADO EM",
+    "paymentDate": "PAGO EM",
+    "receivedValue": "VALOR RECEBIDO",
+    "totalSalesRevenue": "Receita total de vendas",
+    "ticketsEmitted": "Ingressos Emitidos",
+    "checkin": "Check-In",
+    "tkm": "Ticket médio por pedido",
+    "totalOrders": "Total de pedidos",
+    "paidTickets": "Ingressos pagos",
+    "freeTickets": "Ingressos gratuitos / cortesias",
+    "totalValueOfTicketsSold": "Valor gerado através da venda de ingressos, desconsiderando taxas",
+    "totalNumberOfTicketsSoldToolTip": "Quantidade total de ingressos emitidos, incluindo cortesias.",
+    "checkinToolTip": "Porcentagem ingressos validados na entrada.",
+    "tkmToolTip": "Ticket médio",
+    "totalOrdersToolTip": "Total de pedidos vendidos.",
+    "paidTicketsToolTip": "Total de pedidos vendidos.",
+    "freeTicketsToolTip": "Total de pedidos vendidos.",
+    "serviceFeeRebateToolTip": "Valor retirado da nossa Taxa de Conveniência de vendas online e repassado de volta para sua empresa.",
+    "processingFeeRebateToolTip": "Valor retirado da Taxa de Processamento das vendas online e repassado para sua empresa.",
+    "otherRevenues": "Outras Receitas",
+    "serviceFeeRebate": "Rebate (Taxa de Conveniência)",
+    "processingFeeRebate": "Rebate (Taxa de Processamento)",
+    "ordersByLot": "Pedidos Por Lote",
+    "lot": "LOTE",
+    "qty": "QUANTIDADE",
+    "sold": "INGRESSOS VENDIDOS",
+    "participation": "% POR SETOR E TIPO",
+    "participationByPayment": "% POR PAGAMENTO",
+    "participationByPaymentToolTip": "Percentual que cada forma de pagamento representa nas vendas totais.",
+    "participationLot": "% POR LOTE E TIPO",
+    "participationLotToolTip": "Percentual das vendas que cada lote e tipo de ingresso representa nas vendas totais.",
+    "participationtToolTip": "Percentual das vendas que cada setor e tipo de ingresso representa nas vendas totais.",
+    "ordersBySector": "Pedidos Por Setor",
+    "courtesies": "CORTESIAS",
+    "sector": "SETOR",
+    "ordersByPaymentMethod": "Pedidos Por Forma de Pagamento",
+    "paymentMethod": "FORMA DE PAGAMENTO",
+    "ordersByPaymentMethodOrigin": "Pedidos por Forma de Pagamento por Origem",
+    "paymentMethodOrigin": "FORMA DE PAGAMENTO / ORIGEM",
+    "noData": "Sem dados a serem exibidos",
+    "edit": "Editar",
+    "delete": "Deletar",
+    "expenseModal": {
+      "headerTitle": "Lançar despesa",
+      "modalTitle": "Informações da despesa",
+      "expenseName": "Nome de identificação",
+      "expenseQuantity": "Quantidade",
+      "expenseValue": "Valor unitário",
+      "expenseAmount": "Valor total",
+      "expenseDescription": "Descrição (opcional)",
+      "expenseCancel": "Cancelar",
+      "expenseRecord": "Lançar",
+      "expenseEdit": "Editar",
+      "placeholder": {
+        "expenseName": "Identifique o lançamento",
+        "expenseQuantity": "Informe a quantidade",
+        "expenseDescription": "Descreva a despesa para facilitar o entendimento."
+      },
+      "expenseSucceeded": "Despesa lançada com sucesso!",
+      "expenseEdited": "Despesa editada com sucesso!",
+      "expenseEditError": "Ocorreu um erro ao editar despensa.",
+      "expenseError": "Ocorreu um erro ao lançar despensa.",
+      "name": {
+        "min": "O nome de identificação deve ter pelo menos 3 caracteres.",
+        "max": "O máximo de caracteres foi atingido.",
+        "required": "O nome de identificação é obrigatório."
+      },
+      "quantity": {
+        "min": "A quantidade mínima é 1.",
+        "required": "A quantidade é obrigatória."
+      },
+      "value": {
+        "required": "O valor da unidade é obrigatório."
+      }
+    },
+    "modal": {
+      "title": "Tem certeza de que deseja excluir este lançamento?",
+      "content": "Essa ação é irreversível e removerá permanentemente as informações associadas a este registro.",
+      "confirmButton": "Excluir",
+      "cancelButton": "Cancelar"
+    },
+    "expenseDeleted": "Despesa excluída com sucesso!",
+    "expenseDeletedError": "Erro ao excluir despesa",
+    "percentByType": "% POR TIPO",
+    "quantityValue": "QUANTIDADE / VALOR",
+    "deductionsSessionsFilterWarning": "Os valores do bloco <strong>Deduções</strong> não são alterados considerando a filtragem por sessão.",
+    "transfersSessionsFilterWarning": "Os valores do bloco <strong>Transferências</strong> não são alterados considerando a filtragem por sessão."
+  },
+  "global": {
+    "errors": {
+      "somethingWentWrong": "Algo deu errado"
+    }
+  },
+  "batchManagerDrawer": {
+    "title": {
+      "edit": "Editar lote e ingressos",
+      "editButton": "Salvar alterações",
+      "create": "Criar lote e ingressos",
+      "editTicket": "Criar ingressos"
+    },
+    "sessions": {
+      "title": "Escolha as sessões",
+      "description": "Defina para quais sessões serão criados o lote e os ingressos.",
+      "sessionsCreate": "Criar lote e ingressos em quais sessões?",
+      "sessionsEdit": "Editar lote e ingressos em quais sessões?",
+      "ticketCreate": "Criar ingressos em quais sessões?",
+      "allSessions": "Todas as sessões",
+      "allSessionsAlert": "Os ingressos e lotes serão criados apenas nas sessões com o setor {{sector}} existente."
+    },
+    "batches": {
+      "title": "Insira as informações do lote",
+      "description": "Configure as opções para criar seu lote de ingressos.",
+      "inputs": {
+        "name": "Nome do lote",
+        "quantityByBatch": "Quantidade por sessão",
+        "batchClosure": "Data de encerramento",
+        "minQuantity": "Mínimo por compra",
+        "maxQuantity": "Máximo por compra",
+        "salesChannelsLabel": "Canais de venda",
+        "salesChannelsPlaceholder": "Selecione os canais",
+        "hasDocLimit": "Limitar quantidade por Cliente (CPF)",
+        "docLimitPlaceholder": "Digite a quantidade"
+      },
+      "errors": {
+        "sessions": "Selecione ao menos uma sessão",
+        "name": "Por favor, digite o nome.",
+        "positive": "O valor deve ser um número positivo",
+        "salesChannels": "Selecione pelo menos uma opção",
+        "docLimit": "Por favor, digite a quantidade.",
+        "greaterThanMinOrBatch": "A quantidade máxima não pode ser menor que a quantidade mínima ou a quantidade do lote",
+        "typeError": "Somente números",
+        "quantity": "Por favor, digite a quantidade.",
+        "ticketAmount": "A quantidade do ingresso não pode ser maior que a quantidade do lote",
+        "price": "Adicione o valor do ingresso",
+        "lotName": "Insira um nome para o lote",
+        "minQuantity": "Adicione pelo menos um valor para o mínimo por compra",
+        "minPurchaseGreaterThanMax": "O valor mínimo por compra não pode ser superior ao valor máximo por compra.",
+        "maxPurchaseLessThanMin": "O valor máximo por compra não pode ser inferior ao valor mínimo por compra.",
+        "maxPurchaseCannotBeZero": "O valor máximo por compra não pode ser zero quando o valor mínimo é maior que zero.",
+        "minPurchaseExceedsEventLimit": "O valor mínimo por compra não pode ser superior a {{limit}} devido a regras de limite aplicadas.",
+        "maxPurchaseExceedsEventLimit": "O valor máximo por compra não pode ser superior a {{limit}} devido a regras de limite aplicadas."
+      }
+    },
+    "tickets": {
+      "title": "Crie os ingressos",
+      "description": "Você pode alterar os ingressos por sessão na edição individual das sessões.",
+      "delete": "Deletar ingresso",
+      "add": "Adicionar Ingresso",
+      "inputs": {
+        "nameLabel": "Ingresso {{id}}",
+        "namePlaceholder": "Nome do ingresso",
+        "amount": "Quantidade por sessão",
+        "price": "Valor de venda"
+      }
+    },
+    "errors": {
+      "sessions": "Selecione ao menos uma sessão",
+      "name": "Por favor, digite o nome.",
+      "nameMin": "Nome deve ter pelo menos 1 caractere.",
+      "positive": "O valor deve ser um número positivo",
+      "salesChannels": "Selecione pelo menos uma opção",
+      "docLimit": "Por favor, digite a quantidade.",
+      "greaterThanMinOrBatch": "A quantidade máxima não pode ser menor que a quantidade mínima ou a quantidade do lote",
+      "typeError": "Somente números",
+      "quantity": "Por favor, digite a quantidade.",
+      "ticketAmount": "A quantidade do ingresso não pode ser maior que a quantidade do lote",
+      "price": "Adicione o valor do ingresso",
+      "lotName": "Insira um nome para o lote",
+      "minQuantity": "Adicione pelo menos um valor para o mínimo por compra",
+      "minQuantityLot": "A quantidade mínima não pode ser menor que a quantidade vendida",
+      "minPurchaseGreaterThanMax": "O valor mínimo por compra não pode ser superior ao valor máximo por compra.",
+      "maxPurchaseLessThanMin": "O valor máximo por compra não pode ser inferior ao valor mínimo por compra.",
+      "maxPurchaseCannotBeZero": "O valor máximo por compra não pode ser zero quando o valor mínimo é maior que zero.",
+      "minPurchaseExceedsEventLimit": "O valor mínimo por compra não pode ser superior a {{limit}} devido a regras de limite aplicadas.",
+      "maxPurchaseExceedsEventLimit": "O valor máximo por compra não pode ser superior a {{limit}} devido a regras de limite aplicadas."
+    },
+    "alerts": {
+      "successCreate": "Lote criado com sucesso!",
+      "error": "Ops, algo deu errado.",
+      "successEdit": "Lote editado com sucesso!",
+      "successCreateTicket": "Ingresso criado com sucesso!"
+    }
+  },
+  "checkin": {
+    "emptyTable": {
+      "text": "Assim que as primeiras vendas forem registradas os ingressos serão listados",
+      "emptyFiltered": "Ainda não existem vendas registradas para o período selecionado."
+    }
+  },
+  "linkedSessionsDrawer": {
+    "title": "Sessões vinculadas",
+    "lot": "O lote",
+    "ticket": "O ingresso",
+    "alert": "está vinculado a",
+    "alert2": "sessões"
+  },
+  "entry": {
+    "errorLoadingPermissions": "Erro ao carregar permissões de acesso",
+    "errorLoadingPermissionsDescription": "Não foi possível verificar suas permissões de acesso para esse evento. Por favor, tente novamente mais tarde.\nSe o problema persistir, entre em contato com nosso suporte."
+  },
+  "financialSummary": {
+    "title": "Borderô",
+    "subtitle": "Acompanhe em tempo real o resumo financeiro das transações deste evento.",
+    "lastUpdate": "Última atualização",
+    "timeAgo": "há {{minutes}}min",
+    "justNow": "há alguns instantes",
+    "lastUpdateError": "Não foi possível carregar a última atualização",
+    "errorTitle": "Não foi possível carregar os dados",
+    "emptyTitle": "Nenhum dado disponível ainda",
+    "emptyDescription": "As informações financeiras aparecerão aqui assim que existirem vendas no evento.",
+    "noData": "Nenhum dado para o período selecionado",
+    "noFinanceData": "Nenhum lançamento financeiro",
+    "noDataDescription": "Ajuste o período para visualizar as informações financeiras.",
+    "refresh": "Atualizar agora",
+    "refreshing": "Atualizando...",
+    "refreshError": "Não foi possível atualizar os dados. Tente novamente.",
+    "export": "Exportar",
+    "exportReport": {
+      "title": "Exportar relatório",
+      "cancel": "Cancelar",
+      "confirm": "Exportar",
+      "format": {
+        "title": "Selecione o formato"
+      },
+      "content": {
+        "title": "Escolha o conteúdo"
+      },
+      "selectAll": "Selecionar tudo",
+      "itemsCount": "{{selected}} de {{total}}",
+      "selectedSummary": "{{selected}} / {{total}} itens selecionados",
+      "groups": {
+        "overview": "Visão Geral Financeira",
+        "detailing": "Detalhamento financeiro",
+        "boxOffice": "Bilheteria",
+        "audience": "Público e Check-Ins"
+      },
+      "items": {
+        "overviewKpis": "Resumo financeiro (KPIs)",
+        "overviewRevenueExpenses": "Visão Geral (Receitas / Despesas)",
+        "overviewEntries": "Lançamentos Financeiros",
+        "overviewTransfers": "Repasses Financeiros",
+        "detailingRevenueChannel": "Receitas (Por Canal)",
+        "detailingRevenuePayment": "Receitas (Por Forma de Pagamento)",
+        "detailingCostsOnline": "Custos Operação Online",
+        "detailingCostsPdv": "Custos Operação PDV / POS",
+        "detailingOperationalExpenses": "Despesas Operacionais",
+        "boxOfficeKpis": "Indicadores (KPIs)",
+        "boxOfficeByType": "Ingressos por Tipo",
+        "boxOfficeBySector": "Ingressos por Setor",
+        "boxOfficeByLot": "Ingressos por Lote",
+        "audienceKpis": "Indicadores (KPIs)",
+        "audienceByTicket": "Check-Ins por Ingresso",
+        "audienceBySector": "Check-Ins por Setor"
+      },
+      "success": {
+        "title": "O borderô está sendo exportado",
+        "content": "Em breve o relatório do Borderô estará disponível para download."
+      },
+      "error": "Não foi possível exportar o relatório. Tente novamente.",
+      "filterAlert": {
+        "title": "Exportando com filtros aplicados",
+        "period": "o período {{range}}",
+        "connector": " e ",
+        "message": "O relatório vai considerar apenas {{filters}}. Para o relatório completo, limpe os filtros.",
+        "clearLink": "Limpar filtros e exportar relatório completo"
+      }
+    },
+    "dateRangePicker": {
+      "placeholder": "Selecione o período",
+      "apply": "Aplicar",
+      "cancel": "Cancelar",
+      "selectPeriod": "Selecione o período",
+      "allPeriod": "Todo período de vendas"
+    },
+    "tabs": {
+      "overview": "Visão Geral Financeira",
+      "boxOffice": "Bilheteria",
+      "checkin": "Check-Ins"
+    },
+    "boxOffice": {
+      "sectionTitle": "Detalhes da Bilheteria",
+      "placeholderTitle": "Nenhum dado de bilheteria",
+      "placeholderDescription": "Não há informações de bilheteria para o período selecionado.",
+      "kpis": {
+        "created": "Ingressos criados",
+        "issued": "Ingressos emitidos",
+        "paid": "Ingressos pagos",
+        "freeAndCourtesy": "Gratuitos + cortesias"
+      },
+      "groupBy": {
+        "ariaLabel": "Agrupar bilheteria por",
+        "type": "Por Tipo",
+        "sector": "Por Setor",
+        "lot": "Por Lote"
+      },
+      "breakdownTitle": {
+        "type": "Ingressos por Tipo",
+        "sector": "Ingressos por Setor",
+        "lot": "Ingressos por Lote"
+      },
+      "table": {
+        "columns": {
+          "ticketType": "Tipo de ingresso",
+          "percentTotal": "% total",
+          "quantity": "Qtd.",
+          "grossTotal": "Total bruto",
+          "discounts": "Descontos",
+          "absorbedTax": "Tx. absorvida",
+          "netTotal": "Total líquido"
+        },
+        "sections": {
+          "paid": "Pagos",
+          "free": "Gratuitos"
+        },
+        "total": "Total",
+        "empty": "Nenhum ingresso emitido para o período selecionado.",
+        "mobileLabels": {
+          "percentTotal": "% total:",
+          "quantity": "Qtd.:",
+          "grossTotal": "Bruto:",
+          "discounts": "Descontos:",
+          "absorbedTax": "Tx. absorvida:"
+        }
+      }
+    },
+    "checkIn": {
+      "sectionTitle": "Check-Ins",
+      "kpis": {
+        "issued": "Ingressos emitidos",
+        "checkedIn": "Ingressos com check-in",
+        "occupancyRate": "Taxa de Ocupação"
+      },
+      "groupBy": {
+        "ariaLabel": "Agrupar check-ins por",
+        "ticket": "Por Ingresso",
+        "sector": "Por Setor"
+      },
+      "breakdownTitle": {
+        "ticket": "Check-Ins por Ingresso",
+        "sector": "Check-Ins por Setor"
+      },
+      "table": {
+        "columns": {
+          "ticketType": "Tipo de ingresso",
+          "sector": "Setor",
+          "issued": "Ingressos emitidos",
+          "checkedIn": "Ingressos com check-in",
+          "percentCheckIn": "% Check-ins por emitidos"
+        },
+        "sections": {
+          "paid": "Pagos",
+          "free": "Gratuito e cortesias"
+        },
+        "total": "Total",
+        "empty": "Nenhum check-in para o período selecionado.",
+        "mobileLabels": {
+          "issued": "Emitidos:",
+          "checkedIn": "Check-in:",
+          "percentCheckIn": "% check-in:"
+        }
+      }
+    },
+    "financialSummary": "Resumo financeiro",
+    "financialCards": {
+      "totalRevenue": "Total em Receitas",
+      "totalDeductions": "Total em Deduções",
+      "eventNetResult": "Resultado do evento",
+      "totalReceivable": "Total a Receber",
+      "totalReceivableTooltip": "Resultado do evento, descontando as vendas em dinheiro e os lançamentos financeiros."
+    },
+    "revenue": {
+      "title": "Visão Geral do Evento",
+      "seeDetails": "Ver detalhes",
+      "eventResult": "Resultado do Evento",
+      "totalRevenue": "Total em Receitas",
+      "totalDeductions": "Total em Deduções",
+      "salesTotal": "Total em vendas (online e PDV)",
+      "rebate": "Rebate",
+      "salesFees": "Taxas e custos de vendas",
+      "operationalExpenses": "Despesas operacionais",
+      "columns": {
+        "receiptsExpenses": "RECEITAS / DESPESAS",
+        "totalValue": "VALOR TOTAL"
+      },
+      "detailsModal": {
+        "title": "Detalhes de Receitas",
+        "close": "Fechar",
+        "cards": {
+          "salesOnline": "Vendas Online",
+          "salesPdv": "Vendas PDV",
+          "rebate": "Rebate",
+          "total": "Total em Receitas"
+        },
+        "groupBy": {
+          "ariaLabel": "Agrupar receitas por",
+          "channel": "Por Canal",
+          "payment": "Por Forma de Pagamento"
+        },
+        "mobileLabels": {
+          "percentage": "% Receita",
+          "tickets": "Vendidos",
+          "gross": "Bruto"
+        },
+        "channelTable": {
+          "title": "Receitas por canal",
+          "total": "Total",
+          "percentTooltip": "Percentual da receita em relação ao total.",
+          "columns": {
+            "revenue": "RECEITA",
+            "percentage": "% DA RECEITA",
+            "sold": "VENDIDOS",
+            "totalGross": "TOTAL BRUTO",
+            "totalNet": "TOTAL LÍQUIDO"
+          },
+          "rows": {
+            "salesOnline": "Vendas Online (Site e Zig App)",
+            "salesOnlineWhitelabel": "Vendas Online (Site)",
+            "salesPdv": "Vendas PDV"
+          },
+          "methods": {
+            "creditCard": "Cartão de Crédito",
+            "debitCard": "Cartão de Débito",
+            "pix": "PIX",
+            "cash": "Dinheiro",
+            "rebateOnline": "Rebate Taxe de Processamento Online",
+            "rebatePdv": "Rebate Taxe de Processamento PDV"
+          }
+        },
+        "paymentTable": {
+          "title": "Vendas por forma de pagamento",
+          "total": "Total",
+          "columns": {
+            "method": "FORMA DE PAGAMENTO",
+            "percentage": "% DA RECEITA",
+            "tickets": "INGRESSOS",
+            "totalGross": "TOTAL BRUTO",
+            "totalNet": "TOTAL LÍQUIDO"
+          },
+          "rows": {
+            "creditCard": "Cartão de Crédito",
+            "debitCard": "Cartão de Débito",
+            "pix": "PIX",
+            "cash": "Dinheiro"
+          },
+          "methods": {
+            "nuPay": "NuPay",
+            "clickToPay": "Click to Pay",
+            "picPay": "PicPay"
+          }
+        }
+      }
+    },
+    "deductions": {
+      "detailsModal": {
+        "title": "Detalhes de Taxas e Despesas",
+        "close": "Fechar",
+        "cards": {
+          "onlineOperation": "Operação Online",
+          "pdvOperation": "Operação PDV",
+          "operationalExpenses": "Despesas Operacionais",
+          "totalDeductions": "Total em deduções"
+        },
+        "tabs": {
+          "ariaLabel": "Filtrar deduções por operação",
+          "online": "Custos Operação Online",
+          "pdv": "Custos Operação PDV / POS",
+          "operational": "Despesas Operacionais"
+        },
+        "mobileLabels": {
+          "quantity": "Quantidade/Valor",
+          "fee": "Taxa"
+        },
+        "onlineTable": {
+          "title": "Custos Operação Online (Site e Zig App)",
+          "titleWhitelabel": "Custos Operação Online (Site)",
+          "total": "Total",
+          "emptyTitle": "Sem custos de operação online",
+          "emptyDescription": "Os custos aparecerão aqui quando houver vendas online no evento.",
+          "columns": {
+            "cost": "CUSTOS / TAXAS (VENDAS ONLINE)",
+            "quantity": "QUANTIDADE/VALOR",
+            "fee": "TAXA (R$ / %)",
+            "total": "DESCONTO TOTAL"
+          },
+          "groups": {
+            "tickets": "Emissões de Ingressos e Cortesias",
+            "financial-costs": "Custos Financeiros",
+            "discounts": "Descontos Aplicados"
+          },
+          "lines": {
+            "online-courtesy": "Cortesia Online",
+            "commissioner-cash-ticket": "Ingresso online em dinheiro (comissários)",
+            "anticipation": "Antecipação Vendas",
+            "third-party-withdrawals": "Saques (para terceiros)",
+            "promo-codes": "Códigos Promocionais",
+            "absorbed-taxes": "Descontos Absorvidos"
+          }
+        },
+        "pdvTable": {
+          "title": "Custos Operação PDV / POS",
+          "total": "Total",
+          "emptyTitle": "Sem custos de operação PDV / POS",
+          "emptyDescription": "Os custos aparecerão aqui quando houver vendas no PDV.",
+          "columns": {
+            "cost": "CUSTOS / TAXAS (PDV)",
+            "quantity": "VALOR / QUANTIDADE",
+            "fee": "TAXA (R$ / %)",
+            "total": "DESCONTO TOTAL"
+          },
+          "groups": {
+            "ticket-printing": "Impressões de Ingressos e Cortesias",
+            "financial-costs": "Custos Financeiros",
+            "taxes": "Taxas de Vendas"
+          },
+          "lines": {
+            "tickets": "Impressão de Ingressos",
+            "courtesies": "Impressão de Cortesias",
+            "anticipation": "Antecipação Vendas",
+            "credit-card": "Crédito",
+            "debit-card": "Débito",
+            "pix": "PIX",
+            "cash": "Dinheiro",
+            "unique-fee": "Taxa Única",
+            "administrative-fee": "Taxa administrativa PDV"
+          }
+        },
+        "operationalTable": {
+          "title": "Despesas Operacionais",
+          "total": "Total",
+          "emptyTitle": "Sem despesas operacionais cadastradas",
+          "emptyDescription": "As despesas aparecerão aqui quando forem registradas.",
+          "columns": {
+            "cost": "TAXAS DE VENDAS",
+            "quantity": "QUANTIDADE/VALOR",
+            "fee": "VALOR DA TAXA",
+            "total": "DESCONTO TOTAL"
+          },
+          "rows": {
+            "groups": {
+              "fieldTeam": "Equipe de Campo",
+              "equipment": "Equipamentos",
+              "lossesAndDamages": "Perdas e Avarias",
+              "lodging": "Hospedagem",
+              "logistics": "Logística",
+              "meals": "Alimentação",
+              "transportation": "Transporte",
+              "other": "Outros"
+            },
+            "slugs": {
+              "field-team-coordinator": "Diária Coordenador",
+              "field-team-head": "Diária Head",
+              "field-team-supervisor": "Diária Supervisor",
+              "field-team-technician": "Diária Técnico",
+              "field-team-trainee": "Diária Trainee",
+              "field-team-coordinator-setup-daily-rate": "Diária Setup Coordenador",
+              "field-team-head-setup-daily-rate": "Diária Setup Head",
+              "field-team-supervisor-setup-daily-rate": "Diária Setup Supervisor",
+              "field-team-technician-setup-daily-rate": "Diária Setup Técnico",
+              "field-team-trainee-setup-daily-rate": "Diária Setup Trainee",
+              "equipment-self-service-case": "Self-service Case",
+              "equipment-access-control": "Controle Acesso",
+              "equipment-self-service-structure": "Estrutura Self-service",
+              "equipment-printer": "Impressora",
+              "equipment-notebook": "Notebook",
+              "equipment-lollipop": "Lollipop",
+              "equipment-power-bank": "Power Bank",
+              "equipment-tablet": "Tablet",
+              "equipment-ticket-validator": "Validador de Ingresso",
+              "smartpos-unit-cost": "SmartPOS (unidade)",
+              "bucket-cost": "Bucket",
+              "mobile-cashier-cost": "Caixa Móvel",
+              "ticket-pos-monthly-cost": "Ticket POS (mensal)",
+              "expense-lodging": "Hospedagem",
+              "expense-transportation": "Transporte",
+              "expense-meals": "Alimentação",
+              "expense-logistics": "Logística",
+              "expense-losses-and-damages": "Perdas e Avarias",
+              "expense-other": "Outros"
+            }
+          }
+        }
+      }
+    },
+    "financialEntries": {
+      "title": "Lançamentos Financeiros",
+      "total": "Total em lançamentos",
+      "columns": {
+        "name": "CUSTO / TAXA",
+        "description": "OBSERVAÇÃO",
+        "type": "TIPO",
+        "value": "VALOR TOTAL"
+      },
+      "types": {
+        "deduction": "Dedução",
+        "credit": "Crédito"
+      },
+      "categories": {
+        "advanced": "Advance",
+        "general": "Ajuste Financeiro"
+      },
+      "emptyState": {
+        "title": "Nenhum lançamento financeiro",
+        "description": "Os lançamentos aparecerão aqui quando forem registrados."
+      }
+    },
+    "settlements": {
+      "title": "Repasses financeiros",
+      "tags": {
+        "total": "TOTAL",
+        "settled": "REPASSADO",
+        "pending": "PENDENTE"
+      },
+      "expectedPaymentBy": "Pagamento previsto até {{date}}",
+      "seeTransfers": "Ver transferências"
+    }
+  },
+  "ordersPage": {
+    "header": {
+      "title": "Pedidos",
+      "subtitle": "Confira em detalhes as vendas e transações do painel."
+    },
+    "empty": {
+      "title": "Nenhum resultado foi encontrado para essa busca",
+      "description": "Verifique se a busca está correta ou ajuste os filtros."
+    }
+  }
+}

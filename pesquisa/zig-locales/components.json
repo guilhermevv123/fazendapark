@@ -1,0 +1,1144 @@
+{
+  "datepicker": {
+    "startDate": "Data de Início",
+    "startDate2": "Data Inicial",
+    "endDate": "Data de Término",
+    "endDate2": "Data Final",
+    "startDateLabel": "Data Início",
+    "timeCaption": "Hora",
+    "todayButton": "Hoje",
+    "selectDate": "Selecione a data",
+    "date": "Data",
+    "expirationDate": "Data de Expiração",
+    "searchByDate": "Pesquisar por Data",
+    "startDatePlaceholder": "DD/MM/AAAA"
+  },
+  "upload-image": {
+    "description": "A dimensão recomendada é de",
+    "placeholder": "Procurar...",
+    "search": "Buscar"
+  },
+  "advanced": {
+    "form": {
+      "header": {
+        "title": "3. Negociação financeira.",
+        "text": "Taxas administrativas"
+      },
+      "card": {
+        "header": "Negociação financeira.",
+        "section": {
+          "ticket": "Negociação Ingresso",
+          "a-and-b": "Negociação A&B",
+          "withdrawal": "Configurações de Saque",
+          "generic": "Custos Genéricos - Técnicos, Serviços e Taxas POS (máquina de cartão) - custos aplicados para ingresso e A&B em vendas por POS"
+        },
+        "field-label": {
+          "convenience-fee": "Taxa Conveniência (%)",
+          "minimum-convenience-fee": "Taxa Mínima de Conveniência ({{symbol}})",
+          "credit-receiving-form": "Forma de recebimento crédito",
+          "print-cost": "Custo por Impressão ({{symbol}})",
+          "cancellation-cost": "Custo por Cancelamento ({{symbol}})",
+          "withdrawal-possibility": "Possibilidade de saque dos valores",
+          "enable-withdrawal": "Permitir saque antes do evento",
+          "rebate-rate": "Rebaite (%)",
+          "withdrawal-cost": "Custo por saque ({{symbol}})",
+          "select-payment-plan": "Selecione o plano de Pagamento",
+          "daily-withdrawal-limit": "Limite de saque diário ({{symbol}})",
+          "courtesy-print-cost": "Custo por cortesia impressa ({{symbol}})",
+          "monthly-machine-quota": "Franquia mínima mensal por máquina ({{symbol}})",
+          "standalone-smart-pos-cost": "Custo SmartPOS avulso ({{symbol}})",
+          "smart-pos--monthly-fee": "Custo SmartPOS mensalidade ({{symbol}})",
+          "bucket-rental-cost": "Custo locação baldes ({{symbol}})",
+          "backpack-rental-cost": "Custo locação mochila caixa móvel ({{symbol}})",
+          "debit-rate": "Taxa Débito (%)",
+          "pdv-administration-fee": "Taxa Administrativa PDV (%)",
+          "credit-rate": "Taxa Crédito (%)",
+          "pix-rate": "Taxa PIX (%)",
+          "credit-receiving-method": "Forma de recebimento crédito",
+          "anticipation-rate": "Custo de Antecipação (%)",
+          "technician-daily-cost": "Diária técnico ({{symbol}})",
+          "processingFee": "Taxa de processamento",
+          "cashWithdrawal": {
+            "label": "Liberar valor retido",
+            "description": "Disponibiliza o valor retido para transferir",
+            "modalTitle": "Atenção: não é possível reverter essa ação",
+            "modalDescription": "Ao ativar a liberação do valor retido, essa configuração será permanente e não poderá ser alterada depois. Confirme se deseja continuar.",
+            "confirm": "Confirmar",
+            "helper": "Uma vez habilitada, esta opção não poderá ser desativada."
+          }
+        },
+        "button": {
+          "save": "Salvar alterações",
+          "next": "Prosseguir"
+        },
+        "tip": {
+          "anticipation-rate": "Taxa de antecipação para recebimento das vendas em Cartão de Crédito ou PicPay para vendas em POS (máquina de cartão)",
+          "ticket-anticipation-rate": "Taxa de antecipação para recebimento das vendas em Cartão de Crédito ou PicPay para vendas online",
+          "withdrawal-possibility": "Permissão para transferir valores antes do evento ocorrer (por padrão serão 2 dias após desde que haja validação de pelo menos metade dos ingressos)",
+          "cashwithdrawal": "Ao habilitar, o 'valor retido' é zerado e integralmente transferido para o valor 'disponível para transferir'."
+        }
+      }
+    },
+    "validation-errors": {
+      "fintxadmon-required": "A taxa mínima de conveniência é obrigatória.",
+      "fintxmincompra-required": "A taxa mínima de conveniência é obrigatória.",
+      "fintipoCredito-required": "A forma de recebimento crédito é obrigatória.",
+      "cusAntecipacao-required": "O custo de antecipação é obrigatório.",
+      "fincustimpProd-required": "O custo por impressão é obrigatório.",
+      "fincustimpCanc-required": "O custo por cancelamento é obrigatório.",
+      "cusunitarioposavulso-required": "O custo SmartPOS avulso é obrigatório.",
+      "custmensalposavulso-required": "O custo SmartPOS mensalidade é obrigatório.",
+      "custunitariobalde-required": "O custo de locação de baldes é obrigatório.",
+      "custunitariomochilas-required": "O custo de locação de mochilas é obrigatório.",
+      "fincustoDebito-required": "A taxa de débito é obrigatória.",
+      "fincustoCredito-required": "A taxa de crédito é obrigatória.",
+      "custxpix-required": "A taxa de PIX é obrigatória.",
+      "finrecebimentocredito-required": "A forma de recebimento crédito é obrigatória novamente.",
+      "fincustoAntec-required": "O custo de antecipação é obrigatório novamente.",
+      "cusdiariatecnico-required": "O custo da diária do técnico é obrigatório.",
+      "fintxrebaite-required": "A taxa de rebaite é obrigatória.",
+      "cusSaque-required": "O custo por saque é obrigatório.",
+      "finpossibilidadesaque-required": "A possibilidade de saque valores é obrigatório.",
+      "finlimitesaque-required": "O limite de saque diário é obrigatório.",
+      "fincustimpCort-required": "O custo por cortesia é obrigatório.",
+      "finfranquiamensalmaqingresso-required": "A franquia mensal por máquina é obrigatória.",
+      "paymentPlan-required": "O plano de pagamento é obrigatório.",
+      "fintxprocessamento-required": "A taxa de processamento é obrigatória",
+      "fintxprocessamento-max": "O valor deve ser menor ou igual a {{max-value}}."
+    }
+  },
+  "subheader": {
+    "tickets": "Ingressos",
+    "courtesies": "Cortesias",
+    "passport": "Passaportes / Grupos",
+    "promo": "Códigos promocionais",
+    "promoters": "Promoters / Divulgadores",
+    "sortSectors": "Ordenar Setores",
+    "locators": "Localizadores"
+  },
+  "tickets": {
+    "sector-table": {
+      "alert": {
+        "remove": {
+          "title": "Excluir setor {{sector}} do seu evento?",
+          "text": "Ao confirmar, todos os ingressos e lotes vinculados ao setor também serão removidos. Essa ação não pode ser desfeita.",
+          "confirm": "Excluir setor",
+          "cancel": "Cancelar",
+          "button-text": "Ok",
+          "success": {
+            "title": "Setor excluído com sucesso!"
+          },
+          "error": {
+            "RESTRICTION_WITH_ERROR": "Não foi possível excluir o setor, pois já existem ingressos vendidos.",
+            "ER_ROW_IS_REFERENCED_2": "Não foi possível excluir o setor, pois ele está sendo utilizado no sistema.",
+            "generic": "Ocorreu um erro interno, tente novamente."
+          }
+        }
+      },
+      "loading": "Aguarde",
+      "add-lot-button": "Criar novo lote",
+      "add-lot-and-ticket-button": "Criar lote e ingressos",
+      "add-lot-passport": "Criar lote",
+      "text-bar": {
+        "lot": "Lote",
+        "value": "Valor",
+        "sold-plus-pending": "Vendido + Pendente",
+        "available": "Disponível",
+        "availability": "Disponibilidade",
+        "actions": "Ações",
+        "linkedSessions": "Sessões vinculadas"
+      },
+      "pending-lot": "Nenhum lote encontrado",
+      "blockDescription": "Não é possível excluir porque o setor já está vinculado a uma venda, mesmo que não finalizada."
+    },
+    "lot-table": {
+      "alert": {
+        "remove": "Lote {{name}} excluído com sucesso!",
+        "button-text": "Ok",
+        "error": {
+          "title": "Falha",
+          "restriction": "Não foi possível remover o lote, pois já existem ingressos vendidos.",
+          "remove": "Ocorreu um erro ao tentar excluir o lote, tente novamente.",
+          "load": "Erro ao carregar lotes, tente novamente!."
+        }
+      },
+      "toast": {
+        "update-lot": {
+          "success": "Alterado",
+          "error": "Ocorreu um problema, tente novamente!"
+        },
+        "update-ticket": {
+          "success": "Ingresso Alterado!",
+          "error": "Ocorreu um problema, tente novamente!"
+        }
+      },
+      "visible": "visível",
+      "invisible": "invisível",
+      "noTicketFound": "Nenhum ingresso encontrado",
+      "deletion": {
+        "sessionAlertTitle": "Ao excluir, o lote será deletado de todas as sessões",
+        "sessionAlertDescription": "Ao confirmar, o lote e seus ingressos serão excluídos em todas as sessões do evento. Essa ação é irreversível. Deseja continuar?",
+        "confirmButton": "Excluir lote",
+        "blockDescription": "Não é possível excluir porque o lote já está vinculado a uma venda, mesmo que não finalizada.",
+        "cancelButton": "Cancelar",
+        "sessionAlertDescriptionWithDate": "Ao confirmar, o lote e seus ingressos serão excluídos da sessão de <strong>{{sessionDate}}</strong>. Essa ação é irreversível. Deseja continuar?"
+      }
+    },
+    "modal-sector": {
+      "editTitle": "Editar Setor",
+      "createTitle": "Criar novo setor",
+      "validation-errors": {
+        "name-required": "O nome é obrigatório!",
+        "name-unique": "Esse nome de setor já existe",
+        "genericSectorError": "Algo deu errado aqui!",
+        "required": "Campo obrigatório",
+        "maxSalesPerClient": "O valor não pode ser superior ao limite geral do evento ({{eventSalesPerClient}}).",
+        "minSalesPerClient": "Quantidade mínima: 1",
+        "salesPerClientRequired": "Quantidade por cliente é obrigatória quando a limitação está ativada"
+      },
+      "alert": {
+        "button-text": "Ok",
+        "success": {
+          "title": "Sucesso!",
+          "update-text": "O setor foi editado!",
+          "add-text": "O setor foi cadastrado!"
+        },
+        "error": {
+          "edit": {
+            "title": "Erro!",
+            "text": "Ocorreu um erro ao editar o setor. Por favor, tente novamente."
+          },
+          "add": {
+            "title": "Error {{error}}",
+            "text": "Ocorreu um erro ao criar o setor. Por favor, tente novamente."
+          }
+        }
+      },
+      "label": {
+        "name": "Nome",
+        "category": "Categoria",
+        "limit_purchase_per_client": "Limitar compra por cliente no setor",
+        "sector_sales_per_client": "Quantidade por cliente",
+        "sector_sales_per_client_tip": "Configurações específicas de ingresso podem sobrepor essa regra"
+      },
+      "placeholder": {
+        "category": "Categorias",
+        "name": "Exemplo: camarote",
+        "sector_sales_per_client": "Quantidade por cliente"
+      },
+      "button": {
+        "seats-map": "Mapa de assentos",
+        "save": "Salvar",
+        "create": "Criar setor",
+        "edit": "Editar setor"
+      }
+    },
+    "modal-lot": {
+      "operation": {
+        "label": {
+          "edit": "EDITAR",
+          "create": "CRIAR"
+        },
+        "alter": "Alterar",
+        "create": "Criar"
+      },
+      "alert": {
+        "button-text": "Ok",
+        "text": "Alterações efetuadas!",
+        "patch": "Lote atualizado com sucesso!",
+        "update": "Lote alterado com sucesso!",
+        "operation": "Lote {{operation}} com sucesso!",
+        "error": {
+          "load-tickets": {
+            "title": "Error {{error}}!",
+            "text": "Não foi possível carregar os ingressos, tente novamente."
+          },
+          "load-channels": "Nao foi possível carregar os canais de venda"
+        },
+        "createLot": {
+          "success": "Lote criado com sucesso!",
+          "fail": "Ocorreu um erro ao criar o lote, tente novamente!"
+        }
+      },
+      "error": {
+        "name-unique": "Já existe um lote com esse nome",
+        "name-required": "Nome do lote é obrigatório!",
+        "valueRequired": "Valor do lote é obrigatório!",
+        "lotMinValue": "O valor do lote deve ser um valor maior ou igual a 0",
+        "patch": "Erro ao atualizar o lote!",
+        "lot-and-ticket": "Erro ao alterar Lote e Ingresso!",
+        "lot": "Erro ao alterar Lote!",
+        "ticket": "Erro ao alterar Ingresso!",
+        "min-tickets": "Pelo menos um ingresso é necessário!",
+        "selected-fields": "Verifique os campos quantidade e preço dos ingressos selecionados!",
+        "lot-operation": "Erro ao {{operation}} o lote!",
+        "ticketQuantityRequired": "A quantidade de ingressos é obrigatória!",
+        "ticketMinQuantity": "A quantidade de ingressos deve ser um número maior ou igual a 0!",
+        "fillThisField": "Preencha este campo.",
+        "min-purchase-required": "Campo mínimo por compra é obrigatório!",
+        "max-purchase-required": "Campo máximo por compra é obrigatório!"
+      },
+      "header": {
+        "edit": "Editar lote",
+        "passport": "{{operationLabel}} LOTE"
+      },
+      "info-text": {
+        "lot": "Informações do Lote",
+        "tickets": "Ingressos relacionados"
+      },
+      "label": {
+        "name": "Nome do lote",
+        "expire": "Data de expiração",
+        "available": "Quantidade disponivel",
+        "sell-value": "Valor de venda",
+        "min-buy": "Mínimo por compra",
+        "max-buy": "Máximo por compra",
+        "channels": "Canais de venda",
+        "limit": "Limitar por CPF?",
+        "limit-quantity": "Máximo por CPF",
+        "description": "Descrição",
+        "quantity": "Quantidade",
+        "price": "Preço"
+      },
+      "placeholder": {
+        "expiration": "Data de expiração",
+        "channels": "Selecione os canais de venda",
+        "tickets": "Selecione os ingressos do lote"
+      },
+      "limited": "Limitado",
+      "unlimited": "Não limitado",
+      "button": {
+        "remove": "Remover",
+        "save": "Salvar"
+      },
+      "createModal": {
+        "header": "Criar novo Lote",
+        "label": {
+          "name": "Nome",
+          "quantityLot": "Quantidade para venda",
+          "valueLot": "Valor normal do ingresso",
+          "lotExpiration": "Data de vencimento"
+        },
+        "placeholder": {
+          "lotExpiration": "Data de expiração"
+        }
+      }
+    },
+    "modal-ticket-type": {
+      "validation-error": {
+        "name-required": "Preencha um nome para o tipo do ingresso!",
+        "quantity-required": "Insira a quantidade de ingressos disponíveis para este tipo!",
+        "quantity-available": "A quantidade de ingressos deve ser menor ou igual ao total disponível do lote!",
+        "percentage-required": "Insira o valor de desconto em porcentagem!",
+        "percentage-valid-value": "Insira um valor válido para o desconto!",
+        "limit-purchase-required": "Quando o limite de compra está ativado, é necessário informar a quantidade por cliente.",
+        "limit-purchase-exceeds": "A quantidade por cliente não pode ser superior a {{limit}} devido a regras de limite aplicadas.",
+        "limit-purchase-exceeds-sector": "O valor não pode ser superior ao limitado do setor ({{sectorSalesPerClient}}).",
+        "limit-purchase-exceeds-event": "O valor não pode ser superior ao limite geral do evento ({{eventSalesPerClient}})."
+      },
+      "alert": {
+        "button-text": "Ok",
+        "title": "Ingresso criado com sucesso!",
+        "error": "Ocorreu um erro ao salvar o ingresso."
+      },
+      "header": "Criar tipo de ingresso",
+      "info-text": "Informações do Tipo de Ingresso",
+      "label": {
+        "name": "Nome do tipo de ingresso",
+        "quantity": "Quantidade disponível",
+        "percentage": "Porcentagem de desconto",
+        "quantity-per-client": "Quantidade por cliente",
+        "limit-purchase-per-client": "Limitar compra deste ingresso por cliente",
+        "sector_sales_per_client_tip": "O valor definido aqui sobrepõe outras regras de limite criadas."
+      },
+      "placeholder": {
+        "name": "Insira o nome do tipo de ingresso",
+        "quantity": "Insira a quantidade de ingressos"
+      },
+      "save-button": "Salvar"
+    },
+    "modal-link": {
+      "alert": {
+        "button-text": "Ok",
+        "update": {
+          "title": "Atualizado!",
+          "text": "Alterações efetuadas!",
+          "error": {
+            "title": "ERRO! {{error}}",
+            "text": "ERRO, tente novamente!"
+          }
+        },
+        "error": {
+          "title": "Error {{error}}!",
+          "text": "Não foi possível carregar comissários, tente novamente."
+        }
+      },
+      "loading": "Carregando Promoters / Divulgadores...",
+      "header": "Vincular Ingresso ao Promoter / Divulgador",
+      "label": {
+        "name": "Nome",
+        "limit": "Limite de  Venda"
+      },
+      "button": "Associar"
+    },
+    "modal-public": {
+      "header": "Ajuda ao Usuário",
+      "large-text": "Ops! Não foi possível.",
+      "info-text": {
+        "gray": "Não foi possível atrelar seu ingresso a um grupo de pessoas ou Promoter / Divulgador. Para atrelar, primeiro",
+        "blue": "deixe seu ingresso privado."
+      },
+      "medium-text": "Deseja tornar o ingresso Privado?",
+      "button": {
+        "confirm": "Sim",
+        "cancel": "Não"
+      }
+    },
+    "ticketsTable": {
+      "alert": {
+        "text": "Ative o lote para poder alterar os ingressos!"
+      },
+      "toast": {
+        "ticketUpdated": "Ingresso Alterado!",
+        "sectorLotUpdated": "Alterado!",
+        "ticketTypeDeleted": "Tipo de ingresso excluído com sucesso.",
+        "ticketOverQnt": "Quantidade de ingressos excede o número de ingressos dispoíveis!",
+        "ticketUnderQnt": "Quantidade de ingressos menor que o número de ingressos vendidos!",
+        "ticketInvalidQnt": "Quantidade de ingressos inválida!",
+        "ticketTypeDeleteError": "Não é possível excluir um tipo de ingresso com ingressos vendidos"
+      },
+      "deletion": {
+        "sessionAlertTitle": "Ao excluir, o ingresso será deletado dessa sessão",
+        "alertTitle": "Excluir ingresso",
+        "sessionAlertDescription": " Ao confirmar, os ingressos serão excluidos em todas as sessões do evento. Essa ação é irreversível. Deseja continuar?",
+        "sessionAlertDescriptionWithDate": "Ao confirmar, o ingresso será excluído da sessão de <strong>{{sessionDate}}</strong>. Essa ação é irreversível. Deseja continuar?",
+        "alertDescription": "Ao confirmar, a ação não poderá ser desfeita. Deseja mesmo excluir o ingresso",
+        "confirmButton": "Excluir ingresso",
+        "error": "Erro deletando ingresso",
+        "blockDescription": "Não é possível excluir porque o ingresso já está vinculado a uma venda, mesmo que não finalizada.",
+        "cancelButton": "Cancelar"
+      },
+      "available": "disponível",
+      "unavailable": "indisponível",
+      "activeLot": "Ative o lote para poder alterar os ingressos!",
+      "changedSuccessfully": "Alterado!",
+      "deletedSuccessfully": "Ingresso excluído com sucesso!",
+      "deletedSuccessfullyDescription": "O ingresso {{name}} foi removido.",
+      "errorDeletingTicket": "Não é possível excluir um tipo de ingresso com ingressos vendidos",
+      "ticketChangedSuccessfully": "Ingresso Alterado!",
+      "ticketChangedError": "Erro ao alterar o ingresso. Tente novamente.",
+      "ticketQtyExceedsAvailable": "Quantidade de ingressos excede o número de ingressos dispoíveis!",
+      "ticketQtyLessThanSold": "Quantidade de ingressos menor que o número de ingressos vendidos!",
+      "invalidTicketQty": "Quantidade de ingressos inválida!",
+      "closeAlert": "Fechar"
+    }
+  },
+  "pagination": {
+    "results": "Resultados por Página",
+    "displaying": "Exibindo {{currentPageTotal}} de {{total}}",
+    "newDisplaying": "de {{total}}",
+    "newPage": "Página",
+    "newTotalPages": "de {{totalPages}}",
+    "page": "Página {{currentPage}} de {{totalPages}}"
+  },
+  "header": {
+    "hello": "Olá",
+    "modalOptions": {
+      "profile": "Perfil",
+      "userQrcode": "QR Code do usuário",
+      "language": "Idioma: {{currentLang}}",
+      "terms": "Termos de uso",
+      "support": "Suporte",
+      "logout": "Sair da conta"
+    },
+    "modalLanguage": {
+      "title": "Selecione o idioma",
+      "language1": "Inglês (US)",
+      "language2": "Português (BR)",
+      "language3": "Espanhol (ES)"
+    },
+    "buttons": {
+      "myQrcodeText": "Meu Qrcode"
+    },
+    "modalQrcode": {
+      "text": "Este é o Qrcode utilizado para a operação do seu evento",
+      "noQrcodeText": "              Seu QRCode não foi gerado!\n",
+      "generateQrcode": "Gerar Qrcode",
+      "loading": "Aguarde! gerando QRCode..."
+    },
+    "qrcode": "Qrcode"
+  },
+  "breadcrumb": {
+    "talkWithSupport": "Fale com o suporte",
+    "dashboard": "Dashboard",
+    "events": "Eventos",
+    "sales": "Vendas",
+    "details": "Detalhes",
+    "tickets": "Ingressos",
+    "checkin": "Check-in",
+    "users": "Usuários",
+    "profile": "Perfil",
+    "auditActivities": "Auditoria de Atividades",
+    "organizations": "Organizações",
+    "finacialDashboard": "Painel Financeiro - Dashboard",
+    "finacialTransfers": "Painel Financeiro - Transferências",
+    "finacialPlans": "Painel Financeiro - Planos de Pagamento",
+    "equipments": "Equipamentos",
+    "equipmentType": "Equipamentos > Categorias",
+    "products": "Produtos",
+    "establishments": "Estabelecimentos",
+    "establishment": "Estabelecimento",
+    "organization": "Organização",
+    "user": "Usuário",
+    "faqs": "Faqs",
+    "configurations": "Configurações",
+    "eventCategories": "Categorias de eventos",
+    "nomenclatures": "Nomenclaturas",
+    "yourAccount": "Sua conta",
+    "eventPanel": "Painel do Evento",
+    "participants": "Participantes",
+    "sortingOfSectors": "Ordenação de Setores",
+    "passports": "Passaportes",
+    "promotionalCodes": "Códigos Promocionais",
+    "commissioners": "Comissários",
+    "locators": "Localizadores",
+    "courtesies": "Cortesias",
+    "commissionerSales": "Vendas de Comissários",
+    "seatsMap": "Mapa de Assentos",
+    "integrations": "Integrações",
+    "nominalTransfers": "Transferências Nominais",
+    "dataInsights": "Data Insights",
+    "eventEdit": "Editar Evento",
+    "marketing": "Marketing",
+    "financialBordero": "Borderô",
+    "reports": "Relatórios",
+    "userEdit": "Editar",
+    "restrictedAccess": "Acesso restrito",
+    "permission": "Sua permissão para esse evento é limitada ao perfil de acesso",
+    "closings": "Fechamento Operacional"
+  },
+  "buttonSpinner": {
+    "loading": "Carregando..."
+  },
+  "imageInstructionsModal": {
+    "title": "Crie imagens atrativas para seus eventos",
+    "clearInfoTitle": "Informações Claras",
+    "clearInfoDesc": "Certifique-se de que o texto (nome do evento, data, local) seja legível e visível em diferentes tamanhos.",
+    "safeAreaTitle": "Área Segura",
+    "safeAreaDesc": "Evite que informações importantes sem cortadas. Certifique-se de que o formato esteja de acordo com o informado.",
+    "multiUseTitle": "Uso em Vários Locais",
+    "multiUseDesc": "A imagem será usada em diversos formatos no marketplace. Ela deve ser impactante mesmo em tamanhos menores.",
+    "textAndImageTitle": "Texto e Imagem",
+    "textAndImageDesc": "Menos texto, mais impacto visual. A imagem deve representar bem o evento.",
+    "concludeButton": "Concluir"
+  },
+  "dropzone": {
+    "title-completition": "ou selecione os arquivos",
+    "file-type": "Tipo de arquivo",
+    "fileTypeDescription": "Tipo de arquivo .XLS",
+    "maxSize": "de até {{maxSize}}",
+    "fileLoading": "Carregando arquivo...",
+    "fileError": "Erro ao carregar arquivo",
+    "fileSelectOrDrag": "Selecione ou arraste a planilha aqui",
+    "fileRequired": "Selecione um arquivo"
+  },
+  "dialogModal": {
+    "cancelButton": "Cancelar"
+  },
+  "inputTextarea": {
+    "maxLength": "Até {{maxLength}} caracteres"
+  },
+  "imageDropzone": {
+    "title": "Clique ou arraste para adicionar a imagem",
+    "size": "Tamanho 700 x 280px",
+    "formats": "Formatos aceitos: JPG, PNG e WebP até 700KB",
+    "required": "É necessário adicionar uma imagem.",
+    "errors": {
+      "file-too-large": "A imagem excede o tamanho permitido (700 KB).",
+      "file-invalid-type": "Tipo de arquivo inválido. Aceitamos apenas imagens JPG, PNG ou WEBP.",
+      "default": "Erro ao carregar a imagem. Por favor, tente novamente."
+    }
+  },
+  "inputWithSelect": {
+    "percent": "Percentual",
+    "fixed": "Fixo"
+  },
+  "inputSelect": {
+    "noOptions": "Nenhuma opção disponível"
+  },
+  "multiSelect": {
+    "empty": "Nenhuma opção disponível",
+    "loading": "Carregando..."
+  },
+  "form": {
+    "required": "Este campo é obrigatório",
+    "moreThan0": "O valor deve ser maior que 0",
+    "integer": "O valor deve ser um número inteiro",
+    "typeError": "Informe um número válido",
+    "requiredFile": "Selecione um arquivo",
+    "max8": "O valor deve ter no máximo 8 caracteres",
+    "max2000": "O valor deve ser menor ou igual a 2000"
+  },
+  "ordersSearchBar": {
+    "search": {
+      "placeholder": "Buscar por CPF, email, código da venda ou do ingresso"
+    },
+    "events": {
+      "allLabel": "Todos eventos",
+      "placeholder": "Filtrar por eventos",
+      "searchPlaceholder": "Busque um evento",
+      "emptyMessage": "Nenhum evento encontrado",
+      "loadingMessage": "Buscando eventos..."
+    },
+    "statuses": {
+      "allLabel": "Todos status",
+      "placeholder": "Filtrar por status",
+      "options": {
+        "refunded": "Estornado",
+        "partially_refunded": "Estorno parcial",
+        "pending_refund": "Estorno pendente",
+        "finalized": "Finalizado",
+        "pending": "Pendente",
+        "charged_back": "Chargeback",
+        "acquirer_error": "Erro Adquirência",
+        "expired": "Expirado",
+        "pending_retry": "Tentativa pendente",
+        "pre_authorized": "Pré-autorizado",
+        "discarded": "Descartado",
+        "reversed": "Em reversão",
+        "suspicious": "Suspeito",
+        "held": "Em retenção",
+        "fraud": "Fraude",
+        "failed": "Falhou",
+        "canceled": "Cancelado",
+        "dispute": "Disputa",
+        "reverted": "Revertido"
+      }
+    },
+    "date": {
+      "placeholder": "Filtrar por data",
+      "labels": {
+        "apply": "Aplicar",
+        "cancel": "Cancelar",
+        "selectPeriod": "Selecione o período"
+      }
+    },
+    "export": {
+      "label": "Exportar para Excel",
+      "fileName": "pedidos",
+      "sheetName": "Pedidos",
+      "headers": {
+        "email": "E-mail"
+      },
+      "errors": {
+        "empty": "Nenhum pedido encontrado para os filtros selecionados.",
+        "generic": "Não foi possível exportar a planilha. Tente novamente em alguns instantes."
+      }
+    }
+  },
+  "orderTable": {
+    "columns": {
+      "buyer": "Comprador",
+      "tokenTicket": "Cód. da compra",
+      "event": "Evento",
+      "paymentMethod": "Meio de pagamento",
+      "createdAt": "Data",
+      "status": "Status",
+      "total": "Total"
+    },
+    "paymentMethods": {
+      "credit_card": "Cartão de crédito",
+      "debit_card": "Cartão de débito",
+      "pix": "Pix",
+      "cash": "Dinheiro",
+      "boleto": "Boleto",
+      "courtesy": "Cortesia",
+      "picpay": "PicPay",
+      "apple_pay": "Apple Pay",
+      "google_pay": "Google Pay",
+      "click_to_pay": "Click to Pay",
+      "not_completed": "Não concluído"
+    },
+    "statuses": {
+      "finalized": "Finalizada",
+      "pending": "Pendente",
+      "pending_retry": "Aguardando retry",
+      "pending_refund": "Estorno pendente",
+      "pre_authorized": "Pré-autorizada",
+      "held": "Retida",
+      "acquirer_error": "Erro do adquirente",
+      "suspicious": "Suspeita",
+      "fraud": "Fraude",
+      "failed": "Falhou",
+      "dispute": "Em disputa",
+      "charged_back": "Chargeback",
+      "refunded": "Estornada",
+      "partially_refunded": "Estornada parcialmente",
+      "reversed": "Revertida",
+      "reverted": "Revertida",
+      "discarded": "Descartada",
+      "expired": "Expirada",
+      "canceled": "Cancelada"
+    },
+    "empty": {
+      "title": "Nenhum resultado foi encontrado para essa busca",
+      "description": "Verifique se a busca está correta ou ajuste os filtros."
+    },
+    "error": {
+      "title": "Erro ao carregar pedidos",
+      "description": "Tente novamente em alguns instantes."
+    }
+  },
+  "sessionSelect": {
+    "triggerPlaceholder": "Filtrar por sessões",
+    "sessionCountOne": "{{count}} sessão",
+    "sessionCountMany": "{{count}} sessões",
+    "triggerSummaryDay": "{{sessions}} · {{day}}",
+    "triggerSummaryDays": "{{sessions}} · {{days}} dias",
+    "searchPlaceholder": "Buscar sessão pelo dia",
+    "prevMonth": "Mês anterior",
+    "nextMonth": "Próximo mês",
+    "clearSelection": "Limpar seleção",
+    "daySelectedOne": "{{count}} selecionada",
+    "daySelectedMany": "{{count}} selecionadas",
+    "noSessionsThisDay": "Sem sessões nesse dia.",
+    "allSessions": "Todas as sessões",
+    "noSessionsFound": "Nenhuma sessão encontrada.",
+    "emptyHint": "Clique em um dia no calendário para ver as sessões disponíveis.",
+    "footer": "{{count}} de {{total}} sessões selecionadas",
+    "cancel": "Cancelar",
+    "apply": "Aplicar",
+    "modalTitle": "Selecionar sessões",
+    "compactTitle": "Selecione as sessões"
+  },
+  "orderDetailsDrawer": {
+    "title": "Detalhes da Compra",
+    "close": "Fechar",
+    "copied": "Copiado!",
+    "header": {
+      "code": "Código da compra",
+      "createdAt": "Data da compra"
+    },
+    "tabs": {
+      "details": "Detalhes da compra",
+      "tickets": "Ingressos do pedido ({{count}})",
+      "transactions": "Histórico de transações",
+      "comments": "Comentários"
+    },
+    "refund": {
+      "trigger": "Estornar",
+      "types": {
+        "partial": "Parcial",
+        "full": "Total",
+        "withoutTaxes": "Sem Taxas"
+      },
+      "disabledTooltip": {
+        "alreadyRefunded": "A solicitação de estorno já foi realizada.",
+        "notFinalized": "Apenas compras finalizadas podem ser estornadas"
+      },
+      "modal": {
+        "titleValue": "Tem certeza que deseja confirmar o estorno de {{value}}?",
+        "titlePartial": "Estorno parcial",
+        "description": "Essa ação é irreversível e necessita da sua senha para prosseguir.",
+        "passwordLabel": "Insira sua senha",
+        "confirm": "Confirmar estorno",
+        "cancel": "Cancelar",
+        "amount": {
+          "inputLabel": "Valor do estorno",
+          "errorMin": "Informe um valor maior que zero",
+          "errorMax": "O valor não pode ser maior que o total da compra"
+        }
+      },
+      "toast": {
+        "successTitle": "Estorno solicitado",
+        "successBody": "O estorno da compra foi solicitado com sucesso.",
+        "errorTitle": "Erro ao solicitar o estorno"
+      },
+      "errors": {
+        "wrong_password": "Senha incorreta.",
+        "invalid_amount": "Valor de estorno inválido.",
+        "order_not_refundable": "Esta compra não pode ser estornada.",
+        "gateway_failure": "Falha no provedor de pagamento. Tente novamente.",
+        "unprocessable_entity": "Não foi possível processar o estorno.",
+        "generic": "Ocorreu um erro ao solicitar o estorno. Tente novamente."
+      }
+    },
+    "statusChange": {
+      "title": "Mudança de status da compra #{{code}}",
+      "body": "Você confirma a alteração do status da compra no valor de {{value}} de <strong>{{from}}</strong> para <strong>{{to}}</strong>?",
+      "cancel": "Cancelar",
+      "confirm": "Alterar status",
+      "toast": {
+        "successTitle": "O status da compra foi alterado",
+        "successBody": "A compra mudou de {{from}} para {{to}}.",
+        "errorTitle": "Não foi possível alterar o status",
+        "errorBody": "Ocorreu um erro ao alterar o status da compra. Tente novamente."
+      }
+    },
+    "error": {
+      "title": "Erro ao carregar a compra",
+      "description": "Tente novamente em alguns instantes."
+    },
+    "detailsTab": {
+      "sections": {
+        "purchaseInfo": "Informações da compra",
+        "buyer": "Sobre o Comprador",
+        "event": "Mais Informações do Evento"
+      },
+      "fields": {
+        "total": "Total",
+        "paidVia": "Pago via",
+        "saleOrigin": "Origem da venda",
+        "convenienceFee": "Taxa de Conveniência",
+        "processingFee": "Taxa de processamento",
+        "discount": "Desconto",
+        "promoter": "Promoter",
+        "cardNumber": "Nº do cartão",
+        "installments": "Parcelamento",
+        "installmentFee": "Taxa de parcelamento",
+        "ticketInsurance": "Seguro Ingresso",
+        "insuranceFee": "Taxa do seguro",
+        "producerValue": "Valor do produtor",
+        "buyer": "Comprador",
+        "email": "E-mail",
+        "cpf": "CPF",
+        "phone": "Telefone",
+        "zigAppRegistration": "Cadastro no Zig App",
+        "address": "Endereço",
+        "event": "Evento",
+        "eventStatus": "Status",
+        "salesStart": "Início das vendas",
+        "category": "Categoria",
+        "organization": "Organização",
+        "realizationDate": "Data de Realização"
+      },
+      "channels": {
+        "app": "Zig App",
+        "site": "Marketplace",
+        "pos": "PDV",
+        "zigApp": "Zig App",
+        "newSite": "Marketplace",
+        "panel": "Painel"
+      },
+      "feeMode": {
+        "absorbed": "Absorvida",
+        "passedOn": "Repassada"
+      },
+      "installmentsCount_one": "{{count}} vez",
+      "installmentsCount_other": "{{count}} vezes",
+      "insurance": {
+        "contracted": "Contratado",
+        "none": "Não contratado"
+      },
+      "zigApp": {
+        "registered": "Cadastrado",
+        "notRegistered": "Não cadastrado"
+      },
+      "eventStatus": {
+        "ativo": "Ativo",
+        "cancelado": "Cancelado",
+        "encerrado": "Encerrado",
+        "adiado": "Adiado",
+        "offline": "Offline",
+        "draft": "Rascunho"
+      },
+      "refundInfo": {
+        "source": "Origem da solicitação de estorno",
+        "requestedAt": "Data da solicitação do estorno",
+        "requester": "Solicitado por"
+      }
+    },
+    "ticketsTab": {
+      "title": "Ingressos do pedido ({{count}})",
+      "actions": "Ações do ingresso",
+      "menu": {
+        "resend": "Reenviar",
+        "download": "Baixar",
+        "edit": "Editar",
+        "viewTransfer": "Ver transferência"
+      },
+      "bulkActions": {
+        "resend": "Reenviar ingressos",
+        "downloadAll": "Baixar todos",
+        "resendToast": {
+          "success": "Reenvio iniciado, você será notificado quando concluir",
+          "errorTitle": "Erro ao reenviar os ingressos"
+        },
+        "resendErrors": {
+          "dynamic_qr_code_event": "Este evento não permite reenvio de ingressos.",
+          "mailing_service_unavailable": "Serviço de envio indisponível no momento. Tente novamente.",
+          "not_found": "Pedido não encontrado.",
+          "generic": "Não foi possível reenviar os ingressos. Tente novamente."
+        },
+        "downloadToast": {
+          "empty": "Este evento não permite o download dos ingressos.",
+          "error": "Não foi possível baixar os ingressos. Tente novamente."
+        }
+      },
+      "singleSession": "Sessão única",
+      "transferredTo": "Transferido para esse participante",
+      "checkin": {
+        "unavailable": "Check-in não disponível",
+        "pending": "Check-in não realizado",
+        "done": "Check-in realizado"
+      },
+      "editParticipant": {
+        "title": "Editar participante",
+        "warning": "Ao alterar, as informações do participante serão atualizadas no ingresso.",
+        "fields": {
+          "firstName": "Nome",
+          "lastName": "Sobrenome",
+          "email": "E-mail"
+        },
+        "save": "Salvar",
+        "cancel": "Cancelar",
+        "toast": {
+          "success": "Participante atualizado com sucesso.",
+          "errorTitle": "Erro ao atualizar o participante",
+          "errorBody": "Não foi possível atualizar o participante. Tente novamente."
+        }
+      }
+    },
+    "transactionsTab": {
+      "title": "Histórico de transações",
+      "header": {
+        "copyTransactionId": "ID da transação",
+        "viewOnYuno": "Ver na Yuno"
+      },
+      "empty": "Sem tentativas de pagamento registradas",
+      "error": {
+        "title": "Não foi possível carregar o histórico",
+        "description": "Tente novamente em instantes.",
+        "retry": "Tentar novamente"
+      },
+      "fields": {
+        "nsu": "NSU",
+        "status": "Status",
+        "antifraudResponse": "Resposta do antifraude",
+        "score": "Score",
+        "authCode": "Código de Autorização",
+        "cardHolder": "Titular do cartão",
+        "cardNumber": "Número cartão",
+        "cardBrand": "Bandeira"
+      },
+      "labels": {
+        "action": {
+          "payment": "Pagamento",
+          "refund": "Estornado",
+          "chargeback": "Chargeback",
+          "dispute": "Em disputa"
+        },
+        "status": {
+          "paid": "Pago",
+          "authorized": "Autorizado",
+          "waiting_payment": "Aguardando pagamento",
+          "refused": "Erro",
+          "refunded": "Estornado",
+          "pending_refund": "Estorno pendente",
+          "canceled": "Cancelado",
+          "chargeback": "Chargeback",
+          "dispute": "Em disputa",
+          "reversed": "Estornado"
+        },
+        "antifraud": {
+          "not_analyzed": "Não analisado",
+          "approved": "Aprovado",
+          "declined": "Recusado",
+          "pending": "Pendente",
+          "error": "Erro"
+        }
+      },
+      "timeline": {
+        "title": "Linha do tempo do processamento",
+        "empty": "Nenhum evento de processamento registrado",
+        "unavailable": {
+          "title": "Não foi possível carregar a linha do tempo",
+          "description": "Tente novamente em instantes."
+        },
+        "unsupported": {
+          "title": "Linha do tempo não disponível para este meio de pagamento",
+          "description": "Esta tela detalha o processamento apenas de parte dos meios de pagamento. Os demais dados da transação seguem disponíveis acima."
+        },
+        "unknownDate": "Data não informada",
+        "via": "via {{provider}}",
+        "titleWithAmount": "{{label}} — {{amount}}",
+        "titleWithStatus": "{{label}} — {{status}}",
+        "unknownEvent": "Etapa {{type}}",
+        "unknownEventNoType": "Etapa não identificada",
+        "events": {
+          "threeDSecureSucceeded": "Autenticação 3DS concluída",
+          "threeDSecureError": "Autenticação 3DS falhou",
+          "authorizeSucceeded": "Autorização concluída",
+          "authorizeError": "Autorização recusada",
+          "captureSucceeded": "Captura concluída",
+          "captureError": "Captura falhou",
+          "purchaseSucceeded": "Cobrança concluída",
+          "purchaseCreated": "Cobrança criada",
+          "purchaseError": "Cobrança falhou",
+          "refundSucceeded": "Reembolso concluído",
+          "refundError": "Reembolso falhou",
+          "cancelSucceeded": "Cancelamento concluído",
+          "cancelError": "Cancelamento falhou",
+          "decryptSucceeded": "Descriptografia concluída",
+          "decryptError": "Descriptografia falhou",
+          "paymentStartedSucceeded": "Pagamento iniciado",
+          "paymentStartedError": "Falha ao iniciar o pagamento",
+          "preAuthSucceeded": "Análise antifraude concluída",
+          "preAuthError": "Análise antifraude falhou",
+          "postAuthSucceeded": "Análise antifraude pós-autorização concluída",
+          "postAuthError": "Análise antifraude pós-autorização falhou"
+        },
+        "types": {
+          "THREE_D_SECURE": "Autenticação 3DS",
+          "AUTHORIZE": "Autorização",
+          "CAPTURE": "Captura",
+          "PURCHASE": "Cobrança",
+          "REFUND": "Reembolso",
+          "CANCEL": "Cancelamento",
+          "DECRYPT": "Descriptografia",
+          "PAYMENT_STARTED": "Pagamento iniciado",
+          "PRE_AUTH": "Análise antifraude",
+          "POST_AUTH": "Análise antifraude pós-autorização"
+        },
+        "statuses": {
+          "SUCCEEDED": "Concluído",
+          "ERROR": "Erro",
+          "EXPIRED": "Expirado",
+          "UNKNOWN": "Desconhecido",
+          "DECLINED": "Recusado",
+          "CREATED": "Criado",
+          "PENDING": "Pendente",
+          "REJECTED": "Rejeitado",
+          "CANCELED": "Cancelado",
+          "REFUNDED": "Reembolsado"
+        }
+      }
+    },
+    "commentsTab": {
+      "title": "Comentários",
+      "addButton": "Adicionar comentário",
+      "empty": "Nenhum comentário registrado",
+      "editButton": "Editar",
+      "error": {
+        "title": "Não foi possível carregar os comentários",
+        "description": "Tente novamente em instantes.",
+        "retry": "Tentar novamente"
+      },
+      "form": {
+        "addTitle": "Adicione um comentário",
+        "editTitle": "Edite o comentário",
+        "label": "Comentário",
+        "placeholder": "Digite o comentário",
+        "submit": "Salvar",
+        "cancel": "Cancelar",
+        "success": {
+          "created": "Comentário adicionado",
+          "updated": "Comentário atualizado"
+        },
+        "validation": {
+          "min": "O comentário deve ter ao menos 5 caracteres",
+          "max": "O comentário deve ter no máximo 2000 caracteres"
+        },
+        "errors": {
+          "title": "Não foi possível salvar o comentário",
+          "windowExpired": "O prazo para edição expirou",
+          "notAuthor": "Você não pode editar este comentário",
+          "generic": "Não foi possível salvar o comentário. Tente novamente."
+        }
+      }
+    }
+  },
+  "notificationCenter": {
+    "title": "Notificações",
+    "openButton": "Abrir notificações",
+    "closeButton": "Fechar notificações",
+    "tabs": {
+      "news": "Novidades",
+      "newsWithCount": "Novidades ({{count}})",
+      "activity": "Atividade",
+      "activityWithCount": "Atividade ({{count}})"
+    },
+    "newsTab": {
+      "errorTitle": "Não foi possível carregar as novidades",
+      "errorDescription": "Tente novamente em alguns instantes."
+    },
+    "activity": {
+      "filtersAriaLabel": "Filtrar atividades",
+      "filters": {
+        "all": "Todas",
+        "unread": "Não Lidas",
+        "read": "Lidas"
+      },
+      "empty": {
+        "title": "Você ainda não tem notificações"
+      },
+      "error": {
+        "title": "Ocorreu um problema",
+        "retry": "Tentar novamente"
+      }
+    },
+    "toast": {
+      "seeDetails": "Clique para ver."
+    }
+  },
+  "passwordRequirements": {
+    "title": "Sua senha deve conter:",
+    "hasMinLength": "- Pelo menos {{count}} caracteres",
+    "hasUpperCase": "- Letras maiúsculas",
+    "hasLowerCase": "- Letras minúsculas",
+    "hasNumber": "- Pelo menos um número",
+    "hasSpecialChar": "- Pelo menos um carácter especial",
+    "hasNoNumberSequence": "- Sem sequência de números ex: \"123\" etc"
+  },
+  "passwordFields": {
+    "currentPassword": {
+      "label": "Senha atual",
+      "placeholder": "Digite sua senha atual"
+    },
+    "password": {
+      "label": "Nova senha",
+      "placeholder": "Crie uma nova senha"
+    },
+    "passwordConfirmation": {
+      "label": "Confirme a nova senha",
+      "placeholder": "Repita a nova senha"
+    },
+    "errors": {
+      "default": "Senha inválida",
+      "required": "Campo obrigatório",
+      "hasMinLength": "A senha deve ter pelo menos 8 caracteres",
+      "hasUpperCase": "A senha deve conter pelo menos uma letra maiúscula",
+      "hasLowerCase": "A senha deve conter pelo menos uma letra minúscula",
+      "hasNumber": "A senha deve conter pelo menos um número",
+      "hasSpecialChar": "A senha deve conter pelo menos um caractere especial",
+      "hasNoNumberSequence": "A senha não pode conter mais que dois caracteres numéricos sequenciais",
+      "oneOf": "As senhas não conferem",
+      "wrong_current_password": "Senha atual incorreta",
+      "password_reused": "Você já usou esta senha recentemente. Escolha uma senha diferente."
+    },
+    "match": {
+      "ok": "As senhas conferem",
+      "mismatch": "As senhas não conferem"
+    }
+  },
+  "passwordStrength": {
+    "label": "Força da senha",
+    "levelLabel": "Força da senha: {{level}}",
+    "levels": {
+      "weak": "Fraca",
+      "medium": "Média",
+      "strong": "Forte"
+    },
+    "requirements": {
+      "hasMinLength": "Pelo menos {{count}} caracteres",
+      "hasLetterCase": "Maiúscula e minúscula",
+      "hasNumber": "Pelo menos um número",
+      "hasSpecialChar": "Caractere especial",
+      "hasNoNumberSequence": "Sem sequência de números"
+    }
+  },
+  "passwordUpdated": {
+    "title": "Senha atualizada",
+    "text": "Tudo certo com a nova senha."
+  }
+}

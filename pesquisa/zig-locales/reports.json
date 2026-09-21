@@ -1,0 +1,27 @@
+{
+  "perDay": {
+    "header": {
+      "title": "Vendas por dia",
+      "text": "Essa é a página inicial das suas vendas organizadas por dia."
+    },
+    "dataChartLabel": {
+      "dailyValue": "Valor diário",
+      "ticketsQuantity": "Quantidade de ingressos"
+    },
+    "column":{
+      "date": "Data",
+      "quantity": "Quantidade",
+      "total": "Total"
+    },
+    "cards": {
+      "header": "Gráfico de vendas",
+      "sold": "Ingressos vendidos",
+      "total": "Valor total",
+      "tooltip": "Vendas em um período de 15 dias"
+    },
+    "placeholder": {
+      "startDate": "Data de inicio",
+      "endDate": "Data de término"
+    }
+  }
+}

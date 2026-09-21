@@ -1,0 +1,213 @@
+{
+  "title": "Envios ao Banking",
+  "subtitle": "Acompanhe os envios de relatório ao Banking por dia e visualize o payload enviado.",
+  "columns": {
+    "event": "Evento",
+    "reportId": "ID do relatório",
+    "status": "Status",
+    "reconciled": "Conferência",
+    "attempts": "Tentativas",
+    "operationalEntries": "Lançtos. operac.",
+    "financialEntries": "Lançtos. financ.",
+    "processedAt": "Processado em",
+    "sentAt": "Enviado em",
+    "actions": "Ações"
+  },
+  "status": {
+    "pending": "Pendente",
+    "processing": "Processando",
+    "snapshot_ready": "Snapshot pronto",
+    "sending": "Enviando",
+    "sent": "Enviado",
+    "failed": "Falhou",
+    "dead_letter": "Descartado"
+  },
+  "actions": {
+    "viewPayload": "Ver payload",
+    "resend": "Reenviar",
+    "resending": "Reenviando...",
+    "sync": "Sincronizar dia",
+    "syncing": "Sincronizando...",
+    "refresh": "Atualizar",
+    "refreshing": "Atualizando...",
+    "delete": "Apagar",
+    "deleting": "Apagando..."
+  },
+  "resend": {
+    "success": "Envio reenfileirado",
+    "errors": {
+      "not_found": "Envio não encontrado.",
+      "not_snapshot_ready": "O snapshot ainda não está pronto para reenvio.",
+      "no_snapshot": "Este envio não possui snapshot para reenviar.",
+      "generic": "Não foi possível reenviar. Tente novamente."
+    }
+  },
+  "sync": {
+    "success": "Sincronização disparada — {{enqueued}} envio(s) enfileirado(s), {{skipped}} já existente(s)",
+    "successWithErrors": "Sincronização disparada — {{enqueued}} enfileirado(s), {{skipped}} já existente(s), {{errors}} com erro",
+    "empty": "Nenhum evento elegível neste dia",
+    "errors": {
+      "forbidden": "Você não tem acesso financeiro para rodar a sincronização.",
+      "generic": "Não foi possível rodar a sincronização. Tente novamente."
+    }
+  },
+  "reconciliation": {
+    "matched": "Confere com o dashboard",
+    "mismatch": "Diverge do dashboard",
+    "none": "Sem dados de conciliação",
+    "delta": "Diferença: {{delta}}",
+    "comparable": "Comparável: {{comparable}}",
+    "dashboard": "Dashboard: {{dashboard}}",
+    "notApplicable": "Sem receita no período para conferir (movimentação apenas de estorno ou despesa)."
+  },
+  "empty": {
+    "title": "Nenhum envio neste dia",
+    "text": "Não há envios ao Banking registrados para a data selecionada."
+  },
+  "errors": {
+    "forbidden": "Você não tem acesso financeiro para visualizar os envios ao Banking.",
+    "generic": "Não foi possível carregar os envios ao Banking. Tente novamente."
+  },
+  "payload": {
+    "title": "Payload do envio",
+    "reportId": "Relatório {{reportId}}",
+    "loading": "Carregando payload...",
+    "error": "Não foi possível carregar o payload.",
+    "empty": "Nenhum conteúdo disponível.",
+    "copy": "Copiar",
+    "copied": "Copiado!",
+    "tabs": {
+      "snapshot": "Enviado",
+      "details": "Details",
+      "story": "História",
+      "timeline": "Timeline"
+    }
+  },
+  "story": {
+    "unavailable": "Sem dados de auditoria (details) para montar a história deste envio.",
+    "step1": {
+      "title": "Os compradores pagaram {{gross}} em {{count}} compra(s) confirmadas neste dia.",
+      "note": "Esse é o valor cheio (\"Receita bruta\"): ingresso + taxas que o comprador paga junto."
+    },
+    "step2": {
+      "title": "Desse total, {{buyerFees}} eram taxas pagas pelo comprador — não fazem parte do valor do ingresso.",
+      "empty": "Nenhuma taxa de comprador neste dia.",
+      "feeMismatch": "Atenção: {{fee}} agregada marca {{bucket}}, mas as vendas do dia cobraram {{perSale}} — diferença de {{delta}}. Divergência de taxa, não de janela: confira os pedidos antes de usar este número."
+    },
+    "fees": {
+      "marketplace_fee": "taxa de conveniência {{value}}",
+      "insurance_fee": "seguro do ingresso {{value}}",
+      "installment_fee": "juros de parcelamento {{value}}",
+      "processingFee": "taxa de processamento {{value}}",
+      "posAdministrativeFee": "taxa única PDV {{value}}"
+    },
+    "step3": {
+      "title": "Sobrou como venda do produtor: {{producerValue}}.",
+      "note": "A régua deste relatório é o dia do pagamento.",
+      "feeBasisOver": "Atenção: as taxas atribuídas às vendas passam em {{delta}} do que os compradores pagaram acima do ingresso, então o valor do produtor fica {{delta}} abaixo do valor de ingresso ({{ticketValue}}). É taxa cobrada de quem não pagou — a cascata abaixo não mostra isso, porque os dois lados dela partem do valor de ingresso.",
+      "feeBasisUnder": "Atenção: as taxas atribuídas às vendas ficam {{delta}} abaixo do que os compradores pagaram acima do ingresso, então o valor do produtor passa {{delta}} do valor de ingresso ({{ticketValue}}). Falta taxa em alguma venda — a cascata abaixo não mostra isso, porque os dois lados dela partem do valor de ingresso.",
+      "feeBasisLine": "{{label}}: {{delta}} de diferença (pedidos {{orders}})"
+    },
+    "step4": {
+      "title": "O dashboard usa outra régua: soma o valor de face do ingresso (não o total cobrado) e janela pelo dia da compra. A conta começa de novo, do valor de ingresso, e ajusta só quem cruza as fronteiras — cada linha mostra o subtotal acumulado:",
+      "unavailable": "Este envio não tem o bloco de auditoria de datas (saleDayAudit) — ajuste indisponível."
+    },
+    "cascade": {
+      "base": "Valor de ingresso das vendas",
+      "baseNote": "base do dashboard (valor de face do ingresso)",
+      "total": "= Comparável ao \"Total de vendas\" do dashboard",
+      "ops": {
+        "paidBefore": "Pagos no dia, criados em dia anterior",
+        "paidBeforeDesc": "estão neste relatório; o dashboard conta no dia da criação",
+        "paidLater": "Criados no dia, pagos depois",
+        "paidLaterDesc": "o dashboard conta neste dia; o relatório envia no dia do pagamento",
+        "refundedSameDay": "Estornados no dia (total ou parcial)",
+        "refundedSameDayDesc": "o dashboard remove o pedido inteiro (deixa de ser finalizado)",
+        "refundedAfter": "Estornados depois da competência",
+        "refundedAfterDesc": "o dashboard já os removeu retroativamente",
+        "cash": "Vendas em dinheiro",
+        "cashDesc": "o dashboard conta; o relatório não envia (fora do Banking)"
+      },
+      "opMeta": "({{count}}) · {{desc}}"
+    },
+    "countNote": "Quantidade de compras: a receita soma {{count}}; o dashboard deve mostrar ≈ {{dashCount}} compra(s).",
+    "neverPaid": "{{count}} compra(s) do dia ficaram sem pagamento (desistência, expiração ou cartão recusado) — não contam em lado nenhum. Se alguma pagar depois, entra no dashboard deste dia retroativamente.",
+    "step5": {
+      "title": "Fim da conta: o comparável é {{comparable}} — o subtotal final da cascata acima.",
+      "storedMatched": "No arquivo, o \"Total de vendas\" do dashboard estava em {{dashboard}} — diferença de {{delta}} (bateu exatamente).",
+      "storedMismatch": "No arquivo, o \"Total de vendas\" do dashboard estava em {{dashboard}} — diferença de {{delta}} (vale investigar).",
+      "notStored": "Se o dashboard mostrar um valor diferente, compare com o comparável acima para localizar a diferença."
+    },
+    "step6": {
+      "titleWithCosts": "Da venda, a Zig desconta os custos do produtor ({{costs}}) → líquido do dia: {{net}}.",
+      "titleNoCosts": "Neste dia não houve custos do produtor — o líquido do dia é a própria venda: {{producerValue}}.",
+      "note": "Esses custos não aparecem no dashboard — o comprador nunca os pagou.",
+      "entries": "No acerto ainda entram lançamentos à parte: {{entries}}.",
+      "refund": "estornos − {{value}}",
+      "rebate": "rebate + {{value}}"
+    },
+    "costs": {
+      "PixFee": "Aquisição PIX {{value}}",
+      "anticipationFee": "Antecipação de recebíveis {{value}}",
+      "courtesyCostFee": "Custo de cortesias {{value}}",
+      "printingCost": "Impressão de ingressos {{value}}",
+      "promoterCashSalesFee": "Venda em dinheiro via promotor {{value}}",
+      "mdr": "MDR de cartão {{value}}",
+      "zigPulse": "Zig Pulse {{value}}",
+      "operational": "despesas operacionais {{value}}",
+      "mdrNet": "MDR de cartão (líquido da taxa de processamento) {{value}}"
+    },
+    "feeNames": {
+      "installment_fee": "a taxa de parcelamento",
+      "marketplace_fee": "a taxa de conveniência",
+      "insurance_fee": "o seguro do ingresso"
+    }
+  },
+  "timeline": {
+    "empty": "Nenhum evento registrado para este envio.",
+    "stages": {
+      "build": "Geração do snapshot",
+      "send": "Envio ao Banking",
+      "recovery": "Recuperação automática",
+      "daily": "Consolidação diária"
+    },
+    "outcomes": {
+      "success": "sucesso"
+    },
+    "kinds": {
+      "transient": "falha temporária",
+      "permanent": "falha definitiva"
+    },
+    "reasons": {
+      "banking_rejected": "O Banking rejeitou o payload.",
+      "network_error": "Não foi possível alcançar o Banking.",
+      "snapshot_download_failed": "Falha ao baixar o snapshot do S3.",
+      "snapshot_parse_failed": "O snapshot armazenado está inválido.",
+      "rate_limited": "O Banking limitou a taxa de requisições.",
+      "upstream_unavailable": "O Banking está indisponível.",
+      "unexpected": "Erro inesperado durante a geração.",
+      "job_not_found": "Registro do envio não encontrado.",
+      "event_id_missing": "Envio sem evento associado.",
+      "zombie": "Envio travado em \"enviando\" e encerrado pela rotina de recuperação.",
+      "dead_letter": "Tentativas esgotadas; mensagem descartada.",
+      "legacy_error": "Erro registrado antes da timeline existir."
+    },
+    "showDetail": "Ver detalhe",
+    "hideDetail": "Ocultar detalhe",
+    "attempts": "{{count}} tentativas",
+    "afterPrevious": "{{gap}} depois",
+    "overSpan": "ao longo de {{gap}}"
+  },
+  "delete": {
+    "confirmTitle": "Apagar este envio?",
+    "confirmContent": "O envio de \"{{event}}\" será removido e o dia volta a ficar sem registro. Na próxima sincronização ele é gerado de novo, do zero. Esta ação não pode ser desfeita.",
+    "confirm": "Apagar envio",
+    "cancel": "Cancelar",
+    "success": "Envio apagado. Sincronize o dia para gerá-lo de novo.",
+    "errors": {
+      "not_found": "Envio não encontrado.",
+      "already_sent": "Este envio já foi entregue ao Banking e não pode ser apagado.",
+      "generic": "Não foi possível apagar o envio. Tente novamente."
+    }
+  }
+}

@@ -1,0 +1,829 @@
+{
+  "eventList": {
+    "title": "Eventos",
+    "subtitle": "Aqui você encontra uma lista dos seus últimos eventos, e pode acessar os paineis administrativos.",
+    "loadingTextPage": "estamos duplicando o evento...",
+    "headerBtnText": "Criar evento",
+    "searchInputPlaceholder": "Busque por nome do evento",
+    "alerts": {
+      "removeHighlight": {
+        "title": "Retirar Destaque",
+        "subtitle": "Deseja realmente retirar este evento de destaque do site?",
+        "successResponse": "Destaques retirados do site.",
+        "errorResponse": "Erro ao tentar retirar destaques."
+      },
+      "cancel": "Deixar para depois",
+      "ticketPanelAlerts": {
+        "text": "Percebemos que seu evento não está configurado para o módulo de ingresso. Você deseja habilitar? "
+      },
+      "enable": "Habilitar",
+      "createOrganization": "Crie uma organização antes de criar um evento!",
+      "createOrganizationConfirm": "Criar organização"
+    },
+    "buttons": {
+      "exportGeneralReport": "Exportar relatório geral",
+      "advancedFilters": "Filtros avançados"
+    },
+    "eventFiltersModal": {
+      "title": "Filtros",
+      "inputs": {
+        "initialDate": {
+          "label": "Data de início",
+          "placeholder": "Data inicial"
+        },
+        "endDate": {
+          "label": "Data de término",
+          "placeholder": "Data final"
+        },
+        "organizations": {
+          "label": "Selecione a organização",
+          "placeholder": "Organização"
+        },
+        "status": {
+          "label": "Selecione o status",
+          "placeholder": "Selecione um status de evento",
+          "options": {
+            "active": "Eventos ativos",
+            "allEvents": "Todos os eventos",
+            "canceled": "Eventos cancelados",
+            "closed": "Eventos encerrados",
+            "offline": "Eventos offline",
+            "postponed": "Eventos adiados",
+            "draft": "Eventos rascunho"
+          }
+        }
+      },
+      "buttons": {
+        "clearFiltersText": "Limpar filtros",
+        "applyFiltersText": "Aplicar filtros"
+      }
+    },
+    "eventOptionsModal": {
+      "removeHighlight": "Remover destaque",
+      "highlightSite": "Destacar no site",
+      "changeStatus": "Alterar status",
+      "ticketPanel": "Painel de ingressos",
+      "producerInformations": "Informações do produtor",
+      "eventLink": "Link do evento",
+      "statusHistory": "Histórico de status",
+      "duplicateEvent": "Duplicar esse evento"
+    },
+    "eventHighlightModal": {
+      "title": "Destaque",
+      "inputs": {
+        "initialDate": {
+          "label": "Data inicial",
+          "placeholder": "Início da divulgação"
+        },
+        "endDate": {
+          "label": "Data final",
+          "placeholder": "Fim da divulgação"
+        },
+        "positioning": {
+          "label": "Posicionamento",
+          "options": {
+            "bannerOnly": "Somente Banner",
+            "middleOfTheSiteOnly": "Somente meio do site",
+            "middleOfTheSiteAndBanner": "Banner e meio do site"
+          }
+        }
+      },
+      "alerts": {
+        "incompleteRegister": {
+          "title": "Cadastro incompleto!",
+          "subtitle": "Preencha todos os dados antes de salvar!"
+        },
+        "highlightSuccess": "Evento destacado no site com sucesso!",
+        "highlightError": "Evento não destacado, verifique o formulário",
+        "pullInformationsError": "Erro ao puxar informações de destaque deste evento"
+      }
+    },
+    "eventStatusModal": {
+      "title": "Alterar status do evento",
+      "updateButtonText": "Atualizar",
+      "alerts": {
+        "success": "Status do evento atualizado com sucesso!",
+        "error": "Ocorreu um erro ao atualizar o status do evento. Tenve novamente."
+      }
+    },
+    "eventProducerInfoModal": {
+      "title": "Informações do Produtor",
+      "labels": {
+        "producerName": "Nome do produtor",
+        "contact": "Contato"
+      },
+      "callOnWhattsapp": "Chamar no Whattsapp",
+      "producerQrCode": "QRCode do produtor",
+      "noQRCodeMessage": "Ainda não foi gerado QRCode para esse produtor!",
+      "QRCodeButtonText": "Gerar QRCode",
+      "QRCodeLoadingText": "Aguarde! gerando QRCode..."
+    },
+    "eventHistoryModal": {
+      "title": "Histórico de status",
+      "eventCreationText": "Criação do evento"
+    },
+    "copyLinkSuccess": "Link copiado com sucesso!",
+    "liveEvent": "Evento presencial",
+    "onlineEvent": "Evento online",
+    "sold_one": "$t(Ingresso , {{count}}) vendido ",
+    "sold_other": "$t(Ingressos , {{count}}) vendidos ",
+    "update": "Atualizar",
+    "duplicateEventConfirmationText": "Você tem certeza que deseja duplicar o evento {{eventName}} ?",
+    "duplicateEventConfirmationConfirmText": "Duplicar",
+    "duplicateEventConfirmationSubText": "Ao duplicar o evento selecionado, todos os seus atributos serão duplicados também.",
+    "duplicateEventConfirmationCancelText": "Cancelar",
+    "duplicateEventSuccessTitle": "Evento duplicado!",
+    "duplicateEventSuccessText": "Foi gerada uma cópia do evento com sucesso!",
+    "duplicateEventErrorText": "Erro ao duplicar evento.",
+    "duplicateEventErrorTextTryAgain": "Não foi possível duplicar o evento. Tente novamente ou contate o suporte para obter ajuda.",
+    "noEventRegistered": "Nenhum evento registrado.",
+    "processing": "Processando..."
+  },
+  "eventEdit": {
+    "tabs": {
+      "eventInformations": "Informações do evento",
+      "dateAndTime": "Data e hora",
+      "location": "Local",
+      "salesSettings": "Configurações de venda",
+      "integrations": "Integrações",
+      "partners": "Parceiros",
+      "taxes": "Taxas"
+    },
+    "header": {
+      "title": "Configurações do evento",
+      "subtitle": "Edite as informações gerais do seu evento."
+    },
+    "updatedEventSuccessText": "Evento alterado com sucesso!",
+    "reloadErrorText": "Não foi possível recarregar os dados do evento. Atualize a página.",
+    "hideEventEndDate": {
+      "label": "Não mostrar término do evento",
+      "updateErrorText": "As datas do evento foram salvas, mas não foi possível salvar a preferência de ocultar o término. Tente novamente pela edição do evento.",
+      "loadErrorText": "Não foi possível carregar a preferência de ocultar o término do evento. Recarregue a página antes de salvar.",
+      "disabledText": "Você não tem permissão para editar as informações deste evento."
+    },
+    "salesSettings": {
+      "errors": {
+        "minimumTime": "O tempo mínimo de pagamento deve ser de 5 minutos"
+      },
+      "salesPerSessionRequiredError": "Quando o limite de sessão está ativo, o número de ingressos por sessão deve ser maior que 0",
+      "maxOnlineOrderTicketsRequiredError": "Quando o limite por venda está ativo, o número de ingressos por venda deve ser maior que 0",
+      "taxesPolicies": {
+        "label": "Política de taxas",
+        "passOnText": "Repassar",
+        "absorbText": "Absorver",
+        "pdv": "PDV",
+        "online": "Online"
+      },
+      "visibility": {
+        "label": "Visibilidade",
+        "publicText": "Público",
+        "privateText": "Privado"
+      },
+      "ticketsGroupedBySectorsLabel": "Exibir ingressos agrupados por setores:",
+      "enableDigitalCard": "Habilitar cartão digital",
+      "enableDigitalCardHelpText": "Permite que participantes habilitem o cartão virtual Zig para fazer recarga online e facilitar o consumo no dia do evento.",
+      "enableRechargeJourney": "Habilitar Jornada 360°",
+      "enableRechargeJourneyHelpText": "Permite oferecer aos participantes uma experiência completa, do ingresso à recarga e uso do Cartão Digital Zig, em um único fluxo integrado e sem fricções.",
+      "showCheckoutAttendeeAutofill": "Habilitar preenchimento automático de dados de participantes:",
+      "showCheckoutAttendeeAutofillHelpText": "Quando desativado, as informações de ingressos não serão preenchidas automaticamente com as informações do comprador. Sendo necessário que o comprador preencha todos os campos dos participantes.",
+      "salesPerClientLabel": "Limite de compra de ingressos por cliente no evento",
+      "salesPerClientHelpText": "Configurações específicas de ingresso ou setor podem sobrepor essa regra",
+      "maxTicketPerSaleLabel": {
+        "onlineAndApp": "Máximo de ingressos por venda (Site / App)",
+        "pos": "Máxima de ingressos por venda (POS):"
+      },
+      "maxTicketPerSessionSaleLabel": {
+        "onlineAndApp": "Máximo de ingresso por venda de sessão (Site / App)"
+      },
+      "maxTicketPerSessionSaleHelpText": "O limite definido vale para todas as sessões do evento. Limites por sessão prevalecem sobre o limite geral do evento.",
+      "saleLimitLabel": "Limite do tempo de compra (em minutos)",
+      "cartRecoveryLimitLabel": "Limite para recuperação do carrinho pelo cliente (em minutos)",
+      "maximumInstallmentLabel": {
+        "onlineAndApp": "Parcelamento máximo (cartão de crédito) no Site / App",
+        "pos": "Parcelamento máximo (cartão de crédito) na POS"
+      },
+      "paymentPlanSelectLabel": "Selecione o plano de pagamento",
+      "paymentsFormsLabel": {
+        "onlineAndApp": "Formas de pagamento online",
+        "pos": "Formas de pagamento (Pos - Pontos de vendas / bilheteria)"
+      },
+      "interestRateLabel": "Taxa de juros do parcelamento (a.m.) na POS",
+      "riskLevel": {
+        "label": "Nível de risco do evento",
+        "options": {
+          "low": "Baixo",
+          "medium": "Médio",
+          "high": "Alto"
+        }
+      },
+      "eventCategory": {
+        "label": "Categoria do evento do antifraude",
+        "options": {
+          "show": "Show",
+          "theater": "Teatro",
+          "movies": "Filmes",
+          "parties": "Festas",
+          "festivals": "Festivais",
+          "courses": "Cursos",
+          "sport": "Esporte",
+          "corporate": "Corporativo"
+        }
+      },
+      "maximumAttemptsLabel": "Máximo de tentativas para pagamento em crédito:",
+      "forceAutentificationLabel": "Forçar autenticação 3DS para todas as compras:",
+      "allowPdfTicketLabel": "Habilitar envio de PDF em email para compradores",
+      "allowPdfTicketDownloadLabel": "Habilitar download de PDF pelo comprador",
+      "allowPdfCourtesyLabel": "Habilitar envio de PDF em email de recebimento de Cortesias",
+      "activationPeriodLabel": "Período (em horas) para ativar o 3DS antes da data limite de vendas:",
+      "defaultPaymentPlan": "Plano de pagamento padrão",
+      "qrCodeLabel": "QR Code do ingresso",
+      "dynamicQrCode": "Dinâmico",
+      "qrCodeHelpText": "O QR dinâmico aumenta a segurança ao se atualizar constantemente. Ao ser desabilitado, o QR Code torna-se estático, ficando mais vulnerável a cópias e repasses.",
+      "staticQrCode": "Estático",
+      "eventHasSalesQrCode": "Não é possível alterar porque já foram realizadas vendas para o evento.",
+      "bannerStaticQrCode": "Apesar de facilitar a operação em alguns contextos, essa opção também aumenta o risco de cópias e repasses não autorizados.",
+      "bannerStaticQrCodeTitle": "Existem riscos em utilizar o QR Code estático",
+      "bannerDynamicQrCodeTitle": "Ao ativar o QR Code dinâmico, as opções de baixar e reenviar ingressos em PDF serão desativadas do painel e para os participantes",
+      "backofficeOptions": "Configurações Backoffice",
+      "backofficeTabs": {
+        "general": "Configurações gerais",
+        "refund": "Opções de reembolso"
+      },
+      "moreOptions": "Mais opções",
+      "staticQrRequiredForPdf": "O envio de PDF só pode ser habilitado se a opção de “QR Code Estático” estiver selecionada.",
+      "staticQrCodeWarningTitle": "Atenção: mudança para QR Estático  pode ser irreversível",
+      "staticQrCodeWarningDescription1": "Após alterar o QR Code para estático, se alguma venda for realizada, não será mais possível alterar essa configuração.",
+      "staticQrCodeWarningDescription2": "Tem certeza de que deseja alterar o <strong>QR Code de dinâmico para estático?</strong>",
+      "dynamicToStaticWarningTitle": "Ao salvar, não será possível reverter essa ação",
+      "dynamicToStaticWarningDescription": "Já existem vendas registradas para esse evento e por isso, não será possível reverter essa ação após a confirmação.",
+      "dynamicToStaticWarningDescription1": "Já existem vendas registradas para esse evento e por isso, não será possível reverter essa ação após a confirmação.",
+      "dynamicToStaticWarningDescription2": "Tem certeza de que deseja seguir com essa alteração?",
+      "bulkSalesAllowedLabel": "Vendas em grandes quantidades",
+      "bulkSalesTip": "Essa opção altera a seleção de ingressos para um campo de digitação e a forma de exibir o download de ingressos (até 35 QR Codes serão exibidos por página).",
+      "ticketInsurance": "Seguro de ingresso",
+      "ticketInsuranceHelpText": "Ao ativar, a opção de seguro de ingresso ficará disponível para o cliente no momento da compra."
+    },
+    "refundOptions": {
+      "historyButton": "Histórico de atividades",
+      "genericError": "Não foi possível concluir a ação. Tente novamente.",
+      "loadErrorTitle": "Não foi possível carregar as configurações de reembolso.",
+      "loadErrorDescription": "Atualize a página ou tente novamente mais tarde.",
+      "selfService": {
+        "title": "Reembolso self-service",
+        "description": "Ao habilitar, a solicitação de reembolso fica disponível para compradores solicitarem. O valor é devolvido automaticamente e não contempla taxas de serviço."
+      },
+      "communicate": {
+        "title": "Comunicar compradores",
+        "description": "Ao habilitar, compradores receberão um e-mail com o passo a passo do reembolso.",
+        "sentToast": "Compradores comunicados com sucesso!",
+        "sentToastDescription": "Os compradores receberão um e-mail com o passo a passo do reembolso.",
+        "errors": {
+          "no_eligible_buyers": "Não há compradores elegíveis para notificar neste evento."
+        }
+      },
+      "period": {
+        "title": "Período de reembolso",
+        "description": "Define a janela em que a devolução fica disponível para os compradores.",
+        "limitPeriod": "Limitar período",
+        "rowLabel": "Período de início e até quando o botão de reembolso fica ativo",
+        "startDate": "Iniciar em",
+        "endDate": "Encerrar em",
+        "startDatePlaceholder": "Selecionar início",
+        "endDatePlaceholder": "Selecionar encerramento",
+        "save": "Salvar",
+        "savedToast": "Período atualizado com sucesso!",
+        "savedToastDescription": "As alterações do período de reembolso foram salvas."
+      },
+      "enableModal": {
+        "title": "Habilitar reembolso self-service?",
+        "description": "Esta ação libera imediatamente a solicitação de reembolso para todos os compradores elegíveis. Ela fica registrada na auditoria.",
+        "purchasesCount": "Compras efetuadas",
+        "estimatedRefundValue": "Valor estimado a devolver",
+        "availableBalance": "Saldo disponível",
+        "estimateError": "Não foi possível carregar o resumo de reembolso. Mesmo assim, você ainda pode habilitar o reembolso.",
+        "balanceWarningTitle": "O valor estimado a devolver é maior que o saldo disponível.",
+        "balanceWarningDescription": "Ao atingir todo o valor do saldo disponível, a funcionalidade será automaticamente desabilitada.",
+        "confirm": "Habilitar",
+        "cancel": "Cancelar"
+      },
+      "enabledToast": {
+        "title": "Reembolso habilitado com sucesso!",
+        "description": "Se desejar, configure o período de validade para solicitar."
+      },
+      "disableModal": {
+        "title": "Desabilitar reembolso self-service?",
+        "description": "Esta ação remove a possibilidade de compradores solicitarem reembolsos. Solicitações antigas não são afetadas. Ela fica registrada na auditoria.",
+        "reasonLabel": "Motivo",
+        "reasonPlaceholder": "Selecione um motivo",
+        "reasonRequired": "É necessário selecionar um motivo.",
+        "descriptionLabel": "Descrição",
+        "descriptionPlaceholder": "Digite o motivo",
+        "descriptionRequired": "É necessário inserir um motivo.",
+        "descriptionMaxLength": "O motivo pode ter no máximo {{max}} caracteres.",
+        "confirm": "Desabilitar",
+        "cancel": "Cancelar"
+      },
+      "disableReasons": {
+        "periodEnded": "Encerramento do período de reembolso",
+        "producerRequest": "Solicitação do produtor",
+        "underReviewFraud": "Em análise / Suspeita de fraude",
+        "enabledByMistake": "Habilitado por engano",
+        "other": "Outro",
+        "statusChange": "Mudança de status do evento"
+      },
+      "disabledToast": {
+        "title": "O reembolso self-service foi desabilitado",
+        "description": "Compradores não podem mais solicitar reembolso."
+      },
+      "history": {
+        "title": "Histórico de atividades",
+        "close": "Fechar",
+        "empty": "Nenhuma atividade registrada.",
+        "loadErrorTitle": "Não foi possível carregar o histórico de atividades.",
+        "loadErrorDescription": "Atualize a página ou tente novamente mais tarde.",
+        "notEligibleToastDescription": "O histórico de reembolso está disponível apenas para eventos cancelados ou adiados.",
+        "systemAuthor": "Sistema",
+        "notAllowedToastDescription": "Você não tem permissão para acessar o histórico de reembolso.",
+        "activities": {
+          "refundEnabled": "Reembolso self-service foi habilitado",
+          "refundDisabled": "Reembolso self-service foi desabilitado",
+          "refundDisabledWithReason": "O reembolso self-service foi desabilitado com o motivo '{{reason}}'",
+          "refundBuyersNotified": "Compradores foram notificados sobre o reembolso",
+          "communicateEnabled": "Comunicação com compradores foi habilitada",
+          "communicateDisabled": "Comunicação com compradores foi desabilitada",
+          "periodEnabled": "Período de reembolso foi habilitado",
+          "periodEnabledWithDates": "Período de reembolso foi habilitado de {{start}} até {{end}}",
+          "periodDisabled": "Período de reembolso foi desabilitado",
+          "periodUpdated": "Período de reembolso foi atualizado",
+          "periodUpdatedWithDates": "Período de reembolso foi atualizado para {{start}} até {{end}}"
+        }
+      }
+    },
+    "taxes": {
+      "noContractTitle": "As taxas deste evento ainda não estão disponíveis",
+      "noContractDescription": "O evento ainda não tem contrato vinculado. As taxas negociadas aparecem aqui assim que o contrato for sincronizado.",
+      "noContractLoadError": "Não foi possível carregar o evento porque ele ainda não tem contrato vinculado. Os dados aparecem assim que o contrato for sincronizado."
+    },
+    "noContractBanner": {
+      "title": "Evento sem contrato vinculado",
+      "message": "Enquanto o contrato não for sincronizado, a configuração do evento pode não funcionar corretamente."
+    }
+  },
+  "createEvent": {
+    "all": "Todos",
+    "organization": "Organização",
+    "startDatePlaceholder": "Data de Inicio",
+    "startDateLabel": "Início do evento",
+    "startTimeLabel": "Horário de início do evento",
+    "startTimePlaceholder": "Hora inicial",
+    "endDateLabel": "Término do evento",
+    "endDatePlaceholder": "Data de Término",
+    "endTimeLabel": "Horário de término do evento",
+    "endTimePlaceholder": "Hora final",
+    "salesLimitLabel": "Data de encerramento",
+    "salesLimitPlaceholder": "Data para encerrar",
+    "salesLimitHourLabel": "Horário de encerramento",
+    "salesLimitHourPlaceholder": "Horário para encerrar",
+    "step4": {
+      "datePickerPlaceholder": "Dados de expiração"
+    },
+    "expirationDate": "Data de Expiração",
+    "timezone": "Fuso horário",
+    "select": "Selecione",
+    "basicData": "1. Dados básicos",
+    "basicDataDescription": "Insira os dados básicos para a criação de seu evento. Nessa tela você cadastrará informações como nome, categoria e local. Pode também adicionar imagens de banner e miniatura para seu evento, bem como atrelar uma ou mais datas para a realização e definir o local. <a href='/evento-help' target='_blank'>Saiba mais como criar um evento do zero.</a>",
+    "basicInformation": "Informações Básicas",
+    "basicInformationDescription": "Seja inventivo ao escolher o nome do seu evento e explique aos participantes por que não podem perder essa experiência única. Adicione detalhes que enfatizem o que torna o seu evento excepcional.",
+    "eventName": "Nome do Evento",
+    "salesPage": "Caminho para a página de vendas",
+    "eventSlug": "Slug do evento (caminho)",
+    "vinculatedOrg": "Organização vinculada",
+    "ageGroup": "Faixa etária",
+    "coin": "Moeda",
+    "eventDetails": "Detalhes do evento (Opcional)",
+    "eventDetailsDescription": "Essa é a descrição do seu evento. Detalhe sobre o que se trata o evento e dê o máximo de informação útil para o seu participante. Esse campo também afeta posicionamento nos buscadores.",
+    "categorization": "Categorização",
+    "categorizationDescription": "Ajude os participantes a encontrarem seu evento de maneira fácil e rápida: categorize-o com clareza.",
+    "eventImages": "Imagens do evento (Opcional)",
+    "eventImagesDescription": "Enriqueça seu evento com fotos impactantes e conquiste a atenção imediata dos participantes.",
+    "eventImagesDescriptionWL": "Não subestime o poder de uma imagem! Enriqueça seu evento com fotos impactantes e capture a atenção imediata dos participantes.",
+    "bannerDescriptionWL": "Clique ou arraste a imagem. O tamanho recomendado é 800 x 350.",
+    "thumbDescription": "Clique ou arraste a imagem. O tamanho recomendado é 300 x 230.",
+    "seeHowToCreateImages": "Veja como criar imagens para seu evento",
+    "bannerDescription": "Clique ou arraste a imagem. A dimensão recomendada é de 1080 x 1350px",
+    "coverTitle": "Capa 4:5",
+    "tagsDescription": "Digite a tag e pressione enter para adicionar.",
+    "eventLocation": "Onde vai acontecer o seu evento",
+    "eventLocationDescription": "Orientação para todos os participantes, estejam eles presentes fisicamente ou online. Garanta que seu evento seja facilmente localizado e acessível a todos.",
+    "eventModalityDescription": "Qual a modalidade de evento que vai criar?",
+    "eventModalityDescription2": "Modalidade do evento",
+    "inPerson": "Presencial",
+    "transmissionLink": "Link de transmissão",
+    "fantasyAddressName": "Nome Fantasia (opcional)",
+    "fantasyAddressNameExample": "Ex: Casa A",
+    "zipCode": "CEP",
+    "searchingZipCode": "Buscando CEP...",
+    "dontKnowMyZipCode": "Não sei o CEP",
+    "address": "Rua / avenida / logradouro",
+    "number": "Número",
+    "neighborhood": "Bairro",
+    "city": "Cidade",
+    "state": "Estado",
+    "complement": "Complemento (opcional)",
+    "dateAndTime": "Datas e horários",
+    "dateAndTimeDescription": "Registre a data e horário de início, fim e o fuso horário do evento.",
+    "startDate": "Data de Início",
+    "privateBoxDescription": "Marque a caixa 'Privado' para restringir o acesso ao evento apenas para aqueles que possuem o link.",
+    "clientSupport": "Contato de suporte ao cliente",
+    "clientSupportDescription": "Este contato é para quem comprou o ingresso e precisa de suporte em relação ao evento.",
+    "contactType": "Tipo de contato",
+    "contact": "Contato",
+    "telephoneNumber": "Número do telefone",
+    "partners": "Adicionar parceiros (Opcional)",
+    "partnersDescription": "Destaque seus colaboradores no evento. Inclua imagens e informações dos parceiros para fortalecer alianças e reconhecimento.",
+    "addPartners": "Clique para adicionar parceiros",
+    "termsOfUse": {
+      "part1": "Declaro que li e concordo com os ",
+      "part2": "termos de uso ",
+      "part3": "e regras da plataforma."
+    },
+    "acceptedFormats": "Formatos aceitos: ",
+    "acceptedFormats2": "JPG, PNG e WebP",
+    "maximumSize": "Tamanho máximo: ",
+    "maximumSize2": "até 700KB",
+    "salesEventDate": "Encerramento das vendas",
+    "salesEventDateDescription": "Insira nesses campos o horário que as vendas serão finalizadas no site e no aplicativo. Essa configuração não impacta as vendas em bilheteria (PDV).",
+    "dateAndTimeEditDescription": "Registre a data e horário de início, fim e o fuso horário do evento.",
+    "selectCategory": "Categoria",
+    "selectSubcategory": "Subcategoria",
+    "selectSubCategory": "Subcategorias",
+    "selectCategories": "Categorias",
+    "selectSubCategories": "Subcategorias",
+    "categoryError": "Deve escolher pelo menos uma categoria",
+    "subcategoryError": "Deve escolher pelo menos uma subtegoria",
+    "hasSessionsDescription": "Vender ingressos por dias e sessões",
+    "daysAndSessions": "Dias do evento",
+    "daysSessionsDescription": "Configure a oferta de ingressos, setores e lores por dia do evento.",
+    "dateAndHour": "Data e hora",
+    "addSessions": "Sessões do evento",
+    "addSessionsDescription": "Crie as sessões do seu evento adicionando os horários em cada dia. Configure também os tipos de ingressos disponíveis para cada sessão.",
+    "continueBtn": "Prosseguir",
+    "publish": "Publicar",
+    "dateAndTimeSubTitle": "Realização do evento",
+    "endSalesDate": "Período para encerramento das vendas",
+    "endSalesDatePlaceholder": "Digite ou selecione",
+    "endSalesDateDescription": "minutos após o início do evento",
+    "endSalesDateSessionsDescription": "minutos após o início das sessões",
+    "daysSessions": {
+      "sessionCard": {
+        "addSession": "Adicionar sessão",
+        "tickets_one": "{{count}} tipo de ingresso",
+        "tickets_other": "{{count}} tipos de ingresso",
+        "lots_one": "{{count}} lote",
+        "lots_other": "{{count}} lotes"
+      },
+      "drawer": {
+        "sectorAvailable_one": "Capacidade de {{count}} ingresso",
+        "sectorAvailable_other": "Capacidade de {{count}} ingressos",
+        "addSession": "Adicionar sessão",
+        "editSession": "Editar sessão",
+        "configureSession": "Configure a sessão de",
+        "sessionTime": "Horário da sessão",
+        "sessionReplicateError": "Não é possível replicar a sessão em todos os dias porque o horário definido está fora do período de realização do evento.",
+        "sessionReplicateErrorDescription": "Ajuste o horário do evento ou desative a opção de replicar para salvar.",
+        "tickets": "Ingressos da sessão",
+        "ticketsForSale": "ingressos para venda",
+        "selectAll": "Selecionar todos",
+        "replicateSession": "Replicar essa sessão em todos os dias",
+        "deleteSession": "Deletar sessão",
+        "deletedescription": "Deseja mesmo excluir essa sessão? Essa ação será irreversível.",
+        "cancel": "Cancelar",
+        "delete": "Excluir",
+        "save": "Salvar",
+        "startTime": "Hora de início",
+        "endTime": "Hora de encerramento",
+        "endDate": "Data de encerramento",
+        "sessionEndPlaceholder": "DD/MM/AAAA",
+        "unsavedChanges": "Alterações não salvas",
+        "unsavedChangesDescription": "Deseja sair sem salvar as alterações feitas na sessão?",
+        "continueWithoutSaving": "Continuar sem salvar",
+        "sessionEndDateOutOfBounds": "A data está fora do período de realização do evento",
+        "sessionStartDateOutOfBounds": "A data está fora do período de realização do evento",
+        "sessionDurationLessThan15Minutes": "Cada sessão precisa durar pelo menos 15 minutos.",
+        "required": "Campo obrigatório",
+        "personalization": "Personalizar sessão",
+        "personalizationDescription": "Ative para incluir imagem, título e descrição personalizados nesta sessão do evento.",
+        "title": "Título da sessão",
+        "titlePlaceholder": "Insira aqui o título da sessão",
+        "description": "Descrição da sessão (opcional)",
+        "descriptionPlaceholder": "Insira aqui a descrição da sessão",
+        "bannerUrl": "Capa da Sessão",
+        "alert": {
+          "title": "Desativar personalização da sessão?",
+          "content": "Ao desativar esta opção, a sessão será exibida sem título, descrição ou imagem para o público. Tem certeza de que deseja continuar?",
+          "confirmButton": "Desativar personalização",
+          "cancelButton": "Cancelar",
+          "SESSIONS_OVERLAP": "Há sessões sobrepostas, verifique as datas e horários.",
+          "DEFAULT": "Erro ao salvar sessão."
+        },
+        "fileError": "Erro ao fazer upload do arquivo, tente novamente."
+      }
+    },
+    "thumb": "Miniatura",
+    "endSalesDatePlaceHolder": "Data de Encerramento das Vendas",
+    "hideEventEndDate": {
+      "label": "Não mostrar término do evento",
+      "updateErrorText": "O evento foi criado, mas não foi possível salvar a preferência de ocultar a data de término. Ajuste na tela de edição do evento."
+    }
+  },
+  "editEvent": {
+    "startDate": "Data e horário de início",
+    "endDate": "Data e horário de término",
+    "limitDate": "Data e horário limite para vendas",
+    "limitDatePlaceholder": "Data e horário limite",
+    "removeDaysWithSessions": "Você retirou dias do período que já possuiam ingressos configurados. Ao continuar, as sessões criadas para os dias que saíram serão excluídas. Deseja continuar?"
+  },
+  "ticketEventTransform": {
+    "sailsLimit": "Data e hora limite para vendas.",
+    "sailsLimitError": "A data limite é obrigatória"
+  },
+  "dataInsights": {
+    "title": "Insights de dados",
+    "subtitle": "Aqui você encontra informações detalhadas sobre o desempenho do seu evento."
+  },
+  "acquirer": "Adquirente",
+  "clickToPayConfig": {
+    "switchLabel": "Aplicar desconto em pagamentos via Click to Pay",
+    "discountLabel": "Desconto",
+    "discountPlaceholder": "Valor do desconto",
+    "cardIssuer": "Emissor do cartão",
+    "cardIssuerPlaceholder": "Selecione a bandeira",
+    "discountStartDate": "Data de Início",
+    "datePlaceholder": "DD/MM/AAAA",
+    "discountEndDate": "Data de término",
+    "errors": {
+      "min": "Selecione pelo menos um emissor",
+      "required": "Campo obrigatório",
+      "typeError": "Data inválida",
+      "positive": "O valor deve ser positivo",
+      "discountRange": "O valor não pode exceder 100%",
+      "discountEndDate": "A data deve ser posterior à data de início"
+    }
+  },
+  "onlinePaymentMethods": "Formas de pagamento online",
+  "dashboard": {
+    "empty": {
+      "title": "Ainda não tem nada por aqui",
+      "description": "Acompanhe os dados assim que seu primeiro ingresso for emitido.",
+      "filtered": "Nenhuma venda realizada no período selecionado"
+    },
+    "title": "Dashboard do evento",
+    "subtitle": "Acompanhe vendas, público e performance",
+    "error": "Erro ao carregar dados",
+    "filters": {
+      "overview": "Visão geral",
+      "audience": "Público",
+      "overview360": "Visão geral 360°",
+      "lastMonth": "Últimos 30 dias",
+      "today": "Hoje",
+      "lastWeek": "Última semana",
+      "custom": "Período personalizado"
+    },
+    "cards": {
+      "totalSales": "Total de vendas",
+      "emittedTickets": "Ingressos emitidos",
+      "emittedTicketsTooltip": "Soma de todos os ingressos emitidos para o evento, incluindo pagos, gratuitos e cortesias.",
+      "averageTicketPerOrder": "Ticket médio por ingresso",
+      "averageTicketPerOrderSubTitle": "Vendas por ingressos pagos ",
+      "completedOrders": "Pedidos concluídos",
+      "completedOrdersTooltip": "Total de pedidos realizados contendo ingressos pagos e pagamento concluído",
+      "averageTicketPerOrderTooltip": "Total de vendas dividido pela quantidade de ingressos pagos. Cortesias e gratuitos não são considerados.",
+      "totalSalesTooltip2": "Valor gerado através da venda de ingressos pagos e já emitidos. Não considera cortesias.",
+      "totalSalesTooltip1": "Valor gerado através da venda de ingressos pagos e já emitidos, descontando",
+      "totalSalesTooltip1b": "de taxas absorvidas. Não considera cortesias.",
+      "buyers": "Compradores",
+      "participants": "Participantes",
+      "avarageTicketPerSale": "Média de ingressos por pedidos",
+      "avarageTicketPerSaleTooltip": "Representa o total de ingressos vendidos, sem incluir cortesias ou ingressos gratuitos.",
+      "averageTicketPerParticipant": "Ticket médio por participante",
+      "participantsTooltip": "Representa o público total do evento, composto pela soma de ingressos vendidos e cortesias.",
+      "ticketsSold": "Ingressos pagos",
+      "ticketsSoldTooltip": "Representa o total de ingressos vendidos, sem incluir cortesias ou ingressos gratuitos.",
+      "courtesyIssued": "Cortesias / Gratuitos",
+      "courtesyIssuedTooltip": "Representa o total de cortesias e ingressos com valor igual a R$00,00 emitidos",
+      "today": "hoje",
+      "paid": "Pagos",
+      "courtesy": "Cortesias e Gratuitos"
+    },
+    "charts": {
+      "saleChannel": {
+        "title": "Por canal",
+        "online": "Online",
+        "physical": "Físico",
+        "value": "Valor",
+        "emptyState": "Nenhum dado disponível para exibir o gráfico"
+      },
+      "salesRhythm": {
+        "title": "Ritmo de vendas",
+        "dates": {
+          "all": "durante todo o período de vendas",
+          "today": "hoje",
+          "lastWeek": "na última semana",
+          "lastMonth": "nos últimos 30 dias",
+          "custom": "no período selecionado"
+        },
+        "revenue": {
+          "chart": "em vendas {{period}}",
+          "metrics": "Vendas realizadas",
+          "label": "Faturamento"
+        },
+        "tickets": {
+          "chart": "emitidos {{period}}",
+          "metrics": "Tickets realizados",
+          "label": "Ingressos"
+        },
+        "daily": "Por dia",
+        "monthly": "Por mês",
+        "projection": "Projeção",
+        "pending": "Pendentes",
+        "tooltip": {
+          "title": "Mostra o andamento das vendas ao longo do tempo.",
+          "by": "Por",
+          "article": "A",
+          "salesRealized": "Faturamento",
+          "tickets": "Ingressos",
+          "pending": "Pendentes",
+          "salesDescription": "exibe o valor líquido dos pedidos concluídos.",
+          "ticketsDescription": "mostra a quantidade vendida, sem cortesias.",
+          "projectionDescription": "soma pedidos concluídos e pendentes (incluindo retentativas)."
+        },
+        "summary": {
+          "ticket": "{{count}} ingresso",
+          "tickets": "{{count}} ingressos"
+        }
+      },
+      "statusComparison": {
+        "title": "Finalizados x abandonados",
+        "description": "Mostra a quantidade de pedidos finalizados e abandonados.",
+        "abandoned": "Abandonados",
+        "completed": "Finalizados",
+        "completedTooltip": "pedidos pagos com ingressos emitidos",
+        "abandonedTooltip": "compras iniciadas, mas não concluídas. Um pedido abandonado passa a ser contado como finalizado se concluído no prazo."
+      },
+      "paymentMethod": {
+        "title": "Por forma de pagamento",
+        "tooltip": "Valores vendidos por método de pagamento, com opção de filtrar entre vendas online (marketplace e app) e PDVs. Outros inclui Click To Pay e PicPay.",
+        "todos": "Todos",
+        "online": "Online",
+        "pdvs": "PDVs",
+        "pix": "PIX",
+        "credito": "Crédito",
+        "debito": "Débito",
+        "dinheiro": "Dinheiro",
+        "outros": "Outros"
+      },
+      "salesBySector": {
+        "title": "Vendas por setor",
+        "subtitle": "Mostra as vendas por setor e detalha valores por lote e tipo de ingresso.",
+        "emptyState": "Nenhum dado disponível para exibir o gráfico"
+      },
+      "salesByProduct": {
+        "title": "Vendas por produto",
+        "tooltip": "Valores líquidos por ingresso, lote e setor, já com taxas descontadas.",
+        "filter": {
+          "all": "Todos",
+          "paid": "Pagos",
+          "free": "Gratuitos"
+        },
+        "empty": "Nenhum dado disponível para exibir o gráfico",
+        "header": {
+          "product": "Produto",
+          "quantity": "Quantidade",
+          "value": "Receita total",
+          "unity": "Valor unit."
+        }
+      }
+    },
+    "audience": {
+      "error": "Erro ao carregar dados de audiência",
+      "newAndRecurring": {
+        "title": "Novo x recorrentes",
+        "new": "Novos",
+        "recurring": "Recorrentes"
+      },
+      "deviceType": {
+        "title": "Tipo de dispositivo"
+      },
+      "genderChart": {
+        "title": "Gênero",
+        "male": "Masculino",
+        "female": "Feminino",
+        "other": "Outros",
+        "noBinary": "Não binário",
+        "unknown": "Não informado",
+        "noDataAvailable": "Dados não disponíveis"
+      },
+      "genderLabels": {
+        "Feminino": "mulheres",
+        "Masculino": "homens",
+        "Não binário": "pessoas não binárias",
+        "Outros": "Outros",
+        "default": "pessoas"
+      },
+      "insights": {
+        "bestPrefix": "Seu perfil predominante de cliente são",
+        "highestPrefix": "Seu perfil de cliente com maior ticket médio são",
+        "tooltips": {
+          "best": "Resumo do grupo com maior participação, considerando gênero, faixa etária e localização.",
+          "highest": "Perfil (idade, gênero e região) com maior valor médio de compra. Não considera cortesias."
+        },
+        "noData": "Dados não disponíveis",
+        "age": {
+          "upTo18": " com até 18 anos",
+          "over60": " com mais de 60 anos",
+          "range": " com idade entre {{min}} e {{max}} anos",
+          "exact": " com idade {{value}}"
+        },
+        "state": {
+          "de": " de {{state}}",
+          "do": " do {{state}}",
+          "da": " da {{state}}"
+        }
+      },
+      "ageRangeChart": {
+        "title": "Faixa etária",
+        "upTo18": "Até 18",
+        "unknown": "Sem info"
+      },
+      "geographicChart": {
+        "title": "Origem geográfica do público",
+        "country": "País",
+        "state": "Estado",
+        "city": "Cidade"
+      }
+    },
+    "dateRangePicker": {
+      "all": "Todo período de vendas",
+      "today": "Hoje",
+      "lastWeek": "Últimos 7 dias",
+      "lastMonth": "Últimos 30 dias",
+      "custom": "Personalizado",
+      "cancel": "Cancelar",
+      "apply": "Aplicar",
+      "selectPeriod": "Selecione o período"
+    }
+  },
+  "changeEventStatusModal": {
+    "title": "Alterar status do evento",
+    "close": "Fechar",
+    "heading": "Selecione o novo status do evento",
+    "placeholder": "Selecionar status",
+    "cancel": "Cancelar",
+    "confirm": "Alterar",
+    "advance": "Avançar",
+    "talkToSupport": "Falar com suporte",
+    "refundRequiredWarning": "Será necessário completar a etapa de reembolso para concluir.",
+    "supportOnlyWarningCancel": "O cancelamento só é possível via suporte. Ao avançar, o WhatsApp com o time será aberto.",
+    "supportOnlyWarningPostpone": "O adiamento só é possível via suporte. Ao avançar, o WhatsApp com o time será aberto.",
+    "refundStep": {
+      "heading": "Configure o reembolso para alterar o status",
+      "subtitle": "É necessário configurar as opções de reembolso para compradores.",
+      "selfServiceTitle": "Reembolso self-service",
+      "selfServiceDescription": "Ao habilitar, a solicitação de reembolso fica disponível para compradores solicitarem. O valor é devolvido automaticamente e não contempla taxas de serviço.",
+      "reasonLabel": "Motivo",
+      "reasonPlaceholder": "Selecione um motivo para não habilitar o reembolso",
+      "reasonNotGuided": "A produção ainda não passou orientações",
+      "reasonGuidedNotToEnable": "A produção orientou a não habilitar",
+      "conclude": "Concluir",
+      "autoEnableWarningTitle": "O reembolso será automaticamente ligado em 7 dias.",
+      "autoEnableWarningDescription": "Caso não seja configurado no período, o reembolso será automaticamente habilitado.",
+      "notifyTitle": "Comunicar compradores",
+      "notifyDescription": "Ao habilitar, compradores receberão um e-mail com o passo a passo do reembolso.",
+      "sensitiveWarningTitle": "Essa ação é sensível e afeta o valor a receber do produtor.",
+      "sensitiveWarningDescription": "Certifique-se que a equipe de produção esteja de acordo com essa ação."
+    },
+    "success": {
+      "configure": "Configurar reembolso",
+      "canceledEnabled": {
+        "header": "Evento cancelado com reembolso habilitado",
+        "title": "O evento foi cancelado com o reembolso habilitado entre os dias {{start}} a {{end}}",
+        "subtitle": "Se desejar, configure o período e mais opções em Configurações de Vendas."
+      },
+      "canceledDisabled": {
+        "header": "Evento cancelado com reembolso desabilitado",
+        "title": "O evento foi cancelado com o reembolso desabilitado",
+        "subtitle": "Se necessário, habilite o reembolso a qualquer momento em Configurações de Vendas."
+      },
+      "postponedEnabled": {
+        "header": "Reembolso self-service habilitado",
+        "title": "O reembolso foi habilitado com sucesso e compradores podem solicitar",
+        "subtitle": "Se desejar, configure mais opções em Configurações de Venda."
+      },
+      "postponedDisabled": {
+        "header": "Evento adiado com reembolso desabilitado",
+        "title": "O evento foi adiado com o reembolso desabilitado",
+        "subtitle": "Se necessário, habilite o reembolso a qualquer momento em Configurações de Vendas."
+      }
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "sales": {
+    "header": {
+      "title": "Vendas",
+      "text": "Esta é uma página para análise das vendas dos eventos."
+    }
+  },
+  "salesTicketsAudit": {
+    "header": {
+      "title": "Auditoria de Vendas",
+      "subtitle": "Confira em detalhes as vendas e transações do painel."
+    },
+    "tabs": {
+      "buyer": "Comprador",
+      "participant": "Participante"
+    }
+  },
+  "audit": {
+    "drawer": {
+      "actionButtons": {
+        "changeStatus": "Alterar status",
+        "resendTickets": "Reenviar ingressos",
+        "cancelSale": "Cancelar venda",
+        "fullRefund": "Estorno Total",
+        "refundWithoutTaxes": "Estorno sem taxas",
+        "partialRefund": "Estorno Parcial"
+      },
+      "refundOptions": "Opções de estorno:",
+      "resendTicketsSuccess": "Ingresso reenviado com sucesso!",
+      "resendTicketsError": "Erro ao reenviar os ingressos!",
+      "changeStatusConfirm": {
+        "title": "Você tem certeza que deseja alterar o status desta venda?",
+        "confirm": "Sim, alterar!",
+        "cancel": "Não"
+      },
+      "changeStatusError": "Erro ao alterar o status!",
+      "checkinNotRealized": "Checkin não realizado!",
+      "notProvided": "Não informado!",
+      "tableHeader": {
+        "ticketNumber": "Nº Ingresso",
+        "ticketName": "Lote",
+        "participant": "Participante",
+        "checkin": "Checkin",
+        "value": "Valor",
+        "actions": "Ações"
+      },
+      "ticketsTitle": "Ingressos da compra:",
+      "antifraud": {
+        "title": "Informações da análise de fraude:",
+        "accessDetails": "Acessar detalhes da análise",
+        "status": "Status",
+        "recommendation": "Recomendação"
+      },
+      "buyer": {
+        "title": "Informações do comprador:",
+        "name": "Nome"
+      },
+      "emailNotProvided": "Email não informado!",
+      "transaction": {
+        "title": "Informações da transação:",
+        "transactionId": "ID Transação",
+        "chargeId": "ID Cobrança",
+        "origin": "Origem",
+        "discount": "Desconto",
+        "discountNotApplied": "Não aplicado",
+        "taxes": "Taxas",
+        "total": "Total",
+        "producerValue": "Valor do produtor",
+        "purchaseDate": "Data da compra",
+        "paymentMethod": "Forma de pagamento",
+        "card": "Cartão"
+      },
+      "event": {
+        "title": "Informações do evento:",
+        "name": "Nome",
+        "date": "Data"
+      },
+      "validator": {
+        "invalidValue": "O valor informado é inválido",
+        "greaterThanZero": "O valor informado deve ser maior que 0",
+        "lessThanTotal": "O valor informado deve ser menor que o valor total da compra",
+        "passwordRequired": "É necessário informar a senha para concluir a ação"
+      },
+      "confirmation": {
+        "partialRefund": "Você tem certeza que deseja estornar parcialmente esta venda?",
+        "fullRefund": "Você tem certeza que deseja estornar o valor de {{value}} desta venda?",
+        "confirmButtonText": "Sim, estornar pagamento!",
+        "cancelButtonText": "Não"
+      },
+      "attention": "Atenção",
+      "errorRefund": "Ocorreu um erro ao realizar o estorno. Tente novamente.",
+      "refundSuccess": "Venda estornada junto a operadora!",
+      "success": "Sucesso",
+      "insurance": {
+        "title": "Seguro Ingresso",
+        "insurance": "Contratado",
+        "insuranceNot": "Não contratado",
+        "insuranceValue": "Taxa do seguro",
+        "alertTitle": "Atenção: essa compra está protegida com seguro",
+        "alertContent": {
+          "1": "Prossiga com o estorno caso o evento tenha sido",
+          "2": "cancelado",
+          "3": "ou",
+          "4": "adiado",
+          "5": "Caso contrário, oriente o cliente a acionar o seguro contrato pela sua área do usuário."
+        },
+        "alertConfirmButton": "Avançar com estorno",
+        "alertCancelButton": "Voltar"
+      }
+    }
+  }
+}

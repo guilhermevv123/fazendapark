@@ -1,0 +1,47 @@
+{
+	"paymentMethods":{
+		"paymentBillet":"Boleto",
+		"paymentCard":"Cartão de Crédito",
+		"cash":"Dinheiro",
+		"pix":"PIX",
+		"picpay":"PicPay",
+		"debit":"Cartão de Débito"
+	},
+	"orderStatusNames":{
+		"partiallyRefunded":"Estornado parcialmente",
+		"canceled":"Cancelado",
+		"chargedBack":"Chargeback",
+		"dispute":"Disputa",
+		"discarded": "Descartado",
+		"internalError":"Erro interno",
+		"refunded":"Estornada",
+		"expired":"Expirada",
+		"failed":"Falhada",
+		"finished":"Finalizada",
+		"fraud":"Fraude",
+		"pending":"Pendente",
+		"refundProcessing":"Estorno em Processamento",
+		"waitingRefundSystem":"Aguardando estorno sistema",
+		"held":"Retida",
+		"reversed":"Revertida",
+		"fraudSuspect":"Com suspeita de fraude",
+		"analysis":"Em análise",
+		"new":"Nova",
+		"authorized":"Autorizada",
+		"pendingRetry":"Pendente (Retentativa)"
+	},
+	"antifraudStatus": {
+		"approved": "Aprovado",
+		"pending": "Aguardando revisão",
+		"declined": "Rejeitado",
+		"not_authorized": "Não autorizado",
+		"canceled": "Cancelado",
+		"fraud": "Fraude confirmada",
+		"not_analyzed": "Não analisado"
+	},
+	"antifraudRecommendation": {
+		"approve": "Aprovar",
+		"review": "Revisar",
+		"decline": "Rejeitar"
+	}
+}
