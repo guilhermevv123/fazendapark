@@ -239,8 +239,7 @@ const situacao: Record<string, { texto: string; classe: string }> = {
             quem está com fila na frente.
           -->
           <p v-if="semNenhumaTela" class="px-3 py-2 text-[13px] leading-snug text-ink-500">
-            Seu acesso é só o leitor de entrada. Peça a um master da sua organização
-            o link do portão.
+            Seu acesso é só o leitor de entrada.
           </p>
 
           <ul class="grid gap-0.5">

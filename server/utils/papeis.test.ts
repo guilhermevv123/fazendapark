@@ -1772,7 +1772,7 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
    * teste vermelho. A frase errada é pior que a tela em branco, porque quem
    * lê não tem como desconfiar dela.
    */
-  it('lista que deu 403 não vira "nenhum evento aqui ainda"', async () => {
+  it('lista que deu 403 não vira "nenhum evento aqui ainda" — a portaria é levada ao leitor', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
     // primeiro a premissa: é porta fechada MESMO. Sem isto o caso ficaria
@@ -1780,16 +1780,76 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
     expect((await bater('portaria', '/api/admin/eventos')).status,
       'a rota abriu pra portaria — este caso precisa de outro papel').toBe(403)
 
+    // Depois do 403 a tela pergunta ao servidor quais leitores este login abre,
+    // e o que ela desenha SEGUE a resposta. A prova segue a mesma régua: sem
+    // palpite de quantos eventos a organização semeada tem hoje.
+    const destino = await bater('portaria', '/api/portaria/destino')
+    expect(destino.status, JSON.stringify(destino.corpo)).toBe(200)
+    const eventos = destino.corpo.eventos as { id: string; nome: string }[]
+
     const html = await pagina('portaria', '/admin')
     const texto = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
 
     expect(texto, 'a tela disse à portaria que a produtora não tem evento — e tem')
       .not.toContain('Nenhum evento aqui ainda')
-    expect(texto, 'a recusa não foi nomeada: sem ela a tela fica muda em vez de honesta')
-      .toContain('não é do seu acesso')
     expect(texto, 'ofereceu "Criar evento" a quem leva 403 até pra listar')
       .not.toContain('Criar evento')
+
+    if (eventos.length === 1) {
+      // Um evento só: o login cai direto no leitor (o servidor redireciona).
+      // Antes disto a tela parava em "esta lista não é do seu acesso" — a
+      // portaria entrava com o login certo e não tinha pra onde ir.
+      expect(html, 'a portaria com um único evento ficou na lista morta em vez de cair no leitor')
+        .toMatch(/<title>Leitor de entrada/)
+      expect(texto, 'o beco sem saída voltou').not.toContain('não é do seu acesso')
+    } else if (eventos.length > 1) {
+      for (const e of eventos) {
+        expect(html, `faltou o leitor de "${e.nome}" na escolha`)
+          .toContain(`/admin/evento/${e.id}/validacao`)
+      }
+    } else {
+      expect(texto, 'sem evento no ar a tela tem que dizer isso, e não "sem acesso"')
+        .toContain('Nenhum evento com leitor aberto agora')
+    }
   }, PRAZO_TELA)
+
+  /**
+   * A rota que leva a portaria ao leitor mora em `/api/portaria/*`, que NÃO
+   * passa pelo porteiro nem pela tabela de áreas — ela nasceria aberta se a
+   * autenticação à mão sumisse. Os três casos abaixo são as três cercas dela.
+   */
+  it('a rota do leitor diz à portaria quais eventos abrir — id e nome, e mais nada', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const r = await bater('portaria', '/api/portaria/destino')
+    expect(r.status, JSON.stringify(r.corpo)).toBe(200)
+    const eventos = r.corpo.eventos as Record<string, unknown>[]
+    expect(eventos.map((e) => e.id), 'o evento em andamento da organização não veio')
+      .toContain(EVENTO)
+    for (const e of eventos) {
+      expect(Object.keys(e).sort(),
+        'a portaria recebeu mais que id e nome: a lista de eventos vazou por esta rota')
+        .toEqual(['id', 'nome'])
+    }
+  }, PRAZO)
+
+  it('a rota do leitor nega a quem não tem o leitor e a quem não entrou', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    expect((await bater('financeiro', '/api/portaria/destino')).status,
+      'financeiro não tem o leitor de entrada').toBe(403)
+    expect((await fetch(`${BASE}/api/portaria/destino`)).status,
+      'sem sessão a rota nasceu aberta').toBe(401)
+  }, PRAZO)
+
+  it('a rota do leitor não mostra evento de outra organização', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    // m1 é master de uma organização só dela, sem evento nenhum
+    const r = await bater('m1', '/api/portaria/destino')
+    expect(r.status, JSON.stringify(r.corpo)).toBe(200)
+    expect(r.corpo.eventos, 'a organização do lado não tem evento — veio o do parque').toEqual([])
+  }, PRAZO)
 
   /** O contrário: quem PODE ver a lista não pode ter perdido nada. */
   it('quem enxerga a lista continua com a lista, o botão e os filtros', async () => {
