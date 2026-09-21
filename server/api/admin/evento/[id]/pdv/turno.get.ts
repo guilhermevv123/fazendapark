@@ -10,6 +10,7 @@
  */
 import { q, q1, tx } from '../../../../../utils/db'
 import { contarTurno } from '../../../../../utils/caixa'
+import { PEDIDO_VIVO } from '../../../../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const eventId = getRouterParam(event, 'id')!
@@ -39,13 +40,37 @@ export default defineEventHandler(async (event) => {
        LEFT JOIN users u ON u.id = m.by_user
       WHERE m.shift_id = $1 ORDER BY m.at DESC`, [turnoId])
 
+  /**
+   * AS LINHAS PRECISAM SOMAR O TOTAL IMPRESSO ACIMA DELAS.
+   *
+   * `contarTurno` conta o turno por pedido VIVO — `SUM(total − refunded)` em
+   * `'pago'` E `'estornado_parcial'` — e esta lista recortava por
+   * `status = 'pago'`. O pedido do qual o operador devolveu R$ 20 sumia da
+   * lista inteiro e continuava dentro do total: medido na fixture, contagem
+   * de R$ 1.415,00 em 2 pedidos com UMA linha de R$ 500,00 na tela. O
+   * operador confere a gaveta somando linhas que não fecham com o número
+   * impresso logo acima, e não tem como descobrir qual venda falta.
+   *
+   * Duas coisas vêm junto com a linha de volta, porque só trazê-la de volta
+   * trocaria um buraco de R$ 935 por um de R$ 20:
+   *
+   * - `estornadoCents`, o que voltou pra mão do cliente naquela venda;
+   * - `naGavetaCents` = `total − estornado`, que é EXATAMENTE a parcela com
+   *   que aquela linha entra em `contarTurno`. É esta coluna que soma o
+   *   total, e é por isso que ela existe em vez de deixar quem lê refazer a
+   *   subtração.
+   *
+   * `status` vai junto pra a tela poder dizer POR QUE aquela linha vale menos
+   * do que foi vendido, em vez de mostrar dois números sem explicação.
+   */
   const vendas = await q<any>(
-    `SELECT o.id, o.code, o.total_cents, o.payment_method, o.paid_at,
+    `SELECT o.id, o.code, o.status, o.total_cents, o.refunded_cents,
+            o.payment_method, o.paid_at,
             o.cash_received_cents, o.change_cents,
             COALESCE(c.name, '—') AS comprador,
             (SELECT count(*)::int FROM tickets t WHERE t.order_id = o.id) AS ingressos
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
-      WHERE o.pos_shift_id = $1 AND o.status = 'pago'
+      WHERE o.pos_shift_id = $1 AND ${PEDIDO_VIVO('o.')}
       ORDER BY o.paid_at DESC LIMIT 100`, [turnoId])
 
   return {
@@ -70,7 +95,12 @@ export default defineEventHandler(async (event) => {
       motivo: m.reason, em: m.at, por: m.por,
     })),
     vendas: vendas.map((v) => ({
-      id: v.id, codigo: v.code, totalCents: Number(v.total_cents),
+      id: v.id, codigo: v.code, situacao: v.status, totalCents: Number(v.total_cents),
+      // o que voltou pra mão do cliente nesta venda
+      estornadoCents: Number(v.refunded_cents),
+      // a parcela com que esta linha entra na contagem do turno — a soma desta
+      // coluna é o total impresso no alto da tela
+      naGavetaCents: Number(v.total_cents) - Number(v.refunded_cents),
       forma: v.payment_method, em: v.paid_at, comprador: v.comprador, ingressos: v.ingressos,
       recebidoCents: v.cash_received_cents === null ? null : Number(v.cash_received_cents),
       trocoCents: v.change_cents === null ? null : Number(v.change_cents),

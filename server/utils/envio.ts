@@ -437,6 +437,46 @@ export function instanciaDoProcesso(): string {
 }
 
 /**
+ * A tabela do carimbo, UMA LINHA POR PROCESSO (migração 026).
+ *
+ * Até a 025 a chave era só `worker`: as duas instâncias de um deploy com mais
+ * de um contêiner escreviam a MESMA linha, e quem batia por último apagava o
+ * rastro da outra. Medido no banco com o INSERT literal daqui: maquinaA morta
+ * há 10 min, maquinaB batendo — uma linha só, `bateu_ha = 0`, e a tela
+ * respondendo "Andando" com metade da frota parada.
+ *
+ * `worker_heartbeats` continua existindo e é o que a tela de saúde lê: virou
+ * uma VISÃO que resume a frota numa linha por fila, com o `beat_at` da
+ * instância ligada mais CALADA — a viva não empresta o carimbo pra morta. Por
+ * isso escrever aqui é sempre na tabela física, e ler sobre "a fila" é sempre
+ * na visão.
+ */
+const TABELA_DO_PONTO = 'worker_heartbeat_instances'
+
+/**
+ * As filas de que ESTE processo já bateu a saída.
+ *
+ * O gancho `close` do Nitro apaga a linha, mas NÃO para o laço — e a varredura
+ * que começou antes do SIGTERM continua rodando (entregar por SMTP leva
+ * segundos) e termina chamando `baterPonto`, que é um `INSERT ... ON CONFLICT`
+ * e RECRIA a linha recém-apagada. Medido: `anunciarWorker` → `encerrarPonto` →
+ * `baterPonto` deixa a linha de volta no banco.
+ *
+ * A linha que volta nasce com os PADRÕES da coluna — `status = 'ligado'`,
+ * `beats = true`, `booted_at = now()` — e o processo morre logo depois. Em
+ * Docker o contêiner novo tem outro hostname, então a limpeza de mesma-máquina
+ * do `anunciarWorker` nunca alcança esse fantasma: ele fica no painel pra
+ * sempre, um por deploy que pegou uma varredura em voo. É o alarme falso
+ * diário que a 026 foi escrita pra evitar, entrando pela porta dos fundos.
+ *
+ * Por fila, e não global: uma fila pode sair enquanto a outra continua. E
+ * `anunciarWorker` tira dela de novo — quem anuncia está de volta ao trabalho,
+ * e uma mordaça permanente esconderia a fila VIVA, que é estrago maior que o
+ * fantasma.
+ */
+const SAIRAM = new Set<string>()
+
+/**
  * Registra que o trabalhador SUBIU (ou que está desligado de propósito).
  *
  * Chamado pelo plugin no boot, uma vez por processo. Sem esta linha, a tela
@@ -457,17 +497,42 @@ export async function anunciarWorker(
    */
   carimba = true,
 ): Promise<void> {
+  const instancia = instanciaDoProcesso()
+  // Anunciar é o contrário de sair: este processo voltou a atender esta fila.
+  SAIRAM.delete(worker)
+
   await engolir(q(
-    `INSERT INTO worker_heartbeats (worker, status, instance, beat_ms, beats,
-                                    booted_at, beat_at)
+    `INSERT INTO ${TABELA_DO_PONTO} (worker, status, instance, beat_ms, beats,
+                                     booted_at, beat_at)
      VALUES ($1::text, $2::text, $3::text, $4::int, $5::boolean, now(), now())
-     ON CONFLICT (worker) DO UPDATE SET
-       status = EXCLUDED.status, instance = EXCLUDED.instance,
+     ON CONFLICT (worker, instance) DO UPDATE SET
+       status = EXCLUDED.status,
        beat_ms = EXCLUDED.beat_ms, beats = EXCLUDED.beats,
        booted_at = now(), beat_at = now(),
        last_error = NULL`,
-    [worker, ligado ? 'ligado' : 'desligado', instanciaDoProcesso(),
-     regua(intervaloMs), carimba]))
+    [worker, ligado ? 'ligado' : 'desligado', instancia, regua(intervaloMs), carimba]))
+
+  // A vida ANTERIOR deste mesmo lugar sai da frota agora.
+  //
+  // Chave por processo cria um lixo que a chave por fila não tinha: cada
+  // reinício é um pid novo e a linha do pid velho fica calada pra sempre. Sem
+  // esta limpeza, a tela acusaria uma instância morta depois de TODO deploy e
+  // de todo `npm run dev` — alarme falso diário, que é como se ensina o
+  // operador a não olhar mais a tela.
+  //
+  // A régua é a mesma da visão (026): mesma fila, mesma MÁQUINA, e já calada
+  // além da própria tolerância. O irmão que está vivo bate a cada 15 s e nunca
+  // cai nessa janela, então derrubar o processo antigo não derruba o que está
+  // trabalhando ao lado. Instância de OUTRA máquina não é tocada — essa,
+  // calada, é morte de verdade e tem que continuar aparecendo.
+  await engolir(q(
+    `DELETE FROM ${TABELA_DO_PONTO}
+      WHERE worker = $1::text
+        AND instance <> $2::text
+        AND maquina_da_instancia(instance) = maquina_da_instancia($2::text)
+        AND beat_at < now() - make_interval(
+              secs => GREATEST(45, (COALESCE(beat_ms, 15000) * 3) / 1000.0))`,
+    [worker, instancia]))
 }
 
 /**
@@ -500,6 +565,14 @@ function regua(ms?: number | null): number | null {
  * Falha de batida NUNCA derruba a fila: o ponto é um registro sobre o
  * trabalho, não o trabalho. Se o banco piscar na hora do carimbo, o ingresso
  * ainda tem que sair.
+ *
+ * **Quem bate o ponto tem que bater a SAÍDA também.** Desde a 026 cada
+ * processo tem a sua linha, então um processo curto que carimba uma fila de
+ * verdade e vai embora (um teste, um script de terminal) deixa uma instância
+ * fantasma, calada pra sempre — e a tela passa a acusar de parada uma fila que
+ * está trabalhando. O laço de fundo é longo e sai pelo `encerrarPonto()` do
+ * gancho `close` (`server/plugins/00.filas.ts`); quem não for laço chama o
+ * `encerrarPonto()` na mão.
  */
 export async function baterPonto(
   worker: string,
@@ -509,16 +582,27 @@ export async function baterPonto(
     intervaloMs?: number | null
   } = {},
 ): Promise<void> {
+  // Já bateu a saída nesta fila: a varredura que estava em voo quando o
+  // SIGTERM chegou não recria a linha que o `encerrarPonto` apagou. Ver
+  // `SAIRAM`. Sai calado de propósito — é o fim normal de um desligamento, não
+  // um erro pra sujar o log do deploy.
+  if (SAIRAM.has(worker)) return
+
   const feitos = o.feitos ?? 0
   const falhos = o.falhos ?? 0
-  // `instance` NÃO se mexe aqui, e isso custou uma tela mentindo.
+  // `instance` é METADE DA CHAVE, e isso custou uma tela mentindo.
   //
   // `instance` e `booted_at` são o mesmo fato: QUAL processo subiu e QUANDO.
   // Quem escreve os dois juntos é `anunciarWorker`, no boot. Quando a batida
-  // também reescrevia `instance`, a linha passava a misturar dois processos —
-  // medido na tela: `subiuEm 06:29:50` com `instancia :21600`, e o 21600 não
-  // tinha subido àquela hora. Numa investigação de "o ingresso não saiu às
-  // 21h", esse par manda olhar o log do processo errado.
+  // reescrevia `instance` na linha do outro, ela passava a misturar dois
+  // processos — medido na tela: `subiuEm 06:29:50` com `instancia :21600`, e o
+  // 21600 não tinha subido àquela hora. Numa investigação de "o ingresso não
+  // saiu às 21h", esse par manda olhar o log do processo errado.
+  //
+  // Com a chave por `(worker, instance)` (026) isso deixou de depender de
+  // cuidado: a batida de um processo não alcança a linha de outro nem se
+  // quiser. O que ela ainda não pode é apagar a hora de subida da PRÓPRIA
+  // linha — por isso `booted_at` continua fora do UPDATE.
   //
   // A régua do UPDATE vai por COALESCE: batida sem régua na mão não apaga a
   // que o anúncio do boot gravou. Sem isso, a tela de saúde perderia a
@@ -531,20 +615,45 @@ export async function baterPonto(
   // batida nunca chegando ao banco. Foi assim que este mesmo INSERT rodou
   // três varreduras seguidas sem gravar nada.
   await engolir(q(
-    `INSERT INTO worker_heartbeats (worker, instance, beat_ms, beat_at, worked_at,
-                                    done, failed, last_error)
+    `INSERT INTO ${TABELA_DO_PONTO} (worker, instance, beat_ms, beat_at, worked_at,
+                                     done, failed, last_error)
      VALUES ($1::text, $2::text, $3::int, now(),
              CASE WHEN $4::int + $5::int > 0 THEN now() END,
              $4::int, $5::int, $6::text)
-     ON CONFLICT (worker) DO UPDATE SET
-       beat_ms = COALESCE(EXCLUDED.beat_ms, worker_heartbeats.beat_ms),
+     ON CONFLICT (worker, instance) DO UPDATE SET
+       beat_ms = COALESCE(EXCLUDED.beat_ms, ${TABELA_DO_PONTO}.beat_ms),
        beat_at = now(),
-       worked_at = COALESCE(EXCLUDED.worked_at, worker_heartbeats.worked_at),
-       done = worker_heartbeats.done + EXCLUDED.done,
-       failed = worker_heartbeats.failed + EXCLUDED.failed,
-       last_error = COALESCE(EXCLUDED.last_error, worker_heartbeats.last_error)`,
+       worked_at = COALESCE(EXCLUDED.worked_at, ${TABELA_DO_PONTO}.worked_at),
+       done = ${TABELA_DO_PONTO}.done + EXCLUDED.done,
+       failed = ${TABELA_DO_PONTO}.failed + EXCLUDED.failed,
+       last_error = COALESCE(EXCLUDED.last_error, ${TABELA_DO_PONTO}.last_error)`,
     [worker, instanciaDoProcesso(), regua(o.intervaloMs ?? INTERVALO_MS),
      feitos, falhos, o.erro ?? null]))
+}
+
+/**
+ * O ponto de SAÍDA: este processo está saindo de propósito.
+ *
+ * Sem ele, a diferença entre "desligaram esta máquina" e "esta máquina morreu"
+ * não existe no banco — as duas deixam uma linha calada pra sempre, e a tela
+ * de saúde passa a acusar uma instância que ninguém quer de volta. Alarme que
+ * não tem como ser resolvido é alarme que o operador aprende a ignorar, e aí
+ * ele ignora junto o dia em que a instância caiu de verdade.
+ *
+ * Quem chama é o gancho `close` do Nitro (`server/plugins/00.filas.ts`), que
+ * roda no SIGTERM de um deploy ou de um `docker stop`. Queda seca — OOM,
+ * energia, `kill -9` — não passa por aqui, e é exatamente isso que se quer:
+ * essa linha FICA, calada, acusando. Saída limpa some da frota; morte, não.
+ *
+ * A marca em `SAIRAM` vem ANTES do `DELETE`: entre marcar e apagar não pode
+ * caber uma batida da varredura em voo, senão ela grava a linha depois do
+ * apagamento e o fantasma nasce exatamente no lugar que este conserto fecha.
+ */
+export async function encerrarPonto(worker: string): Promise<void> {
+  SAIRAM.add(worker)
+  await engolir(q(
+    `DELETE FROM ${TABELA_DO_PONTO} WHERE worker = $1::text AND instance = $2::text`,
+    [worker, instanciaDoProcesso()]))
 }
 
 /** Erro de carimbo vira uma linha no log, nunca uma exceção que sobe. */

@@ -8,10 +8,23 @@
  * A regra de liberação é a MESMA do financeiro por evento, importada de
  * `utils/retencao`. Duas definições de "quando o dinheiro libera" é a receita
  * pra esta tela dizer que tem saldo e a outra dizer que não tem.
+ *
+ * ## A régua do dinheiro aqui é `PEDIDO_VIVO()`, em TODO campo
+ *
+ * O líquido desta rota já saía de `utils/liquido.ts` e batia com as outras
+ * telas; face, taxa, contagem de pedido, a curva por mês e a quebra por forma
+ * de pagamento continuavam cada uma com `status = 'pago'`. É o mesmo defeito,
+ * só que escrito dentro do `FILTER` em vez do `WHERE`: o pedido com estorno
+ * PARCIAL cai fora antes de a soma chegar nele.
+ *
+ * Medido lado a lado no mesmo evento, antes: face R$ 1.500,00 aqui contra
+ * R$ 2.450,00 no borderô/painel/relatórios; a quebra por forma somando
+ * R$ 1.900,00 contra R$ 2.835,00 de cobrado. Um evento em que a face aparece
+ * MENOR que o próprio líquido — e a tela inteira verde.
  */
 import { q, q1 } from '../../utils/db'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../utils/retencao'
-import { SQL_LIQUIDO } from '../../utils/liquido'
+import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const orgId = (event.context as any).sessao?.orgId
@@ -27,6 +40,7 @@ export default defineEventHandler(async (event) => {
               COALESCE(v.estornado, 0)::bigint AS estornado,
               COALESCE(v.liquido, 0)::bigint   AS liquido,
               COALESCE(v.pedidos, 0)::int      AS pedidos,
+              COALESCE(v.fechados, 0)::int     AS fechados,
               COALESCE(t.transferido, 0)::bigint AS transferido,
               COALESCE(t.em_curso, 0)::bigint    AS em_curso
          FROM events e
@@ -37,10 +51,26 @@ export default defineEventHandler(async (event) => {
            -- fora antes de a conta do líquido filtrar: uma devolução de
            -- R$ 20 apagava um pedido de R$ 850 do caixa da organização, e o
            -- estorno em si também sumia da coluna que devia mostrá-lo.
-           SELECT SUM(face_cents) FILTER (WHERE status = 'pago')  AS face,
-                  SUM(fee_cents)  FILTER (WHERE status = 'pago')  AS taxa,
+           --
+           -- Trocar o WHERE por FILTER consertou só o líquido; face, taxa e a
+           -- contagem seguiram recortando por 'pago', que é o MESMO defeito
+           -- escrito dentro de cada soma. Medido lado a lado no mesmo evento:
+           -- face R$ 1.500,00 aqui contra R$ 2.450,00 no borderô, no painel e
+           -- em relatórios, com o líquido igual nas quatro — a linha do
+           -- financeiro da organização mostrando uma face MENOR que o próprio
+           -- líquido, que é aritmeticamente impossível e ninguém percebeu.
+           --
+           -- Daqui pra frente todo FILTER de dinheiro desta rota é
+           -- PEDIDO_VIVO(), e a contagem de "quantos fecharam sem devolver
+           -- nada" continua existindo com nome próprio.
+           -- (sem crase em comentário de SQL: dentro de template literal ela
+           --  fecha a string e o erro sai em OUTRO arquivo — foi o que
+           --  aconteceu na primeira versão desta linha.)
+           SELECT SUM(face_cents) FILTER (WHERE ${PEDIDO_VIVO()}) AS face,
+                  SUM(fee_cents)  FILTER (WHERE ${PEDIDO_VIVO()}) AS taxa,
                   SUM(refunded_cents)                             AS estornado,
-                  COUNT(*)        FILTER (WHERE status = 'pago')  AS pedidos,
+                  COUNT(*)        FILTER (WHERE ${PEDIDO_VIVO()}) AS pedidos,
+                  COUNT(*)        FILTER (WHERE status = 'pago')  AS fechados,
                   ${SQL_LIQUIDO()} AS liquido
              FROM orders WHERE event_id = e.id
          ) v ON true
@@ -64,19 +94,28 @@ export default defineEventHandler(async (event) => {
 
     // Competência pelo PAGAMENTO, não pela criação do pedido: o mês em que o
     // dinheiro entrou é o mês que o contador quer ver.
+    //
+    // `PEDIDO_VIVO` e não `'pago'`: o gráfico de barras é uma decomposição da
+    // face total da tela, e com o recorte por 'pago' o mês em que alguém pediu
+    // reembolso parcial perdia a venda inteira — a barra encolhia e o total
+    // acima dela não, sem nada explicando a diferença.
     q<any>(
       `SELECT date_trunc('month', o.paid_at) AS mes,
               COALESCE(SUM(o.face_cents),0)::bigint AS face,
               COALESCE(SUM(o.fee_cents),0)::bigint  AS taxa,
               COUNT(*)::int AS pedidos
          FROM orders o
-        WHERE o.org_id = $1 AND o.status = 'pago' AND o.paid_at IS NOT NULL
+        WHERE o.org_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.paid_at IS NOT NULL
         GROUP BY 1 ORDER BY 1 DESC LIMIT 18`, [orgId]),
 
+    // Mesma régua: a quebra por forma de pagamento tem que somar o cobrado que
+    // as outras telas mostram. Com `status = 'pago'` ela somava R$ 1.900,00
+    // contra R$ 2.835,00 de cobrado no painel e em relatórios pelo mesmo
+    // período.
     q<any>(
       `SELECT payment_method AS forma, COUNT(*)::int AS pedidos,
               COALESCE(SUM(total_cents),0)::bigint AS cobrado
-         FROM orders WHERE org_id = $1 AND status = 'pago'
+         FROM orders WHERE org_id = $1 AND ${PEDIDO_VIVO()}
         GROUP BY 1 ORDER BY 3 DESC`, [orgId]),
   ])
 
@@ -99,7 +138,12 @@ export default defineEventHandler(async (event) => {
       id: e.id, nome: e.name, status: e.status,
       comeca: e.starts_at, termina: e.ends_at,
       liberado: e.liberado, liberaEm: e.libera_em,
+      // `pedidos` é a população que as somas ao lado usam — pedido que virou
+      // dinheiro, inclusive o que devolveu uma parte. É o mesmo número que
+      // relatórios e o painel chamam de `pedidos`.
       pedidos: e.pedidos,
+      // e a outra pergunta, a de sempre: quantos fecharam sem devolver nada
+      pedidosFechados: e.fechados,
       faceCents: Number(e.face), taxaCents: Number(e.taxa),
       estornadoCents: Number(e.estornado), liquidoCents: liquido,
       transferidoCents: t, emCursoCents: c,

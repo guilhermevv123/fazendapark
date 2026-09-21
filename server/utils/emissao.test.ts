@@ -591,4 +591,258 @@ describe('cortesia não é "o pedido fechou em zero"', () => {
       expect(d.ingressos[0].gratuito).toBe(true)
     }
   }, 30_000)
+
+  /**
+   * O TERCEIRO leitor: a ficha que o ATENDENTE abre com o cliente ao telefone.
+   *
+   * Participantes e a tela do comprador já sabiam a diferença; esta rota
+   * continuava devolvendo `cortesia: t.is_courtesy` cru. Medido antes do
+   * conserto, no pedido online com cupom de 100%:
+   * `ingressos[0].cortesia = true`. É esta tela que responde "eu paguei ou me
+   * deram?" — e ela respondia errado justamente pra quem usou o cupom.
+   *
+   * Devolva `t.is_courtesy` ali e este caso fica vermelho.
+   */
+  it('a ficha do atendente não chama de cortesia a venda que fechou em zero', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const ler = async (id: string) => {
+      const r = await fetch(`${BASE}/api/admin/pedido/${id}`,
+        { headers: { cookie }, signal: AbortSignal.timeout(20_000) })
+      const d: any = await r.json()
+      expect(r.status, `${id}: ${d.statusMessage ?? d.message ?? ''}`).toBe(200)
+      return d
+    }
+
+    const convite = await ler(cortesia.id)
+    expect(convite.ingressos.length).toBe(1)
+    expect(convite.ingressos[0].cortesia,
+      'o convite do patrocinador deixou de ser cortesia na ficha do atendente').toBe(true)
+    expect(convite.ingressos[0].gratuito,
+      'a cortesia entrou também como venda gratuita').toBe(false)
+
+    for (const [nome, caso] of [['promoção de 100%', promocao], ['criança', crianca]] as const) {
+      const d = await ler(caso.id)
+      expect(d.ingressos.length).toBe(1)
+      expect(d.ingressos[0].cortesia,
+        `o atendente lê CORTESIA no ingresso de ${nome}, que é VENDA`).toBe(false)
+      expect(d.ingressos[0].gratuito,
+        `a ficha não diz que o ingresso de ${nome} saiu sem dinheiro`).toBe(true)
+    }
+
+    // Os dois recortes particionam aqui também: nenhum ingresso nos dois, e
+    // nenhum marcado somindo dos dois. É o que mantém esta ficha, a lista da
+    // portaria e o borderô falando a mesma coisa sobre o mesmo ingresso.
+    for (const caso of [cortesia, promocao, crianca]) {
+      const d = await ler(caso.id)
+      const t = d.ingressos[0]
+      expect(t.cortesia !== t.gratuito,
+        `${t.codigo} caiu nos dois recortes (ou em nenhum) na ficha do pedido`).toBe(true)
+    }
+  }, 30_000)
+
+  /* =========================================================================
+   * A TELA, não a API
+   *
+   * Os dois casos abaixo leem o HTML que o servidor renderiza, porque o
+   * defeito que sobrou não estava na rota: a API já mandava os três campos e
+   * a tela mostrava um só. Isso não lança exceção, não suja o console e não
+   * deixa teste de API vermelho — só aparece olhando.
+   * ====================================================================== */
+
+  /** O `<td>` daquele código, do código até o fim da célula. */
+  function celulaDoCodigo(html: string, codigo: string): string | null {
+    const i = html.indexOf(codigo)
+    if (i < 0) return null
+    const fim = html.indexOf('</td>', i)
+    return fim < 0 ? null : html.slice(i, fim)
+  }
+
+  /** Os selos daquela linha, pelo texto. */
+  const selosDaLinha = (html: string, codigo: string) =>
+    [...(celulaDoCodigo(html, codigo) ?? '').matchAll(/<span[^>]*>([^<]*)<\/span>/g)]
+      .map((m) => m[1].trim()).filter(Boolean)
+
+  /**
+   * Três jeitos de entrar de graça, TRÊS selos com nome próprio.
+   *
+   * Medido no navegador (1440×900, `getComputedStyle`) antes do conserto:
+   *
+   *   - a venda que fechou em zero ficava SEM SELO NENHUM — o `<span>` nem
+   *     existia (`getBoundingClientRect().width` 0). O selo errado tinha sido
+   *     removido e nada entrou no lugar: o operador perdeu a informação de que
+   *     aquele ingresso saiu sem dinheiro;
+   *   - o ingresso SEM PEDIDO recebia selo IDÊNTICO ao da cortesia de verdade
+   *     (`selo-neutro ml-1`, `rgb(90, 107, 132)`, 73.8px nas duas linhas) — a
+   *     tela afirmava uma origem que ninguém consegue provar.
+   *
+   * Volte a tela pra um `v-if="p.cortesia"` só e este caso cai duas vezes: o
+   * gratuito fica sem selo e o órfão volta a se disfarçar de convite.
+   */
+  it('a tela de Participantes dá selo próprio aos três — e a nenhum deles o mesmo', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const r = await fetch(`${BASE}/admin/evento/${eventId}/vendas/participantes`,
+      { headers: { cookie }, signal: AbortSignal.timeout(20_000) })
+    expect(r.status, 'a tela de Participantes não abriu').toBe(200)
+    const html = await r.text()
+
+    // A tela mostra a primeira página (50). Se a fixture crescer além disso,
+    // o caso passa a medir outra coisa — melhor cair dizendo o porquê.
+    const n = (await q1<any>(
+      `SELECT count(*)::int AS n FROM tickets WHERE event_id = $1`, [eventId]))!.n
+    expect(n, 'a fixture passou de uma página: os três casos saíram da tela medida')
+      .toBeLessThanOrEqual(50)
+
+    // Primeiro: as quatro linhas estão MESMO nesta tela. Sem isto, "ficou sem
+    // selo" lá embaixo confundiria "a tela não mostra o selo" com "a tela não
+    // mostra o ingresso".
+    const codigos = {
+      cortesia: cortesia.ingresso, gratuito: promocao.ingresso,
+      crianca: crianca.ingresso, semOrigem: codigoOrfao,
+    }
+    for (const [nome, codigo] of Object.entries(codigos)) {
+      expect(celulaDoCodigo(html, codigo), `${nome} (${codigo}) não apareceu na tela`)
+        .not.toBeNull()
+    }
+
+    const selo = Object.fromEntries(
+      Object.entries(codigos).map(([nome, codigo]) => [nome, selosDaLinha(html, codigo)]),
+    ) as Record<keyof typeof codigos, string[]>
+
+    // 1. ninguém que entrou de graça fica sem selo — foi assim que a venda
+    //    gratuita sumiu da tela depois que o selo errado saiu.
+    for (const [nome, s] of Object.entries(selo)) {
+      expect(s.length, `${nome}: o ingresso gratuito ficou sem selo nenhum na tela`)
+        .toBeGreaterThan(0)
+    }
+
+    // 2. cada um com o nome DELE.
+    expect(selo.cortesia).toContain('CORTESIA')
+    expect(selo.gratuito.join(' '),
+      'a venda com cupom de 100% voltou a ser chamada de cortesia na tela')
+      .not.toMatch(/CORTESIA/)
+    expect(selo.crianca.join(' ')).not.toMatch(/CORTESIA/)
+    expect(selo.gratuito, 'a venda gratuita e a criança não saem com o mesmo selo')
+      .toEqual(selo.crianca)
+
+    // 3. e o que ninguém consegue provar não se passa pelo convite.
+    expect(selo.semOrigem.join(' '),
+      'o ingresso sem pedido recebeu o mesmo selo da cortesia de verdade')
+      .not.toEqual(selo.cortesia.join(' '))
+
+    // 4. o rodapé continua explicando o que tem dentro do número dele: sem
+    //    esta linha, "Cortesias 2" com um selo CORTESIA na tela é contradição.
+    expect(html, 'a tela deixou de avisar que há cortesia sem origem registrada')
+      .toMatch(/origem não registrada/)
+  }, 30_000)
+
+  /**
+   * A nota do KPI empresta um número da OUTRA tela — e só pode fazer isso
+   * quando as duas estão olhando o mesmo conjunto.
+   *
+   * O borderô conta o evento INTEIRO. Esta lista conta o que o filtro deixou
+   * passar. Enquanto a frase era uma só, bastava ligar o filtro de setor pra
+   * ela virar uma afirmação errada sobre a tela do lado. Medido no navegador
+   * (1440×900), fixture com 5 cortesias no evento (1 cancelada) e o filtro
+   * num setor que tem 2 (1 cancelada):
+   *
+   *     a tela dizia  "1 cancelada(s) — o borderô mostra 1"
+   *     o borderô diz  4
+   *
+   * Errado por 3, com as duas abertas lado a lado — a discussão com o sócio
+   * que esta nota nasceu justamente pra evitar. Nada estourava: é a classe de
+   * bug que só aparece olhando.
+   *
+   * O caso trava as DUAS metades do conserto, e cai se qualquer uma sumir:
+   *
+   *  1. o filtro mora na URL (regra da casa), senão `?setor=` nem chega ao
+   *     desenho e não existe tela filtrada pra medir de fora;
+   *  2. filtrada, a tela fala por si; inteira, o número que ela atribui ao
+   *     borderô é o do borderô, conferido na rota dele no mesmo instante.
+   */
+  it('a nota do KPI não atribui ao borderô um número que o borderô não mostra', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const tela = async (qs: string) => {
+      const r = await fetch(
+        `${BASE}/admin/evento/${eventId}/vendas/participantes${qs}`,
+        { headers: { cookie }, signal: AbortSignal.timeout(20_000) })
+      expect(r.status, `a tela de Participantes não abriu (${qs || 'sem filtro'})`).toBe(200)
+      // Comentário some junto com a tag: o texto do comentário desta tela
+      // CITA a frase antiga, e sem tirá-lo o caso acharia a nota no lugar
+      // errado e passaria com a tela mentindo.
+      return (await r.text())
+        .replace(/<!--[\s\S]*?-->/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+    }
+
+    const bordero: any = await (await fetch(
+      `${BASE}/api/admin/evento/${eventId}/bordero`, { headers: { cookie } })).json()
+
+    /* ---- a tela inteira: pode emprestar o número, e ele tem que bater ---- */
+    const inteira = await tela('')
+    const citada = inteira.match(/(\d+) cancelada\(s\) — o borderô mostra (\d+)/)
+    expect(citada,
+      'a tela parou de explicar por que o borderô mostra um número menor de cortesias')
+      .not.toBeNull()
+    expect(Number(citada![2]),
+      'a tela diz ao produtor um número de borderô que o borderô não mostra')
+      .toBe(bordero.totais.cortesias)
+
+    /* ---- filtrada: ela fala por si, nunca pelo borderô ---- */
+    const filtrada = await tela(`?setor=${setorCancelada}`)
+
+    // Antes de tudo: o filtro CHEGOU. Sem isto, "não falou do borderô"
+    // passaria à toa no dia em que o `?setor=` voltasse a ser ignorado.
+    expect(filtrada, 'o `?setor=` da URL não filtrou a tela — o link não vale nada')
+      .not.toMatch(new RegExp(cortesia.ingresso))
+    expect(filtrada, 'a cortesia cancelada sumiu do setor dela — o caso mede outra coisa')
+      .toMatch(/cancelada\(s\)/)
+
+    expect(filtrada,
+      'com filtro ligado a tela continua falando pelo borderô, que conta o evento inteiro')
+      .not.toMatch(/o borderô mostra/)
+    expect(filtrada, 'filtrada, a tela não diz quantas cortesias ocupam lugar no recorte')
+      .toMatch(/cancelada\(s\) — \d+ ocupa\(m\) lugar dentro deste filtro/)
+  }, 30_000)
+
+  /**
+   * Rótulo sem valor é pior que ausência.
+   *
+   * Desde que o convite parou de dar 404, a ficha dele ABRE — e abria com
+   * "Comprador" em cima de nada (medido: `textContent` `""`, `offsetHeight`
+   * 0), porque cortesia não tem comprador: quem recebe o convite não
+   * preencheu formulário nenhum. Quem lê conclui que o sistema perdeu o dado.
+   *
+   * A trava é dupla: nenhum rótulo desta ficha aparece sem valor, e o nome
+   * que aparece no convite é o de quem RECEBEU.
+   */
+  it('no convite, a ficha nomeia quem RECEBEU — e nenhum rótulo fica sem valor', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const ler = async (code: string) => {
+      const r = await fetch(`${BASE}/ingressos/${code}`,
+        { signal: AbortSignal.timeout(20_000) })
+      expect(r.status, `a ficha de ${code} não abriu`).toBe(200)
+      return r.text()
+    }
+    const pares = (html: string) =>
+      [...html.matchAll(/<p class="text-xs text-tinta-fraca">([^<]*)<\/p><p[^>]*>([^<]*)<\/p>/g)]
+        .map((m) => [m[1].trim(), m[2].trim()] as const)
+
+    const convite = pares(await ler(cortesia.code))
+    expect(convite.length, 'o cabeçalho da ficha mudou de forma — o caso parou de medi-lo')
+      .toBeGreaterThan(1)
+    for (const [rotulo, valor] of convite) {
+      expect(valor, `o convite mostra o rótulo "${rotulo}" sem valor nenhum embaixo`).not.toBe('')
+    }
+    expect(convite.map(([r]) => r),
+      'o convite ainda pede "Comprador" a quem não comprou nada').not.toContain('Comprador')
+    expect(convite.map(([, v]) => v),
+      'o convite não diz quem recebeu — o nome está no INGRESSO').toContain('Jornal da Cidade')
+
+    // E quem COMPROU continua sendo chamado de comprador, com o nome dele.
+    const compra = pares(await ler(promocao.code))
+    expect(compra.map(([r]) => r), 'a compra deixou de nomear o comprador').toContain('Comprador')
+    expect(compra.map(([, v]) => v)).toContain('Maria Souza')
+    for (const [rotulo, valor] of compra) {
+      expect(valor, `a compra mostra o rótulo "${rotulo}" sem valor nenhum embaixo`).not.toBe('')
+    }
+  }, 30_000)
 })

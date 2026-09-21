@@ -285,13 +285,13 @@ async function pedirEstorno(
  */
 async function explicarRecusa(c: PoolClient, orderId: string) {
   const { rows } = await c.query(
-    `SELECT o.status,
+    `SELECT o.status, o.total_cents, o.refunded_cents,
             count(t.id) FILTER (WHERE t.status = 'usado' OR t.checked_in_at IS NOT NULL)::int AS entraram,
             count(t.id)::int AS ingressos
        FROM orders o
        LEFT JOIN tickets t ON t.order_id = o.id
       WHERE o.id = $1
-      GROUP BY o.status`, [orderId])
+      GROUP BY o.id, o.status`, [orderId])
   const r = rows[0]
   if (!r) return createError({ statusCode: 404, statusMessage: 'Venda não encontrada' })
 
@@ -301,10 +301,36 @@ async function explicarRecusa(c: PoolClient, orderId: string) {
       statusMessage: `${r.entraram} de ${r.ingressos} ingresso(s) desta venda já entraram no parque. Não dá para cancelar — o acerto é com o gerente.`,
     })
   }
+  /*
+   * Devolução PARCIAL não é venda cancelada, e dizer que é manda o operador
+   * embora com a informação errada.
+   *
+   * Isto era `r.status?.startsWith('estornado')`, que casa os dois status de
+   * uma vez. A frase só ficou alcançável quando a lista de vendas do turno
+   * passou a mostrar pedido vivo (antes o `WHERE status = 'pago'` escondia o
+   * parcial da tela, e com ele o botão): medido num pedido de R$ 935,00 com
+   * R$ 20,00 devolvidos, o guichê oferecia "Cancelar R$ 935,00" e a recusa
+   * respondia "Esta venda já foi cancelada" — com R$ 915,00 ainda na gaveta e
+   * o cliente na frente. Não há estorno em dobro, o dano é a frase.
+   *
+   * O guichê continua sem poder mexer: o que já foi devolvido saiu pelo
+   * gateway, e o acerto do que sobrou é do financeiro. Mas a recusa agora diz
+   * o que de fato aconteceu, e quanto.
+   */
+  if (r.status === 'estornado_parcial') {
+    const devolvido = Number(r.refunded_cents ?? 0)
+    const naGaveta = Math.max(Number(r.total_cents ?? 0) - devolvido, 0)
+    return createError({
+      statusCode: 409,
+      statusMessage: `Esta venda NÃO foi cancelada: ${brl(devolvido)} já foram devolvidos ao `
+        + `cliente e ${brl(naGaveta)} continuam com a produtora. O guichê não desfaz venda `
+        + 'com devolução no meio — quem acerta o que sobrou é o financeiro.',
+    })
+  }
   if (r.status !== 'pago') {
     return createError({
       statusCode: 409,
-      statusMessage: r.status === 'cancelado' || r.status?.startsWith('estornado')
+      statusMessage: r.status === 'cancelado' || r.status === 'estornado'
         ? 'Esta venda já foi cancelada.'
         : `Esta venda está como "${r.status}" e não pode ser cancelada no guichê.`,
     })

@@ -9,10 +9,43 @@
  * As situações abaixo são as que efetivamente aparecem na porta e no
  * atendimento, cada uma com a tela que resolve. O link não é decorativo —
  * é o destino real.
+ *
+ * ## Por que esta tela pergunta o papel
+ *
+ * Ela é uma parede de ATALHOS, e atalho pra porta fechada é pior aqui do que
+ * em qualquer outro lugar do painel: quem abre esta tela já está com problema
+ * e com fila na frente. Medido no HTML servido a uma sessão de OPERAÇÃO,
+ * antes deste filtro — quatro portas, e as quatro respondem 403 pra ela:
+ *
+ * | atalho oferecido                  | a rota por trás                    |
+ * |-----------------------------------|------------------------------------|
+ * | Abrir Equipe → `/admin/equipe`    | `GET /api/admin/equipe` → **403**  |
+ * | Abrir Configurações               | `GET /api/admin/organizacao` → **403** |
+ * | Abrir painel do evento (dashboard)| `GET .../dashboard` → **403**      |
+ * | Abrir Financeiro                  | `GET .../financeiro` → **403**     |
+ *
+ * O texto de cada situação CONTINUA na tela: ele é a explicação do que está
+ * acontecendo, e some seria trocar "não é o seu acesso" por "o sistema não
+ * cobre o seu caso". O que some é o BOTÃO, que vira a frase de quem procurar.
+ *
+ * A régua é a `podeAbrirPagina` de `server/utils/papeis.ts` — a MESMA que
+ * tranca a rota e que filtra a lateral. Uma segunda lista aqui envelheceria
+ * sozinha. Esconder não é proteção: quem tranca é o `middleware/03.papel.ts`.
  */
+import { ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
+
 definePageMeta({ layout: 'admin' })
 
 const { data: eventos } = await useFetch<any>('/api/admin/eventos')
+
+// mesma `key` do layout: nenhuma chamada a mais por navegação
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+const papel = computed<Papel | null>(() => {
+  const p = eu.value?.usuario?.papel
+  return ehPapel(p) ? p : null
+})
+/** Enquanto o papel não chegou, nada é oferecido — listar por otimismo é o defeito. */
+const podeAbrir = (para: string) => !!papel.value && podeAbrirPagina(papel.value, para)
 
 /** o evento que está acontecendo, ou o próximo — é sobre ele que perguntam */
 const foco = computed(() => {
@@ -28,7 +61,7 @@ const foco = computed(() => {
 
 const base = computed(() => (foco.value ? `/admin/evento/${foco.value.id}` : null))
 
-const SITUACOES = computed(() => [
+const TODAS_AS_SITUACOES = computed(() => [
   {
     titulo: 'O cliente diz que pagou e não recebeu o ingresso',
     o_que: 'Procure pelo e-mail, CPF ou código do pedido. A ficha mostra o histórico bruto '
@@ -76,6 +109,14 @@ const SITUACOES = computed(() => [
   },
 ])
 
+/**
+ * A mesma lista, com a resposta de quem abre cada porta. O card fica; o botão
+ * só existe quando o clique não termina em 403.
+ */
+const SITUACOES = computed(() => TODAS_AS_SITUACOES.value.map((s) => ({
+  ...s, aberta: podeAbrir(s.para),
+})))
+
 useHead({ title: 'Suporte' })
 </script>
 
@@ -99,7 +140,10 @@ useHead({ title: 'Suporte' })
           <template v-if="foco.cidade"> · {{ foco.cidade }}<template v-if="foco.estado">/{{ foco.estado }}</template></template>
         </p>
       </div>
-      <NuxtLink :to="`/admin/evento/${foco.id}/dashboard`" class="btn-secundario">
+      <!-- o painel do evento é a tela de faturamento do dia (área `dinheiro`):
+           quem é de operação não abre, e o botão não é desenhado pra ela -->
+      <NuxtLink v-if="podeAbrir(`/admin/evento/${foco.id}/dashboard`)"
+                :to="`/admin/evento/${foco.id}/dashboard`" class="btn-secundario">
         Abrir painel do evento
       </NuxtLink>
     </div>
@@ -108,7 +152,13 @@ useHead({ title: 'Suporte' })
       <article v-for="s in SITUACOES" :key="s.titulo" class="card flex flex-col">
         <h2 class="titulo text-base font-bold text-tinta">{{ s.titulo }}</h2>
         <p class="mt-2 flex-1 text-sm leading-relaxed text-tinta-suave">{{ s.o_que }}</p>
-        <NuxtLink :to="s.para" class="btn-secundario mt-3 self-start">{{ s.acao }}</NuxtLink>
+        <NuxtLink v-if="s.aberta" :to="s.para" class="btn-secundario mt-3 self-start">
+          {{ s.acao }}
+        </NuxtLink>
+        <!-- porta fechada não vira botão morto: vira quem procurar -->
+        <p v-else class="mt-3 text-xs text-tinta-fraca">
+          Esta tela não faz parte do seu acesso. Peça a um master da sua organização.
+        </p>
       </article>
     </div>
 

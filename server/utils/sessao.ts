@@ -20,8 +20,8 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { H3Event } from 'h3'
-import { q1, tx } from './db'
-import { ehPapel, papelDoRoleLegado, type Papel as PapelDaGrade } from './papeis'
+import { q, q1, tx } from './db'
+import { ehPapel, papelDoRoleLegado, type Papel } from './papeis'
 
 export const COOKIE = 'dt_sessao'
 const DIAS = 30
@@ -51,12 +51,26 @@ export type Sessao = {
   nome: string
   email: string
   /** `users.papel` — a grade fina, a mesma que tranca a rota. Use este. */
-  papelFino: PapelDaGrade
+  papelFino: Papel
   /** `users.role` — legado. Só `podeFazer`/`exigir` e o porteiro 01 leem. */
-  papel: Papel
+  papel: PapelLegado
 }
 
-export type Papel =
+/**
+ * O vocabulário de `users.role`, a grade GROSSA. **Não é o `Papel`** da grade
+ * fina (`utils/papeis.ts`): as palavras que coincidem não querem dizer a
+ * mesma coisa (`financeiro` fino chega no evento, `financeiro` legado não).
+ *
+ * O nome tem "Legado" porque este arquivo e o `papeis.ts` moram os dois em
+ * `server/utils`, que o Nitro varre pra montar o auto-import — e dois arquivos
+ * exportando `Papel` faziam o build avisar
+ * `Duplicated imports "Papel", the one from papeis.ts has been ignored`.
+ * Ninguém dependia do nome solto, mas o dia em que alguém escrevesse `Papel`
+ * sem importar levaria o tipo LEGADO em silêncio, com sete valores onde a
+ * grade fina tem quatro — e `papelPode(papel, 'dinheiro')` com um `admin`
+ * dentro não é erro de compilação, é `false` em produção.
+ */
+export type PapelLegado =
   | 'master' | 'admin' | 'financeiro' | 'marketing' | 'operacional' | 'portaria' | 'leitura'
 
 const hash = (t: string) => createHash('sha256').update(t).digest('hex')
@@ -74,6 +88,20 @@ export async function abrirSessao(event: H3Event, usuarioId: string) {
 
   await q1(`UPDATE users SET last_login_at = now() WHERE id = $1 RETURNING id`, [usuarioId])
 
+  /*
+   * Entrar escreve UM `Set-Cookie`, e isso é decisão, não descuido.
+   *
+   * A tentação é varrer aqui o resíduo dos outros caminhos, como o `sair` faz.
+   * Medido: com os `Max-Age=0` na frente, a resposta do login passa a começar
+   * por `Set-Cookie: dt_sessao=; Max-Age=0; Path=/api` — e TODO helper de
+   * login deste repositório (e o `/tmp/dt.sh`) pega o PRIMEIRO cabeçalho
+   * `dt_sessao=` da lista, que vira string vazia. Navegador aplica os cinco e
+   * não se importa; a suíte inteira entra sem cookie e responde 401.
+   *
+   * Quem varre resíduo é o `sair` (ver `CAMINHOS_DO_COOKIE`), e desde
+   * `lerSessao` olhar a lista inteira o resíduo deixou de esconder sessão
+   * viva — que era o estrago de verdade.
+   */
   setCookie(event, COOKIE, segredo, {
     httpOnly: true,
     sameSite: 'lax',
@@ -87,23 +115,56 @@ export async function abrirSessao(event: H3Event, usuarioId: string) {
   return segredo
 }
 
-/** Lê a sessão do cookie. Devolve null se não existe, expirou ou foi revogada. */
+/**
+ * Lê a sessão do cookie. Devolve null se não existe, expirou ou foi revogada.
+ *
+ * ## Por que ela olha TODOS os `dt_sessao`, e não o primeiro
+ *
+ * `encerrarSessao` já revogava por todos os valores do cabeçalho; esta aqui
+ * continuava em `getCookie`, que devolve UM — o primeiro. A assimetria tinha
+ * preço, e ele foi MEDIDO no servidor no ar, com a sessão viva no banco:
+ *
+ *     Cookie: dt_sessao=<resíduo>; dt_sessao=<bom>
+ *     GET /api/auth/eu   -> {"usuario":null}
+ *     GET /admin         -> 302 /entrar?de=/admin
+ *     banco              -> sessions.revoked_at NULL (a sessão está DE PÉ)
+ *
+ * Ou seja: o login respondia 200, gravava a linha, escrevia o cookie em
+ * `Path=/` — e o navegador continuava mandando o resíduo na frente (RFC 6265
+ * §5.4: caminho mais específico primeiro), então a próxima página jogava a
+ * pessoa de volta pro `/entrar`. Entrar de novo repete tudo: laço de login
+ * sem nenhuma mensagem de erro, com o sistema achando que ninguém tentou.
+ *
+ * A ordem do cabeçalho é mantida de propósito: quando o primeiro cookie é uma
+ * sessão boa, quem entra é exatamente quem `getCookie` escolheria. Isto aqui
+ * só passa a enxergar o que antes ficava invisível — nada que já funcionava
+ * muda de dono.
+ */
 export async function lerSessao(event: H3Event): Promise<Sessao | null> {
-  const segredo = getCookie(event, COOKIE)
-  if (!segredo) return null
+  const segredos = segredosDoCookie(event)
+  if (!segredos.length) return null
 
-  const linha = await q1<any>(
-    `SELECT s.id, s.last_seen_at, u.id AS uid, u.org_id, u.name, u.email,
+  // hash -> segredo, na ordem em que vieram no cabeçalho
+  const porHash = new Map(segredos.map((s) => [hash(s), s]))
+  const hashes = [...porHash.keys()]
+
+  const linhas = await q<any>(
+    `SELECT s.id, s.token_hash, s.last_seen_at, u.id AS uid, u.org_id, u.name, u.email,
             u.papel, u.role, u.active
        FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = $1
+      WHERE s.token_hash = ANY($1::text[])
         AND s.revoked_at IS NULL
         AND s.expires_at > now()`,
-    [hash(segredo)])
+    [hashes])
 
   // Usuário desativado perde o acesso na hora, sem precisar revogar sessão a
   // sessão: a checagem é no `active` do usuário, na leitura.
-  if (!linha || !linha.active) return null
+  const posicao = new Map(hashes.map((h, i) => [h, i]))
+  const linha = linhas
+    .filter((l) => l.active)
+    .sort((a, b) => (posicao.get(a.token_hash) ?? 0) - (posicao.get(b.token_hash) ?? 0))[0]
+  if (!linha) return null
+  const segredo = porHash.get(linha.token_hash)!
 
   // Renovação deslizante — mas só de hora em hora. Escrever no banco a cada
   // requisição transformaria a tabela de sessões no ponto mais quente do
@@ -127,24 +188,121 @@ export async function lerSessao(event: H3Event): Promise<Sessao | null> {
     // parcial) cai no papel derivado do `role` — a mesma regra do
     // `middleware/03.papel.ts`, pra sessão e porteiro nunca discordarem.
     papelFino: ehPapel(linha.papel) ? linha.papel : papelDoRoleLegado(linha.role),
-    papel: linha.role as Papel,
+    papel: linha.role as PapelLegado,
   }
 }
 
-export async function encerrarSessao(event: H3Event) {
-  const segredo = getCookie(event, COOKIE)
-  if (segredo) {
-    await q1(`UPDATE sessions SET revoked_at = now() WHERE token_hash = $1 RETURNING id`,
-      [hash(segredo)])
+/**
+ * TODO valor de `dt_sessao` que veio no cabeçalho — não só o primeiro.
+ *
+ * `getCookie` devolve UM: o `Cookie:` é um cabeçalho de texto e o parser fica
+ * com a primeira ocorrência do nome. O navegador manda mais de uma quando
+ * existem cookies de mesmo nome com `Path` diferente (resto de build antigo,
+ * por exemplo) e ordena o de caminho MAIS ESPECÍFICO na frente (RFC 6265 §5.4).
+ * Resultado medido no servidor no ar, antes disto:
+ *
+ *     POST /api/auth/sair   Cookie: dt_sessao=<lixo>; dt_sessao=<real>  -> 200 {ok:true}
+ *     GET  /api/auth/eu     Cookie: dt_sessao=<real>                    -> "Dono" (master)
+ *     GET  /admin           Cookie: dt_sessao=<real>                    -> renderizou o painel
+ *     banco: sessions.revoked_at do token real                          -> NULL
+ *
+ * Ou seja: a tela disse que saiu, e a sessão continuou de pé — o `UPDATE`
+ * tinha casado o hash do LIXO e alterado zero linha, em silêncio.
+ */
+function segredosDoCookie(event: H3Event): string[] {
+  const bruto = getRequestHeader(event, 'cookie') ?? ''
+  const achados: string[] = []
+  for (const pedaco of bruto.split(';')) {
+    const p = pedaco.trim()
+    if (!p.startsWith(COOKIE + '=')) continue
+    const cru = p.slice(COOKIE.length + 1)
+    if (!cru) continue
+    // valor com `%` torto derruba o decode; o valor cru ainda pode ser o token
+    try { achados.push(decodeURIComponent(cru)) } catch { achados.push(cru) }
+    achados.push(cru)
   }
-  deleteCookie(event, COOKIE, { path: '/' })
+  const doH3 = getCookie(event, COOKIE)
+  if (doH3) achados.push(doH3)
+  return [...new Set(achados.filter(Boolean))]
 }
 
-/** Encerra TODAS as sessões do usuário (troca de senha, suspeita de vazamento). */
-export async function encerrarTodas(usuarioId: string) {
-  await q1(
+/**
+ * Caminhos em que o cookie de sessão é apagado no navegador.
+ *
+ * Apagar cookie é escrever OUTRO com `Max-Age=0`, e o navegador só considera
+ * que é o mesmo quando nome + domínio + **caminho** batem. Limpar só `Path=/`
+ * deixa em pé qualquer `dt_sessao` gravado com caminho mais específico — e é
+ * justamente ele que o navegador manda no documento de `/admin` e não manda na
+ * chamada de `/api`, que foi como "saiu" e "continua logado" conviveram na
+ * mesma aba. O código de hoje grava só em `/`; os outros são resíduo de build
+ * antigo, e resíduo que ninguém apaga é sessão que ninguém encerra.
+ */
+const CAMINHOS_DO_COOKIE = ['/', '/api', '/api/auth', '/admin', '/entrar']
+
+export type SaidaDaSessao = {
+  /** linhas de `sessions` que ESTE pedido revogou agora */
+  revogadas: number
+  /** quantos `dt_sessao` vieram no cabeçalho (mais de um = resíduo) */
+  tokensNoCookie: number
+  /** dono das linhas revogadas, quando deu pra saber */
+  usuarioId: string | null
+}
+
+/**
+ * Encerra a sessão deste navegador: revoga no BANCO e apaga o cookie.
+ *
+ * Duas garantias que a versão anterior não dava:
+ *
+ * 1. **Revoga toda linha que o pedido carrega**, não a do primeiro cookie que
+ *    o parser achou. `token_hash = ANY(...)` com todos os valores de
+ *    `dt_sessao` do cabeçalho.
+ * 2. **Devolve quantas revogou.** Zero não é mais silêncio: `sair.post.ts` usa
+ *    isso pra só responder "saiu" depois de conferir que ninguém mais entra.
+ *
+ * `todosOsAparelhos` fica DESLIGADO de propósito — ver `encerrarTodas`.
+ */
+export async function encerrarSessao(
+  event: H3Event,
+  opcoes: { todosOsAparelhos?: boolean } = {},
+): Promise<SaidaDaSessao> {
+  const segredos = segredosDoCookie(event)
+  let revogadas = 0
+  let usuarioId: string | null = null
+
+  if (segredos.length) {
+    const linhas = await q<{ id: string; user_id: string }>(
+      `UPDATE sessions SET revoked_at = now()
+        WHERE token_hash = ANY($1::text[]) AND revoked_at IS NULL
+        RETURNING id, user_id`,
+      [segredos.map(hash)])
+    revogadas = linhas.length
+    usuarioId = linhas[0]?.user_id ?? null
+  }
+
+  if (opcoes.todosOsAparelhos && usuarioId) revogadas += await encerrarTodas(usuarioId)
+
+  for (const path of CAMINHOS_DO_COOKIE) deleteCookie(event, COOKIE, { path })
+
+  return { revogadas, tokensNoCookie: segredos.length, usuarioId }
+}
+
+/**
+ * Encerra TODAS as sessões do usuário (troca de senha, suspeita de vazamento).
+ * Devolve quantas caíram.
+ *
+ * **Onde ligar**: na rota que troca a senha e na que desativa o acesso — ali
+ * derrubar tudo é o ponto. No `sair` do dia a dia ela fica DESLIGADA: quem
+ * sai do computador do guichê não espera perder a sessão do celular do portão,
+ * e isso é decisão do dono, não da implementação. Pra ligar mesmo assim, o
+ * caminho já está pronto e é uma linha:
+ *
+ *     await encerrarSessao(event, { todosOsAparelhos: true })   // em sair.post.ts
+ */
+export async function encerrarTodas(usuarioId: string): Promise<number> {
+  const linhas = await q<{ id: string }>(
     `UPDATE sessions SET revoked_at = now()
       WHERE user_id = $1 AND revoked_at IS NULL RETURNING id`, [usuarioId])
+  return linhas.length
 }
 
 /* ------------------------------------------------------------------ freio */
@@ -188,7 +346,7 @@ export function ipDaRequisicao(event: H3Event) {
 /* ------------------------------------------------------------------ papéis */
 
 /** O que cada papel pode fazer. Deny-by-default: não listado = não pode. */
-const PODE: Record<Papel, string[]> = {
+const PODE: Record<PapelLegado, string[]> = {
   master:      ['*'],
   admin:       ['evento', 'ingresso', 'venda', 'cortesia', 'cupom', 'promoter',
                 'relatorio', 'financeiro', 'portaria', 'equipe'],
@@ -199,7 +357,7 @@ const PODE: Record<Papel, string[]> = {
   leitura:     ['relatorio'],
 }
 
-export const podeFazer = (papel: Papel, area: string) =>
+export const podeFazer = (papel: PapelLegado, area: string) =>
   PODE[papel]?.includes('*') || PODE[papel]?.includes(area) || false
 
 /** Igual a `lerSessao`, mas explode com 401/403 em vez de devolver null. */

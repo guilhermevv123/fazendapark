@@ -20,7 +20,9 @@
  */
 import { q, q1 } from '../../../../utils/db'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../../../utils/retencao'
-import { SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY } from '../../../../utils/liquido'
+import {
+  PEDIDO_VIVO, SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY,
+} from '../../../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -36,15 +38,40 @@ export default defineEventHandler(async (event) => {
   // quando ela foi repassada ao comprador. Quando é absorvida (padrão do
   // balcão), a face já inclui a taxa que vai sair dele. A conta que vale nos
   // dois casos mora em `utils/liquido.ts`; aqui ela é só somada.
+  //
+  // TODO FILTER DE DINHEIRO AQUI É `PEDIDO_VIVO()`, NUNCA `status = 'pago'`.
+  //
+  // O líquido desta rota já vinha de `utils/liquido.ts` e batia com as outras
+  // seis telas; bruto, descontos e taxas seguiam recortando por `'pago'`. É o
+  // mesmo defeito do `WHERE`, só escrito dentro do `FILTER`: o pedido com
+  // estorno PARCIAL — que o webhook marca `estornado_parcial`, com o valor
+  // devolvido já em `refunded_cents` — cai fora antes de a soma chegar nele.
+  //
+  // Medido lado a lado no mesmo evento, antes: bruto R$ 1.800,00 AQUI contra
+  // R$ 2.750,00 no borderô, no painel, em relatórios e no financeiro da
+  // organização, com o líquido igual nas seis — esta tela mostrando uma FACE
+  // MENOR QUE O PRÓPRIO LÍQUIDO (R$ 1.800,00 de bruto e R$ 2.650,00 de
+  // líquido), que é aritmeticamente impossível, sem estourar nada.
+  //
+  // Por que passou por duas frotas: no evento semeado NÃO EXISTE estorno
+  // parcial, e ali `'pago'` e `PEDIDO_VIVO()` respondem igual. Quem medisse no
+  // seed veria as telas batendo e daria o defeito por morto — foi o que
+  // aconteceu. A prova tem que sair de fixture com estorno parcial dentro.
+  //
+  // `pedidos_pagos` FICA em `'pago'` de propósito: ali a pergunta é outra
+  // ("quantos fecharam sem devolver nada"), o nome do campo diz isso, e é o
+  // número que o borderô e o financeiro da organização mostram com esse nome.
   const v = await q1<any>(
-    `SELECT ${SQL_LIQUIDO()}                                                        AS liquido,
-            ${SQL_LIQUIDO_GATEWAY()}                                                AS gateway,
-            ${SQL_LIQUIDO_DIRETO()}                                                 AS direto,
-            COALESCE(SUM(face_cents) FILTER (WHERE status = 'pago'), 0)::bigint     AS bruto,
-            COALESCE(SUM(discount_cents) FILTER (WHERE status = 'pago'), 0)::bigint AS descontos,
-            COALESCE(SUM(refunded_cents), 0)::bigint                                AS estornado,
-            COALESCE(SUM(fee_cents) FILTER (WHERE status = 'pago'), 0)::bigint      AS taxas,
-            count(*) FILTER (WHERE status = 'pago')::int                            AS pedidos_pagos
+    `SELECT ${SQL_LIQUIDO()}                                                     AS liquido,
+            ${SQL_LIQUIDO_GATEWAY()}                                             AS gateway,
+            ${SQL_LIQUIDO_DIRETO()}                                              AS direto,
+            COALESCE(SUM(face_cents) FILTER (WHERE ${PEDIDO_VIVO()}), 0)::bigint AS bruto,
+            COALESCE(SUM(discount_cents)
+                       FILTER (WHERE ${PEDIDO_VIVO()}), 0)::bigint               AS descontos,
+            COALESCE(SUM(refunded_cents), 0)::bigint                             AS estornado,
+            COALESCE(SUM(fee_cents) FILTER (WHERE ${PEDIDO_VIVO()}), 0)::bigint  AS taxas,
+            count(*) FILTER (WHERE ${PEDIDO_VIVO()})::int                        AS pedidos,
+            count(*) FILTER (WHERE status = 'pago')::int                         AS pedidos_pagos
        FROM orders WHERE event_id = $1`, [id])
 
   const liquido = Number(v.liquido)
@@ -99,6 +126,11 @@ export default defineEventHandler(async (event) => {
       transferidoCents: transferido,
       emCursoCents: emCurso,
       disponivelCents: disponivel,
+      // a população que as somas acima usam — pedido que virou dinheiro,
+      // inclusive o que devolveu uma parte. É o mesmo número que relatórios,
+      // o painel e o financeiro da organização chamam de `pedidos`.
+      pedidos: v.pedidos,
+      // e a outra pergunta, a de sempre: quantos fecharam sem devolver nada
       pedidosPagos: v.pedidos_pagos,
       transferencias: t.total,
     },

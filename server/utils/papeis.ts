@@ -196,6 +196,33 @@ const AREA_DA_RAIZ: [string, Area][] = [
   ['/api/admin/organizacoes', 'organizacao'],
   ['/api/admin/organizacao', 'organizacao'],
   ['/api/admin/financeiro', 'dinheiro'],
+  /*
+   * A execução da fila de saque — a única rota em que o dinheiro SAI da
+   * plataforma. Ela ficou fora desta tabela por um tempo, trancada por
+   * ausência, com a justificativa "mandar dinheiro embora é ato de dono".
+   *
+   * Por que ela passou a ser `dinheiro`, de propósito:
+   *
+   * 1. **O papel `financeiro` existe exatamente pra isto.** Ele já pede o
+   *    saque (`POST /api/admin/evento/:id/financeiro` é área `dinheiro`) e já
+   *    lê borderô, extrato e auditoria. Deixar só a EXECUÇÃO com o dono
+   *    partia a mesma tarefa em duas pessoas: uma pede, a outra manda — e a
+   *    outra é a que viaja. Medido antes desta linha: `financeiro` levava
+   *    **403** em `POST /api/admin/payout/executar`, e com o dono fora do ar
+   *    o pedido ficava `solicitada` para sempre, que é o defeito que a
+   *    própria rota foi escrita pra fechar.
+   * 2. **Ausência não é tranca escrita.** "Rota sem área é do master" é rede
+   *    de segurança pra rota que NASCE amanhã — quem já existe e tem dono
+   *    conhecido entra na tabela, senão a rede vira o esconderijo de decisões
+   *    que ninguém revisa.
+   * 3. **Quem não tem caixa continua sem mandar dinheiro embora**: `operacao`
+   *    e `portaria` não têm `dinheiro`, então os 403 delas não mudaram.
+   *
+   * Não é "abrir": é dizer em voz alta quem pode, no mesmo lugar em que se
+   * diz o resto. Quem quiser voltar atrás tira daqui e põe em `SO_DO_MASTER`,
+   * no mesmo diff do teste de `executar.test.ts`.
+   */
+  ['/api/admin/payout', 'dinheiro'],
   // A tela de "quem mexeu nisso": valor de venda, motivo de estorno e e-mail
   // de operador. Sem esta linha nem o financeiro abria — e a tranca própria
   // que a rota tem (`podeFazer(..., 'financeiro')`, em `auditoria.get.ts`)
@@ -212,18 +239,17 @@ const AREA_DA_RAIZ: [string, Area][] = [
  * Rotas administrativas que ficam de fora da grade DE PROPÓSITO — o `null`
  * delas é decisão registrada, não esquecimento.
  *
- * `/api/admin/payout` é a única rota do sistema em que o dinheiro SAI da
- * plataforma. `executar.post.ts` documenta a ausência como a tranca dela
- * ("mandar dinheiro embora é ato de dono") e `executar.test.ts` prende essa
- * decisão com um caso que exige `areaDaRota('/api/admin/payout/executar')
- * === null`. Quem quiser abrir pro financeiro muda os três lugares juntos, de
- * propósito, no mesmo diff — que é exatamente o que esta lista força.
+ * `/api/admin/payout` MOROU aqui e saiu: a execução da fila de saque virou
+ * área `dinheiro` (o porquê está escrito na linha dela, em `AREA_DA_RAIZ`).
+ * Enquanto esteve aqui, a tranca da rota que manda dinheiro embora era uma
+ * AUSÊNCIA — e ausência não é decisão que alguém revisa: é o esconderijo de
+ * quem não quis escolher. Quem quiser voltar atrás traz a linha de volta pra
+ * cá e ajusta `executar.test.ts` no mesmo diff.
  *
  * Serve também pro teste de varredura: rota que aparece aqui pode ficar sem
  * área; qualquer outra sem área deixa a suíte vermelha.
  */
 export const SO_DO_MASTER: string[] = [
-  '/api/admin/payout',
   // `/api/admin/filas` nasceu nesta mesma rodada, em outra trilha. Ela segue
   // sem área — que é o estado em que ela já está no ar — porque quem decide a
   // quem uma tela serve é quem a construiu: a resposta mistura "o ingresso
@@ -388,13 +414,33 @@ export const RESUMO: Record<Papel, string> = {
   portaria: 'Só o leitor de entrada.',
 }
 
-/** Catálogo pronto pra tela — a rota de equipe devolve isto, ninguém copia. */
-export const CATALOGO = PAPEIS.map((p) => ({
+/**
+ * Catálogo pronto pra tela — a rota de equipe devolve isto, ninguém copia.
+ *
+ * O nome é longo por um motivo de build, não de gosto: o Nitro varre
+ * `server/utils` inteiro pra montar o auto-import, e `utils/reconciliacao.ts`
+ * também exporta um `CATALOGO` (o de tipos de divergência). Com os dois, o
+ * build avisa `Duplicated imports "CATALOGO", the one from papeis.ts has been
+ * ignored` — e o dia em que alguém escrever `CATALOGO` sem importar recebe o
+ * da reconciliação, em silêncio, com a forma errada dentro.
+ */
+export const CATALOGO_DE_PAPEIS = PAPEIS.map((p) => ({
   valor: p,
   rotulo: ROTULO[p],
   resumo: RESUMO[p],
   areas: PODE[p],
 }))
+
+/**
+ * Apelido de compatibilidade — a ÚNICA razão de o aviso de duplicidade ainda
+ * existir pra `CATALOGO`.
+ *
+ * `server/api/admin/equipe/index.get.ts` importa `CATALOGO` deste arquivo pelo
+ * nome. **Apague esta linha junto com a troca do nome lá**, num diff só; não
+ * dá pra fazer um sem o outro sem quebrar o build. Nada novo deve usar este
+ * nome: o nome é `CATALOGO_DE_PAPEIS`.
+ */
+export const CATALOGO = CATALOGO_DE_PAPEIS
 
 /**
  * Como a recusa é escrita pra quem está lendo ela às 21h com fila na frente:

@@ -39,10 +39,17 @@
  * ## Duas decisões
  *
  * 1. **Subir não é o bastante; tem que ficar VISÍVEL.** As duas filas
- *    carimbam o boot em `worker_heartbeats` (migração 024) e a de e-mail
- *    carimba cada varredura. Sem isso, "a fila não anda" continua sendo uma
- *    descoberta do cliente pelo telefone: `GET /api/admin/filas` responde
- *    agora, com o quanto está parado e há quanto tempo ninguém varre.
+ *    carimbam o boot em `worker_heartbeat_instances` (migração 026, uma linha
+ *    POR PROCESSO) e a de e-mail carimba cada varredura. Sem isso, "a fila não
+ *    anda" continua sendo uma descoberta do cliente pelo telefone:
+ *    `GET /api/admin/filas` responde agora, com o quanto está parado e há
+ *    quanto tempo cada instância não varre, e a tela `/admin/filas` mostra.
+ *
+ *    A chave era só `worker` até a 025, e aí ESTE arquivo era quem produzia o
+ *    defeito: com duas instâncias no ar, os dois processos anunciavam na mesma
+ *    linha e o último apagava o rastro do primeiro. Medido no banco: maquinaA
+ *    morta há 10 min, maquinaB batendo, uma linha só, `bateu_ha = 0` — a tela
+ *    dizendo "Andando" com metade da frota parada.
  *
  * 2. **Erro aqui não derruba o servidor.** O boot da fila é importante, mas
  *    não é mais importante que a bilheteria continuar vendendo. Falhou o
@@ -50,13 +57,14 @@
  *    a verdade.
  */
 import {
-  FILA_DE_ENVIO, FILA_DE_ESTORNO, INTERVALO_MS, anunciarWorker, garantirWorker,
+  FILA_DE_ENVIO, FILA_DE_ESTORNO, INTERVALO_MS, anunciarWorker, encerrarPonto,
+  garantirWorker, pararWorker,
 } from '../utils/envio'
 import {
   INTERVALO_MS as INTERVALO_ESTORNO_MS, garantirWorkerDeEstorno,
 } from '../utils/cancelamento'
 
-export default defineNitroPlugin(() => {
+export default defineNitroPlugin((nitro) => {
   garantirWorker()
   garantirWorkerDeEstorno()
 
@@ -86,4 +94,25 @@ export default defineNitroPlugin(() => {
   // alarme falso diário treina o operador a ignorar a tela inteira.
   void anunciarWorker(FILA_DE_ENVIO, envioLigado, INTERVALO_MS, true)
   void anunciarWorker(FILA_DE_ESTORNO, estornoLigado, INTERVALO_ESTORNO_MS, false)
+
+  // Saída limpa tira ESTE processo da frota; morte, não.
+  //
+  // Com uma linha por processo (026), a linha de quem sai fica calada pra
+  // sempre — e "desligaram esta máquina" passaria a ser idêntico a "esta
+  // máquina caiu". São as duas coisas que a tela de saúde existe pra separar:
+  // a primeira ninguém precisa resolver, a segunda alguém precisa resolver
+  // agora. O gancho `close` do Nitro roda no SIGTERM do deploy e do
+  // `docker stop`; `kill -9`, OOM e queda de energia NÃO passam por aqui, que
+  // é justamente o que faz a linha ficar acusando quando tem que acusar.
+  nitro.hooks.hook('close', async () => {
+    // Primeiro PARA de varrer, depois bate a saída. Na outra ordem o laço
+    // dispara mais uma varredura depois da linha apagada e o carimbo dela
+    // recria o registro de um processo que está morrendo — o fantasma que
+    // `SAIRAM` (em `utils/envio.ts`) segura por dentro. Aqui é o cinto: sem
+    // varredura nova não há batida nova, e o que já estava em voo o `SAIRAM`
+    // cala.
+    pararWorker()
+    await encerrarPonto(FILA_DE_ENVIO)
+    await encerrarPonto(FILA_DE_ESTORNO)
+  })
 })

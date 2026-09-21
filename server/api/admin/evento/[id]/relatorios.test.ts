@@ -1,9 +1,10 @@
 /**
- * AS CINCO TELAS DO DINHEIRO PRECISAM DIZER O MESMO NÚMERO.
+ * AS SETE TELAS DO DINHEIRO PRECISAM DIZER O MESMO NÚMERO.
  *
  * O produtor abre o borderô e vê um total; abre o financeiro do evento e vê
  * outro; abre o financeiro da organização e vê um terceiro; abre relatórios e
- * vê um quarto; abre o painel do evento e vê um quinto. Nenhuma das cinco está
+ * vê um quarto; abre o painel do evento e vê um quinto; abre o extrato e vê um
+ * sexto; abre a lista de vendas e vê um sétimo. Nenhuma das sete está
  * "quebrada" — cada uma fazia a própria conta. É o pior defeito possível numa
  * tela de dinheiro, porque não tem sintoma: não estoura, não loga, não deixa
  * teste vermelho. Só produz uma ligação perguntando qual dos números é o certo.
@@ -44,6 +45,36 @@
  * O último caso é o público: quantas pessoas entraram sai do livro da porta
  * (`entries`, `sum(people)`), e não do ingresso emitido. Uma mesa de 4 é um
  * ingresso e quatro pessoas dentro do parque.
+ *
+ * ## O que a terceira passagem descobriu: o título prometia mais do que cobria
+ *
+ * Esta grade dizia "as cinco telas do dinheiro" e "CADA campo comparável bate
+ * entre as telas", e comparava CINCO: o extrato (`/extrato`) e a lista de
+ * vendas (`/vendas`) mostram os mesmos campos e nunca tinham entrado. Medido
+ * na fixture com a grade inteira verde:
+ *
+ * 1. **A devolução de relatórios discordava das outras seis.** Borderô,
+ *    painel, financeiro do evento, extrato, vendas e financeiro da
+ *    organização diziam R$ 240,00 de devolvido; `/relatorios` dizia R$ 20,00,
+ *    porque recortava a devolução por `PEDIDO_VIVO`. A pergunta é "quanto
+ *    voltou pro comprador" e o pedido estornado POR INTEIRO devolveu dinheiro
+ *    do mesmo jeito — ele só não tem mais líquido a apurar.
+ * 2. **O financeiro da ORGANIZAÇÃO recortava face, taxa e contagem por
+ *    `'pago'`.** Só o líquido tinha sido consertado. Medido: face R$ 1.800,00
+ *    na linha da organização contra R$ 2.750,00 no borderô/painel/relatórios,
+ *    com o líquido igual nas quatro — a mesma linha mostrando uma face MENOR
+ *    que o próprio líquido.
+ * 3. **`ticketMedioCents` seguia sem régua no nome em `/relatorios`** depois
+ *    que o painel renomeou os dois campos dele.
+ *
+ * Daí este arquivo passar a abrir as SETE portas. A única que NÃO bate campo a
+ * campo é o `/extrato`, de propósito e com a diferença provada aqui: ele é
+ * extrato de MOVIMENTO e inclui todo pedido que mexeu dinheiro
+ * (`pago`, `estornado`, `estornado_parcial`, `chargeback`, `disputa`), não só
+ * o que ainda tem líquido a apurar. Por isso a face dele é maior — e o caso
+ * abaixo exige que seja maior EXATAMENTE pela face dos pedidos que mexeram
+ * dinheiro e não estão vivos, lida do banco. "Diferente" sem número é o mesmo
+ * que não testar.
  *
  * ## Login com e-mail SÓ deste arquivo, inclusive o master da casa
  *
@@ -105,6 +136,48 @@ const EVENTO_JANELA = '0000ca11-0000-4000-8000-00000000000d'
  */
 const EVENTO_BALCAO = '0000ca11-0000-4000-8000-00000000000f'
 const PONTO_BALCAO = '0000ca11-0000-4000-8000-000000000010'
+
+/**
+ * O GUICHÊ QUE VENDEU ONTEM — e a venda cancelada no balcão.
+ *
+ * Evento próprio pelo mesmo motivo dos dois de cima: os dois casos que ele
+ * carrega envenenariam os totais do evento principal.
+ *
+ * Ele existe porque a linha "Sem ponto identificado" da tela de PDV passou a
+ * afirmar, por escrito, que o valor dela era "exatamente a diferença" entre o
+ * cabeçalho e a soma dos cartões — e não é. O cabeçalho conta o EVENTO
+ * INTEIRO; cada cartão conta o CAIXA ABERTO (ou só hoje, quando não há caixa
+ * aberto). Venda de guichê num turno já fechado, ou de outro dia, está no
+ * cabeçalho e em cartão nenhum, e não é venda órfã.
+ *
+ * Medido na tela com a frase no ar: cabeçalho R$ 2.465,00, cartões
+ * R$ 1.415,00, diferença REAL R$ 1.050,00 — e a linha imprimindo R$ 250,00.
+ * R$ 800,00 de erro numa frase escrita pra o produtor conferir a conta.
+ */
+const EVENTO_GUICHE = '0000ca11-0000-4000-8000-000000000011'
+const PONTO_GUICHE = '0000ca11-0000-4000-8000-000000000012'
+/** vendido HOJE no guichê: é o único que o cartão do ponto mostra */
+const NO_GUICHE_HOJE = 60_000
+/** vendido no MESMO guichê três dias atrás: está no cabeçalho e em cartão nenhum */
+const NO_GUICHE_ANTES = 80_000
+/** e a venda de balcão sem guichê nenhum, com R$ 50 devolvidos */
+const SEM_GUICHE_COBRADO = 30_000
+const SEM_GUICHE_DEVOLVIDO = 5_000
+const SEM_GUICHE = SEM_GUICHE_COBRADO - SEM_GUICHE_DEVOLVIDO
+/** o total de balcão do evento: as três, pela régua da gaveta */
+const NO_BALCAO_DO_GUICHE = NO_GUICHE_HOJE + NO_GUICHE_ANTES + SEM_GUICHE
+/** o buraco entre o cabeçalho e a soma dos cartões: as DUAS partes */
+const FORA_DOS_CARTOES = NO_BALCAO_DO_GUICHE - NO_GUICHE_HOJE
+
+/**
+ * A VENDA CANCELADA NO GUICHÊ — o estado que a fixture das sete telas não
+ * tinha, e que o cancelamento de balcão produz o tempo todo.
+ *
+ * `SQL_CANCELA_VENDA_PDV` (`utils/caixa.ts`) grava `status = 'cancelado'` com
+ * `refunded_cents = total_cents`: o operador tirou as notas da gaveta e
+ * devolveu. É devolução tanto quanto o estorno parcial.
+ */
+const CANCELADA_NO_GUICHE = 40_000
 
 /**
  * O BALCÃO SEM GUICHÊ — a venda que a tela de pontos de venda descartava.
@@ -256,6 +329,29 @@ async function json(rota: string, quem = cookie) {
   return corpo
 }
 
+/**
+ * O `R$` que o `Intl` monta vem com espaço FINO (U+00A0), não com espaço
+ * normal — comparar sem normalizar falha com as duas strings IDÊNTICAS na
+ * tela. Escrito com `fromCharCode` de propósito: um U+00A0 solto dentro de uma
+ * regex é invisível no editor e no diff.
+ */
+const ESPACO_FINO = new RegExp(String.fromCharCode(160), 'g')
+const semEspacoFino = (s: string) => s.replace(ESPACO_FINO, ' ')
+
+/**
+ * SÓ O QUE A TELA DESENHOU — comentário de template e payload do Nuxt fora.
+ *
+ * O Vue manda os comentários `<!-- -->` do `.vue` pro HTML, e o `__NUXT_DATA__`
+ * carrega o payload inteiro no fim da página. Procurar texto no HTML cru
+ * encontra as duas coisas: a primeira versão do caso da venda órfã ficou
+ * VERDE porque o comentário do `.vue` cita a frase que o caso procura — com a
+ * linha arrancada da tela, o teste continuava passando. Um teste que fica
+ * verde com a trava arrancada é pior que não ter teste.
+ */
+const soOQueARenderizou = (html: string) =>
+  semEspacoFino(html.replace(/<!--[\s\S]*?-->/g, '')
+                    .replace(/<script[\s\S]*?<\/script>/g, ''))
+
 async function entrar(email: string) {
   const r = await fetch(`${BASE}/api/auth/entrar`, {
     method: 'POST',
@@ -296,6 +392,34 @@ async function asTelasDoDinheiro(eventoId: string, quem = cookie) {
     relatorios: relatorios.resumo.liquidoCents,
     dashboard: dashboard.totais.liquidoCents,
   }
+}
+
+/**
+ * AS SETE PORTAS, com o corpo inteiro de cada uma.
+ *
+ * `asTelasDoDinheiro` acima devolve só o líquido, porque líquido é o único
+ * campo que as CINCO telas de total expõem. Esta aqui abre as sete e devolve o
+ * payload cru: o extrato e a lista de vendas mostram devolução, face e cobrado
+ * na cara do produtor e nunca tinham entrado em comparação nenhuma.
+ *
+ * A linha da organização sai já filtrada — comparar o total da org com o total
+ * do evento seria comparar populações diferentes e daria vermelho no dia em
+ * que a fixture ganhasse o segundo evento.
+ */
+async function asSeteTelas(eventoId: string, quem = cookie) {
+  const [bordero, financeiroDoEvento, financeiroDaOrg, relatorios, dashboard, extrato, vendas] =
+    await Promise.all([
+      json(`/api/admin/evento/${eventoId}/bordero`, quem),
+      json(`/api/admin/evento/${eventoId}/financeiro`, quem),
+      json(`/api/admin/financeiro`, quem),
+      json(`/api/admin/evento/${eventoId}/relatorios`, quem),
+      json(`/api/admin/evento/${eventoId}/dashboard`, quem),
+      json(`/api/admin/evento/${eventoId}/extrato`, quem),
+      json(`/api/admin/evento/${eventoId}/vendas`, quem),
+    ])
+  const org = financeiroDaOrg.eventos.find((e: any) => e.id === eventoId)
+  expect(org, 'o evento sumiu da lista do financeiro da organização').toBeTruthy()
+  return { bordero, financeiroDoEvento, org, relatorios, dashboard, extrato, vendas }
 }
 
 /** insere um pedido com os valores que o checkout gravaria; devolve o id */
@@ -408,10 +532,24 @@ beforeAll(async () => {
      VALUES ($1,$2,$3,'ZZ GUICHÊ BALCÃO','Portão ZZB','bilheteria')
      ON CONFLICT (id) DO NOTHING`, [PONTO_BALCAO, ORG, EVENTO_BALCAO])
 
+  // O evento do GUICHÊ QUE VENDEU ONTEM: mesmo guichê, duas datas, mais uma
+  // venda órfã e uma venda CANCELADA. Separado pelo mesmo motivo dos outros
+  // dois — cada um desses casos mexeria em todos os totais do evento
+  // principal.
+  await sql(
+    `INSERT INTO events (id, org_id, name, slug, starts_at, ends_at, fee_bps, status)
+     VALUES ($1,$2,'ZZ EVENTO GUICHÊ','zz-evento-guiche',
+             now() - interval '10 days', now() - interval '9 days', 1000, 'ativo')
+     ON CONFLICT (id) DO NOTHING`, [EVENTO_GUICHE, ORG])
+  await sql(
+    `INSERT INTO pos_terminals (id, org_id, event_id, name, location, kind)
+     VALUES ($1,$2,$3,'ZZ GUICHÊ DE ONTEM','Portão ZZG','bilheteria')
+     ON CONFLICT (id) DO NOTHING`, [PONTO_GUICHE, ORG, EVENTO_GUICHE])
+
   await sql(`DELETE FROM entries WHERE event_id = $1`, [EVENTO])
   await sql(`DELETE FROM tickets WHERE event_id = $1`, [EVENTO])
   await sql(`DELETE FROM orders WHERE event_id = ANY($1)`,
-            [[EVENTO, EVENTO_JANELA, EVENTO_BALCAO]])
+            [[EVENTO, EVENTO_JANELA, EVENTO_BALCAO, EVENTO_GUICHE]])
   await sql(`DELETE FROM promo_codes WHERE event_id = $1`, [EVENTO])
 
   // O guichê e o caixa ABERTO. Precisam existir antes dos pedidos: é o turno
@@ -590,6 +728,33 @@ beforeAll(async () => {
                  face: 30_000, feeComprador: 0, plataforma: 3_000,
                  estornado: NO_BALCAO_DEVOLVIDO })
 
+  // ------------------------- o guichê que vendeu ONTEM, e o cancelamento ---
+  // Três vendas vivas no mesmo evento e uma cancelada. O guichê NÃO tem caixa
+  // aberto, então o cartão dele mostra só o dia de hoje — e é justamente por
+  // isso que a venda de três dias atrás fica no cabeçalho sem aparecer em
+  // cartão nenhum, sem ser venda órfã.
+  await pedido({ codigo: 'ZZ-CT-GUI-HOJE', evento: EVENTO_GUICHE, canal: 'bilheteria',
+                 asaas: null, forma: 'debito', ponto: PONTO_GUICHE,
+                 face: NO_GUICHE_HOJE, feeComprador: 0, plataforma: 6_000 })
+  await pedido({ codigo: 'ZZ-CT-GUI-ANTES', evento: EVENTO_GUICHE, canal: 'bilheteria',
+                 asaas: null, forma: 'debito', ponto: PONTO_GUICHE,
+                 face: NO_GUICHE_ANTES, feeComprador: 0, plataforma: 8_000,
+                 pagoEm: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
+  await pedido({ codigo: 'ZZ-CT-GUI-SEM', evento: EVENTO_GUICHE, canal: 'bilheteria',
+                 asaas: null, forma: 'dinheiro', ponto: null,
+                 status: 'estornado_parcial',
+                 face: SEM_GUICHE_COBRADO, feeComprador: 0, plataforma: 3_000,
+                 estornado: SEM_GUICHE_DEVOLVIDO })
+  // A VENDA CANCELADA NO GUICHÊ, como `SQL_CANCELA_VENDA_PDV` a deixa:
+  // `cancelado` com `refunded_cents = total_cents`. Ela não tem líquido a
+  // apurar e não entra em nenhum total de venda — mas DEVOLVEU dinheiro, e é
+  // por isso que ela está aqui.
+  await pedido({ codigo: 'ZZ-CT-GUI-CANC', evento: EVENTO_GUICHE, canal: 'bilheteria',
+                 asaas: null, forma: 'dinheiro', ponto: PONTO_GUICHE,
+                 status: 'cancelado',
+                 face: CANCELADA_NO_GUICHE, feeComprador: 0, plataforma: 4_000,
+                 estornado: CANCELADA_NO_GUICHE })
+
   // A passagem: UMA leitura, QUATRO pessoas — como o servidor grava, copiando
   // `sectors.admits` no instante em que a catraca liberou.
   await sql(
@@ -603,22 +768,28 @@ afterAll(async () => {
   await sql(`DELETE FROM entries WHERE event_id = $1`, [EVENTO])
   await sql(`DELETE FROM tickets WHERE event_id = $1`, [EVENTO])
   await sql(`DELETE FROM orders WHERE event_id = ANY($1)`,
-            [[EVENTO, EVENTO_JANELA, EVENTO_BALCAO]])
+            [[EVENTO, EVENTO_JANELA, EVENTO_BALCAO, EVENTO_GUICHE]])
   await sql(`DELETE FROM promo_codes WHERE event_id = $1`, [EVENTO])
   // o turno sai ANTES do usuário: `pos_shifts.operator_id` é ON DELETE
   // RESTRICT, e apagar o operador primeiro deixaria a fixture inteira de pé
   await sql(`DELETE FROM pos_shifts WHERE id = $1`, [TURNO])
-  await sql(`DELETE FROM pos_terminals WHERE id = ANY($1)`, [[PONTO, PONTO_BALCAO]])
+  await sql(`DELETE FROM pos_terminals WHERE id = ANY($1)`,
+            [[PONTO, PONTO_BALCAO, PONTO_GUICHE]])
   await sql(`DELETE FROM customers WHERE id = $1`, [COMPRADOR])
   await sql(`DELETE FROM lots WHERE id = $1`, [LOTE])
   await sql(`DELETE FROM sectors WHERE id = $1`, [SETOR])
   await sql(`DELETE FROM users WHERE id = ANY($1)`, [[USUARIO, USUARIO_CASA]])
   await sql(`DELETE FROM events WHERE id = ANY($1)`,
-            [[EVENTO, EVENTO_JANELA, EVENTO_BALCAO]])
+            [[EVENTO, EVENTO_JANELA, EVENTO_BALCAO, EVENTO_GUICHE]])
   await sql(`DELETE FROM organizations WHERE id = $1`, [ORG])
 })
 
-describe('as cinco telas do dinheiro contam igual', () => {
+// O título deste bloco dizia "as cinco telas" e o arquivo passou a abrir
+// sete. Quem conta cinco aqui dentro é `asTelasDoDinheiro`, e conta cinco
+// porque LÍQUIDO é o único campo que só cinco expõem — o extrato e a lista de
+// vendas não apuram o que sobra pro produtor. A grade das sete está no bloco
+// seguinte, campo a campo.
+describe('as telas do dinheiro contam igual', () => {
   it('borderô, financeiro do evento, financeiro da org, relatórios e painel dão o MESMO número', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
     expect(cookie, 'login falhou — o teste ficaria verde à toa').toBeTruthy()
@@ -661,16 +832,16 @@ describe('as cinco telas do dinheiro contam igual', () => {
       json(`/api/admin/evento/${EVENTO}/dashboard`),
     ])
 
-    // Armadilha de nome, não de número: o campo `ticketMedioCents` existe nas
-    // DUAS rotas e quer dizer coisas diferentes — por PEDIDO em relatórios
-    // ("Ticket médio · por pedido" na tela) e por INGRESSO no painel ("Ticket
-    // médio por ingresso · Vendas por ingressos pagos"). Os dois rótulos estão
-    // certos hoje; medido no evento semeado, R$ 88,00 num e R$ 43,47 no outro.
+    // Armadilha de nome, não de número: `ticketMedioCents` queria dizer coisas
+    // diferentes nas DUAS rotas — por PEDIDO em relatórios ("Ticket médio ·
+    // por pedido" na tela) e por INGRESSO no painel ("Ticket médio por
+    // ingresso"). Os dois rótulos estão certos; medido no evento semeado,
+    // R$ 88,00 num e R$ 43,47 no outro com o mesmo nome de campo.
     //
     // Este caso prende cada um na sua conta. Trocar a régua de um lado sem
     // trocar o rótulo do .vue junto faz a tela mentir em silêncio — que é
     // exatamente o defeito desta trilha, só que na legenda em vez do total.
-    expect(rel.resumo.ticketMedioCents,
+    expect(rel.resumo.ticketMedioPorPedidoCents,
       'relatórios deixou de dividir por PEDIDO, e o rótulo da tela diz "por pedido"')
       .toBe(Math.round(COBRADO / PEDIDOS_VIVOS))
     expect(dash.totais.ticketMedioPorIngressoCents,
@@ -679,11 +850,11 @@ describe('as cinco telas do dinheiro contam igual', () => {
 
     // E o número por ingresso de relatórios é o MESMO do painel: quando duas
     // telas respondem a mesma pergunta, elas respondem igual.
-    expect(rel.resumo.porIngressoCents,
+    expect(rel.resumo.ticketMedioPorIngressoCents,
       'o "por ingresso" de relatórios discorda do "ticket médio por ingresso" do painel')
       .toBe(dash.totais.ticketMedioPorIngressoCents)
 
-    expect(rel.resumo.ticketMedioCents,
+    expect(rel.resumo.ticketMedioPorPedidoCents,
       'a fixture ficou fraca: com 1 ingresso por pedido as duas contas ' +
       'coincidem e este caso não prova nada')
       .not.toBe(dash.totais.ticketMedioPorIngressoCents)
@@ -697,7 +868,7 @@ describe('as cinco telas do dinheiro contam igual', () => {
       json(`/api/admin/evento/${EVENTO}/dashboard`),
     ])
 
-    // O painel tinha um `ticketMedioCents` por INGRESSO e relatórios tem um
+    // O painel tinha um `ticketMedioCents` por INGRESSO e relatórios tinha um
     // `ticketMedioCents` por PEDIDO. Mesmo nome, contas opostas — armadilha
     // armada pro primeiro relatório que lesse as duas rotas. Quem sobrou tem
     // a régua no nome, e o nome ambíguo NÃO pode voltar ao painel.
@@ -715,14 +886,39 @@ describe('as cinco telas do dinheiro contam igual', () => {
         porPedido: Math.round(COBRADO / PEDIDOS_VIVOS),
       })
 
-    // E o painel e relatórios respondem IGUAL às duas perguntas. É o que
-    // prova que os nomes novos apontam pra régua certa, e não só que existem.
-    expect(dash.totais.ticketMedioPorPedidoCents,
-      'o "por pedido" do painel discorda do de relatórios')
-      .toBe(rel.resumo.ticketMedioCents)
-    expect(dash.totais.ticketMedioPorIngressoCents,
-      'o "por ingresso" do painel discorda do de relatórios')
-      .toBe(rel.resumo.porIngressoCents)
+    // AS DUAS ROTAS CHAMAM A MESMA PERGUNTA PELO MESMO NOME.
+    //
+    // Enquanto relatórios devolvia `ticketMedioCents` e o painel devolvia
+    // `ticketMedioPorPedidoCents`, quem escrevesse um relatório lendo as duas
+    // precisava saber de cor qual campo era qual. Agora as duas expõem os
+    // mesmos dois nomes com a régua dentro do nome.
+    expect({
+      porPedido: rel.resumo.ticketMedioPorPedidoCents,
+      porIngresso: rel.resumo.ticketMedioPorIngressoCents,
+    }, 'relatórios não devolve os dois campos com a régua no nome, como o painel')
+      .toEqual({
+        porPedido: dash.totais.ticketMedioPorPedidoCents,
+        porIngresso: dash.totais.ticketMedioPorIngressoCents,
+      })
+
+    // O NOME ANTIGO SÓ PODE EXISTIR COMO APELIDO.
+    //
+    // `ticketMedioCents` e `porIngressoCents` continuam no payload de
+    // relatórios porque a tela (`relatorios/index.vue`) ainda lê esses dois —
+    // arrancá-los sem trocar lá deixaria os dois KPIs em R$ 0,00, sem exceção
+    // e sem console. O que este caso trava é que eles NUNCA carreguem uma
+    // conta própria: no dia em que um deles apontar pra outra régua, esta
+    // linha fica vermelha antes de a tela mentir.
+    for (const [apelido, canonico] of [
+      ['ticketMedioCents', 'ticketMedioPorPedidoCents'],
+      ['porIngressoCents', 'ticketMedioPorIngressoCents'],
+    ] as const) {
+      if (rel.resumo[apelido] === undefined) continue // a tela já migrou: ótimo
+      expect(rel.resumo[apelido],
+        `o apelido ${apelido} deixou de ser apelido e virou uma segunda conta — ` +
+        `ele tem que ser o MESMO número de ${canonico}`)
+        .toBe(rel.resumo[canonico])
+    }
   }, 20_000)
 
   it('relatórios mostra a devolução em vez de esconder o pedido', async () => {
@@ -733,17 +929,20 @@ describe('as cinco telas do dinheiro contam igual', () => {
       pedidos: r.resumo.pedidos,
       fechados: r.resumo.pedidosFechados,
       comEstorno: r.resumo.pedidosComEstorno,
+      // a devolução INTEIRA do evento — é a pergunta que o rótulo faz
       estornado: r.resumo.estornadoCents,
+      // e a parte dela que já saiu do líquido, com nome próprio
+      estornadoNoLiquido: r.resumo.estornadoNoLiquidoCents,
       cobrado: r.resumo.cobradoCents,
     }, 'o pedido com estorno parcial sumiu da contagem ou o estorno não aparece')
       .toEqual({
         pedidos: PEDIDOS_VIVOS, fechados: PEDIDOS_FECHADOS, comEstorno: 1,
-        estornado: DEVOLVIDO_NO_LIQUIDO, cobrado: COBRADO,
+        estornado: DEVOLVIDO, estornadoNoLiquido: DEVOLVIDO_NO_LIQUIDO, cobrado: COBRADO,
       })
 
     // Ticket médio divide pela MESMA população que somou. Somar cinco pedidos
     // e dividir por quatro é o jeito silencioso de a média inflar.
-    expect(r.resumo.ticketMedioCents,
+    expect(r.resumo.ticketMedioPorPedidoCents,
       'o ticket médio dividiu por uma população diferente da que somou')
       .toBe(Math.round(COBRADO / PEDIDOS_VIVOS))
   }, 20_000)
@@ -850,7 +1049,288 @@ describe('as cinco telas do dinheiro contam igual', () => {
   }, 20_000)
 })
 
-describe('não é só o líquido: CADA campo comparável bate entre as telas', () => {
+describe('não é só o líquido: CADA campo comparável bate entre as SETE telas', () => {
+  /**
+   * A GRADE DAS SETE PORTAS — uma consulta, um campo de cada vez.
+   *
+   * O título deste arquivo prometia "cada campo comparável entre as telas" e
+   * comparava CINCO. `/extrato` e `/vendas` mostram devolução, face e cobrado
+   * pro mesmo produtor, na mesma noite, e nunca tinham entrado em comparação
+   * nenhuma — foi por essa porta que a devolução de `/relatorios` ficou
+   * discordando das outras seis sem nada ficar vermelho.
+   *
+   * A régua de cada linha abaixo:
+   *
+   * - **devolução** (`estornadoCents`) — as SETE respondem, e é "quanto voltou
+   *   pro comprador", com o estorno TOTAL dentro.
+   * - **líquido** — as cinco que apuram o que sobra pro produtor.
+   * - **face / taxa / desconto / cobrado** — a população é o pedido VIVO.
+   * - **contagem** — `pedidos` é a população que somou; `pedidosFechados` é a
+   *   outra pergunta e tem nome próprio.
+   *
+   * ## A EXCEÇÃO DO `/extrato`, escrita e provada
+   *
+   * O extrato NÃO entra na igualdade de face/taxa/cobrado, e isso é decisão,
+   * não desleixo: ele é extrato de MOVIMENTO e a população dele é todo pedido
+   * que mexeu dinheiro — `pago`, `estornado`, `estornado_parcial`,
+   * `chargeback`, `disputa`. O pedido devolvido por inteiro precisa aparecer
+   * numa tela que existe pra explicar linha a linha por que o dia caiu;
+   * escondê-lo ali seria o defeito oposto.
+   *
+   * Por isso o caso não ignora a diferença: ele a AFIRMA. A face do extrato
+   * tem que ser maior exatamente pela face dos pedidos que mexeram dinheiro e
+   * não estão vivos, lida do banco. Assim o dia em que o extrato começar a
+   * derrubar o estorno total — ou a somar um pedido a mais — esta linha fica
+   * vermelha do mesmo jeito.
+   */
+  it('as SETE telas do dinheiro dizem o MESMO em cada campo comparável', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    expect(cookie, 'login falhou — o teste ficaria verde à toa').toBeTruthy()
+
+    const t = await asSeteTelas(EVENTO)
+
+    // ---------------------------------------------------------------------
+    // 1. A DEVOLUÇÃO — o campo que as SETE mostram, e onde a sétima mentia.
+    const devolucao = {
+      bordero: t.bordero.totais.estornadoCents,
+      painel: t.dashboard.totais.estornadoCents,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.estornadoCents,
+      extrato: t.extrato.totais.estornadoCents,
+      vendas: t.vendas.totais.estornadoCents,
+      financeiroDaOrg: t.org.estornadoCents,
+      relatorios: t.relatorios.resumo.estornadoCents,
+    }
+    expect(new Set(Object.values(devolucao)).size,
+      `as sete telas discordaram da devolução: ${JSON.stringify(devolucao)}`).toBe(1)
+    expect(devolucao.relatorios,
+      'as sete concordaram, mas no número errado — a devolução é tudo que ' +
+      'voltou pro comprador, inclusive o pedido estornado por inteiro')
+      .toBe(DEVOLVIDO)
+
+    // ---------------------------------------------------------------------
+    // 2. O LÍQUIDO — as cinco que apuram o que sobra pro produtor.
+    const liquido = {
+      bordero: t.bordero.totais.liquidoCents,
+      painel: t.dashboard.totais.liquidoCents,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.liquidoCents,
+      financeiroDaOrg: t.org.liquidoCents,
+      relatorios: t.relatorios.resumo.liquidoCents,
+    }
+    expect(new Set(Object.values(liquido)).size,
+      `as cinco telas de líquido discordaram: ${JSON.stringify(liquido)}`).toBe(1)
+    expect(liquido.bordero, 'o líquido das cinco não é o somado à mão').toBe(LIQUIDO)
+
+    // ---------------------------------------------------------------------
+    // 3. FACE e TAXA — a população é o pedido VIVO, nas CINCO que somam.
+    //
+    //    O FINANCEIRO DO EVENTO ENTROU AQUI NA TERCEIRA PASSAGEM, e foi por
+    //    esta fresta que o defeito atravessou a segunda: a grade tinha
+    //    acabado de trazer o financeiro da ORGANIZAÇÃO pra comparação e
+    //    deixou de fora justamente o `brutoCents`/`taxasCents` da tela
+    //    IRMÃ — o mesmo `FILTER (WHERE status = 'pago')`, no arquivo do lado.
+    //    Medido na fixture com a grade inteira verde: bruto R$ 1.800,00 no
+    //    financeiro do evento contra R$ 2.750,00 nas outras quatro, com o
+    //    líquido igual em todas.
+    //
+    //    E foi dado por morto porque a medição de conferência rodou no evento
+    //    SEMEADO, onde não existe estorno parcial nenhum: ali `'pago'` e
+    //    `PEDIDO_VIVO()` respondem o mesmo número e a tela passa verde com a
+    //    conta errada. É por isso que o alvo desta grade é a fixture.
+    const face = {
+      bordero: t.bordero.totais.faceCents,
+      painel: t.dashboard.totais.faceCents,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.brutoCents,
+      financeiroDaOrg: t.org.faceCents,
+      relatorios: t.relatorios.resumo.faceCents,
+    }
+    expect(new Set(Object.values(face)).size,
+      `as telas discordaram da face: ${JSON.stringify(face)}`).toBe(1)
+
+    const taxa = {
+      bordero: t.bordero.totais.taxaCents,
+      painel: t.dashboard.totais.taxaCents,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.taxasCents,
+      financeiroDaOrg: t.org.taxaCents,
+      relatorios: t.relatorios.resumo.taxaCents,
+    }
+    expect(new Set(Object.values(taxa)).size,
+      `as telas discordaram da taxa: ${JSON.stringify(taxa)}`).toBe(1)
+
+    // FACE MENOR QUE O PRÓPRIO LÍQUIDO é aritmeticamente impossível, e era
+    // exatamente o que as duas telas de financeiro mostravam — cada uma na
+    // sua vez. É o sintoma que qualquer um reconhece sem saber de SQL, então
+    // ele fica travado por tela, com nome, e não só na igualdade acima.
+    for (const [tela, faceDaTela, liquidoDaTela] of [
+      ['financeiro da organização', t.org.faceCents, t.org.liquidoCents],
+      ['financeiro do evento',
+       t.financeiroDoEvento.resumo.brutoCents, t.financeiroDoEvento.resumo.liquidoCents],
+    ] as [string, number, number][]) {
+      expect(faceDaTela,
+        `o ${tela} mostra uma face MENOR que o próprio líquido — o recorte ` +
+        'por status = \'pago\' voltou')
+        .toBeGreaterThanOrEqual(liquidoDaTela)
+    }
+
+    // ---------------------------------------------------------------------
+    // 4. DESCONTO e COBRADO.
+    const desconto = {
+      bordero: t.bordero.totais.descontoCents,
+      painel: t.dashboard.totais.descontoCents,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.descontosCents,
+      relatorios: t.relatorios.resumo.descontoCents,
+    }
+    expect(new Set(Object.values(desconto)).size,
+      `as telas discordaram do desconto: ${JSON.stringify(desconto)}`).toBe(1)
+    expect(desconto.relatorios, 'o desconto do cupom sumiu de alguma tela')
+      .toBe(DESCONTO_DO_CUPOM)
+
+    const cobrado = {
+      painel: t.dashboard.totais.cobradoCents,
+      relatorios: t.relatorios.resumo.cobradoCents,
+      // o borderô não tem o campo: tem a quebra por forma, e as partes somam
+      // o todo das outras duas
+      borderoPorForma: t.bordero.formas.reduce((s: number, f: any) => s + f.totalCents, 0),
+    }
+    expect(new Set(Object.values(cobrado)).size,
+      `as telas discordaram do cobrado: ${JSON.stringify(cobrado)}`).toBe(1)
+    expect(cobrado.relatorios, 'o cobrado das telas não é o somado à mão').toBe(COBRADO)
+
+    // ---------------------------------------------------------------------
+    // 5. CONTAGEM — duas perguntas, cada uma com o seu nome, e as duas iguais
+    //    em toda tela que as responde.
+    const pedidosVivos = {
+      painel: t.dashboard.totais.pedidos,
+      relatorios: t.relatorios.resumo.pedidos,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.pedidos,
+      financeiroDaOrg: t.org.pedidos,
+    }
+    expect(new Set(Object.values(pedidosVivos)).size,
+      `as telas discordaram de quantos pedidos viraram dinheiro: ${JSON.stringify(pedidosVivos)}`)
+      .toBe(1)
+    expect(pedidosVivos.financeiroDaOrg,
+      'o financeiro da organização voltou a contar só os pedidos em \'pago\'')
+      .toBe(PEDIDOS_VIVOS)
+
+    const fechados = {
+      bordero: t.bordero.totais.pedidosPagos,
+      painel: t.dashboard.totais.pedidosFechados,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.pedidosPagos,
+      financeiroDaOrg: t.org.pedidosFechados,
+      relatorios: t.relatorios.resumo.pedidosFechados,
+    }
+    expect(new Set(Object.values(fechados)).size,
+      `as telas discordaram de quantos pedidos fecharam: ${JSON.stringify(fechados)}`).toBe(1)
+    expect(fechados.relatorios, 'a contagem de fechados não é a somada à mão')
+      .toBe(PEDIDOS_FECHADOS)
+
+    // A fixture só prova alguma coisa enquanto as duas perguntas tiverem
+    // respostas DIFERENTES — sem pedido com estorno parcial elas coincidem.
+    expect(PEDIDOS_VIVOS,
+      'a fixture ficou fraca: sem estorno parcial "vivos" e "fechados" ' +
+      'coincidem e o recorte por \'pago\' não teria sintoma')
+      .not.toBe(PEDIDOS_FECHADOS)
+
+    // ---------------------------------------------------------------------
+    // 6. A EXCEÇÃO DO EXTRATO — afirmada, não ignorada.
+    //
+    // O extrato inclui de propósito todo pedido que MEXEU dinheiro, vivo ou
+    // não. A diferença dele pras outras telas tem que ser exatamente a face
+    // (e o cobrado) desses pedidos — nem um centavo a mais.
+    const [fora] = await sql(
+      `SELECT COALESCE(SUM(face_cents),0)::bigint  AS face,
+              COALESCE(SUM(total_cents),0)::bigint AS cobrado,
+              COALESCE(SUM(fee_cents),0)::bigint   AS taxa,
+              count(*)::int                        AS pedidos
+         FROM orders
+        WHERE event_id = $1
+          AND status IN ('estornado','chargeback','disputa')`, [EVENTO])
+
+    expect({
+      face: t.extrato.totais.faceCents - face.bordero,
+      cobrado: t.extrato.totais.cobradoCents - cobrado.relatorios,
+      taxa: t.extrato.totais.taxaCompradorCents - taxa.bordero,
+    }, 'o extrato deixou de ser extrato de MOVIMENTO: a diferença dele pras ' +
+       'outras telas não é mais a dos pedidos que mexeram dinheiro e não ' +
+       'estão vivos')
+      .toEqual({
+        face: Number(fora.face), cobrado: Number(fora.cobrado), taxa: Number(fora.taxa),
+      })
+
+    // E a exceção só é exceção enquanto existir pedido morto que mexeu
+    // dinheiro: sem ele o extrato bateria com as outras por acidente e esta
+    // parte do caso não provaria nada.
+    expect(Number(fora.pedidos),
+      'a fixture perdeu o pedido estornado por inteiro — a exceção do extrato ' +
+      'passou a ser indistinguível de igualdade')
+      .toBeGreaterThan(0)
+    expect(t.extrato.totais.faceCents,
+      'o extrato passou a recortar pelos vivos e parou de mostrar o pedido ' +
+      'devolvido por inteiro, que é a linha que explica a queda do dia')
+      .toBeGreaterThan(face.bordero)
+  }, 30_000)
+
+  /**
+   * DENTRO do financeiro da organização: as partes somam o todo.
+   *
+   * O total da linha do evento já foi travado no caso acima. Aqui é a outra
+   * metade da mesma tela — o gráfico por mês e a quebra por forma de
+   * pagamento — que continuava com `WHERE status = 'pago'` de verdade, não em
+   * `FILTER`: a soma dessas partes dava menos que o total impresso acima delas
+   * e não havia nada na tela explicando a diferença. Medido na fixture antes:
+   * por forma R$ 1.900,00 contra R$ 2.835,00 de cobrado.
+   *
+   * O número esperado sai do BANCO com a régua escrita à mão, e não de um
+   * literal — a organização da fixture tem três eventos e ganharia um quarto
+   * no dia em que alguém precisasse de mais um caso.
+   */
+  it('o financeiro da organização: por mês e por forma somam o total da tela', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const fin = await json('/api/admin/financeiro')
+
+    const [naOrg] = await sql(
+      `SELECT COALESCE(SUM(face_cents)
+                FILTER (WHERE status IN ('pago','estornado_parcial')),0)::bigint AS face,
+              COALESCE(SUM(fee_cents)
+                FILTER (WHERE status IN ('pago','estornado_parcial')),0)::bigint AS taxa,
+              COALESCE(SUM(total_cents)
+                FILTER (WHERE status IN ('pago','estornado_parcial')),0)::bigint AS cobrado,
+              COALESCE(SUM(face_cents)
+                FILTER (WHERE status IN ('pago','estornado_parcial')
+                          AND paid_at IS NOT NULL),0)::bigint AS face_com_data
+         FROM orders WHERE org_id = $1`, [ORG])
+
+    // O total da tela é a soma das linhas por evento — e é a régua dos vivos.
+    expect({ face: fin.totais.faceCents, taxa: fin.totais.taxaCents },
+      'o total do financeiro da organização não é o que o banco confirma pela ' +
+      'régua do pedido vivo')
+      .toEqual({ face: Number(naOrg.face), taxa: Number(naOrg.taxa) })
+
+    // A curva por mês é a decomposição dessa face. Ela exige `paid_at`, então
+    // o alvo é a face dos vivos COM data de pagamento.
+    const porMes = fin.porMes.reduce((s: number, m: any) => s + m.faceCents, 0)
+    expect(porMes,
+      'a curva por mês voltou a recortar por status = \'pago\': o mês do ' +
+      'estorno parcial perdeu a venda inteira e a barra encolheu sozinha')
+      .toBe(Number(naOrg.face_com_data))
+
+    // E a quebra por forma de pagamento soma o cobrado dos vivos.
+    const porForma = fin.porForma.reduce((s: number, f: any) => s + f.cobradoCents, 0)
+    expect(porForma,
+      'a quebra por forma de pagamento não fecha com o cobrado da organização')
+      .toBe(Number(naOrg.cobrado))
+
+    // A fixture só prova alguma coisa enquanto o recorte por 'pago' der um
+    // número DIFERENTE — senão o defeito não teria sintoma aqui.
+    const [soPagos] = await sql(
+      `SELECT COALESCE(SUM(total_cents) FILTER (WHERE status = 'pago'),0)::bigint AS cobrado
+         FROM orders WHERE org_id = $1`, [ORG])
+    expect(porForma,
+      'a fixture ficou fraca: sem pedido com estorno parcial na organização, ' +
+      'a régua errada dava no mesmo')
+      .not.toBe(Number(soPagos.cobrado))
+  }, 30_000)
+
   /**
    * O líquido já estava travado e as telas continuavam brigando no resto —
    * face, taxa, desconto, devolução, contagem de pedido. Todas essas somas
@@ -945,22 +1425,42 @@ describe('não é só o líquido: CADA campo comparável bate entre as telas', (
     // resposta honesta inclui o pedido devolvido POR INTEIRO — ele só não tem
     // mais líquido a apurar, não é que a devolução não aconteceu. Recortando
     // pelos vivos, o evento devolveu R$ 240,00 e a tela dizia R$ 20,00.
-    expect({ bordero: bordero.totais.estornadoCents, painel: dash.totais.estornadoCents },
-      'a devolução parou de contar o estorno total — R$ 220,00 sumiram da tela')
-      .toEqual({ bordero: DEVOLVIDO, painel: DEVOLVIDO })
+    //
+    // Relatórios entrou aqui na terceira passagem: as outras seis telas já
+    // respondiam R$ 240,00 e ela respondia R$ 20,00 — a sétima porta, com o
+    // mesmo rótulo e outro número.
+    expect({
+      bordero: bordero.totais.estornadoCents,
+      painel: dash.totais.estornadoCents,
+      relatorios: rel.resumo.estornadoCents,
+    }, 'a devolução parou de contar o estorno total — R$ 220,00 sumiram da tela')
+      .toEqual({ bordero: DEVOLVIDO, painel: DEVOLVIDO, relatorios: DEVOLVIDO })
 
     // E a OUTRA pergunta — quanto da devolução já está descontado do líquido —
     // continua respondida, com nome próprio, pela régua dos vivos. É ela que
-    // fecha a conta do líquido, e é o que relatórios mostra hoje.
+    // fecha a conta do líquido, e as três telas que a respondem respondem igual.
     expect({
       bordero: bordero.totais.estornadoNoLiquidoCents,
       painel: dash.totais.estornadoNoLiquidoCents,
-      relatorios: rel.resumo.estornadoCents,
+      relatorios: rel.resumo.estornadoNoLiquidoCents,
     }, 'os dois lados da devolução se misturaram de novo')
       .toEqual({
         bordero: DEVOLVIDO_NO_LIQUIDO, painel: DEVOLVIDO_NO_LIQUIDO,
         relatorios: DEVOLVIDO_NO_LIQUIDO,
       })
+
+    // E o valor exato que o defeito produzia, com o nome do que ele fazia.
+    expect(rel.resumo.estornadoCents,
+      'relatórios voltou a recortar a devolução por PEDIDO_VIVO: o estorno ' +
+      'total sumiu e a sétima tela discorda das outras seis')
+      .not.toBe(DEVOLVIDO_NO_LIQUIDO)
+
+    // A curva por dia é a decomposição do LÍQUIDO, então a devolução dela é a
+    // dos vivos — e o nome do campo diz isso. Somar a devolução total numa
+    // curva de líquido faria a soma dos dias parar de fechar com o total.
+    const naCurva = rel.porDia.reduce((s: number, d: any) => s + d.estornadoNoLiquidoCents, 0)
+    expect(naCurva, 'a curva por dia trocou a régua da devolução')
+      .toBe(DEVOLVIDO_NO_LIQUIDO)
 
     // A fixture só prova alguma coisa se os dois números forem diferentes.
     expect(DEVOLVIDO, 'a fixture ficou fraca: sem estorno total os dois números coincidem')
@@ -1102,6 +1602,76 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
   }, 30_000)
 
   /**
+   * AS LINHAS DO EXTRATO DO CAIXA SOMAM O TOTAL IMPRESSO ACIMA DELAS.
+   *
+   * O total do turno já batia com a lista de PDV (caso acima) — o que não
+   * batia era a tela com ELA MESMA. `contarTurno` conta por pedido VIVO e a
+   * LISTA de vendas logo abaixo recortava por `status = 'pago'`: a venda com
+   * estorno parcial sumia da lista inteira e continuava dentro do total.
+   *
+   * Medido na fixture antes: contagem de R$ 1.415,00 em 2 pedidos, UMA linha
+   * de R$ 500,00 na tela. O operador confere a gaveta somando o que vê, não
+   * fecha com o número impresso logo acima, e não tem como descobrir qual
+   * venda falta — a que falta é justamente a que não está lá.
+   *
+   * Trazer a linha de volta sem mais nada trocaria um buraco de R$ 935 por um
+   * de R$ 20, porque a linha vale o que foi vendido e o total conta o que
+   * ficou na gaveta. Por isso a linha carrega `naGavetaCents`
+   * (`total − estornado`): é a parcela com que ela entra em `contarTurno`, e é
+   * a soma DELA que fecha.
+   */
+  it('a lista de vendas do caixa soma exatamente o total do turno', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const caixa = await json(`/api/admin/evento/${EVENTO}/pdv/turno?turno=${TURNO}`)
+    const total = caixa.contagem.dinheiroCents + caixa.contagem.eletronicoCents
+
+    // 1. a venda com estorno parcial está NA LISTA
+    const codigos = caixa.vendas.map((v: any) => v.codigo)
+    expect(codigos,
+      'a lista de vendas voltou a recortar por status = \'pago\': a venda com ' +
+      'estorno parcial sumiu da tela e continua dentro do total')
+      .toContain('ZZ-CT-PARCIAL')
+    expect(caixa.vendas.length,
+      'a lista mostra menos vendas do que o turno conta')
+      .toBe(caixa.contagem.pedidos)
+
+    // 2. e a soma das linhas é EXATAMENTE o total impresso acima delas
+    const somaDasLinhas = caixa.vendas.reduce((s: number, v: any) => s + v.naGavetaCents, 0)
+    expect(somaDasLinhas,
+      `as linhas da tela somam ${somaDasLinhas} e o total impresso diz ${total} — ` +
+      'o operador confere a gaveta somando linhas que não fecham')
+      .toBe(total)
+    expect(total, 'o total do turno deixou de ser o somado à mão').toBe(NO_CAIXA)
+
+    // 3. a linha devolvida NOMEIA o que voltou, em vez de esconder na
+    //    subtração: valor vendido e valor que ficou na gaveta, lado a lado
+    const parcial = caixa.vendas.find((v: any) => v.codigo === 'ZZ-CT-PARCIAL')
+    expect({
+      situacao: parcial.situacao,
+      total: parcial.totalCents,
+      estornado: parcial.estornadoCents,
+      naGaveta: parcial.naGavetaCents,
+    }, 'a venda com devolução parcial não diz quanto voltou pra mão do cliente')
+      .toEqual({
+        situacao: 'estornado_parcial', total: 93_500,
+        estornado: DEVOLVIDO_NO_LIQUIDO, naGaveta: NO_CAIXA_DINHEIRO,
+      })
+
+    // 4. e a fixture só prova alguma coisa enquanto os dois valores da linha
+    //    forem diferentes — sem devolução, somar `totalCents` daria no mesmo
+    expect(parcial.totalCents,
+      'a fixture ficou fraca: sem devolução na venda, somar o total cheio ' +
+      'fecharia com a contagem e o caso não provaria nada')
+      .not.toBe(parcial.naGavetaCents)
+
+    // 5. o valor exato que o defeito produzia, com o nome do que ele fazia
+    expect(somaDasLinhas,
+      'a lista voltou a mostrar só a venda em \'pago\'')
+      .not.toBe(NO_CAIXA_COM_O_DEFEITO)
+  }, 30_000)
+
+  /**
    * A VENDA DE BALCÃO SEM GUICHÊ CADASTRADO CONTA — e tem nome.
    *
    * O cartão "Vendido na bilheteria" recortava por `pos_terminal_id IS NOT
@@ -1172,6 +1742,224 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
     expect(ponto.hoje.totalCents,
       'a venda sem ponto foi atribuída ao guichê pra o total fechar')
       .toBe(NO_BALCAO - NO_BALCAO_SEM_PONTO)
+  }, 30_000)
+
+  /**
+   * ESTAR NO PAYLOAD NÃO É ESTAR NA TELA.
+   *
+   * A rota passou a devolver `semPontoCents` / `pedidosSemPonto` e a tela de
+   * pontos de venda simplesmente não pintava a linha: o cabeçalho dizia
+   * R$ 2.202,80, os cartões dos guichês somavam R$ 470,00, e a diferença de
+   * R$ 1.732,80 não aparecia em lugar nenhum. O teste do payload ficava verde
+   * e o produtor continuava vendo um total que não conseguia rastrear.
+   *
+   * É a classe de bug que este projeto mais leva: não estoura, não loga, não
+   * deixa teste vermelho — só aparece olhando. Por isso este caso pede o HTML
+   * que o servidor renderiza e procura a linha nele.
+   *
+   * O valor é montado com aritmética inteira, igual ao `reais` de
+   * `composables/formato.ts`, e não com `toLocaleString`: o `Intl` separa o
+   * `R$` com espaço FINO (U+00A0) e a comparação falha com as duas strings
+   * idênticas na tela.
+   */
+  it('a venda sem guichê aparece NA TELA de pontos de venda, não só no payload', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const r = await comSessao(`/admin/evento/${EVENTO_BALCAO}/pdv`)
+    expect(r.status, 'a tela de pontos de venda não abriu').toBe(200)
+    const html = soOQueARenderizou(await r.text())
+
+    expect(html,
+      'a tela de pontos de venda não nomeia a venda de balcão sem guichê: o ' +
+      'total do cabeçalho não fecha com a soma dos cartões e nada explica por quê')
+      .toContain('Sem ponto identificado')
+
+    const emReais = (c: number) =>
+      `R$ ${Math.floor(c / 100).toLocaleString('pt-BR')},${String(c % 100).padStart(2, '0')}`
+
+    expect(html,
+      `a linha existe mas não mostra o valor: ${emReais(NO_BALCAO_SEM_PONTO)} é a ` +
+      'diferença entre o total da tela e a soma dos cartões')
+      .toContain(emReais(NO_BALCAO_SEM_PONTO))
+
+    // A fixture só prova alguma coisa se o valor da linha for diferente do
+    // total — senão bastaria a tela repetir o cabeçalho pra ficar verde.
+    expect(NO_BALCAO_SEM_PONTO,
+      'a fixture ficou fraca: com a venda órfã valendo o total inteiro, ' +
+      'qualquer número na tela passaria')
+      .not.toBe(NO_BALCAO)
+
+    // E a tela NÃO pode inventar a linha onde ela não existe: no evento em que
+    // toda venda de balcão tem guichê, nada de "sem ponto". Sem esta metade, a
+    // linha poderia ser fixa na tela e o caso acima ficaria verde à toa.
+    const pdvSemOrfao = await json(`/api/admin/evento/${EVENTO}/pdv`)
+    expect(pdvSemOrfao.resumo.semPontoCents,
+      'a fixture do evento principal ganhou uma venda órfã e esta metade do ' +
+      'caso parou de provar o contrário')
+      .toBe(0)
+    const semOrfao = await comSessao(`/admin/evento/${EVENTO}/pdv`)
+    expect(soOQueARenderizou(await semOrfao.text()),
+      'a linha "sem ponto" aparece num evento que não tem venda órfã nenhuma')
+      .not.toContain('Sem ponto identificado')
+  }, 30_000)
+
+  /**
+   * A TELA NÃO PODE PROMETER UMA CONTA QUE ELA NÃO FAZ.
+   *
+   * A linha "Sem ponto identificado" nasceu certa e veio com uma frase errada
+   * embaixo: "entra no total lá em cima e não entra em nenhum cartão acima: é
+   * EXATAMENTE a diferença entre os dois". Não é — e o erro não é de arredondar:
+   *
+   *   cabeçalho  = todo pedido vivo de balcão do EVENTO INTEIRO;
+   *   cartão     = o total do CAIXA ABERTO, ou só o de HOJE quando não há um.
+   *
+   * São populações diferentes. Venda de guichê num turno já fechado, ou de
+   * outro dia, está no cabeçalho e em cartão nenhum — e não é venda órfã.
+   * Medido nesta fixture com a frase no ar: cabeçalho R$ 1.650,00, cartões
+   * R$ 600,00, diferença REAL R$ 1.050,00, e a linha imprimindo R$ 250,00.
+   *
+   * Frase errada numa tela de dinheiro é pior que nenhuma frase: o produtor
+   * confere a conta, ela não fecha, e agora ele desconfia do total também.
+   *
+   * O caso pede o HTML renderizado, pelo mesmo motivo do de cima: estar no
+   * payload não é estar na tela, e aqui o defeito era SÓ da tela.
+   */
+  it('a tela de PDV mostra a diferença que ela realmente tem, não só a venda órfã', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const pdv = await json(`/api/admin/evento/${EVENTO_GUICHE}/pdv`)
+
+    // A régua da tela, montada do jeito que a tela monta: cada cartão mostra o
+    // caixa aberto quando há um, e só o de hoje quando não há.
+    const somaDosCartoes = pdv.pontos.reduce(
+      (s: number, p: any) => s + Number(p.turno ? p.turno.totalCents : p.hoje.totalCents), 0)
+    const foraDosCartoes = pdv.resumo.brutoCents - somaDosCartoes
+
+    expect({
+      bruto: pdv.resumo.brutoCents,
+      cartoes: somaDosCartoes,
+      semPonto: pdv.resumo.semPontoCents,
+    }, 'a fixture do guichê de ontem mudou de forma')
+      .toEqual({
+        bruto: NO_BALCAO_DO_GUICHE,
+        cartoes: NO_GUICHE_HOJE,
+        semPonto: SEM_GUICHE,
+      })
+
+    // A FIXTURE SÓ PROVA ALGUMA COISA enquanto a venda órfã NÃO for o buraco
+    // inteiro: é exatamente por isso que existe a venda de três dias atrás.
+    expect(foraDosCartoes,
+      'a fixture ficou fraca: sem venda de guichê fora do caixa aberto, a ' +
+      'frase errada daria no mesmo e este caso passaria verde à toa')
+      .toBeGreaterThan(pdv.resumo.semPontoCents)
+    expect(foraDosCartoes, 'o buraco da tela não é o somado à mão').toBe(FORA_DOS_CARTOES)
+
+    const r = await comSessao(`/admin/evento/${EVENTO_GUICHE}/pdv`)
+    expect(r.status, 'a tela de pontos de venda não abriu').toBe(200)
+    const html = soOQueARenderizou(await r.text())
+
+    // Aritmética inteira, igual ao `reais` de `composables/formato.ts` — o
+    // `Intl` separa o `R$` com espaço FINO e a comparação falharia com as duas
+    // strings idênticas na tela.
+    const emReais = (c: number) =>
+      `R$ ${Math.floor(c / 100).toLocaleString('pt-BR')},${String(c % 100).padStart(2, '0')}`
+
+    // 1. O BURACO INTEIRO, com o valor que a tela consegue provar somando o
+    //    que ela mesma está mostrando.
+    expect(html,
+      `a tela não mostra a diferença real de ${emReais(foraDosCartoes)} entre o ` +
+      'cabeçalho e a soma dos cartões')
+      .toContain(emReais(foraDosCartoes))
+
+    // 2. AS DUAS PARTES, cada uma com o seu nome. Sem a segunda, a tela volta
+    //    a dizer que a venda órfã é o buraco todo.
+    expect(html, 'a venda de balcão sem guichê perdeu o nome próprio')
+      .toContain('Sem ponto identificado')
+    expect(html,
+      `a venda de guichê fora do caixa aberto (${emReais(NO_GUICHE_ANTES)}) não ` +
+      'aparece: a tela voltou a atribuir o buraco inteiro à venda órfã')
+      .toContain(emReais(NO_GUICHE_ANTES))
+
+    // 3. E A FRASE NÃO PODE VOLTAR. Ela é o defeito em si: o número está certo
+    //    e o que está escrito ao lado dele é falso.
+    expect(html,
+      'a frase "é exatamente a diferença entre os dois" voltou pra baixo da ' +
+      'venda órfã, e ela é falsa sempre que um guichê vendeu fora do caixa aberto')
+      .not.toContain('é exatamente a diferença entre os dois')
+  }, 30_000)
+
+  /**
+   * A VENDA CANCELADA NO GUICHÊ — a devolução que seis telas contam e o
+   * extrato não.
+   *
+   * O caso das SETE telas lá em cima prova a igualdade da devolução com a
+   * fixture que ele tem: estorno parcial e estorno total. Falta o terceiro
+   * jeito de devolver dinheiro neste sistema, e é o mais comum no balcão —
+   * `SQL_CANCELA_VENDA_PDV` grava `status = 'cancelado'` com
+   * `refunded_cents = total_cents` quando o operador desfaz a venda e tira as
+   * notas da gaveta.
+   *
+   * Medido nesta fixture: borderô, painel, financeiro do evento, financeiro da
+   * organização e a lista de vendas dizem R$ 450,00 de devolvido; o extrato
+   * diz R$ 50,00. R$ 400,00 de diferença — o dinheiro que saiu da gaveta.
+   *
+   * A causa é uma linha só, e NÃO É DESTA TRILHA:
+   * `server/api/admin/evento/[id]/extrato.get.ts:57` lista
+   * `('pago','estornado','estornado_parcial','chargeback','disputa')` e deixa
+   * `cancelado` de fora, contrariando a própria regra escrita duas linhas
+   * acima ("todo estado em que o dinheiro CHEGOU a entrar") — no balcão ele
+   * chegou a entrar e depois saiu.
+   *
+   * Este caso PRENDE o defeito em vez de escondê-lo:
+   *
+   * - exige que as SEIS telas que respondem certo continuem concordando —
+   *   qualquer uma que regrida fica vermelha aqui;
+   * - exige que a falta do extrato seja EXATAMENTE a devolução dos pedidos nos
+   *   status que ele não lista, lida do banco. No dia em que o extrato passar
+   *   a listar `cancelado`, esta diferença vira zero e o caso fica vermelho
+   *   avisando que a exceção acabou — aí ela sai daqui e o extrato entra na
+   *   igualdade das sete.
+   */
+  it('a venda cancelada no guichê é devolução nas seis — e o extrato ainda não conta', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const t = await asSeteTelas(EVENTO_GUICHE)
+
+    const asSeis = {
+      bordero: t.bordero.totais.estornadoCents,
+      painel: t.dashboard.totais.estornadoCents,
+      financeiroDoEvento: t.financeiroDoEvento.resumo.estornadoCents,
+      financeiroDaOrg: t.org.estornadoCents,
+      vendas: t.vendas.totais.estornadoCents,
+      relatorios: t.relatorios.resumo.estornadoCents,
+    }
+    expect(new Set(Object.values(asSeis)).size,
+      `as seis telas discordaram da devolução: ${JSON.stringify(asSeis)}`).toBe(1)
+    expect(asSeis.relatorios,
+      'a devolução das seis não é a somada à mão — o cancelamento de balcão ' +
+      'devolveu dinheiro tanto quanto o estorno')
+      .toBe(SEM_GUICHE_DEVOLVIDO + CANCELADA_NO_GUICHE)
+
+    // A fixture só prova alguma coisa se a venda cancelada valer alguma coisa.
+    expect(CANCELADA_NO_GUICHE,
+      'a fixture perdeu a venda cancelada e este caso virou uma cópia do de cima')
+      .toBeGreaterThan(0)
+
+    // A FALTA DO EXTRATO, com número: é a devolução dos pedidos em status que
+    // ele não lista. Sai do banco, não de um literal.
+    const [foraDoExtrato] = await sql(
+      `SELECT COALESCE(SUM(refunded_cents),0)::bigint AS devolvido
+         FROM orders
+        WHERE event_id = $1
+          AND status NOT IN ('pago','estornado','estornado_parcial','chargeback','disputa')`,
+      [EVENTO_GUICHE])
+
+    expect(asSeis.relatorios - t.extrato.totais.estornadoCents,
+      'a diferença entre o extrato e as outras seis deixou de ser a devolução ' +
+      'dos status que o extrato não lista — ou o extrato foi consertado (e aí ' +
+      'este caso sai daqui e o extrato entra na igualdade das sete), ou nasceu ' +
+      'uma terceira régua de devolução')
+      .toBe(Number(foraDoExtrato.devolvido))
   }, 30_000)
 })
 
@@ -1311,7 +2099,16 @@ describe('público é quem entrou, não ingresso emitido', () => {
   }, 20_000)
 })
 
-describe('o evento de verdade — as cinco telas continuam batendo', () => {
+describe('o evento de verdade — as sete telas continuam batendo', () => {
+  /**
+   * A fixture é desenhada pra ter os casos que o seed não produz. Este caso é
+   * o contrário: o evento REAL, com 358 pedidos e a mistura de taxa repassada
+   * e absorvida no mesmo canal, lido pelas sete portas.
+   *
+   * Ele não repete a grade campo a campo do caso da fixture — repete o que
+   * pode ser afirmado sem depender de qual pedido existe hoje: as réguas
+   * batem entre si e batem com o banco.
+   */
   it('borderô, financeiro do evento, financeiro da org, relatórios e painel não divergem', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
     expect(cookieDaCasa, 'login do master da casa falhou').toBeTruthy()

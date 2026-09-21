@@ -46,8 +46,16 @@ const apenasConsultar = ref(false)
 const lendo = ref(false)
 const campo = ref<HTMLInputElement | null>(null)
 
-/** o que a portaria pede quando o ingresso é meia (migração 015) */
-type Meia = { motivo: string; rotulo: string; documento: string; numero: string | null }
+/**
+ * O que a portaria pede quando o ingresso é meia (migração 015).
+ *
+ * `motivo` é `string | null` e o `null` é o caso NORMAL, não a exceção: medido
+ * no banco desta instalação em 21/09, 23 dos 23 ingressos de meia do evento
+ * estão sem motivo declarado. O tipo dizia `string` e mentia — quem lesse o
+ * tipo escreveria a tela pro caso raro. É essa distinção que abre os dois
+ * blocos diferentes lá embaixo.
+ */
+type Meia = { motivo: string | null; rotulo: string; documento: string; numero: string | null }
 
 /** o retrato do público — um objeto, uma consulta (ver `publico` abaixo) */
 type Publico = {
@@ -125,11 +133,61 @@ const avisoRelogio = ref<{ passagens: number; dispositivo: string | null
                            motivo: string; piorEnviado: string | null } | null>(null)
 const conflitos = ref<any[]>([])
 const swPronto = ref<'sim' | 'nao' | 'indisponivel'>('indisponivel')
+/**
+ * O servidor cortou a lista no teto — a contagem abaixo fica parcial.
+ *
+ * Mora GUARDADO junto com a lista (`CHAVE_LISTA`), e não só em memória, porque
+ * a marca e a lista são a mesma informação: uma lista cortada continua cortada
+ * depois do F5, e este é o único leitor do sistema feito pra **reabrir sem
+ * rede** — quando isso acontece, `sincronizar()` não roda e nada redescobre o
+ * corte. Em memória, a faixa voltava dizendo "N de M meias deste evento" sobre
+ * um pedaço do evento, sem o aviso de parcial: número incompleto que se
+ * apresenta como completo é exatamente o que ela existe pra não fazer.
+ */
+const listaTruncada = ref(false)
+
+/** A lista e a marca de corte viajam juntas pro localStorage — ver acima. */
+function guardarLista() {
+  guardar(CHAVE_LISTA, {
+    em: listaEm.value, truncada: listaTruncada.value, ingressos: lista.value,
+  })
+}
 
 const mapa = computed(() => {
   const m = new Map<string, IngressoLocal>()
   for (const i of lista.value) m.set(i.codigo, i)
   return m
+})
+
+/**
+ * Quantas meias deste evento vão chegar na porta sem dizer por quê.
+ *
+ * Contado na LISTA baixada, e não numa segunda consulta ao servidor, por dois
+ * motivos que apontam pro mesmo lugar:
+ *
+ *  • é a mesma régua — cada item da lista traz o `meia` calculado pelo mesmo
+ *    `meiaDoIngresso` que a porta online usa (server/utils/catraca.ts). Uma
+ *    contagem própria aqui seria a segunda definição de "meia sem motivo", e
+ *    é assim que duas telas passam a mostrar números diferentes da mesma coisa;
+ *  • é exatamente o conjunto que ESTE portão vai validar no apagão. Um total
+ *    vindo do banco diria um número que o aparelho na mão do operador não
+ *    tem como cumprir.
+ *
+ * O número existe pro PRODUTOR, não pro operador: é ele que decide se manda
+ * avisar na bilheteria, e é ele que precisa saber que ninguém inventou motivo
+ * pros ingressos antigos. Fica parcial e DIZ que está parcial quando o servidor
+ * cortou a lista — número incompleto que se apresenta como completo é como o
+ * produtor toma decisão errada achando que está informado.
+ */
+const meiasDoEvento = computed(() => {
+  let total = 0
+  let semMotivo = 0
+  for (const i of lista.value) {
+    if (!i.meia) continue
+    total++
+    if (!i.meia.motivo) semMotivo++
+  }
+  return { total, semMotivo, parcial: listaTruncada.value }
 })
 
 /** uuid mesmo fora de contexto seguro — tablet do parque roda em http na LAN,
@@ -178,8 +236,15 @@ onMounted(async () => {
     try { localStorage.setItem(CHAVE_APARELHO, aparelho.value) } catch { /* aba anônima */ }
   }
 
-  const guardada = recuperar<{ em: string; ingressos: IngressoLocal[] } | null>(CHAVE_LISTA, null)
-  if (guardada) { lista.value = guardada.ingressos; listaEm.value = guardada.em }
+  const guardada = recuperar<
+    { em: string; truncada?: boolean; ingressos: IngressoLocal[] } | null>(CHAVE_LISTA, null)
+  if (guardada) {
+    lista.value = guardada.ingressos
+    listaEm.value = guardada.em
+    // Lista guardada por uma versão anterior não tem a marca: fica `false`,
+    // que é o que a tela já fazia. A próxima descida da lista corrige.
+    listaTruncada.value = Boolean(guardada.truncada)
+  }
   fila.value = recuperar<Passagem[]>(CHAVE_FILA, [])
 
   online.value = navigator.onLine
@@ -262,14 +327,13 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
              titular: t.titular, entrouEm: t.usadoAqui?.em ?? null,
              portao: t.usadoAqui?.gate ?? null }
   }
+  let foraDaSessao = false
   if (t.sessaoInicio) {
     // a mesma folga de 2h do servidor: chegar cedo é normal
     const agora = Date.now()
     const abre = new Date(t.sessaoInicio).getTime() - 2 * 3600_000
     const fecha = new Date(t.sessaoFim ?? t.sessaoInicio).getTime() + 2 * 3600_000
-    if (agora < abre || agora > fecha) {
-      return { ...base, resultado: 'fora_da_sessao', mensagem: 'Fora do horário desta sessão' }
-    }
+    foraDaSessao = agora < abre || agora > fecha
   }
 
   // A meia sai da lista baixada, igual ao resto: sem rede o operador continua
@@ -278,9 +342,21 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   const dados = { titular: t.titular, setor: t.setor, lote: t.lote, tipo: t.tipo,
                   meia: t.meia ?? null }
 
+  // Mesma regra do servidor (`/api/checkin`): a consulta responde SEMPRE, com
+  // os dados do ingresso, e diz se o horário ainda não chegou. As duas portas
+  // precisam responder igual — offline, a pergunta "o que este cliente precisa
+  // trazer?" é a única que o operador ainda consegue resolver sozinho.
   if (apenasConsultar.value) {
-    return { local: true, ok: true, resultado: 'ok', mensagem: 'Válido (não marcado)',
+    return { local: true, ok: !foraDaSessao,
+             resultado: foraDaSessao ? 'fora_da_sessao' : 'ok',
+             mensagem: foraDaSessao
+               ? 'Ainda não é o horário desta sessão — mas o ingresso é válido'
+               : 'Válido (não marcado)',
              consulta: true, ingresso: dados }
+  }
+
+  if (foraDaSessao) {
+    return { ...base, resultado: 'fora_da_sessao', mensagem: 'Fora do horário desta sessão' }
   }
 
   // Passou: entra na fila com id criado AQUI, e o ingresso fica marcado no
@@ -292,7 +368,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   fila.value = [...fila.value, { id: idPassagem, qr: bruto.trim(), gate: gate.value || null,
                                  em, offline: true }]
   guardar(CHAVE_FILA, fila.value)
-  guardar(CHAVE_LISTA, { em: listaEm.value, ingressos: lista.value })
+  guardarLista()
 
   return { local: true, ok: true, resultado: 'ok', mensagem: 'Liberado (sem rede)',
            pessoas: t.pessoas, ingresso: dados }
@@ -455,11 +531,16 @@ async function sincronizar({ comLista = false } = {}) {
             ? { ...i, usadoAqui: mapa.value.get(i.codigo)?.usadoAqui }
             : i)
         listaEm.value = r.lista.geradaEm
-        guardar(CHAVE_LISTA, { em: listaEm.value, ingressos: lista.value })
 
         // O servidor corta a lista em 20 mil e MARCA o corte. Sem ler essa
         // marca, o tablet ficaria recusando ingresso bom no apagão sem que
         // ninguém soubesse por quê — a falha muda de sempre.
+        //
+        // Lida ANTES de guardar: a marca vai pro localStorage na mesma gravação
+        // da lista que ela descreve. Guardar primeiro escreveria a lista nova
+        // com a marca da lista anterior.
+        listaTruncada.value = Boolean(r.lista.truncada)
+        guardarLista()
         if (r.lista.truncada) {
           avisoLocal.value = `A lista parou em ${lista.value.length} ingressos e este evento `
             + 'tem mais que isso. Sem rede, quem ficou de fora da lista será recusado — '
@@ -586,6 +667,28 @@ useHead({ title: 'Leitor de entrada' })
       </p>
     </div>
 
+    <!-- O número que o PRODUTOR precisa ver, e que ninguém tinha: quantas
+         meias deste evento chegam na porta sem dizer por quê. Ele existe
+         porque a saída certa para o ingresso antigo NÃO é inventar um motivo
+         — backfill chutado vira rastro falso, que é pior que rastro faltando.
+         Então conta-se quantos ficaram sem e mostra-se o número. -->
+    <div v-if="meiasDoEvento.semMotivo" class="card mt-3 border-alerta bg-alerta-claro">
+      <p class="rotulo-kpi text-alerta">
+        {{ meiasDoEvento.semMotivo }} de {{ meiasDoEvento.total }}
+        meia(s)-entrada(s) deste evento sem motivo registrado
+      </p>
+      <p class="mt-1 text-sm text-tinta-corpo">
+        Nesses ingressos ninguém perguntou se o direito é de estudante, idoso, PCD, ID Jovem
+        ou professor — a compra é anterior à exigência, ou foi feita no balcão. A portaria vai
+        pedir o documento genérico e conferir com o supervisor; nenhum motivo foi inventado
+        para eles.
+        <template v-if="meiasDoEvento.parcial">
+          <strong>A contagem está parcial</strong> — a lista deste aparelho foi cortada no teto
+          do servidor e não cobre o evento inteiro.
+        </template>
+      </p>
+    </div>
+
     <p v-if="ultimoEnvio" class="mt-3 text-sm text-tinta-suave">
       Último envio: {{ ultimoEnvio.aplicadas }} registrada(s),
       {{ ultimoEnvio.repetidas }} repetida(s),
@@ -668,8 +771,15 @@ useHead({ title: 'Leitor de entrada' })
 
     <div v-if="ultima" class="mt-4 rounded-card px-6 py-8 text-center entra-resposta"
          :class="CLASSE[ultima.resultado] ?? 'bg-erro text-white'">
+      <!-- "Só conferir" agora responde mesmo fora do horário da sessão (o
+           cliente que chega cedo é quem ainda dá tempo de mandar buscar o
+           documento em casa). Então o veredito da consulta deixa de ser
+           sempre "VÁLIDO": quando o horário não chegou, ele diz isso. Fixar
+           "VÁLIDO" aqui faria a tela contradizer a própria mensagem logo
+           abaixo. -->
       <p class="titulo text-4xl font-bold">
-        {{ ultima.consulta ? 'VÁLIDO' : ultima.ok ? 'PODE ENTRAR' : 'BARRADO' }}
+        {{ ultima.consulta ? (ultima.ok ? 'VÁLIDO' : 'AINDA NÃO')
+           : ultima.ok ? 'PODE ENTRAR' : 'BARRADO' }}
       </p>
       <p class="mt-2 text-lg opacity-95">{{ ultima.mensagem }}</p>
       <p v-if="ultima.ingresso" class="mt-3 text-lg">
@@ -686,20 +796,64 @@ useHead({ title: 'Leitor de entrada' })
            relance com fila na frente. Fundo branco dentro da faixa colorida
            porque é o que o operador tem que PARAR e ler — o resto do card ele
            só olha a cor. Sem isto a tela dizia "Meia-entrada" no nome do tipo
-           e o operador ficava adivinhando qual papel pedir (migração 015). -->
-      <div v-if="ultima.ingresso?.meia"
+           e o operador ficava adivinhando qual papel pedir (migração 015).
+
+           DOIS blocos, e a diferença é o ponto: com motivo declarado o
+           operador confere UM papel; sem motivo ele tem que perguntar qual é o
+           caso da pessoa antes de saber o que pedir. Medido antes do conserto:
+           os dois casos renderizavam idênticos — mesmo título de 24px, mesmo
+           rótulo auxiliar de 12px em #4F6C7C — e a ausência de motivo aparecia
+           só como um texto no lugar onde deveria estar o motivo
+           ("MEIA-ENTRADA · motivo não declarado na compra"). Com o tablet na
+           mão e sol batendo isso é a mesma tela duas vezes. -->
+
+      <!-- 1. com motivo: um papel, nomeado. -->
+      <div v-if="ultima.ingresso?.meia?.motivo"
            class="mx-auto mt-4 max-w-xl rounded-card bg-white p-4 text-left text-tinta-corpo">
         <p class="titulo text-2xl font-bold text-tinta">
           MEIA-ENTRADA · {{ ultima.ingresso.meia.rotulo }}
         </p>
-        <p class="rotulo mt-3">Peça este documento</p>
-        <p class="text-lg font-bold text-tinta">{{ ultima.ingresso.meia.documento }}</p>
+        <p class="titulo mt-3 text-base font-bold text-tinta-rotulo">Peça este documento</p>
+        <p class="text-xl font-bold leading-snug text-tinta">
+          {{ ultima.ingresso.meia.documento }}
+        </p>
         <template v-if="ultima.ingresso.meia.numero">
-          <p class="rotulo mt-3">Número declarado na compra — confira se bate</p>
+          <p class="titulo mt-3 text-base font-bold text-tinta-rotulo">
+            Número declarado na compra — confira se bate
+          </p>
           <p class="font-mono text-xl font-bold tracking-wide text-tinta">
             {{ ultima.ingresso.meia.numero }}
           </p>
         </template>
+      </div>
+
+      <!-- 2. SEM motivo: o caso que este banco tem de verdade (23 de 23 em
+           21/09). Não dá pra nomear o papel, então o aviso muda de natureza —
+           deixa de ser "confira este documento" e vira "pergunte primeiro".
+           Borda grossa de alerta e título em 30px porque o operador precisa
+           reparar que ESTE ingresso é diferente do anterior antes de liberar
+           por reflexo. -->
+      <div v-else-if="ultima.ingresso?.meia"
+           class="mx-auto mt-4 max-w-2xl rounded-card border-4 border-alerta bg-white
+                  p-5 text-left text-tinta-corpo">
+        <p class="titulo text-3xl font-bold leading-tight text-alerta">
+          MEIA-ENTRADA SEM MOTIVO REGISTRADO
+        </p>
+        <p class="mt-2 text-xl font-bold leading-snug text-tinta">
+          Peça o documento de estudante, idoso (60+), PCD, ID Jovem ou professor,
+          conforme a regra do evento.
+        </p>
+        <p class="titulo mt-4 text-base font-bold text-tinta-rotulo">
+          O que este ingresso pede
+        </p>
+        <p class="text-xl font-bold leading-snug text-tinta">
+          {{ ultima.ingresso.meia.documento }}
+        </p>
+        <p class="mt-3 text-base leading-snug text-tinta-corpo">
+          Este ingresso não diz por que tem direito à meia — ninguém perguntou na compra.
+          Não é fraude e não é motivo pra barrar sozinho: confira o papel e, na dúvida,
+          chame o supervisor.
+        </p>
       </div>
       <!-- A recusa útil: além de "já entrou", QUANDO e ONDE. Sem isso a fila
            para com o cliente jurando que não entrou. -->

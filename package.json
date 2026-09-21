@@ -13,19 +13,22 @@
     "seed": "node scripts/seed.mjs"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "jose": "^5.9.6",
+    "nanoid": "^5.0.9",
     "nuxt": "^4.3.0",
+    "pg": "^8.13.1",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0",
-    "pg": "^8.13.1",
-    "zod": "^3.24.1",
-    "qrcode": "^1.5.4",
-    "jose": "^5.9.6",
-    "bcryptjs": "^2.4.3",
-    "nanoid": "^5.0.9"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@nuxtjs/tailwindcss": "^6.13.1",
-    "vitest": "^2.1.8",
-    "@types/pg": "^8.11.10"
+    "@types/pg": "^8.11.10",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "happy-dom": "^20.14.5",
+    "vitest": "^2.1.8"
   }
 }

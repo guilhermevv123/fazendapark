@@ -36,10 +36,14 @@ import {
 } from './email'
 import {
   FILA_DE_ENVIO, FILA_DE_ESTORNO, SQL_RESERVA, adiamentoSegundos, anunciarWorker,
-  baterPonto, emPortugues,
-  enfileirar, garantirWorker, montarMensagemDoPedido, pararWorker, processarUm,
-  reservarProximo, usarTransporte, vereditoDaFila,
+  baterPonto, emPortugues, encerrarPonto,
+  enfileirar, garantirWorker, instanciaDoProcesso, montarMensagemDoPedido, pararWorker,
+  processarUm, reservarProximo, usarTransporte, vereditoDaFila,
 } from './envio'
+// O formatador único da casa, o MESMO que a tela usa por auto-import do Nuxt.
+// Importar uma cópia aqui faria o teste de sinal julgar um `reais()` que não é
+// o que roda na auditoria — e passaria verde com a tela errada.
+import { reais } from '~/composables/formato'
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
 
@@ -1262,15 +1266,26 @@ describe('a batida do ponto', () => {
   // de rodadas antigas. Lixo de teste no banco de verdade é o tipo de coisa
   // que ninguém liga de deixar e todo mundo xinga de achar.
   afterAll(async () => {
-    await q(`DELETE FROM worker_heartbeats WHERE worker LIKE $1`, [`${NOME}%`])
+    // A tabela FÍSICA: `worker_heartbeats` virou visão na 026 e visão com
+    // agregação não aceita DELETE. Apagar pelo nome certo é o que garante que
+    // a limpeza acontece de verdade em vez de estourar no `afterAll` e deixar
+    // o lixo pra próxima rodada achar.
+    await q(`DELETE FROM worker_heartbeat_instances WHERE worker LIKE $1`, [`${NOME}%`])
   })
+
+  /** o que a TELA DE SAÚDE lê sobre a fila — uma linha por fila, não por processo */
+  const comoATelaVe = (worker: string) => q1<any>(
+    `SELECT status, instance, beats, booted_at, done, failed, last_error, worked_at,
+            instances, instances_on, instances_live, instances_silent, fleet,
+            EXTRACT(epoch FROM now() - beat_at)::int AS bateu_ha
+       FROM worker_heartbeats WHERE worker = $1`, [worker])
 
   it('acumula o que já saiu desde o boot em vez de sobrescrever', async () => {
     await anunciarWorker(NOME, true, 15_000)
     await baterPonto(NOME, { feitos: 2, falhos: 1, erro: 'caixa cheia' })
     await baterPonto(NOME, { feitos: 3, falhos: 0 })
 
-    const l = await q1<any>(`SELECT * FROM worker_heartbeats WHERE worker = $1`, [NOME])
+    const l = await comoATelaVe(NOME)
     expect(l, 'a batida não chegou ao banco — a tela de saúde fica cega').toBeTruthy()
     // Sobrescrever responderia "1" pra quem pergunta quanto já saiu hoje.
     expect(Number(l.done), 'a batida sobrescreveu em vez de somar').toBe(5)
@@ -1281,32 +1296,46 @@ describe('a batida do ponto', () => {
   it('varredura vazia bate o ponto, mas NÃO conta como trabalho', async () => {
     const vazio = `${NOME}-vazio`
     await baterPonto(vazio, {})
-    const l = await q1<any>(`SELECT * FROM worker_heartbeats WHERE worker = $1`, [vazio])
-    expect(l.beat_at, 'trabalhador vivo numa fila vazia ficou parecendo morto').toBeTruthy()
+    const l = await comoATelaVe(vazio)
+    expect(l.bateu_ha, 'trabalhador vivo numa fila vazia ficou parecendo morto')
+      .toBeLessThan(60)
     expect(l.worked_at, '"não tinha nada pra fazer" virou "trabalhou agora"').toBeNull()
   })
 
   it('a batida não mistura o processo de um com a hora de subida de outro', async () => {
     // "Quem subiu" e "quando subiu" são o MESMO fato, escrito junto no boot.
-    // Quando a batida reescrevia só o `instance`, a linha virava meio de um
-    // processo e meio de outro — visto na tela: `subiuEm 06:29:50` com
+    // Quando a batida reescrevia o `instance` da linha alheia, ela virava meio
+    // de um processo e meio de outro — visto na tela: `subiuEm 06:29:50` com
     // `instancia :21600`, e o 21600 não tinha subido àquela hora. Quem está
     // investigando "o ingresso não saiu às 21h" vai ler o log do processo
     // errado por causa disso.
+    //
+    // Com a chave por `(worker, instance)` isso deixou de depender de cuidado
+    // no SQL: a batida deste processo NÃO ALCANÇA a linha do outro. O caso
+    // continua aqui porque o que ele protege é o par, não o `UPDATE`.
     const par = `${NOME}-par`
-    await anunciarWorker(par, true, 15_000)
-    await q(`UPDATE worker_heartbeats
-                SET instance = 'outra-maquina:1', booted_at = timestamptz '2020-01-01 00:00Z'
-              WHERE worker = $1`, [par])
+    await q(`INSERT INTO worker_heartbeat_instances
+               (worker, status, instance, beat_ms, beats, booted_at, beat_at)
+             VALUES ($1,'ligado','outra-maquina:1',15000,true,
+                     timestamptz '2020-01-01 00:00Z', timestamptz '2020-01-01 00:00Z')`,
+      [par])
 
     await baterPonto(par, { feitos: 1 })
 
-    const l = await q1<any>(
-      `SELECT instance, booted_at, EXTRACT(epoch FROM beat_at - booted_at)::int AS vida
-         FROM worker_heartbeats WHERE worker = $1`, [par])
-    expect(l.instance, 'a batida adotou o processo dela e deixou a hora de subida do outro')
-      .toBe('outra-maquina:1')
-    expect(new Date(l.booted_at).getUTCFullYear()).toBe(2020)
+    const dela = await q1<any>(
+      `SELECT booted_at, done FROM worker_heartbeat_instances
+        WHERE worker = $1 AND instance = 'outra-maquina:1'`, [par])
+    expect(new Date(dela.booted_at).getUTCFullYear(),
+      'a batida de um processo reescreveu a hora de subida do outro').toBe(2020)
+    expect(Number(dela.done),
+      'a batida de um processo foi somada no contador do outro').toBe(0)
+
+    const minha = await q1<any>(
+      `SELECT booted_at FROM worker_heartbeat_instances
+        WHERE worker = $1 AND instance <> 'outra-maquina:1'`, [par])
+    expect(minha, 'a batida não abriu linha própria: ela escreveu na de outro processo')
+      .toBeTruthy()
+    expect(new Date(minha.booted_at).getUTCFullYear()).toBeGreaterThan(2020)
   })
 
   it('quem não carimba varredura fica marcado como tal no banco', async () => {
@@ -1315,11 +1344,226 @@ describe('a batida do ponto', () => {
     // esquecer de dizer é cobrada, não perdoada.
     const mudo = `${NOME}-mudo`
     await anunciarWorker(mudo, true, 15_000, false)
-    const l = await q1<any>(`SELECT beats FROM worker_heartbeats WHERE worker = $1`, [mudo])
+    const l = await comoATelaVe(mudo)
     expect(l?.beats, 'a fila muda entrou no banco como se carimbasse').toBe(false)
 
-    const l2 = await q1<any>(`SELECT beats FROM worker_heartbeats WHERE worker = $1`, [NOME])
+    const l2 = await comoATelaVe(NOME)
     expect(l2?.beats, 'a fila que carimba entrou marcada como muda').toBe(true)
+  })
+
+  /* ------------------------------------------------- uma linha por processo */
+
+  /** Sobe uma instância de mentira, com a idade que o caso precisa. */
+  const instanciaFalsa = (
+    worker: string, instance: string,
+    o: { subiuHaMin: number; bateuHaMin: number; status?: string; carimba?: boolean },
+  ) => q(
+    `INSERT INTO worker_heartbeat_instances
+       (worker, status, instance, beat_ms, beats, booted_at, beat_at)
+     VALUES ($1, $2, $3, 15000, $4,
+             now() - make_interval(mins => $5::int),
+             now() - make_interval(mins => $6::int))`,
+    [worker, o.status ?? 'ligado', instance, o.carimba ?? true, o.subiuHaMin, o.bateuHaMin])
+
+  it('instância morta não se esconde atrás da instância viva', async () => {
+    // ESTE é o defeito da 024, medido antes do conserto: com
+    // `PRIMARY KEY (worker)`, as duas instâncias escreviam a MESMA linha e a
+    // que batia por último apagava o rastro da outra —
+    //   count(*) = 1, instance = maquinaB:222, bateu_ha = 0
+    // com maquinaA parada havia dez minutos. `vereditoDaFila` lia isso e
+    // respondia "Andando" com metade da frota fora do ar, que é o cenário
+    // exato pra que a tabela foi criada.
+    const frota = `${NOME}-frota`
+    await instanciaFalsa(frota, 'maquinaA:111', { subiuHaMin: 20, bateuHaMin: 10 })
+    await instanciaFalsa(frota, 'maquinaB:222', { subiuHaMin: 5, bateuHaMin: 0 })
+
+    const fisicas = await q<any>(
+      `SELECT instance FROM worker_heartbeat_instances WHERE worker = $1`, [frota])
+    expect(fisicas.length, 'as duas instâncias voltaram a disputar uma linha só').toBe(2)
+
+    const l = await comoATelaVe(frota)
+    expect(Number(l.instances), 'a leitura não sabe quantas instâncias existem').toBe(2)
+    expect(Number(l.instances_live), 'a leitura não sabe quantas estão vivas').toBe(1)
+    expect(Number(l.instances_silent), 'a instância calada não foi contada').toBe(1)
+    // A medida que a rota de saúde usa pra decidir "parado". Com a chave
+    // velha isto era 0 — o carimbo da viva cobrindo a morta.
+    expect(Number(l.bateu_ha),
+      'a instância viva emprestou o carimbo dela pra morta: a tela diz "Andando" '
+      + 'com metade da frota parada').toBeGreaterThan(500)
+    expect(l.instance, 'a tela não sabe QUAL instância parou').toContain('maquinaA:111')
+
+    // E o veredito, que é a frase que o operador lê, acusa.
+    expect(vereditoDaFila({
+      status: l.status, bateuHaSegundos: Number(l.bateu_ha),
+      intervaloMs: 15_000, carimba: l.beats, maduros: 0,
+    }).parado, 'o veredito passou "andando" com uma instância morta').toBe(true)
+
+    // Cada uma com o seu tempo de silêncio — é o que a tela precisa pra dizer
+    // onde ir olhar, e o que a linha única não tinha como guardar.
+    const porInstancia = Object.fromEntries(
+      (l.fleet as any[]).map((i) => [i.instance, i.silent_seconds]))
+    expect(porInstancia['maquinaA:111']).toBeGreaterThan(500)
+    expect(porInstancia['maquinaB:222']).toBeLessThan(60)
+  })
+
+  it('reinício na MESMA máquina não vira instância morta', async () => {
+    // O lixo que a chave por processo cria: todo deploy e todo `npm run dev`
+    // deixa a linha do pid anterior calada pra sempre. Contar isso como morte
+    // acende vermelho depois de toda subida — e alarme que mente todo dia é
+    // como se ensina o operador a não olhar mais a tela.
+    const deploy = `${NOME}-deploy`
+    await instanciaFalsa(deploy, 'maquinaA:111', { subiuHaMin: 180, bateuHaMin: 120 })
+    await instanciaFalsa(deploy, 'maquinaA:999', { subiuHaMin: 110, bateuHaMin: 0 })
+
+    const l = await comoATelaVe(deploy)
+    expect(Number(l.instances),
+      'o pid anterior da mesma máquina entrou na frota como se fosse outro servidor').toBe(1)
+    expect(Number(l.instances_silent), 'todo deploy passou a acender alarme').toBe(0)
+    expect(Number(l.bateu_ha)).toBeLessThan(60)
+    expect(l.instance, 'a frota ficou com o processo que já saiu').toBe('maquinaA:999')
+  })
+
+  it('a vida anterior da própria máquina sai da frota no boot', async () => {
+    // A limpeza é do `anunciarWorker`: ele apaga a linha calada da MESMA
+    // máquina antes de começar. Sem ela a tabela cresce um pid por reinício e,
+    // num banco de desenvolvimento, chega a centenas.
+    const boot = `${NOME}-boot`
+    const minhaMaquina = instanciaDoProcesso().replace(/:[0-9]+$/, '')
+    await instanciaFalsa(boot, `${minhaMaquina}:404`, { subiuHaMin: 60, bateuHaMin: 30 })
+    await instanciaFalsa(boot, 'outra-maquina:404', { subiuHaMin: 60, bateuHaMin: 30 })
+
+    await anunciarWorker(boot, true, 15_000)
+
+    const vivas = await q<any>(
+      `SELECT instance FROM worker_heartbeat_instances WHERE worker = $1 ORDER BY instance`,
+      [boot])
+    const nomes = vivas.map((v) => v.instance)
+    expect(nomes, 'o pid velho da minha própria máquina ficou acusando pra sempre')
+      .not.toContain(`${minhaMaquina}:404`)
+    expect(nomes, 'o boot daqui apagou a instância de OUTRA máquina — que calada é '
+      + 'morte de verdade e tem que continuar aparecendo').toContain('outra-maquina:404')
+    expect(nomes).toContain(instanciaDoProcesso())
+  })
+
+  it('saída limpa tira o processo da frota; queda seca, não', async () => {
+    const saida = `${NOME}-saida`
+    await anunciarWorker(saida, true, 15_000)
+    await instanciaFalsa(saida, 'caiu-de-vez:7', { subiuHaMin: 60, bateuHaMin: 30 })
+
+    await encerrarPonto(saida)
+
+    const nomes = (await q<any>(
+      `SELECT instance FROM worker_heartbeat_instances WHERE worker = $1`, [saida]))
+      .map((v) => v.instance)
+    expect(nomes, 'o processo que saiu de propósito continuou acusando na tela')
+      .not.toContain(instanciaDoProcesso())
+    expect(nomes, 'a instância que CAIU sumiu junto — é ela que alguém precisa ir ver')
+      .toContain('caiu-de-vez:7')
+  })
+
+  it('a varredura que ainda estava em voo não ressuscita quem já bateu a saída', async () => {
+    // O gancho `close` do Nitro NÃO para o laço: ele só apaga a linha. Uma
+    // varredura que começou ANTES do SIGTERM continua rodando (SMTP leva
+    // segundos) e termina chamando `baterPonto` — que é um
+    // `INSERT ... ON CONFLICT` e, portanto, RECRIA a linha que o
+    // `encerrarPonto` acabou de apagar.
+    //
+    // A linha que volta nasce com os PADRÕES da coluna: `status = 'ligado'`,
+    // `beats = true`, `booted_at = now()`. Quarenta e cinco segundos depois o
+    // processo já morreu e a tela de saúde acusa uma instância parada que não
+    // existe mais. Em Docker, o contêiner novo tem outro hostname, então a
+    // limpeza de mesma-máquina do `anunciarWorker` nunca alcança esse
+    // fantasma: ele fica no painel PARA SEMPRE, um por deploy que pegou uma
+    // varredura em voo.
+    //
+    // É o alarme falso diário que a 026 foi escrita pra evitar, entrando pela
+    // porta dos fundos — e alarme que mente todo dia é como se ensina o
+    // operador a não olhar mais a tela no dia em que ela está certa.
+    const voo = `${NOME}-voo`
+    await anunciarWorker(voo, true, 15_000)
+    await encerrarPonto(voo)
+
+    // a varredura em voo termina AGORA, depois da saída já registrada
+    await baterPonto(voo, { feitos: 1 })
+
+    const nomes = (await q<any>(
+      `SELECT instance FROM worker_heartbeat_instances WHERE worker = $1`, [voo]))
+      .map((v) => v.instance)
+    expect(nomes, 'a varredura em voo recriou a linha do processo que já saiu: '
+      + 'a tela ganha uma instância morta a cada deploy, e ninguém consegue apagá-la')
+      .not.toContain(instanciaDoProcesso())
+  })
+
+  it('e quem sobe de novo volta a carimbar — o silêncio é da saída, não do processo',
+    async () => {
+      // A trava de cima não pode virar mordaça: um processo que anuncia de
+      // novo (o `close` do dev que recarrega sem trocar de pid, um laço
+      // religado na mão) está de volta ao trabalho e o painel precisa vê-lo.
+      // Sem este caso, a forma mais fácil de passar no de cima seria calar o
+      // `baterPonto` para sempre — e aí a fila viva ficaria invisível, que é
+      // um estrago maior que o fantasma.
+      const volta = `${NOME}-volta`
+      await anunciarWorker(volta, true, 15_000)
+      await encerrarPonto(volta)
+      await anunciarWorker(volta, true, 15_000)
+      await baterPonto(volta, { feitos: 2 })
+
+      const l = await q1<any>(
+        `SELECT done, EXTRACT(epoch FROM now() - beat_at)::int AS bateu_ha
+           FROM worker_heartbeat_instances WHERE worker = $1 AND instance = $2`,
+        [volta, instanciaDoProcesso()])
+      expect(l, 'o processo voltou ao ar e o painel continuou sem enxergá-lo').toBeTruthy()
+      expect(Number(l.done), 'quem voltou a trabalhar continuou mudo no painel').toBe(2)
+      expect(Number(l.bateu_ha)).toBeLessThan(60)
+    })
+
+  it('instância desligada de propósito não é instância muda', async () => {
+    // `DT_ENVIO_WORKER=off` numa máquina que só serve tela é estado legítimo.
+    // Contar o silêncio dela como falha é o alarme falso de novo, e desta vez
+    // um que ninguém consegue resolver.
+    const off = `${NOME}-off`
+    await instanciaFalsa(off, 'soTela:1',
+      { subiuHaMin: 180, bateuHaMin: 180, status: 'desligado' })
+    await instanciaFalsa(off, 'trabalha:2', { subiuHaMin: 180, bateuHaMin: 0 })
+
+    const l = await comoATelaVe(off)
+    expect(l.status, 'uma máquina desligada apagou a fila inteira da tela').toBe('ligado')
+    expect(Number(l.instances_silent), 'a máquina desligada de propósito virou alarme').toBe(0)
+    expect(Number(l.bateu_ha), 'o silêncio legítimo virou o silêncio da fila')
+      .toBeLessThan(60)
+  })
+
+  it('fila que não carimba varredura não é acusada de silêncio nem com duas instâncias',
+    async () => {
+      // A fila de estorno registra o boot e nunca mais fala. Com duas
+      // instâncias, as duas ficam caladas pra sempre — e sem esta regra a tela
+      // acusaria as duas de morte 45 s depois de todo boot, com as duas
+      // trabalhando.
+      const muda = `${NOME}-muda`
+      await instanciaFalsa(muda, 'maquinaA:1',
+        { subiuHaMin: 180, bateuHaMin: 180, carimba: false })
+      await instanciaFalsa(muda, 'maquinaB:2',
+        { subiuHaMin: 120, bateuHaMin: 120, carimba: false })
+
+      const l = await comoATelaVe(muda)
+      expect(Number(l.instances)).toBe(2)
+      expect(Number(l.instances_silent),
+        'a fila que nunca prometeu carimbar foi acusada de não carimbar').toBe(0)
+      expect(vereditoDaFila({
+        status: l.status, bateuHaSegundos: Number(l.bateu_ha),
+        intervaloMs: 15_000, carimba: l.beats, maduros: 0,
+      }).parado, 'o veredito acusou uma fila que está trabalhando').toBe(false)
+    })
+
+  it('com uma instância só, a leitura continua exatamente host:pid', async () => {
+    // A rota de saúde mostra este campo como "instância", e ela não é minha
+    // pra mexer. Enfeitar o texto quando só existe um processo — que é o caso
+    // de produção hoje — mudaria a tela sem que ninguém tenha pedido.
+    const so = `${NOME}-sozinha`
+    await anunciarWorker(so, true, 15_000)
+    const l = await comoATelaVe(so)
+    expect(l.instance).toBe(instanciaDoProcesso())
+    expect(Number(l.instances)).toBe(1)
   })
 })
 
@@ -1384,18 +1628,29 @@ describe('GET /api/admin/filas', () => {
   it('diz há quanto tempo o trabalhador não varre — a pergunta que a contagem não responde',
     async () => {
       if (semRota()) return
-      await baterPonto(FILA_DE_ENVIO, {})
+      // Este caso bate o ponto na fila DE VERDADE, e desde a 026 cada processo
+      // tem a SUA linha: a batida daqui cria uma instância `envio` com o pid
+      // do vitest, que morre no fim da rodada e nunca mais carimba. Sem o
+      // `encerrarPonto` do `finally`, cada `npx vitest run` deixava um
+      // fantasma no banco — e 45 s depois a tela de saúde acusava a fila de
+      // e-mail de parada, pra sempre, com o trabalhador do servidor de dev
+      // trabalhando ao lado. Quem bate ponto tem que bater a saída também.
+      try {
+        await baterPonto(FILA_DE_ENVIO, {})
 
-      const r = await comSessao('/api/admin/filas').then((x) => x.json())
-      const envio = r.filas.find((f: any) => f.nome === FILA_DE_ENVIO)
+        const r = await comSessao('/api/admin/filas').then((x) => x.json())
+        const envio = r.filas.find((f: any) => f.nome === FILA_DE_ENVIO)
 
-      expect(envio.trabalhador,
-        'a tela não sabe dizer se o trabalhador está vivo: fila vazia com laço morto '
-        + 'fica idêntica a fila vazia com laço vivo').toBeTruthy()
-      expect(envio.trabalhador.bateuHaSegundos).toBeLessThan(120)
-      expect(envio.trabalhador.instancia,
-        'com duas instâncias no ar, "não bate" pode ser só uma delas').toBeTruthy()
-      expect(envio.diagnostico, 'a tela devolve número e não devolve veredito').toBeTruthy()
+        expect(envio.trabalhador,
+          'a tela não sabe dizer se o trabalhador está vivo: fila vazia com laço morto '
+          + 'fica idêntica a fila vazia com laço vivo').toBeTruthy()
+        expect(envio.trabalhador.bateuHaSegundos).toBeLessThan(120)
+        expect(envio.trabalhador.instancia,
+          'com duas instâncias no ar, "não bate" pode ser só uma delas').toBeTruthy()
+        expect(envio.diagnostico, 'a tela devolve número e não devolve veredito').toBeTruthy()
+      } finally {
+        await encerrarPonto(FILA_DE_ENVIO)
+      }
     }, 30_000)
 
   it('e-mail que desistiu de vez derruba o ok, e duas tentativas do mesmo comprador são UMA pessoa',
@@ -1539,5 +1794,220 @@ describe('a auditoria inteira', () => {
 
     const n = await q1<any>(`SELECT count(*)::int AS n FROM audit_log`)
     expect(n.n, 'a conferência da trava levou a auditoria junto').toBeGreaterThan(0)
+  })
+})
+
+/* ================== 11. o sinal do dinheiro não troca de lado entre telas */
+
+const RAIZ = resolve(AQUI, '../..')
+const leiaTela = (rel: string) => readFile(resolve(RAIZ, rel), 'utf8')
+
+const TELA_DA_AUDITORIA = 'app/pages/admin/auditoria.vue'
+const TELA_DAS_FILAS = 'app/pages/admin/filas.vue'
+
+/** Só o código da tela — bloco `/* *\/`, `//` e `<!-- -->` fora. */
+const semComentario = (src: string) => src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/<!--[\s\S]*?-->/g, '')
+  .replace(/^\s*\/\/.*$/gm, '')
+
+/**
+ * A `dinheiro()` da auditoria, arrancada da tela e rodada de VERDADE.
+ *
+ * Olhar o texto da função provaria só que alguém escreveu alguma coisa; o que
+ * custa dinheiro é o que sai na célula. Extrair e executar deixa o teste
+ * julgar a saída — e, por vir do arquivo, ele morre junto com o conserto se
+ * alguém devolver o `return reais(v)`.
+ */
+async function dinheiroDaAuditoria(): Promise<(cents: number) => string> {
+  const fonte = await leiaTela(TELA_DA_AUDITORIA)
+  const m = fonte.match(/function dinheiro\(cents: number\): string \{\n([\s\S]*?)\n\}/)
+  expect(m, `${TELA_DA_AUDITORIA} perdeu a função dinheiro() — o sinal voltou pro lado errado`)
+    .not.toBeNull()
+  const corpo = m![1]
+  const f = new Function('reais', `return (cents) => { ${corpo} }`) as
+    (r: typeof reais) => (cents: number) => string
+  return f(reais)
+}
+
+/**
+ * O que o pt-BR faz com valor negativo, sem opinião de ninguém.
+ *
+ * É a régua da casa por tabela: as outras quatro telas de dinheiro
+ * (`evento/[id]/financeiro/index.vue`, `.../financeiro/bordero.vue`,
+ * `.../relatorios/extrato.vue`, `.../relatorios/lotes.vue`) entregam o número
+ * COM sinal pro `toLocaleString('pt-BR', { style: 'currency' })`, então o
+ * lado do sinal delas é o lado do padrão. Comparar com o padrão, e não com o
+ * código delas, mantém este teste vermelho pelo motivo certo mesmo que alguém
+ * reescreva aquelas telas amanhã.
+ *
+ * O espaço vira espaço normal: o `Intl` usa U+00A0 e a `reais()` da casa usa
+ * espaço comum de propósito (o fino quebrava busca e colagem em planilha). O
+ * que está em jogo aqui é o SINAL, não o espaço.
+ */
+const padraoPtBr = (cents: number) =>
+  (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    .replace(/ /g, ' ')
+
+describe('o sinal do dinheiro na auditoria', () => {
+  it('fica na FRENTE do R$, como nas outras quatro telas de dinheiro', async () => {
+    const dinheiro = await dinheiroDaAuditoria()
+
+    // Medido na tela antes do conserto, campo `diferencaCents` do fechamento
+    // de caixa: "diferença: R$ -20,00" (codepoints 52 24 20 2d). As outras
+    // quatro imprimem "-R$ 20,00" pro mesmo número. Sinal que troca de lado
+    // entre telas do mesmo valor é o que faz quem confere desconfiar das duas.
+    expect(dinheiro(-2000), 'o menos voltou pra trás do R$').toBe('-R$ 20,00')
+    expect(dinheiro(-2000)).toBe(padraoPtBr(-2000))
+    expect(padraoPtBr(-2000).startsWith('-'),
+      'o próprio pt-BR mudou de ideia sobre onde fica o sinal').toBe(true)
+  })
+
+  it('e não estraga o positivo nem o zero no caminho', async () => {
+    const dinheiro = await dinheiroDaAuditoria()
+    expect(dinheiro(85_000)).toBe('R$ 850,00')
+    expect(dinheiro(85_000)).toBe(padraoPtBr(85_000))
+    expect(dinheiro(0)).toBe('R$ 0,00')
+    // Menos de um centavo negativo continua sendo negativo: `-1` é o caso que
+    // um `Math.abs` na hora errada transformaria em "R$ 0,01" positivo.
+    expect(dinheiro(-1)).toBe('-R$ 0,01')
+    expect(dinheiro(-1)).toBe(padraoPtBr(-1))
+  })
+
+  it('continua saindo de reais(): sem float e sem o espaço fino do Intl', async () => {
+    const dinheiro = await dinheiroDaAuditoria()
+    // 8,15 é o valor que estourava em float (`815 / 100 * 100 = 814.9999…`) e
+    // 1.234.567,89 é onde o milhar aparece. O espaço aqui é o comum (U+0020);
+    // se a tela remontar o R$ com `Intl`, este é o que fica vermelho.
+    expect(dinheiro(-815)).toBe('-R$ 8,15')
+    expect(dinheiro(-123_456_789)).toBe('-R$ 1.234.567,89')
+    expect(dinheiro(-2000).includes(' '),
+      'voltou o espaço fino (U+00A0): não dá pra buscar nem colar em planilha').toBe(false)
+  })
+
+  it('e TODO campo *Cents da auditoria passa por ela — não sobra atalho', async () => {
+    const fonte = await leiaTela(TELA_DA_AUDITORIA)
+    // O defeito não era a falta da função; era a linha do `valorLegivel` que
+    // mandava o número cru pra `reais()`. É essa linha que este teste prende.
+    expect(fonte, 'o roteamento de *Cents deixou de passar pelo sinal')
+      .toMatch(/cents\$\/i\.test\(campo\)\)\s*return dinheiro\(v\)/)
+    expect(/cents\$\/i\.test\(campo\)\)\s*return reais\(v\)/.test(fonte),
+      'voltou o `return reais(v)` — negativo volta a sair "R$ -20,00"').toBe(false)
+  })
+})
+
+/* ================== 12. a tela que mostra a fila */
+
+describe('a tela /admin/filas', () => {
+  it('existe, com código dentro e não só comentário', async () => {
+    const fonte = await leiaTela(TELA_DAS_FILAS)
+    expect(fonte.length, 'a tela de filas sumiu').toBeGreaterThan(2000)
+    const codigo = semComentario(fonte)
+    expect(codigo.replace(/\s/g, '').length, 'sobrou só o comentário')
+      .toBeGreaterThan(fonte.replace(/\s/g, '').length / 3)
+    expect(codigo).toContain('<template>')
+  })
+
+  it('lê a rota de saúde e não inventa consulta própria ao banco', async () => {
+    const fonte = await leiaTela(TELA_DAS_FILAS)
+    expect(fonte).toContain(`useFetch<any>('/api/admin/filas')`)
+    // Tela que fala com o banco por fora da rota é tela que um dia discorda
+    // do servidor sobre se o cliente recebeu.
+    expect(/\bfrom '(~~\/server|\.\.\/)/.test(fonte),
+      'a tela passou a importar coisa do servidor direto').toBe(false)
+  })
+
+  it('mostra as três coisas: quantos esperam, quantos pararam de vez, e há quanto tempo ninguém varre',
+    async () => {
+      const fonte = await leiaTela(TELA_DAS_FILAS)
+      expect(fonte, 'sumiu "quantos estão esperando"').toMatch(/Esperando[\s\S]{0,200}f\.naFila/)
+      expect(fonte, 'sumiu "quantos estouraram o teto de tentativas"')
+        .toMatch(/Pararam de vez[\s\S]{0,400}f\.perdidos/)
+      expect(fonte, 'sumiu "há quanto tempo esta instância não varre"')
+        .toMatch(/Sem carimbar há[\s\S]{0,1200}bateuHaTexto/)
+      expect(fonte, 'sumiu de qual instância é o silêncio').toContain('trabalhador.instancia')
+    })
+
+  it('e é SÓ o número de gente que aparece em vermelho', async () => {
+    const fonte = await leiaTela(TELA_DAS_FILAS)
+    // `perdidos` é quanta gente pagou e não vai receber nada até alguém
+    // mandar de novo. Se ele deixar de ser o destacado, a tela vira uma
+    // parede de números iguais e o único que custa cliente some no meio.
+    expect(fonte, 'o NÚMERO de quem pagou e não recebeu perdeu o vermelho')
+      .toMatch(/numero-kpi[^>]*:class="f\.perdidos \? 'text-erro'/)
+    expect(fonte, 'o rótulo desse número perdeu o vermelho')
+      .toMatch(/rotulo-kpi"\s*:class="f\.perdidos \? 'text-erro'/)
+    expect(fonte, 'o dinheiro que não voltou pro cliente perdeu o destaque')
+      .toMatch(/font-bold text-erro[\s\S]{0,120}perdidoCents/)
+    // E é SÓ ele: pintar todo KPI de vermelho é a outra forma de esconder o
+    // número que custa cliente — a cor deixa de querer dizer alguma coisa.
+    const kpisEmVermelho = [...fonte.matchAll(/class="numero-kpi[^"]*"[^>]*text-erro/g)]
+    expect(kpisEmVermelho.length,
+      'mais de um KPI em vermelho: a cor parou de separar o que custa cliente').toBe(1)
+  })
+
+  it('quem não prometeu carimbar varredura não é desenhado como silêncio', async () => {
+    const fonte = await leiaTela(TELA_DAS_FILAS)
+    // Medido na tela com a fila de estorno parada por dinheiro que não voltou:
+    // `f.parado` sozinho punha `font-bold` na célula, e "não carimba
+    // varredura" saía em NEGRITO (peso 700) — cinza, mas gritando, numa linha
+    // cujo recado é "aqui não tem nada pra ver". É o alarme falso da 026 de
+    // novo, só que desenhado em vez de contado.
+    expect(fonte, 'o destaque de silêncio voltou a valer pra fila que não carimba varredura')
+      .toMatch(/f\.parado && f\.trabalhador\.carimbaVarredura\s*\n?\s*\? 'font-bold text-erro'/)
+    // E a dica do comando de limpeza também: mandar apagar a linha de quem
+    // nunca carimba é ensinar a apagar o registro de uma fila saudável.
+    expect(fonte).toMatch(/f\.parado && f\.trabalhador\?\.carimbaVarredura"[\s\S]{0,400}DELETE FROM worker_heartbeat_instances/)
+  })
+
+  it('o botão de empurrão só existe para fila que TEM rota de empurrão', async () => {
+    const fonte = await leiaTela(TELA_DAS_FILAS)
+    const m = fonte.match(/const EMPURRAO: Record<[^>]+> = \{([\s\S]*?)\n\}/)
+    expect(m, 'sumiu a tabela de empurrões').not.toBeNull()
+    const rotas = [...m![1].matchAll(/rota: '([^']+)'/g)].map((x) => x[1])
+    expect(rotas.length).toBeGreaterThan(0)
+    // Botão que aponta pra rota inexistente é pior do que botão nenhum: ele
+    // ensina o operador a achar que já tentou.
+    for (const rota of rotas) {
+      const arquivo = resolve(RAIZ, `server/api${rota.replace(/^\/api/, '')}.post.ts`)
+      const existe = await readFile(arquivo, 'utf8').then(() => true).catch(() => false)
+      expect(existe, `${rota} não existe no servidor — o botão seria um 404`).toBe(true)
+    }
+    // E a de e-mail continua FORA: não há rota de varredura global pra ela.
+    expect(Object.keys(m![1].match(/^\s*(\w+):/gm) ?? []).length).toBeGreaterThan(0)
+    expect(m![1].includes('email:'), 'apareceu botão de empurrão pra fila de e-mail, '
+      + 'que não tem rota de varredura global').toBe(false)
+  })
+
+  it('usa só classe da casa que existe de verdade no base.css', async () => {
+    const fonte = await leiaTela(TELA_DAS_FILAS)
+    const css = await readFile(resolve(RAIZ, 'app/assets/base.css'), 'utf8')
+    const declaradas = new Set([...css.matchAll(/^\s*\.([a-z][\w-]*)\s*[,{]/gm)].map((m) => m[1]))
+    // Classe da casa inventada não quebra build nem teste: ela só não pinta
+    // nada, e o destaque do número que custa cliente some em silêncio. Só as
+    // da casa entram na conferência; utilitário do Tailwind é do Tailwind.
+    const daCasa = /^(card|rotulo|numero-kpi|selo|faixa|btn|titulo)(-[\w-]+)?$/
+    const usadas = new Set<string>()
+    for (const m of fonte.matchAll(/class="([^"]*)"/g)) {
+      for (const c of m[1].split(/\s+/)) if (daCasa.test(c)) usadas.add(c)
+    }
+    for (const m of fonte.matchAll(/'([a-z][\w-]*)'/g)) {
+      if (daCasa.test(m[1])) usadas.add(m[1])
+    }
+    expect(usadas.size, 'a tela parou de usar as classes da casa').toBeGreaterThan(5)
+    expect([...usadas].filter((c) => !declaradas.has(c)),
+      'classe da casa que não existe no base.css: não pinta nada e ninguém vê').toEqual([])
+  })
+
+  it('e formata dinheiro e data pelo formatador único, sem cópia local', async () => {
+    // Comentário fora: o que explica o conserto cita o defeito pelo nome, e a
+    // varredura acusaria a própria explicação. Pra calar o alarme alguém
+    // apagaria o comentário, que é a parte que impede o bug de voltar.
+    const fonte = semComentario(await leiaTela(TELA_DAS_FILAS))
+    expect(/style:\s*'currency'|Intl\.NumberFormat|toISOString/.test(fonte),
+      'voltou a cópia local do R$/da data — é de lá que vem o espaço fino e o dia errado às 21h')
+      .toBe(false)
+    expect(fonte).toContain('reais(f.')
+    expect(fonte).toContain('dataHora(')
   })
 })

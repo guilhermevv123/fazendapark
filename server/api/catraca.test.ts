@@ -20,37 +20,79 @@
  * apagadas no fim. Nenhum ingresso do seed é queimado — um teste que gasta
  * dado de verdade só pode rodar uma vez.
  *
- * Precisa do servidor de dev no ar. Sem ele, PULA em vez de falhar.
+ * Precisa do servidor de dev no ar. Sem ele, PULA — com `ctx.skip()`, que sai
+ * CONTADO como pulado. Antes o caso saía com um `return` seco, que o vitest
+ * conta como ✓: medido com a porta fechada, este arquivo imprimia
+ * `Tests 12 passed (12)` sem ter lido um QR.
+ *
+ * ## A fixtura é DESTA corrida
+ *
+ * Os ids eram fixos no repositório, e duas corridas ao mesmo tempo no mesmo
+ * banco — o dia a dia aqui, com várias trilhas rodando `npx vitest run` — se
+ * atropelavam. Reproduzido com dois `npx vitest run server/api/catraca.test.ts`
+ * simultâneos:
+ *
+ *   A: insert or update on table "tickets" violates foreign key constraint
+ *      "tickets_org_id_fkey"        ← o `afterAll` da vizinha apagou a
+ *                                     organização no meio deste `beforeAll`
+ *   B: duplicate key value violates unique constraint
+ *      "organizations_slug_key"     ← o slug também era fixo
+ *
+ * As duas terminaram `Test Files 1 failed` com `Tests 12 skipped (12)`. Agora
+ * id, e-mail, slug e código de ingresso carregam a marca da corrida
+ * (`scripts/test-setup.ts`), e o `afterAll` apaga só o que ESTA corrida criou.
  */
+import { readFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  anunciarPulo, BASE_DE_TESTE, MARCA_MAIUSCULA, seForaDoArPula, sondarServidor,
+  uuidDaCorrida, type Sonda,
+} from '../../scripts/test-setup'
 import { montarQr } from '../utils/ingresso'
 
-const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
+const BASE = BASE_DE_TESTE
 
-/** ids fixos: o teste limpa exatamente o que criou */
-const ORG_CASA = '0000ca01-0000-4000-8000-000000000001'
-const USER_PORTEIRO = '0000ca01-0000-4000-8000-000000000002'
-const EVENTO_CASA = '0000ca01-0000-4000-8000-000000000003'
-const SESSAO_ABERTA = '0000ca01-0000-4000-8000-000000000004'
-const SESSAO_PASSADA = '0000ca01-0000-4000-8000-000000000005'
-const SETOR_CASA = '0000ca01-0000-4000-8000-000000000006'
-const LOTE_CASA = '0000ca01-0000-4000-8000-000000000007'
+/** ids DESTA corrida: o teste limpa exatamente o que criou, e só isso */
+const id = (n: number) => uuidDaCorrida('api/catraca', n)
+const ORG_CASA = id(1)
+const USER_PORTEIRO = id(2)
+const EVENTO_CASA = id(3)
+const SESSAO_ABERTA = id(4)
+const SESSAO_PASSADA = id(5)
+const SETOR_CASA = id(6)
+const LOTE_CASA = id(7)
 
-const ORG_VIZINHA = '0000ca02-0000-4000-8000-000000000001'
-const EVENTO_VIZINHO = '0000ca02-0000-4000-8000-000000000003'
-const SESSAO_VIZINHA = '0000ca02-0000-4000-8000-000000000004'
-const SETOR_VIZINHO = '0000ca02-0000-4000-8000-000000000006'
-const LOTE_VIZINHO = '0000ca02-0000-4000-8000-000000000007'
+const ORG_VIZINHA = id(11)
+const EVENTO_VIZINHO = id(13)
+const SESSAO_VIZINHA = id(14)
+const SETOR_VIZINHO = id(16)
+const LOTE_VIZINHO = id(17)
 
-const EMAIL_PORTEIRO = 'porteiro.teste@catraca.invalido'
+const MARCA_MINUSCULA = MARCA_MAIUSCULA.toLowerCase()
+const EMAIL_PORTEIRO = `porteiro.${MARCA_MINUSCULA}@catraca.invalido`
 const SENHA = 'diamond123'
 
-const COD_OK = 'ZZT-CATR-AAAA'
-const COD_CANCELADO = 'ZZT-CATR-BBBB'
-const COD_PASSADO = 'ZZT-CATR-CCCC'
-const COD_VIZINHO = 'ZZT-CATR-DDDD'
+/**
+ * `code` é UNIQUE na tabela `tickets` INTEIRA — não por evento.
+ *
+ * Esta é a armadilha que sobreviveu à primeira rodada do conserto: os quatro
+ * códigos do topo viraram marcados, e os cinco que moram DENTRO dos casos
+ * ficaram fixos. Com duas corridas simultâneas, o
+ * `ON CONFLICT (code) DO NOTHING` da segunda não insere nada — calado — e ela
+ * passa a ler o ingresso da PRIMEIRA, que é de outra organização e de outro
+ * evento. A porta responde `invalido` e a mensagem fala de assinatura, não de
+ * fixtura. Medido: 4 casos vermelhos numa corrida e 1 na outra, todos
+ * `expected 'invalido' to be 'ok'`.
+ *
+ * Todo código deste arquivo passa por aqui. Nenhum literal solto.
+ */
+const cod = (sufixo: string) => `ZZT-${MARCA_MAIUSCULA}-${sufixo}`
+const COD_OK = cod('AAAA')
+const COD_CANCELADO = cod('BBBB')
+const COD_PASSADO = cod('CCCC')
+const COD_VIZINHO = cod('DDDD')
 
-let noAr = false
+let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
 let cookie = ''
 
 async function sql(texto: string, par: any[] = []) {
@@ -99,14 +141,17 @@ async function semearIngresso(code: string, org: string, evento: string, sessao:
 }
 
 beforeAll(async () => {
-  try {
-    noAr = (await fetch(`${BASE}/api/auth/eu`, { signal: AbortSignal.timeout(2500) })).status < 500
-  } catch { noAr = false }
-  if (!noAr) return
+  sonda = await sondarServidor()
+  anunciarPulo('server/api/catraca.test.ts', sonda)
+  if (!sonda.noAr) return
 
-  await semearCasa(ORG_CASA, EVENTO_CASA, SETOR_CASA, LOTE_CASA, 'ZZ CATRACA CASA', 'zz-catraca-casa')
+  // nome e slug também levam a marca: `organizations_slug_key` é UNIQUE, e
+  // `ON CONFLICT (id)` não cobre conflito num OUTRO índice único — foi esse o
+  // erro da corrida B lá em cima.
+  await semearCasa(ORG_CASA, EVENTO_CASA, SETOR_CASA, LOTE_CASA,
+                   `ZZ CATRACA CASA ${MARCA_MAIUSCULA}`, `zz-catraca-casa-${MARCA_MINUSCULA}`)
   await semearCasa(ORG_VIZINHA, EVENTO_VIZINHO, SETOR_VIZINHO, LOTE_VIZINHO,
-                   'ZZ CATRACA VIZINHA', 'zz-catraca-vizinha')
+                   `ZZ CATRACA VIZINHA ${MARCA_MAIUSCULA}`, `zz-catraca-vizinha-${MARCA_MINUSCULA}`)
 
   // Sessão ABERTA agora: sem isso o evento inteiro cai em "fora do horário" e
   // o teste ficaria verde sem nunca chegar na trava.
@@ -148,13 +193,65 @@ beforeAll(async () => {
 }, 40_000)
 
 afterAll(async () => {
-  if (!noAr) return
+  if (!sonda.noAr) return
+  // por id DESTA corrida. Apagar por nome ou por slug alcançaria a fixtura da
+  // corrida vizinha — que é exatamente o defeito consertado aqui.
   await sql(`DELETE FROM organizations WHERE id = ANY($1::uuid[])`, [[ORG_CASA, ORG_VIZINHA]])
 })
 
 describe('catraca', () => {
-  it('o porteiro entrou (senão nada abaixo prova nada)', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  /**
+   * A TRAVA DA FIXTURA DESTA CORRIDA — e por que ela é um caso, não um comentário.
+   *
+   * Não precisa de servidor: lê o próprio arquivo. A corrida simultânea que
+   * expõe o defeito é, por definição, corrida de sorte; o que dá pra travar é a
+   * REGRA que a evita. Duas partes, e as duas já falharam de verdade aqui:
+   *
+   *  1. **nenhum id de fixtura é literal.** Com uuid fixo, duas corridas no
+   *     mesmo banco disputam a MESMA linha, e o `afterAll` de uma apaga a
+   *     organização que a outra está usando — medido:
+   *     `insert or update on table "tickets" violates foreign key constraint
+   *     "tickets_org_id_fkey"`, com os 12 casos saindo como "skipped";
+   *
+   *  2. **nenhum `code` de ingresso é literal.** `tickets.code` é UNIQUE na
+   *     tabela inteira: o `ON CONFLICT (code) DO NOTHING` da segunda corrida não
+   *     insere nada, calado, e ela passa a ler o ingresso da primeira — de outra
+   *     organização, de outro evento. A porta responde `invalido` e a mensagem
+   *     fala de assinatura. Este foi o defeito que sobreviveu à primeira rodada
+   *     do conserto, justamente porque os literais estavam DENTRO dos casos e
+   *     só os do topo tinham sido marcados.
+   *
+   * Comentário não é conferido: o corpo do arquivo é lido sem comentário pra
+   * esta varredura não acusar os parágrafos que explicam o defeito.
+   */
+  it('a fixtura é da corrida, não do repositório', () => {
+    const fonte = readFileSync(new URL(import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .map((linha) => {
+        const barras = linha.search(/(^|[^:])\/\//)
+        return barras >= 0 ? linha.slice(0, linha.indexOf('//', barras)) : linha
+      })
+      .join('\n')
+
+    const uuidsFixos = fonte.match(/'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'/g) ?? []
+    expect(uuidsFixos, 'id de fixtura literal: duas corridas disputam a mesma linha')
+      .toEqual([])
+
+    const codigosFixos = fonte.match(/'ZZ[A-Z]-[A-Z0-9]+-[A-Z0-9]+'/g) ?? []
+    expect(codigosFixos, '`code` literal: `tickets.code` é UNIQUE e a segunda corrida lê o ingresso da primeira')
+      .toEqual([])
+
+    // A varredura achou ALGUMA coisa? Sem isto, um dia a regex para de casar e
+    // as duas listas ficam vazias afirmando saúde que ninguém conferiu.
+    expect(fonte, 'a fixtura parou de carregar a marca da corrida').toContain('MARCA_MAIUSCULA')
+    expect(fonte.match(/uuidDaCorrida\(/g)?.length ?? 0,
+      'nenhum id sai mais de `uuidDaCorrida` — a marca da corrida sumiu')
+      .toBeGreaterThan(0)
+  })
+
+  it('o porteiro entrou (senão nada abaixo prova nada)', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     expect(cookie, 'login do porteiro falhou — o teste ficaria verde à toa').toBeTruthy()
   }, 20_000)
 
@@ -173,10 +270,10 @@ describe('catraca', () => {
    * carimbo no ingresso, e a linha no livro de entradas (que é quem usa o SQL
    * de 8 parâmetros).
    */
-  it('a porta responde 200 e grava as duas linhas — sem 500 de parâmetro', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('a porta responde 200 e grava as duas linhas — sem 500 de parâmetro', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const codigo = 'ZZT-CATR-HTTP'
+    const codigo = cod('HTTP')
     await semearIngresso(codigo, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
 
     const { status, corpo } = await ler(montarQr(codigo, EVENTO_CASA), EVENTO_CASA, 'PORTAO-HTTP')
@@ -210,11 +307,11 @@ describe('catraca', () => {
    * retorno da segunda leitura conte mais gente que o da primeira, e que os
    * dois batam com o livro no banco naquele instante.
    */
-  it('cada leitura devolve o retrato do público, e ele anda', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('cada leitura devolve o retrato do público, e ele anda', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const um = 'ZZT-CATR-PUB1'
-    const dois = 'ZZT-CATR-PUB2'
+    const um = cod('PUB1')
+    const dois = cod('PUB2')
     await semearIngresso(um, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
     await semearIngresso(dois, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
 
@@ -252,8 +349,8 @@ describe('catraca', () => {
       .toBe(r2.corpo.publico.ingressos)
   }, 30_000)
 
-  it('QR assinado entra, e o carimbo diz quem liberou', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('QR assinado entra, e o carimbo diz quem liberou', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     const { status, corpo } = await ler(montarQr(COD_OK, EVENTO_CASA))
     expect(status, `a porta devolveu ${status}: ${JSON.stringify(corpo)}`).toBe(200)
@@ -266,8 +363,8 @@ describe('catraca', () => {
     expect(t.checked_in_by, 'leitura sem dono: ninguém sabe quem liberou').toBe(USER_PORTEIRO)
   }, 20_000)
 
-  it('o mesmo QR não entra de novo — nem por outro portão', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('o mesmo QR não entra de novo — nem por outro portão', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     const antes = await ingresso(COD_OK)
     const { corpo } = await ler(montarQr(COD_OK, EVENTO_CASA), EVENTO_CASA, 'PORTAO-2')
@@ -282,15 +379,15 @@ describe('catraca', () => {
       .toBe(antes.checked_in_at?.toISOString?.() ?? antes.checked_in_at)
   }, 20_000)
 
-  it('dois leitores que leram juntos: só um consegue marcar', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('dois leitores que leram juntos: só um consegue marcar', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     // A checagem prévia da rota ("já está usado?") esconde a trava quando os
     // pedidos chegam em fila — foi assim que a versão anterior deste teste
     // ficou verde com a trava arrancada. Aqui a ordem é forçada à mão: as
     // DUAS conexões leem o ingresso ainda válido e só depois tentam marcar,
     // que é exatamente o instante que a trava existe pra resolver.
-    const codigo = 'ZZT-CATR-RACE'
+    const codigo = cod('RACE')
     await semearIngresso(codigo, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
     const [alvo] = await sql(`SELECT id FROM tickets WHERE code = $1`, [codigo])
 
@@ -314,14 +411,14 @@ describe('catraca', () => {
     }
   }, 20_000)
 
-  it('24 leitores na mesma porta, um único ok', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('24 leitores na mesma porta, um único ok', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     // A prova de ponta a ponta, com o servidor no meio. Volume alto de
     // propósito: com poucos leitores os pedidos são atendidos em fila e o
     // caminho difícil nunca é exercitado (com a trava arrancada, 10 leitores
     // devolviam 1 ok e 20 devolviam 10).
-    const codigo = 'ZZT-CATR-TROPA'
+    const codigo = cod('TROPA')
     await semearIngresso(codigo, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
     const qr = montarQr(codigo, EVENTO_CASA)
 
@@ -331,8 +428,8 @@ describe('catraca', () => {
     expect(entraram, `${entraram} leitores deixaram a mesma pessoa entrar`).toBe(1)
   }, 30_000)
 
-  it('QR fabricado não passa, e o ingresso continua intacto', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('QR fabricado não passa, e o ingresso continua intacto', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     const forjado = `DT1:${EVENTO_CASA}:${COD_PASSADO}:AAAAAAAAAA`
     const { corpo } = await ler(forjado)
@@ -342,20 +439,20 @@ describe('catraca', () => {
     expect(t.status, 'o QR fabricado mexeu no ingresso').toBe('valido')
   }, 20_000)
 
-  it('ingresso cancelado é barrado', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('ingresso cancelado é barrado', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const { corpo } = await ler(montarQr(COD_CANCELADO, EVENTO_CASA))
     expect(corpo.resultado).toBe('cancelado')
   }, 20_000)
 
-  it('ingresso de outro dia não entra hoje', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('ingresso de outro dia não entra hoje', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const { corpo } = await ler(montarQr(COD_PASSADO, EVENTO_CASA))
     expect(corpo.resultado).toBe('fora_da_sessao')
   }, 20_000)
 
-  it('a portaria de uma produtora não queima ingresso de outra', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('a portaria de uma produtora não queima ingresso de outra', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     // O porteiro da CASA lê um ingresso legítimo da VIZINHA, com a assinatura
     // certa do evento dela. Se a porta aceitar, uma empresa derruba a entrada
@@ -368,8 +465,8 @@ describe('catraca', () => {
     expect(corpo.titular, 'o nome do comprador da vizinha vazou na resposta').toBeUndefined()
   }, 20_000)
 
-  it('nem apontando o leitor para o próprio evento', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('nem apontando o leitor para o próprio evento', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     // A segunda forma do mesmo ataque: o porteiro digita o código alheio no
     // leitor do evento DELE. Passa pela cerca do evento (o evento é mesmo

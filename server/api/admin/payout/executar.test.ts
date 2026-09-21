@@ -42,6 +42,23 @@ const USUARIO = '0000f021-0000-4000-8000-000000000003'
 const EVENTO = '0000f021-0000-4000-8000-000000000004'
 const EMAIL = 'dono.payout@teste.invalido'
 
+/**
+ * Os dois logins que medem a decisão de quem executa o saque, na ROTA — não na
+ * tabela. Mesma organização da fixtura; somem no `DELETE` da organização.
+ */
+const EQUIPE = {
+  financeiro: {
+    id: '0000f021-0000-4000-8000-000000000005',
+    email: 'financeiro.payout@teste.invalido', papel: 'financeiro', role: 'admin',
+  },
+  operacao: {
+    id: '0000f021-0000-4000-8000-000000000006',
+    email: 'operacao.payout@teste.invalido', papel: 'operacao', role: 'operacional',
+  },
+} as const
+/** cookie de cada um deles, preenchido no beforeAll */
+const cookieDe: Record<string, string> = {}
+
 /** chave PIX de teste — e-mail, que `tipoDeChavePix` reconhece sem ambiguidade */
 const CHAVE_PIX = 'zz.payout@teste.invalido'
 
@@ -172,14 +189,30 @@ beforeAll(async () => {
        FROM users WHERE email = 'dono@fazendapark.com.br'
      ON CONFLICT (id) DO NOTHING`, [USUARIO, ORG, EMAIL])
 
-  if (noAr) {
+  // o financeiro e a operação da MESMA organização — é com eles que se mede,
+  // na rota, quem manda dinheiro embora
+  for (const u of Object.values(EQUIPE)) {
+    await sql(
+      `INSERT INTO users (id, org_id, name, email, password_hash, papel, role)
+       SELECT $1, $2, $3, $4, password_hash, $5, $6
+         FROM users WHERE email = 'dono@fazendapark.com.br'
+       ON CONFLICT (id) DO UPDATE SET papel = EXCLUDED.papel, role = EXCLUDED.role, active = true`,
+      [u.id, ORG, `ZZ ${u.papel} payout`, u.email, u.papel, u.role])
+  }
+
+  const entrar = async (email: string) => {
     const r = await fetch(`${BASE}/api/auth/entrar`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: EMAIL, senha: 'diamond123' }),
+      body: JSON.stringify({ email, senha: 'diamond123' }),
     })
-    cookie = (r.headers.getSetCookie?.() ?? [])
+    return (r.headers.getSetCookie?.() ?? [])
       .map((c) => c.split(';')[0]).find((c) => c.startsWith('dt_sessao=')) ?? ''
+  }
+
+  if (noAr) {
+    cookie = await entrar(EMAIL)
+    for (const [nome, u] of Object.entries(EQUIPE)) cookieDe[nome] = await entrar(u.email)
   }
 
   await limparFila()
@@ -786,30 +819,87 @@ describe('execução da fila de saque', () => {
   /* ------------------------------------------------- 6. quem pode executar */
 
   /**
-   * Esta é a única rota do sistema em que o dinheiro SAI, e ela está trancada
-   * por ausência: ninguém classificou `/api/admin/payout` em `papeis.ts`, e
-   * rota sem área só passa pro master.
+   * Esta é a única rota do sistema em que o dinheiro SAI — e por um tempo ela
+   * esteve trancada por AUSÊNCIA: ninguém a classificava em `papeis.ts`, e
+   * rota sem área só passa pro master. Este caso prendia essa ausência com um
+   * `toBe(null)`, sob a justificativa "mandar dinheiro embora é ato de dono".
    *
-   * `papeis.test.ts` já prova a REGRA geral, com um caminho inventado. O que
-   * faltava era prender a regra a ESTE caminho: no dia em que alguém puser
-   * `['/api/admin/payout', 'dinheiro']` na tabela de áreas — movimento
-   * plausível, já que saque é dinheiro —, quem é de `financeiro` passa a mandar
-   * transferência, e sem este caso nenhum teste fica vermelho.
+   * **A decisão mudou, de propósito, e o caso mudou junto.** A área é
+   * `dinheiro`:
+   *
+   * 1. o papel `financeiro` existe exatamente pra isto — ele já PEDE o saque
+   *    (`POST /api/admin/evento/:id/financeiro`, área `dinheiro`) e já lê
+   *    borderô, extrato e auditoria. Só a EXECUÇÃO ficar com o dono partia a
+   *    mesma tarefa em duas pessoas, e a outra é a que viaja: medido antes,
+   *    `financeiro` levava **403** em `POST /api/admin/payout/executar`, e com
+   *    o dono fora do ar o pedido ficava `solicitada` para sempre — que é o
+   *    defeito que esta rota foi escrita pra fechar;
+   * 2. ausência não é tranca escrita. "Rota sem área é do master" é rede pra
+   *    rota que NASCE amanhã; quem já existe e tem dono conhecido entra na
+   *    tabela, senão a rede vira esconderijo de decisão que ninguém revisa.
+   *
+   * O que este caso guarda agora é o contorno: quem NÃO tem caixa continua
+   * fora. `operacao` e `portaria` não têm a área `dinheiro`, e é por isso que
+   * a linha em `papeis.ts` não é um "deixa passar".
    */
-  it('a execução da fila é só do master — nenhum outro papel abre esta rota', async () => {
-    const { decidirAcesso, areaDaRota } = await import('../../../utils/papeis')
+  it('a execução da fila é do dinheiro: financeiro manda, operação e portaria não', async () => {
+    const { decidirAcesso, areaDaRota, papelPode, SO_DO_MASTER } =
+      await import('../../../utils/papeis')
     const rota = '/api/admin/payout/executar'
 
     expect(areaDaRota(rota),
-      'alguém classificou a rota que tira dinheiro da plataforma: confira de propósito quem passou '
-      + 'a poder executá-la').toBe(null)
+      'a rota que tira dinheiro da plataforma voltou a ficar sem área: trancar por ausência '
+      + 'esconde a decisão de quem pode mandar transferência').toBe('dinheiro')
+    expect(SO_DO_MASTER.some((p) => rota.startsWith(p)),
+      'a rota tem área E está na lista de exceções: as duas coisas discordam').toBe(false)
+
     expect(decidirAcesso('master', rota).liberado).toBe(true)
-    for (const papel of ['financeiro', 'operacao', 'portaria'] as const) {
+    expect(decidirAcesso('financeiro', rota).liberado,
+      'quem cuida do dinheiro não executa o saque que ele mesmo pediu — com o dono viajando, '
+      + 'a fila para').toBe(true)
+
+    for (const papel of ['operacao', 'portaria'] as const) {
       const d = decidirAcesso(papel, rota)
       expect(d.liberado, `${papel} pode mandar transferência`).toBe(false)
       expect(d.motivo, `a recusa para ${papel} não diz o que fazer`).toMatch(/master/)
+      expect(papelPode(papel, 'dinheiro'), `${papel} ganhou a área do caixa`).toBe(false)
     }
   })
+
+  /**
+   * A mesma decisão, medida NA ROTA — porque foi na rota que o defeito doeu.
+   * A tabela pode dizer o que quiser: o que o financeiro recebia, com sessão
+   * de verdade, era **403 "Esta tela ainda não foi liberada para nenhum
+   * acesso além do master"** — e a fila de saque parava junto com o dono.
+   *
+   * A fila é esvaziada antes: este caso pergunta quem PASSA no porteiro, não
+   * quanto saiu. Com a fila vazia a execução é inócua e a resposta é 200 com
+   * `processados: 0`.
+   */
+  it('pela rota: o financeiro executa a fila; operação e portaria continuam fora', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    expect(cookieDe.financeiro, 'login do financeiro falhou — o caso ficaria verde à toa')
+      .toBeTruthy()
+    await limparFila()
+
+    const bater = async (quem: string) => {
+      const r = await fetch(`${BASE}/api/admin/payout/executar`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookieDe[quem], origin: BASE },
+        body: '{}',
+      })
+      return { status: r.status, corpo: await r.json().catch(() => ({})) }
+    }
+
+    const fin = await bater('financeiro')
+    expect(fin.status,
+      `o financeiro levou ${fin.status} na rota que executa o saque que ele mesmo pede: `
+      + JSON.stringify(fin.corpo).slice(0, 300)).toBe(200)
+    expect(fin.corpo.processados, 'a fila estava vazia e mesmo assim processou algo').toBe(0)
+
+    const ope = await bater('operacao')
+    expect(ope.status, 'quem é de operação mandou dinheiro embora').toBe(403)
+  }, 30_000)
 
   it('sem sessão a fila não executa', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')

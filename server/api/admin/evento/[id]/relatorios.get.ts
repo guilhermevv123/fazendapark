@@ -24,6 +24,31 @@
  * - **contagem de pedido é outra pergunta** e sai de `FILTER` explícito, com o
  *   nome dizendo qual pergunta responde (`pedidosFechados` × `pedidosComEstorno`).
  *
+ * ## Devolução são DUAS perguntas, e esta tela respondia só a segunda
+ *
+ * "Quanto foi devolvido ao comprador neste evento" inclui o pedido estornado
+ * POR INTEIRO: ele devolveu dinheiro tanto quanto o parcial, só não tem mais
+ * líquido a apurar. Esta tela recortava a devolução por `PEDIDO_VIVO` e
+ * respondia R$ 20,00 enquanto o borderô, o painel, o extrato, a lista de
+ * vendas e os dois financeiros — as outras SEIS portas — diziam R$ 240,00 no
+ * mesmo evento. Nenhuma estourava; só a sétima mentia.
+ *
+ * Agora os dois números existem, com nomes que dizem qual pergunta respondem:
+ *
+ *   estornadoCents          — tudo que voltou pro comprador, em qualquer status
+ *   estornadoNoLiquidoCents — a parte já descontada do líquido (só vivos). É
+ *                             ela que fecha `cobrado − plataforma − devolvido
+ *                             = líquido`; usar o total aí faria a tela não
+ *                             bater com ela mesma.
+ *
+ * ## Ticket médio carrega a régua NO NOME
+ *
+ * `ticketMedioCents` queria dizer por PEDIDO aqui e por INGRESSO no painel —
+ * medido no evento semeado, R$ 88,00 numa tela e R$ 43,47 na outra com o mesmo
+ * nome de campo. O painel já nomeou os dois (`ticketMedioPorPedidoCents` /
+ * `ticketMedioPorIngressoCents`); daqui pra frente esta rota devolve os MESMOS
+ * dois nomes, pra a mesma pergunta ter o mesmo nome nas duas portas.
+ *
  * ## Público sai do livro da porta, não do ingresso emitido
  *
  * Quantas pessoas entraram é `entries` (`SQL_PUBLICO`, `sum(people)`), e não
@@ -53,7 +78,7 @@ export default defineEventHandler(async (event) => {
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
 
   const [funil, porDia, porDiaSemana, porHoraDoDia, topCompradores,
-         porPromoter, porCupom, porParcela, resumo, publico] = await Promise.all([
+         porPromoter, porCupom, porParcela, resumo, publico, devolvido] = await Promise.all([
     // Um bucket por status REAL do banco, em vez de uma lista de FILTER
     // escrita de cabeça. A lista de cabeça envelhece: `aguardando_pagamento`
     // já tinha virado `aguardando` no meu FILTER e a coluna aparecia zerada
@@ -70,6 +95,12 @@ export default defineEventHandler(async (event) => {
     // `cobrado` é o que o comprador pagou no dia; `liquido` é o que sobra pro
     // produtor depois de taxa e devolução. Os dois precisam vir juntos: só o
     // cobrado esconde a devolução, e só o líquido esconde o movimento.
+    //
+    // A devolução desta curva é a DOS VIVOS — é a decomposição do líquido por
+    // dia, e a soma dos dias tem que fechar com o líquido do total. Ela sai no
+    // payload com o nome `estornadoNoLiquidoCents`, o mesmo do resumo, pra não
+    // ser confundida com a devolução total do evento (que inclui o pedido
+    // estornado por inteiro e não cabe numa curva de líquido).
     q<any>(
       `SELECT date_trunc('day', paid_at) AS dia,
               count(*)::int AS pedidos,
@@ -182,10 +213,35 @@ export default defineEventHandler(async (event) => {
     // que a portaria usa — não de ingresso emitido, que conta papel e não
     // pessoa: uma mesa de 4 é um ingresso e quatro pessoas dentro do parque.
     q1<any>(SQL_PUBLICO, [id]),
+
+    // QUANTO VOLTOU PRO COMPRADOR — consulta separada de propósito.
+    //
+    // O `resumo` acima recorta por `PEDIDO_VIVO` no `WHERE`, que é o certo pra
+    // tudo que ele soma; só que a devolução é a única pergunta desta tela que
+    // NÃO se responde pela população dos vivos. O pedido estornado por inteiro
+    // devolveu dinheiro de verdade — ele só não tem mais líquido a apurar. Sem
+    // esta consulta o único jeito de trazê-lo de volta seria abrir o `WHERE`
+    // do resumo e pendurar um `FILTER` em cada soma, que é trocar um recorte
+    // escondido por oito.
+    //
+    // Sem `status` nenhum no `WHERE`: `refunded_cents` só é diferente de zero
+    // onde houve devolução, e é a mesma régua — palavra por palavra — que o
+    // borderô usa. Duas telas, uma conta.
+    q1<any>(
+      `SELECT COALESCE(SUM(refunded_cents),0)::bigint AS tudo
+         FROM orders WHERE event_id = $1`, [id]),
   ])
 
   const pedidos = Number(resumo.pedidos)
   const ingressos = Number(resumo.ingressos)
+
+  // As duas réguas do ticket médio, calculadas UMA vez cada. Quem compra 6 de
+  // uma vez é um cliente, não seis — por isso "por pedido" divide pela mesma
+  // população que somou o cobrado; "por ingresso" responde a outra pergunta e
+  // é o número que o painel mostra com esse nome.
+  const ticketMedioPorPedido = pedidos > 0 ? Math.round(Number(resumo.cobrado) / pedidos) : 0
+  const ticketMedioPorIngresso = ingressos > 0
+    ? Math.round(Number(resumo.cobrado) / ingressos) : 0
 
   const porStatus: Record<string, number> = {}
   for (const f of funil) porStatus[f.status] = Number(f.n)
@@ -218,11 +274,27 @@ export default defineEventHandler(async (event) => {
       faceCents: Number(resumo.face),
       taxaCents: Number(resumo.taxa),
       descontoCents: Number(resumo.desconto),
-      estornadoCents: Number(resumo.estornado),
+      // TUDO que voltou pro comprador — inclusive o pedido estornado por
+      // inteiro. É a resposta que as outras seis telas já davam.
+      estornadoCents: Number(devolvido.tudo),
+      // a parte da devolução que já está descontada do líquido (só vivos): é
+      // ela que fecha `cobrado − plataforma − devolvido = líquido`
+      estornadoNoLiquidoCents: Number(resumo.estornado),
       // o mesmo número do borderô e dos dois financeiros
       liquidoCents: Number(resumo.liquido),
-      ticketMedioCents: pedidos > 0 ? Math.round(Number(resumo.cobrado) / pedidos) : 0,
-      porIngressoCents: ingressos > 0 ? Math.round(Number(resumo.cobrado) / ingressos) : 0,
+      // A régua no NOME, igual à do painel: a mesma pergunta tem o mesmo nome
+      // de campo nas duas portas.
+      ticketMedioPorPedidoCents: ticketMedioPorPedido,
+      ticketMedioPorIngressoCents: ticketMedioPorIngresso,
+      // Nomes antigos, mantidos porque a tela de Relatórios ainda lê estes
+      // dois (`app/pages/admin/evento/[id]/relatorios/index.vue`) e arrancá-los
+      // aqui sem trocar lá deixaria os dois KPIs em R$ 0,00 — sem exceção, sem
+      // console, sem teste vermelho. São APELIDO: apontam pro mesmo valor do
+      // campo com a régua no nome, nunca pra uma conta própria, e
+      // `relatorios.test.ts` trava isso. Quando a tela passar a ler os nomes
+      // novos, estas duas linhas saem.
+      ticketMedioCents: ticketMedioPorPedido,
+      porIngressoCents: ticketMedioPorIngresso,
       ingressosPorPedido: pedidos > 0 ? Math.round((ingressos / pedidos) * 100) / 100 : 0,
       primeiraVenda: resumo.primeira, ultimaVenda: resumo.ultima,
     },
@@ -249,7 +321,7 @@ export default defineEventHandler(async (event) => {
     porDia: porDia.map((d) => ({
       dia: d.dia, pedidos: d.pedidos, pedidosComEstorno: d.com_estorno,
       cobradoCents: Number(d.cobrado), faceCents: Number(d.face),
-      estornadoCents: Number(d.estornado), liquidoCents: Number(d.liquido),
+      estornadoNoLiquidoCents: Number(d.estornado), liquidoCents: Number(d.liquido),
     })),
     porDiaSemana: porDiaSemana.map((d) => ({
       dow: d.dow, pedidos: d.pedidos,

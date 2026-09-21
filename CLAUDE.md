@@ -95,7 +95,15 @@ Teste de dinheiro vai **ao banco**, não confere aritmética em memória: o que 
 travado é a expressão SQL compartilhada, não uma cópia dela em TypeScript.
 
 Fixture: ids fixos próprios, `DELETE` no `afterAll`, **nunca mexer nos dados do evento
-semeado**. Se o servidor estiver fora do ar, o teste **pula** em vez de falhar.
+semeado**. **Fixture é dona da identidade que cria**: e-mail de teste leva o nome do arquivo
+(`dono.venda.pdv@teste.invalido`), nunca um compartilhado — dois arquivos com o mesmo e-mail em
+organizações diferentes produzem vermelho **intermitente**, que aparece só quando a outra suíte
+morreu antes do `afterAll`.
+
+Se o servidor estiver fora do ar, o teste **pula de verdade** — `ctx.skip()`, nunca
+`if (!noAr) return`. O `return` conta como **✓**: já houve rodada com **296 passed em 4s** sem
+bater uma vez na rota, com o servidor respondendo 500. Numa corrida de mutação isso dá a
+invariante por provada exatamente quando ela foi arrancada.
 
 ---
 
@@ -116,6 +124,17 @@ teste vermelho. Só aparece na tela.
 - **`JOIN` come linha sem par em silêncio.** Venda de balcão sem terminal sumiu de um painel
   e ficou no outro; os dois estavam "certos". Use `LEFT JOIN` e marque a linha órfã.
 - Nunca `<p>` com bloco dentro: o navegador fecha o `<p>` sozinho e o layout quebra.
+- **`startsWith` em status casa o vizinho.** `status.startsWith('estornado')` pega
+  `estornado` *e* `estornado_parcial`, e o guichê passou a responder "esta venda já foi
+  cancelada" pra um pedido com R$ 915,00 ainda na gaveta. Compare o status **inteiro**.
+- **Mostrar mais linha acorda botão que dormia.** Consertar um `WHERE status = 'pago'` de
+  lista não é só mostrar a linha: é liberar todas as ações daquela linha, que nunca foram
+  exercidas naquele estado. Depois de alargar uma lista, clique o que ela agora oferece.
+
+**Recusa não é senha errada.** O freio de força bruta conta tentativa **falha**; uma recusa em
+que a senha estava CERTA (e-mail em duas organizações, por exemplo) não entra nele. Contando,
+a pessoa leva 429 por cima de um problema que nenhuma tentativa dela resolve, e o sinal de quem
+está de fato chutando senha fica embaçado.
 
 ---
 

@@ -153,20 +153,49 @@ export default defineEventHandler(async (event) => {
   }
 
   // janela da sessão, com 2h de folga antes e depois — chegar cedo é normal
+  let foraDaSessao = false
   if (ingresso.sessao_inicio) {
     const agora = Date.now()
     const abre = new Date(ingresso.sessao_inicio).getTime() - 2 * 3600_000
     const fecha = new Date(ingresso.sessao_fim ?? ingresso.sessao_inicio).getTime() + 2 * 3600_000
-    if (agora < abre || agora > fecha) return registrar('fora_da_sessao', ingresso.id, codigo)
+    foraDaSessao = agora < abre || agora > fecha
   }
 
+  /**
+   * "Só conferir" responde SEMPRE — inclusive fora da janela da sessão.
+   *
+   * Até aqui a janela era checada antes, e a consulta de um ingresso fora do
+   * horário voltava só "BARRADO / Fora do horário desta sessão", sem titular,
+   * sem setor e sem o bloco de meia-entrada. Medido nesta instalação em 21/09:
+   * os 23 ingressos de meia do evento semeado estão numa sessão que abre em
+   * outubro, e "só conferir" em qualquer um deles devolve exatamente isso —
+   * o operador pergunta "o que este cliente precisa trazer?" e recebe silêncio.
+   *
+   * E é a pior hora pra receber silêncio: quem chega cedo é justamente quem
+   * ainda dá tempo de mandar buscar a carteira de estudante em casa. Depois
+   * que o portão abre, a resposta "faltou documento" custa a entrada.
+   *
+   * A consulta não marca nada e não registra leitura — recusar a RESPOSTA não
+   * protege coisa nenhuma. O que ela precisa é não MENTIR: o veredito continua
+   * negativo (`ok: false`), com a mensagem dizendo que o horário ainda não
+   * chegou, e os dados do ingresso vêm junto.
+   *
+   * A validação de verdade (sem "só conferir") segue barrando e registrando
+   * exatamente como antes — é ela que decide quem passa.
+   */
   if (apenasConsultar) {
     return {
-      ok: true, resultado: 'ok' as const, mensagem: 'Válido (não marcado)',
+      ok: !foraDaSessao,
+      resultado: (foraDaSessao ? 'fora_da_sessao' : 'ok') as const,
+      mensagem: foraDaSessao
+        ? 'Ainda não é o horário desta sessão — mas o ingresso é válido'
+        : 'Válido (não marcado)',
       consulta: true,
       ingresso: dadosDoIngresso(ingresso),
     }
   }
+
+  if (foraDaSessao) return registrar('fora_da_sessao', ingresso.id, codigo)
 
   // ---- a trava: só um UPDATE consegue virar 'usado' -----------------------
   // A instrução mora em utils/catraca.ts pra que o teste rode exatamente

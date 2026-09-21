@@ -31,6 +31,30 @@ const estado: Record<string, { t: string; c: string }> = {
   cancelado: { t: 'CANCELADO', c: 'selo-erro' },
 }
 
+/* ---------------------------------------------- quem é o dono da ficha --- */
+/**
+ * O convite não tem comprador — e "Comprador:" vazio é pior que nada.
+ *
+ * `cortesias.post.ts` grava o pedido SEM `customer_id`: quem recebe o convite
+ * não preencheu formulário nenhum, o nome dele está no INGRESSO. Desde que a
+ * rota parou de dar 404 nesse pedido, a ficha abre — e abria com o rótulo
+ * "Comprador" em cima de nada. Medido no convite (1440×900): `textContent`
+ * `""`, `offsetHeight` 0. Rótulo sem valor não é um detalhe de layout: quem lê
+ * conclui que o sistema perdeu o dado dele, e liga pra bilheteria por causa
+ * disso.
+ *
+ * Então a palavra muda com o que a linha é. Num convite quem importa é quem
+ * RECEBEU; e se não houver nome em lugar nenhum (balcão sem cadastro, pedido
+ * ainda não pago), o bloco inteiro some — ausência é ausência.
+ */
+const pessoa = computed<{ rotulo: string; nome: string } | null>(() => {
+  const comprador = data.value?.comprador?.nome
+  if (comprador) return { rotulo: 'Comprador', nome: comprador }
+  const titular = data.value?.ingressos?.find((t: any) => t.titular)?.titular
+  if (!titular) return null
+  return { rotulo: data.value?.cortesia ? 'Convidado' : 'Titular', nome: titular }
+})
+
 /* ------------------------------------------- pedido ainda não pago ------- */
 /**
  * Quem cai aqui com o pedido em aberto fechou a aba do pagamento (ou pagou por
@@ -112,13 +136,17 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
             <p class="text-xs text-tinta-fraca">Pedido</p>
             <p class="font-medium tabular-nums text-tinta">{{ data.pedido }}</p>
           </div>
-          <div>
-            <p class="text-xs text-tinta-fraca">Comprador</p>
-            <p class="font-medium text-tinta">{{ data.comprador.nome }}</p>
+          <!-- "Comprador" só quando existe um; no convite o nome é o de quem
+               RECEBEU, e sem nome nenhum o bloco não aparece. -->
+          <div v-if="pessoa">
+            <p class="text-xs text-tinta-fraca">{{ pessoa.rotulo }}</p>
+            <p class="font-medium text-tinta">{{ pessoa.nome }}</p>
           </div>
           <div>
-            <p class="text-xs text-tinta-fraca">Total pago</p>
-            <p class="font-medium tabular-nums text-tinta">{{ reais(data.totalCents) }}</p>
+            <p class="text-xs text-tinta-fraca">{{ data.cortesia ? 'Entrada' : 'Total pago' }}</p>
+            <p class="font-medium tabular-nums text-tinta">
+              {{ data.cortesia ? 'Cortesia' : reais(data.totalCents) }}
+            </p>
           </div>
           <span class="ml-auto" :class="data.status === 'pago' ? 'selo-ok' : 'selo-alerta'">
             {{ data.status === 'pago' ? 'PAGO' : data.status.replace(/_/g, ' ').toUpperCase() }}
@@ -213,9 +241,19 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                   <p class="text-sm text-tinta-suave">{{ t.setor }}<template v-if="t.lote"> · {{ t.lote }}</template></p>
                   <p v-if="t.sessao" class="text-sm text-tinta-suave">{{ t.sessao }}</p>
                 </div>
-                <span :class="estado[t.status]?.c ?? 'selo-neutro'">
-                  {{ estado[t.status]?.t ?? t.status.toUpperCase() }}
-                </span>
+                <div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                  <!-- CORTESIA só no convite de verdade. A régua vem da API
+                       (origem do pedido), nunca do valor: o ingresso que a
+                       pessoa comprou com o cupom dela fechou em zero igual, e
+                       escrever CORTESIA nele é dizer que lhe deram esmola. -->
+                  <span v-if="t.cortesia" class="selo-neutro"
+                        title="Convite da casa: você não paga nada por esta entrada.">
+                    CORTESIA
+                  </span>
+                  <span :class="estado[t.status]?.c ?? 'selo-neutro'">
+                    {{ estado[t.status]?.t ?? t.status.toUpperCase() }}
+                  </span>
+                </div>
               </div>
 
               <dl class="mt-3 border-t border-linha pt-3 text-sm">

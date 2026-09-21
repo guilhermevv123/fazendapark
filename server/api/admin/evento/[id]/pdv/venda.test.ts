@@ -51,7 +51,22 @@ const PONTO_VIZINHO = '0000d004-0000-4000-8000-000000000006'
 const TURNO_VIZINHO = '0000d004-0000-4000-8000-000000000007'
 const PEDIDO_VIZINHO = '0000d004-0000-4000-8000-000000000008'
 
-const EMAIL = 'dono.cancelamento@teste.invalido'
+/*
+ * E-mail PRÓPRIO deste arquivo, e não um compartilhado.
+ *
+ * Ele era `dono.cancelamento@teste.invalido`, o mesmo de
+ * `server/utils/cancelamento.test.ts`, com o mesmo hash de senha — só que em
+ * OUTRA organização. O login recusa (409) quando o mesmo e-mail casa a mesma
+ * senha em duas organizações, porque aí não dá pra saber qual painel abrir.
+ * Quando as duas fixturas coexistiam no banco, este arquivo não recebia
+ * cookie e os 11 casos caíam com 401 — vermelho INTERMITENTE, que aparecia
+ * só quando a outra suíte tinha sido interrompida antes do `afterAll` ou a
+ * ordem de execução sobrepunha as duas.
+ *
+ * A regra que isso deixa: fixtura é dona do que cria. E-mail de teste leva o
+ * nome do arquivo, senão duas suítes disputam a mesma identidade.
+ */
+const EMAIL = 'dono.venda.pdv@teste.invalido'
 const FACE = 3000 // R$ 30,00 redondo: a conta do balcão fica conferível de cabeça
 
 let noAr = false
@@ -634,5 +649,76 @@ describe('cancelamento de venda no balcão', () => {
       `SELECT status, refunded_cents FROM orders WHERE id = $1`, [PEDIDO_VIZINHO])
     expect(pedido.status, 'a venda da vizinha foi mexida').toBe('pago')
     expect(Number(pedido.refunded_cents)).toBe(0)
+  }, 30_000)
+
+  /*
+   * Devolução PARCIAL não é venda cancelada.
+   *
+   * Esta frase só ficou alcançável quando a lista de vendas do turno passou a
+   * mostrar pedido VIVO: antes, o `WHERE status = 'pago'` escondia o parcial
+   * da tela, e com ele o botão de cancelar. Descoberto o botão, a recusa
+   * respondia "Esta venda já foi cancelada" — porque o teste era
+   * `status.startsWith('estornado')`, que casa `estornado` e
+   * `estornado_parcial` de uma vez. O operador ia embora achando que o
+   * cliente recebeu tudo de volta, com o dinheiro na gaveta.
+   *
+   * O que este caso tranca não é a recusa (essa continua certa: o guichê não
+   * desfaz venda com devolução no meio) — é a HONESTIDADE dela.
+   */
+  it('devolução parcial não é "já cancelada": a recusa diz quanto voltou', async (ctx) => {
+    seForaDoArPula(ctx)
+
+    const ponto = await novoPonto('Guichê da devolução parcial')
+    const turno = await abrirCaixa(ponto)
+    const venda = await vender({
+      turnoId: turno, forma: 'dinheiro', itens: [{ lotId: LOTE, quantidade: 1 }],
+    })
+
+    // o gateway devolveu PARTE: é o que o webhook grava num reembolso parcial
+    const DEVOLVIDO = 500
+    await sql(
+      `UPDATE orders SET status = 'estornado_parcial', refunded_cents = $2 WHERE id = $1`,
+      [venda.pedidoId, DEVOLVIDO])
+
+    const r = await cancelar(venda.pedidoId, 'cliente voltou no guichê')
+    expect(r.status).toBe(409)
+
+    // U+00A0: `toLocaleString` separa o R$ com espaço fino, e comparar sem
+    // normalizar falha com as duas strings idênticas na tela
+    const frase = String(r.corpo.message ?? r.corpo.statusMessage).replace(/ /g, ' ')
+
+    expect(frase, 'a recusa continua dizendo que a venda foi cancelada')
+      .not.toMatch(/já foi cancelada/i)
+    // os DOIS valores: o que voltou pro cliente e o que ficou com a produtora
+    expect(frase).toContain('R$ 5,00')
+    expect(frase).toContain(`R$ ${((FACE - DEVOLVIDO) / 100).toFixed(2).replace('.', ',')}`)
+
+    // e a recusa é recusa de verdade: nada mexeu no pedido
+    const [depois] = await sql(
+      `SELECT status, refunded_cents FROM orders WHERE id = $1`, [venda.pedidoId])
+    expect(depois.status).toBe('estornado_parcial')
+    expect(Number(depois.refunded_cents)).toBe(DEVOLVIDO)
+  }, 30_000)
+
+  /*
+   * O estorno TOTAL continua sendo "já cancelada" — senão o conserto de cima
+   * vira o defeito espelhado, com o guichê deixando de reconhecer a venda que
+   * de fato foi desfeita.
+   */
+  it('estorno TOTAL continua sendo "já cancelada"', async (ctx) => {
+    seForaDoArPula(ctx)
+
+    const ponto = await novoPonto('Guichê da devolução total')
+    const turno = await abrirCaixa(ponto)
+    const venda = await vender({
+      turnoId: turno, forma: 'dinheiro', itens: [{ lotId: LOTE, quantidade: 1 }],
+    })
+    await sql(
+      `UPDATE orders SET status = 'estornado', refunded_cents = $2 WHERE id = $1`,
+      [venda.pedidoId, FACE])
+
+    const r = await cancelar(venda.pedidoId, 'segunda tentativa')
+    expect(r.status).toBe(409)
+    expect(String(r.corpo.message ?? r.corpo.statusMessage)).toMatch(/já foi cancelada/i)
   }, 30_000)
 })

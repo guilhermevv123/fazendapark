@@ -36,7 +36,7 @@
  *
  * Servidor fora do ar: PULA em vez de falhar.
  */
-import { readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import bcrypt from 'bcryptjs'
@@ -242,6 +242,87 @@ describe('a grade de papéis (tabela)', () => {
   })
 })
 
+/* ------------------------------- o nome solto não pode virar o tipo errado */
+
+/**
+ * O Nitro varre `server/utils` inteiro pra montar o auto-import: todo nome
+ * exportado ali vira global dentro de `server/`. Quando DOIS arquivos exportam
+ * o mesmo nome, um ganha e o outro é descartado — o build avisa e segue:
+ *
+ *     WARN Duplicated imports "Papel", the one from server/utils/papeis.ts
+ *          has been ignored and server/utils/sessao.ts is used
+ *
+ * Ninguém dependia do nome solto, mas isso é bomba-relógio: o dia em que
+ * alguém escrever `Papel` sem importar leva o tipo LEGADO (`admin`,
+ * `operacional`, sete valores) no lugar da grade fina (quatro), **sem erro de
+ * compilação** — e `papelPode(papel, 'dinheiro')` com um `admin` dentro não
+ * explode, só responde `false` em produção.
+ *
+ * O de `Papel` foi resolvido renomeando o legado pra `PapelLegado`, em
+ * `sessao.ts`. Este caso guarda o resto: nenhum nome novo de `papeis.ts` pode
+ * nascer colidindo.
+ */
+describe('nenhum nome exportado por papeis.ts colide com outro utilitário', () => {
+  const PASTA_UTILS = fileURLToPath(new URL('.', import.meta.url))
+
+  /** os nomes que um arquivo exporta, pelo mesmo tipo de leitura que o Nitro faz */
+  function exportados(caminho: string): string[] {
+    const fonte = readFileSync(caminho, 'utf8')
+    const nomes: string[] = []
+    for (const m of fonte.matchAll(
+      /^export\s+(?:declare\s+)?(?:const|let|var|function|async function|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm)) {
+      nomes.push(m[1]!)
+    }
+    for (const m of fonte.matchAll(/^export\s*\{([^}]+)\}/gm)) {
+      for (const parte of m[1]!.split(',')) {
+        const nome = parte.trim().split(/\s+as\s+/).pop()?.trim()
+        if (nome) nomes.push(nome)
+      }
+    }
+    return [...new Set(nomes)]
+  }
+
+  /**
+   * A dívida conhecida, nomeada — não uma peneira genérica.
+   *
+   * `CATALOGO` continua saindo daqui com o nome antigo porque
+   * `server/api/admin/equipe/index.get.ts` o importa assim. O nome de verdade
+   * já é `CATALOGO_DE_PAPEIS`; quando a linha de importação daquele arquivo
+   * mudar, o apelido morre em `papeis.ts` e esta exceção sai daqui — no mesmo
+   * diff, senão o build quebra.
+   */
+  const DIVIDA_CONHECIDA = ['CATALOGO']
+
+  it('nome de papeis.ts que também sai de outro arquivo vira tipo errado em silêncio', () => {
+    const meus = exportados(join(PASTA_UTILS, 'papeis.ts'))
+    expect(meus, 'a leitura dos exports quebrou — o formato do arquivo mudou?')
+      .toContain('podeAbrirPagina')
+
+    const colisoes: string[] = []
+    for (const arquivo of readdirSync(PASTA_UTILS)) {
+      if (!arquivo.endsWith('.ts') || arquivo.endsWith('.test.ts') || arquivo === 'papeis.ts') continue
+      for (const nome of exportados(join(PASTA_UTILS, arquivo))) {
+        if (meus.includes(nome) && !DIVIDA_CONHECIDA.includes(nome)) {
+          colisoes.push(`${nome} (papeis.ts × ${arquivo})`)
+        }
+      }
+    }
+    expect(colisoes,
+      'dois utilitários exportando o mesmo nome: o auto-import fica com UM deles e descarta o '
+      + 'outro em silêncio. Renomeie um dos dois — o build já avisa, e o aviso passa despercebido')
+      .toEqual([])
+  })
+
+  /** e o nome que causou o aviso de hoje não pode voltar */
+  it('o papel legado tem nome próprio, separado do Papel da grade fina', () => {
+    const daSessao = exportados(join(PASTA_UTILS, 'sessao.ts'))
+    expect(daSessao, 'o tipo legado voltou a se chamar Papel: o auto-import volta a entregar '
+      + 'a grade GROSSA pra quem escrever `Papel` sem importar').not.toContain('Papel')
+    expect(daSessao).toContain('PapelLegado')
+    expect(exportados(join(PASTA_UTILS, 'papeis.ts'))).toContain('Papel')
+  })
+})
+
 /* ------------------------------------------------- nenhuma rota esquecida */
 
 /**
@@ -329,6 +410,38 @@ describe('nenhuma rota administrativa fica sem área por esquecimento', () => {
     expect(papelPode('operacao', 'venda')).toBe(true)
     // e quem não tem caixa continua sem cancelar o evento inteiro
     expect(papelPode('operacao', 'dinheiro')).toBe(false)
+  })
+
+  /**
+   * A rota em que o dinheiro SAI deixou de ser trancada por AUSÊNCIA.
+   *
+   * Ela morava em `SO_DO_MASTER` com a justificativa "mandar dinheiro embora é
+   * ato de dono", e o preço disso era uma plataforma que para quando o dono
+   * viaja: medido, `financeiro` levava **403** em
+   * `POST /api/admin/payout/executar` — a execução do saque que ele mesmo
+   * pede — e o pedido ficava `solicitada` para sempre. Agora a área está
+   * escrita (`dinheiro`), que é onde dá pra revisar quem pode.
+   *
+   * O contorno é o que este caso guarda: quem não tem caixa continua fora.
+   */
+  it('a execução do saque é área de dinheiro — e não vira tela de menu por isso', () => {
+    expect(areaDaRota('/api/admin/payout')).toBe('dinheiro')
+    expect(areaDaRota('/api/admin/payout/executar')).toBe('dinheiro')
+    expect(SO_DO_MASTER,
+      'a rota tem área E está na lista de exceções: as duas coisas discordam')
+      .not.toContain('/api/admin/payout')
+
+    expect(decidirAcesso('financeiro', '/api/admin/payout/executar').liberado).toBe(true)
+    expect(decidirAcesso('master', '/api/admin/payout/executar').liberado).toBe(true)
+    for (const papel of ['operacao', 'portaria'] as const) {
+      expect(decidirAcesso(papel, '/api/admin/payout/executar').liberado, papel).toBe(false)
+    }
+
+    // e não existe PÁGINA de saque: quem dispara a fila é a própria fila, não
+    // uma tela. Por isso `/admin/payout` continua sem área — e continua sendo
+    // do master, igual a qualquer página que ninguém classificou.
+    expect(areaDaPagina('/admin/payout')).toBe(null)
+    expect(podeAbrirPagina('financeiro', '/admin/payout')).toBe(false)
   })
 })
 
@@ -445,7 +558,6 @@ describe('a página que ninguém classificou é do master, igual à rota', () =>
   it('página de raiz sem área não chega no menu de quem não é master', () => {
     const naoClassificadas = [
       '/admin/filas',          // a rota existe hoje e é só-do-master
-      '/admin/payout',         // idem: é por onde o dinheiro SAI
       '/admin/tela-de-amanha', // a que ainda não foi escrita
     ]
     for (const pagina of naoClassificadas) {
@@ -460,7 +572,7 @@ describe('a página que ninguém classificou é do master, igual à rota', () =>
   })
 
   it('menu e rota negam a mesma página pros mesmos papéis', () => {
-    for (const pagina of ['/admin/filas', '/admin/payout', '/admin/tela-de-amanha']) {
+    for (const pagina of ['/admin/filas', '/admin/tela-de-amanha']) {
       const rota = pagina.replace('/admin/', '/api/admin/')
       for (const papel of PAPEIS) {
         expect(podeAbrirPagina(papel, pagina),
@@ -511,17 +623,43 @@ let semPortariaSemeada = ''
 const codigosLidos: string[] = []
 const http: Record<string, ReturnType<typeof comSessao>> = {}
 
+/**
+ * Entra e devolve o cookie.
+ *
+ * Tenta de novo APENAS quando o servidor não respondeu ou respondeu 5xx: o
+ * `nuxt dev` reinicia sozinho a cada arquivo salvo, e uma rodada que pega essa
+ * janela de meio segundo derruba o `beforeAll` inteiro — vermelho que não é
+ * defeito nenhum e que já custou uma leitura da suíte. Recusa de verdade (401,
+ * 403, 409) e freio de força bruta (429) estouram na primeira: essas SÃO a
+ * resposta do sistema, e insistir esconderia o que o teste existe pra ver.
+ */
 async function entrarCom(email: string) {
-  const r = await fetch(`${BASE}/api/auth/entrar`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, senha: SENHA }),
-  })
-  if (!r.ok) throw new Error(`login de ${email} falhou (${r.status})`)
-  const cookie = (r.headers.getSetCookie?.() ?? [])
-    .map((c) => c.split(';')[0]).find((c) => c.startsWith('dt_sessao='))
-  if (!cookie) throw new Error(`login de ${email} não devolveu cookie`)
-  return cookie
+  let ultimo = ''
+  for (let tentativa = 1; tentativa <= 3; tentativa++) {
+    let r: Response
+    try {
+      r = await fetch(`${BASE}/api/auth/entrar`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, senha: SENHA }),
+      })
+    } catch (e: any) {
+      ultimo = `o servidor não respondeu (${e?.message ?? e})`
+      await new Promise((r2) => setTimeout(r2, 400 * tentativa))
+      continue
+    }
+    if (!r.ok) {
+      ultimo = `login de ${email} falhou (${r.status})`
+      if (r.status < 500) throw new Error(ultimo)
+      await new Promise((r2) => setTimeout(r2, 400 * tentativa))
+      continue
+    }
+    const cookie = (r.headers.getSetCookie?.() ?? [])
+      .map((c) => c.split(';')[0]).find((c) => c.startsWith('dt_sessao='))
+    if (!cookie) throw new Error(`login de ${email} não devolveu cookie`)
+    return cookie
+  }
+  throw new Error(`${ultimo} — três vezes seguidas`)
 }
 
 beforeAll(async () => {
@@ -1173,13 +1311,37 @@ describe('as telas destrancadas chegaram em quem trabalha nelas', () => {
  * senha dela era conferida contra o hash da OUTRA, e a resposta era
  * "E-mail ou senha não confere" — a mesma de senha errada.
  *
- * Duas saídas eram possíveis: ensinar a organização ao login, ou tratar o
- * e-mail como global. A segunda foi a escolhida (o login é a porta de um
- * sistema só; pedir "qual é a sua loja?" na tela de entrada é pedir uma
- * informação que a pessoa do guichê não tem). Estes casos provam os dois
- * lados: a recusa na tela, e o estrago que ela evita.
+ * ## A trava do cadastro era só metade, e foi MEDIDO
+ *
+ * A recusa da tela de equipe é de APLICAÇÃO; o índice do banco continua
+ * `UNIQUE (org_id, email)` e aceita as duas linhas por `INSERT` direto,
+ * restore ou importação. Com as duas linhas no banco e as duas senhas CERTAS
+ * na mão, o roteiro `[A,A,B,B,A,A]` na rota de login respondia:
+ *
+ *     A:200  A:401  B:200  B:401  A:200  A:401
+ *
+ * — porque a consulta não tinha `ORDER BY` e `abrirSessao` reescreve a linha
+ * (grava `last_login_at`), mudando a ordem física a cada entrada.
+ *
+ * O conserto está em `auth/entrar.post.ts`: quem decide qual conta abre é a
+ * SENHA, conferida contra todas as linhas daquele e-mail, e não a ordem da
+ * tabela. Os casos abaixo provam os três lados: a recusa no cadastro (que
+ * evita a ambiguidade nascer), cada pessoa entrando na SUA conta quando ela
+ * já existe, e a recusa quando as duas senhas são iguais — aí ninguém entra,
+ * porque entrar seria abrir o painel da organização errada.
  */
 describe('o e-mail é um só no sistema, porque o login também é', () => {
+  /**
+   * Prazo próprio pros dois casos de senha, pelo mesmo motivo do `PRAZO_TELA`
+   * lá embaixo. Cada entrada daqui custa um `bcrypt` POR LINHA daquele e-mail
+   * — duas linhas, seis entradas, doze comparações — e o `bcryptjs` é
+   * JavaScript puro, sem addon nativo. Sozinho na máquina, o caso inteiro leva
+   * 774 ms (medido). Com a frota rodando suíte e build no mesmo processador, o
+   * MESMO caso passou dos 20 s do `PRAZO` e ficou vermelho como
+   * "Test timed out" — que não é o defeito que ele mede, e vermelho que não é
+   * o defeito é vermelho que ninguém olha.
+   */
+  const PRAZO_SENHA = 120_000
   beforeAll(async () => {
     if (!noAr) return
     await q(`INSERT INTO organizations (id, name, slug)
@@ -1231,31 +1393,27 @@ describe('o e-mail é um só no sistema, porque o login também é', () => {
   }, PRAZO)
 
   /**
-   * O estrago que a recusa evita, MEDIDO na rota de login. As duas linhas
-   * entram direto no banco porque pela tela o caso de cima não deixa mais — e
-   * o índice único do banco é `(org_id, email)`, então ele aceita as duas.
+   * As duas linhas que JÁ EXISTEM no banco — o caso que a recusa do cadastro
+   * não alcança. Elas entram por `INSERT` direto porque é assim que chegam no
+   * mundo real (restore, importação, linha anterior ao conserto), e o índice
+   * único do banco é `(org_id, email)`: ele aceita as duas.
    *
    * ## Por que seis tentativas, e nesta ordem
    *
-   * A consulta do login é `WHERE lower(email) = $1` sem organização e **sem
-   * `ORDER BY`**: qual das duas linhas volta é a ordem física da tabela. E ela
-   * MUDA — `abrirSessao` grava `last_login_at`, o que reescreve a linha e a
-   * joga pro fim. Medido: duas entradas alternadas (uma senha, depois a outra)
-   * passaram as DUAS, porque a ordem virou no meio.
+   * A consulta do login era `WHERE lower(email) = $1` sem organização e **sem
+   * `ORDER BY`**: qual das duas linhas voltava era a ordem física da tabela.
+   * E ela MUDA — `abrirSessao` grava `last_login_at`, o que reescreve a linha
+   * e a joga pro fim. Por isso o roteiro é a mesma pessoa DUAS VEZES SEGUIDAS,
+   * que é o que acontece no expediente. Medido antes do conserto:
    *
-   * Por isso o padrão é a mesma pessoa DUAS VEZES SEGUIDAS, que é o que
-   * acontece no expediente. Qualquer que seja o comportamento da ordem, pelo
-   * menos uma entrada com a senha CERTA é recusada:
+   *     A:200  A:401  B:200  B:401  A:200  A:401
    *
-   * - ordem estável → a pessoa da outra linha nunca é encontrada, e as três
-   *   tentativas dela caem;
-   * - ordem virando a cada entrada → a segunda seguida da mesma pessoa cai.
-   *
-   * As seis passarem só seria possível se a linha certa estivesse na frente
-   * nas seis, o que as duas senhas diferentes tornam impossível. É por isso
-   * que este caso não é sorteio.
+   * Metade das entradas com a senha CERTA recusada, com a frase de senha
+   * errada. Agora quem decide é a senha, e as seis passam — **cada uma na sua
+   * conta**, que é a metade que faltava: aceitar as seis abrindo sempre a
+   * MESMA conta seria trocar um defeito por outro pior.
    */
-  it('duas pessoas com o mesmo e-mail em lojas diferentes: a entrada vira sorteio', async () => {
+  it('duas pessoas com o mesmo e-mail em lojas diferentes: cada uma entra na SUA', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
     await q(`DELETE FROM users WHERE lower(email) = $1`, [EMAIL_REPETIDO])
@@ -1267,23 +1425,41 @@ describe('o e-mail é um só no sistema, porque o login também é', () => {
       [ORG_VIZINHA, EMAIL_REPETIDO, await bcrypt.hash(SENHA_DE_LA, 10)])
     expect(await quantos(EMAIL_REPETIDO), 'o banco recusou as duas linhas').toBe(2)
 
+    /**
+     * Entra e pergunta a /api/auth/eu QUEM entrou — o nome e a organização.
+     *
+     * 5xx não é resposta do login: é o `nuxt dev` reiniciando porque alguém
+     * salvou um arquivo (com a frota toda no mesmo repositório, isso cai no
+     * meio do roteiro e vira um `500` no lugar de um `200`). Aí tenta de novo.
+     * 401 e 409 estouram na primeira — essas SÃO a resposta que o caso mede.
+     */
     const tentar = async (senha: string) => {
-      const r = await fetch(`${BASE}/api/auth/entrar`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: EMAIL_REPETIDO, senha }),
-      })
-      return { status: r.status, corpo: await r.json().catch(() => ({})) }
+      let r!: Response
+      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        r = await fetch(`${BASE}/api/auth/entrar`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: EMAIL_REPETIDO, senha }),
+        })
+        if (r.status < 500) break
+        await new Promise((espera) => setTimeout(espera, 700 * tentativa))
+      }
+      const corpo = await r.json().catch(() => ({}))
+      const cookie = (r.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0])
+        .find((c) => c.startsWith('dt_sessao='))
+      const eu = cookie
+        ? await fetch(`${BASE}/api/auth/eu`, { headers: { cookie } }).then((x) => x.json())
+        : { usuario: null }
+      return { status: r.status, corpo, quem: eu.usuario?.nome ?? '', org: eu.usuario?.orgId ?? '' }
     }
 
     const roteiro = [SENHA_DAQUI, SENHA_DAQUI, SENHA_DE_LA, SENHA_DE_LA, SENHA_DAQUI, SENHA_DAQUI]
-    const respostas: { senha: string; status: number; corpo: any }[] = []
-    for (const senha of roteiro) respostas.push({ senha, ...(await tentar(senha)) })
+    const esperado = ['Pessoa Daqui', 'Pessoa Daqui', 'Pessoa de Lá',
+      'Pessoa de Lá', 'Pessoa Daqui', 'Pessoa Daqui']
+    const respostas: Awaited<ReturnType<typeof tentar>>[] = []
+    for (const senha of roteiro) respostas.push(await tentar(senha))
 
-    // As recusas daqui são de propósito, e o freio de força bruta não pode
-    // herdar elas: oito num e-mail em quinze minutos trancariam a rodada
-    // seguinte, e o vermelho apareceria num caso que não tem nada a ver com o
-    // assunto. Este caso apaga exatamente o que escreveu.
+    // o freio de força bruta não pode herdar o que este caso escreveu
     await q(`DELETE FROM login_attempts WHERE email = $1`, [EMAIL_REPETIDO])
 
     // se o freio pegar antes (rodada anterior, suíte rodando em paralelo),
@@ -1292,22 +1468,63 @@ describe('o e-mail é um só no sistema, porque o login também é', () => {
       return void console.warn('  (pulado: freio de força bruta respondeu 429)')
     }
 
-    const recusadas = respostas.filter((r) => r.status !== 200)
-    expect(recusadas.length,
-      `as seis entradas com a senha CERTA foram aceitas (${respostas.map((r) => r.status).join(',')}): `
-      + 'o login passou a saber de qual organização é o e-mail, e a recusa do cadastro virou '
-      + 'exagero — reveja os dois no mesmo diff')
-      .toBeGreaterThan(0)
+    expect(respostas.map((r) => r.status),
+      'entrada com a senha CERTA recusada: é o sorteio da ordem física da tabela de volta — '
+      + `${respostas.map((r) => r.status).join(',')}`)
+      .toEqual([200, 200, 200, 200, 200, 200])
 
-    // e quem é recusado ouve a frase de senha errada, com a senha certa na
-    // mão. É isso que o suporte não tem como adivinhar — e é por isso que o
-    // cadastro recusa antes, em vez de entregar um login que às vezes abre.
-    for (const r of recusadas) {
-      expect(r.status).toBe(401)
-      expect(r.corpo.statusMessage ?? r.corpo.message ?? '')
-        .toContain('E-mail ou senha não confere')
+    expect(respostas.map((r) => r.quem),
+      'as seis entraram, mas não cada uma na sua: a senha de uma abriu a conta da outra, '
+      + 'que é atravessar a parede entre duas produtoras')
+      .toEqual(esperado)
+
+    // e as duas organizações são MESMO diferentes — senão o caso acima
+    // passaria com as duas linhas na mesma loja
+    const orgs = new Set(respostas.map((r) => r.org))
+    expect(orgs.size, 'as duas contas caíram na mesma organização: a fixtura não mede nada').toBe(2)
+  }, PRAZO_SENHA)
+
+  /**
+   * O outro lado da mesma moeda: duas linhas com a MESMA senha.
+   *
+   * Aí não existe pergunta que a rota possa fazer — as duas conferem. Chutar a
+   * mais antiga colocaria alguém dentro do painel de outra produtora, com
+   * dinheiro e dados de comprador dentro. A saída segura é recusar dizendo o
+   * que fazer, e é isso que este caso prende.
+   */
+  it('mesmo e-mail e MESMA senha em duas lojas: ninguém entra por chute', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const senhaIgual = 'igual-nas-duas-4Tz'
+    const hash = await bcrypt.hash(senhaIgual, 10)
+    await q(`DELETE FROM users WHERE lower(email) = $1`, [EMAIL_REPETIDO])
+    for (const org of [ORG_EQUIPE, ORG_VIZINHA]) {
+      await q(`INSERT INTO users (org_id, name, email, password_hash, papel, role)
+               VALUES ($1,'Xará de Senha',$2,$3,'operacao','operacional')`,
+        [org, EMAIL_REPETIDO, hash])
     }
-  }, PRAZO)
+
+    const r = await fetch(`${BASE}/api/auth/entrar`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: EMAIL_REPETIDO, senha: senhaIgual }),
+    })
+    const corpo = await r.json().catch(() => ({}))
+    await q(`DELETE FROM login_attempts WHERE email = $1`, [EMAIL_REPETIDO])
+    if (r.status === 429) return void console.warn('  (pulado: freio respondeu 429)')
+
+    expect(r.status,
+      'a rota escolheu uma das duas contas no chute: quem digitou entrou no painel de outra '
+      + 'produtora').toBe(409)
+
+    const abriu = (r.headers.getSetCookie?.() ?? [])
+      .some((c) => c.startsWith('dt_sessao=') && !/Max-Age=0/i.test(c))
+    expect(abriu, 'recusou e abriu sessão assim mesmo').toBe(false)
+
+    const msg: string = corpo.statusMessage ?? corpo.message ?? ''
+    expect(msg, 'a recusa não diz o que fazer pra quem está no guichê').toMatch(/master/i)
+    expect(msg, 'recusa escrita pra máquina').not.toMatch(/conflict|duplicate|constraint|ambiguous/i)
+  }, PRAZO_SENHA)
 })
 
 /* ------------------------------------------- a tela toda, não só o menu */
@@ -1420,4 +1637,192 @@ describe('o topo da tela não oferece porta fechada', () => {
           .toContain(`/admin/evento/${EVENTO}/dashboard`)
       }
     }, PRAZO_TELA)
+})
+
+/* ----------------------------- as outras duas superfícies que desenham porta */
+
+/**
+ * A lateral e o cabeçalho já filtram. Faltavam DUAS superfícies, e as duas
+ * foram medidas oferecendo porta que responde 403.
+ *
+ * **1. A barra de abas (`components/AbasSecao.vue`)** monta do MESMO catálogo
+ * `menuDoEvento` e não filtrava nada — os quatro papéis recebiam as mesmas
+ * abas. Medido no HTML servido a uma sessão de portaria em
+ * `/admin/evento/<id>/validacao`, com a lateral dela já reduzida a um item e
+ * a frase "seu acesso é só o leitor de entrada" na parede:
+ *
+ *     href=".../validacao"            ← o leitor, o trabalho dela
+ *     href=".../validacao/historico"  ← e `GET .../checkins` responde 403
+ *
+ * A lateral tirava a porta da parede e a barra desenhava de volta, dois
+ * centímetros acima.
+ *
+ * **2. A tela de suporte (`pages/admin/suporte.vue`)** é uma parede de
+ * atalhos, e pra uma sessão de operação quatro deles eram porta fechada —
+ * medido, com a resposta de cada rota ao lado:
+ *
+ * | atalho                             | rota                               |
+ * |------------------------------------|------------------------------------|
+ * | Abrir Equipe                       | `GET /api/admin/equipe` → 403      |
+ * | Abrir Configurações                | `GET /api/admin/organizacao` → 403 |
+ * | Abrir painel do evento (dashboard) | `GET .../dashboard` → 403          |
+ * | Abrir Financeiro                   | `GET .../financeiro` → 403         |
+ *
+ * Os dois consertos usam a MESMA `podeAbrirPagina` daqui. Os casos abaixo leem
+ * o HTML que o servidor entrega e conferem contra ela — não contra uma lista
+ * escrita aqui, que envelheceria junto com a da tela.
+ */
+describe('a barra de abas e o suporte não oferecem porta fechada', () => {
+  /** mesmo motivo do `PRAZO_TELA` acima: a primeira visita compila a página */
+  const PRAZO_TELA = 180_000
+
+  /**
+   * Só o MIOLO da página — o `<main>`. A lateral e o cabeçalho têm casos
+   * próprios, e o logotipo do canto (que aponta pra `/admin`) mora no shell,
+   * que não é assunto destes casos.
+   */
+  const linksDoMiolo = (html: string): string[] => {
+    const main = html.match(/<main class="px-6 pb-12">[\s\S]*<\/main>/)
+    if (!main) return ['(esta tela não tem o miolo do painel)']
+    return [...main[0].matchAll(/href="([^"]+)"/g)]
+      .map((m) => m[1]!)
+      .filter((h) => h === '/admin' || h.startsWith('/admin/'))
+  }
+
+  /** os links da BARRA DE ABAS, só dela */
+  const abasDaTela = (html: string): string[] => {
+    const nav = html.match(/<nav class="-mb-px flex gap-6[\s\S]*?<\/nav>/)
+    if (!nav) return [] // grupo de uma tela só não desenha barra — é o esperado
+    return [...nav[0].matchAll(/href="([^"]+)"/g)].map((m) => m[1]!)
+  }
+
+  /**
+   * Pede a página e só devolve o HTML que foi renderizado COM a sessão daquele
+   * papel.
+   *
+   * O `nuxt dev` reinicia a cada arquivo salvo — e com a frota inteira mexendo
+   * no repositório ao mesmo tempo, isso acontece no meio da medição. Nessa
+   * janela a página ainda responde 200, mas o `useFetch('/api/auth/eu')` do
+   * servidor volta vazio: a tela desenha como se não houvesse ninguém logado e
+   * o caso fica vermelho dizendo "o master perdeu o atalho /admin/equipe" —
+   * vermelho que não é defeito de permissão e que já custou uma leitura inteira
+   * da suíte.
+   *
+   * O crivo é o próprio payload do SSR: `__NUXT_DATA__` carrega o papel que a
+   * página enxergou. Sem ele, não foi a tela deste papel que chegou — tenta de
+   * novo. Isso não afrouxa nada: o que se mede depois continua sendo o HTML que
+   * o servidor entregou pra aquela sessão.
+   */
+  const papelEsperado = (chave: string) =>
+    chave.startsWith('portaria') ? 'portaria' : /^m\d$/.test(chave) ? 'master' : chave
+
+  const pagina = async (papel: string, caminho: string) => {
+    const quero = papelEsperado(papel)
+    let ultimo = ''
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      const r = await http[papel](caminho)
+      const html = await r.text()
+      if (r.status === 200 && html.includes(`"${quero}"`)) return html
+      ultimo = `${caminho} pra ${papel}: HTTP ${r.status}`
+        + (r.status === 200 ? ' — a página veio sem a sessão no payload (servidor recarregando)' : '')
+      await new Promise((espera) => setTimeout(espera, 700 * tentativa))
+    }
+    throw new Error(`${ultimo} — três vezes seguidas`)
+  }
+
+  /**
+   * O caso com nome: a portaria, no leitor de entrada, recebendo a aba do
+   * histórico — a tela cuja rota responde 403 pra ela.
+   */
+  it('a portaria não recebe a aba do histórico dentro do leitor de entrada', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const historico = `/admin/evento/${EVENTO}/validacao/historico`
+    const html = await pagina('portaria', `/admin/evento/${EVENTO}/validacao`)
+
+    expect(abasDaTela(html),
+      'a barra de abas ofereceu à portaria o histórico de leituras; `/checkins` responde 403 pra ela')
+      .not.toContain(historico)
+    expect(linksDoMiolo(html), 'o histórico sobrou em outro canto do miolo')
+      .not.toContain(historico)
+
+    // é porta fechada mesmo, medida na rota
+    expect((await bater('portaria', `/api/admin/evento/${EVENTO}/checkins`)).status).toBe(403)
+  }, PRAZO_TELA)
+
+  /** O contrário: filtrar não pode ter apagado a aba de quem trabalha nela. */
+  it('quem trabalha com as duas telas continua com as duas abas', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    for (const papel of ['operacao', 'master'] as const) {
+      const abas = abasDaTela(await pagina(papel, `/admin/evento/${EVENTO}/validacao`))
+      expect(abas, `${papel} perdeu o leitor de entrada`)
+        .toContain(`/admin/evento/${EVENTO}/validacao`)
+      expect(abas, `${papel} perdeu o histórico de leituras — "a tela sumiu" é tão mudo quanto o item morto`)
+        .toContain(`/admin/evento/${EVENTO}/validacao/historico`)
+    }
+  }, PRAZO_TELA)
+
+  /**
+   * A varredura: toda aba que a barra desenhar, em qualquer grupo, tem que ser
+   * tela que aquele papel abre. Parte do menu DE VERDADE (`menuDoEvento`), e
+   * visita só as telas que o papel alcança — que é o caso real.
+   */
+  it('nenhuma aba oferecida é tela que o papel não abre', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const grupos = menuDoEvento(EVENTO).filter((g) => g.filhos?.length)
+    for (const papel of PAPEIS) {
+      for (const grupo of grupos) {
+        const primeira = grupo.filhos!.find((f) => podeAbrirPagina(papel, f.para))
+        if (!primeira) continue // grupo inteiro fechado pra ele: nem visita
+        const abas = abasDaTela(await pagina(papel, primeira.para))
+        const fechadas = abas.filter((a) => !podeAbrirPagina(papel, a))
+        expect(fechadas,
+          `${papel} em ${primeira.para}: a barra de abas desenhou porta que a rota nega`)
+          .toEqual([])
+      }
+    }
+  }, PRAZO_TELA)
+
+  /**
+   * A tela de suporte, papel por papel — inclusive a portaria, que não deveria
+   * nem chegar nela (a página é área `evento_ver`) mas chega digitando o
+   * endereço. Nenhum atalho pode terminar em 403.
+   */
+  it('a tela de suporte não oferece atalho que responde 403', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    for (const papel of PAPEIS) {
+      const oferecidos = linksDoMiolo(await pagina(papel, '/admin/suporte'))
+      const fechados = oferecidos.filter((l) => !podeAbrirPagina(papel, l))
+      expect(fechados,
+        `${papel}: o suporte ofereceu atalho que responde 403 — e quem abre esta tela já está `
+        + 'com problema e com fila na frente').toEqual([])
+    }
+  }, PRAZO_TELA)
+
+  /**
+   * E o suporte continua sendo suporte pra quem pode: o master vê as sete
+   * situações COM botão, e o texto de cada situação fica na tela pra todo
+   * mundo — o que some é o botão, não a explicação.
+   */
+  it('o suporte continua inteiro pro master, e explica a porta fechada pros outros', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const doMaster = linksDoMiolo(await pagina('master', '/admin/suporte'))
+    for (const destino of ['/admin/equipe', '/admin/configuracoes',
+      `/admin/evento/${EVENTO}/vendas`, `/admin/evento/${EVENTO}/financeiro`]) {
+      expect(doMaster, `o master perdeu o atalho ${destino}`).toContain(destino)
+    }
+
+    const html = await pagina('operacao', '/admin/suporte')
+    const main = html.match(/<main class="px-6 pb-12">[\s\S]*<\/main>/)?.[0] ?? ''
+    expect(main, 'o card fechado sumiu inteiro: quem é de operação passa a ler '
+      + '"o sistema não cobre o meu caso" em vez de "não é o meu acesso"')
+      .toContain('Alguém da equipe saiu e ainda tem acesso')
+    expect((main.match(/não faz parte do seu acesso/g) ?? []).length,
+      'nenhum card explicou a porta fechada — ou o filtro não rodou, ou apagou o texto junto')
+      .toBeGreaterThanOrEqual(3)
+  }, PRAZO_TELA)
 })

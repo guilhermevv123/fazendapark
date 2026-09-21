@@ -7,14 +7,19 @@
  * repositório: se alguém criar uma rota nova e ela responder sem sessão, este
  * teste fica vermelho sozinho, sem ninguém precisar lembrar de adicionar caso.
  *
- * Precisa do servidor de dev no ar. Sem ele, PULA em vez de falhar.
+ * Precisa do servidor de dev no ar. Sem ele, PULA — com `ctx.skip()`, que sai
+ * CONTADO como pulado. O `return` seco que estava aqui saía como ✓: medido com
+ * a porta fechada, este arquivo imprimia `8 passed` tendo conferido uma rota.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  anunciarPulo, BASE_DE_TESTE, seForaDoArPula, sondarServidor, type Sonda,
+} from '../../scripts/test-setup'
 import { comSessao, CONTAS, entrar } from '../../scripts/teste-sessao'
 
-const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
+const BASE = BASE_DE_TESTE
 const SLUG = 'conquista-park-4-edicao'
 
 /**
@@ -77,18 +82,15 @@ const PADRAO_FIXTURA = 'senha-errada.autenticacao%@teste.invalido'
  */
 const TETO_HTTP = 20_000
 
-let noAr = false
+let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
 beforeAll(async () => {
   // 2,5 s de paciência transformava "servidor ocupado" em "servidor fora do
-  // ar", e o arquivo inteiro PULAVA em silêncio — sete casos verdes que não
-  // testaram nada. Duas tentativas, a segunda mais longa.
-  for (const paciencia of [4000, 10_000]) {
-    try {
-      noAr = (await fetch(`${BASE}/api/e/${SLUG}`, { signal: AbortSignal.timeout(paciencia) })).ok
-      if (noAr) break
-    } catch { noAr = false }
-  }
-  if (!noAr) return
+  // ar", e o arquivo inteiro PULAVA em silêncio. A sonda com prazo crescente
+  // e o motivo do pulo moram em `scripts/test-setup.ts`, pra suíte inteira
+  // decidir isso de um jeito só.
+  sonda = await sondarServidor(`/api/e/${SLUG}`)
+  anunciarPulo('server/api/autenticacao.test.ts', sonda)
+  if (!sonda.noAr) return
 
   const { q } = await import('../utils/db')
 
@@ -111,14 +113,17 @@ beforeAll(async () => {
 }, 30_000)
 
 afterAll(async () => {
-  if (!noAr) return
+  if (!sonda.noAr) return
   const { q } = await import('../utils/db')
   await q(`DELETE FROM users WHERE id = $1`, [USUARIO_SENHA_ERRADA])
   await q(`DELETE FROM login_attempts WHERE email = $1`, [EMAIL_SENHA_ERRADA])
 }, 30_000)
 
+const RAIZ_ADMIN = join(process.cwd(), 'server/api/admin')
+const SUFIXO_DE_METODO = /\.(get|post|patch|delete|put)\.ts$/
+
 /** Varre server/api/admin e devolve a URL de cada rota, com id de exemplo. */
-function rotasAdmin(dir = join(process.cwd(), 'server/api/admin'), prefixo = '/api/admin') {
+function rotasAdmin(dir = RAIZ_ADMIN, prefixo = '/api/admin') {
   const achados: { url: string; metodo: string }[] = []
   for (const nome of readdirSync(dir)) {
     const caminho = join(dir, nome)
@@ -135,9 +140,37 @@ function rotasAdmin(dir = join(process.cwd(), 'server/api/admin'), prefixo = '/a
   return achados
 }
 
+/**
+ * A MESMA contagem, por outro caminho — quem desce a árvore aqui é o Node.
+ *
+ * `rotasAdmin()` é a coisa SOB TESTE: recursão escrita à mão, com
+ * `readdirSync` + `statSync` + `continue`. Ela já quebrou, e quando quebra
+ * devolve lista CURTA em silêncio. Comparar com uma lista feita por um
+ * mecanismo diferente é o que transforma "quebrou" em vermelho — um piso
+ * numérico sozinho não faz isso (ver o caso abaixo).
+ */
+function arquivosDeRota(): string[] {
+  return (readdirSync(RAIZ_ADMIN, { recursive: true, encoding: 'utf8' }) as string[])
+    .filter((caminho) => SUFIXO_DE_METODO.test(caminho) && !caminho.includes('.test.'))
+}
+
+/**
+ * Arquivo de rota SEM sufixo de método — o ponto cego da varredura.
+ *
+ * `server/api/admin/foo.ts` (sem `.get`/`.post`) é rota válida no Nitro e
+ * atende QUALQUER método. A varredura faz `if (!m) continue` e pula ele
+ * caladinha: a rota existiria, responderia, e o porteiro nunca teria sido
+ * perguntado sobre ela. Hoje não tem nenhum; esta lista é a armadilha pro dia
+ * em que alguém criar o primeiro.
+ */
+function rotasSemMetodo(): string[] {
+  return (readdirSync(RAIZ_ADMIN, { recursive: true, encoding: 'utf8' }) as string[])
+    .filter((c) => c.endsWith('.ts') && !c.includes('.test.') && !SUFIXO_DE_METODO.test(c))
+}
+
 describe('porteiro das rotas administrativas', () => {
-  it('nenhuma rota sob /api/admin responde sem sessão', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('nenhuma rota sob /api/admin responde sem sessão', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     /*
      * O PISO DA VARREDURA — a trava deste caso, não um detalhe.
@@ -146,18 +179,42 @@ describe('porteiro das rotas administrativas', () => {
      * rotas que eu achei responde sem sessão". Se a varredura quebrar — a
      * pasta muda de lugar, a convenção de nome do arquivo muda, a recursão
      * para de descer — ela devolve uma lista curta, TODA aquela lista passa, e
-     * o caso fica VERDE tendo conferido quase nada. Foi por isso que o piso
-     * `> 3` saiu: com ele, uma varredura que achasse 4 rotas de 68 continuava
-     * verde.
+     * o caso fica VERDE tendo conferido quase nada.
      *
-     * 40 é bem abaixo das 68 de hoje (folga pra rota ser apagada sem vermelho
-     * de mentira) e bem acima da faixa em que a varredura claramente quebrou.
+     * Já foi `> 3` (uma varredura que achasse 4 rotas de 68 passava). Virou
+     * `> 40`, e AINDA passava: medido, com um `continue` na pasta `pdv` — dez
+     * rotas, a superfície do caixa — a varredura devolvia 58 e o caso fechava
+     * `8 passed`. Piso solto não pega quebra parcial, e quebra parcial é a
+     * que acontece.
+     *
+     * Agora são três perguntas, e as três têm que passar:
+     *
+     *  1. a contagem BATE com uma varredura feita por outro mecanismo (o
+     *     `readdirSync` recursivo do Node). Qualquer rota que a recursão à mão
+     *     deixe de enxergar aparece aqui como diferença, seja 1 ou 50;
+     *  2. o número absoluto não desabou (piso 60 pras 68 de hoje — folga pra
+     *     apagar rota sem vermelho de mentira, e trava pro caso das duas
+     *     varreduras quebrarem juntas);
+     *  3. não existe arquivo de rota sem sufixo de método, que é o formato
+     *     que a varredura ignora em silêncio.
      */
     const rotas = rotasAdmin()
+    const arquivos = arquivosDeRota()
+
+    expect(arquivos.length,
+      'a pasta de rotas administrativas encolheu demais — ou a convenção mudou, '
+      + 'e um caso verde aqui não quer dizer que elas estão trancadas')
+      .toBeGreaterThanOrEqual(60)
+
     expect(rotas.length,
-      'a varredura achou rota de menos — ela quebrou, e um caso verde aqui não '
-      + 'quer dizer que as rotas administrativas estão trancadas')
-      .toBeGreaterThan(40)
+      `a varredura à mão achou ${rotas.length} rotas e o Node achou ${arquivos.length}: `
+      + 'ela parou de enxergar parte da árvore, e o que ela não enxerga não é conferido')
+      .toBe(arquivos.length)
+
+    expect(rotasSemMetodo(),
+      'rota sem sufixo de método: o Nitro atende TODOS os verbos nela e a '
+      + 'varredura pula o arquivo — confira o login dela na mão ou renomeie')
+      .toEqual([])
 
     /*
      * A varredura vai em LEVAS, não em fila única.
@@ -175,27 +232,58 @@ describe('porteiro das rotas administrativas', () => {
      */
     const LEVA = 8
     const abertas: string[] = []
+    const mudas: string[] = []
     for (let i = 0; i < rotas.length; i += LEVA) {
       const respostas = await Promise.all(rotas.slice(i, i + LEVA).map(
-        async ({ url, metodo }) => ({
-          url, metodo,
-          status: (await fetch(`${BASE}${url}`, {
-            method: metodo,
-            headers: { 'content-type': 'application/json' },
-            body: metodo === 'GET' ? undefined : '{}',
-          })).status,
-        })))
+        async ({ url, metodo }) => {
+          try {
+            /*
+             * Prazo POR ROTA, não só pelo caso.
+             *
+             * O teto do caso inteiro era 60 s e estourou de verdade, com três
+             * trilhas batendo no mesmo `nuxt dev`: a mensagem foi
+             * `Test timed out in 60000ms`, que não diz QUAL rota travou nem
+             * se travou alguma. Com prazo por rota, uma rota pendurada sai
+             * nomeada na lista `mudas` e as outras 67 continuam sendo
+             * perguntadas — que é a diferença entre um relatório e um susto.
+             */
+            const r = await fetch(`${BASE}${url}`, {
+              method: metodo,
+              headers: { 'content-type': 'application/json' },
+              body: metodo === 'GET' ? undefined : '{}',
+              signal: AbortSignal.timeout(20_000),
+            })
+            return { url, metodo, status: r.status as number | null }
+          } catch {
+            return { url, metodo, status: null }
+          }
+        }))
       // 401 é o esperado. Qualquer outra coisa significa que a rota respondeu
       // (ou validou o corpo) ANTES de exigir login.
       for (const r of respostas) {
-        if (r.status !== 401) abertas.push(`${r.metodo} ${r.url} → ${r.status}`)
+        if (r.status === null) mudas.push(`${r.metodo} ${r.url}`)
+        else if (r.status !== 401) abertas.push(`${r.metodo} ${r.url} → ${r.status}`)
       }
     }
     expect(abertas, 'rota administrativa acessível sem login').toEqual([])
-  }, 60_000)
+    expect(mudas,
+      'rota administrativa que não respondeu em 20 s: ou ela trava, ou o '
+      + 'servidor de dev está afogado — e nos dois casos o login dela NÃO foi conferido')
+      .toEqual([])
+  /*
+   * 180 s, e não 60.
+   *
+   * São 68 perguntas em levas de 8. Com a máquina só pra ela o caso fecha em
+   * menos de 2 s; com outras suítes no mesmo `nuxt dev` já passou de 60 e
+   * reprovou por LENTIDÃO DO VIZINHO — vermelho que não é o defeito é
+   * vermelho que ninguém olha, e some no meio dos de verdade. O que segura
+   * rota pendurada agora é o prazo de 20 s por rota lá em cima, que sai
+   * nomeando a culpada; este teto aqui é só a rede da rede.
+   */
+  }, 180_000)
 
-  it('rota pública continua pública', async () => {
-    if (!noAr) return void console.warn('  (pulado)')
+  it('rota pública continua pública', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     for (const url of [`/api/e/${SLUG}`, '/api/eventos-publicos', '/api/auth/eu']) {
       expect((await fetch(`${BASE}${url}`)).status, url).toBe(200)
     }
@@ -243,8 +331,8 @@ describe('porteiro das rotas administrativas', () => {
       .toEqual([])
   })
 
-  it('senha errada e e-mail inexistente dão a MESMA resposta', async () => {
-    if (!noAr) return void console.warn('  (pulado)')
+  it('senha errada e e-mail inexistente dão a MESMA resposta', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const { q, q1 } = await import('../utils/db')
 
     const tentar = (email: string, senha: string) =>
@@ -284,8 +372,8 @@ describe('porteiro das rotas administrativas', () => {
     expect(gravadas).not.toContain(CONTAS.portaria.email)
   }, TETO_HTTP)
 
-  it('portaria não entra em rota de evento, mas entra na portaria', async () => {
-    if (!noAr) return void console.warn('  (pulado)')
+  it('portaria não entra em rota de evento, mas entra na portaria', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const http = comSessao(await entrar('portaria'))
 
     const evento = await http('/api/admin/eventos')
@@ -297,8 +385,8 @@ describe('porteiro das rotas administrativas', () => {
     expect(portaria.status).toBe(400)
   }, TETO_HTTP)
 
-  it('o segredo da sessão não fica em claro no banco', async () => {
-    if (!noAr) return void console.warn('  (pulado)')
+  it('o segredo da sessão não fica em claro no banco', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const cookie = await entrar('master')
     const segredo = cookie.split('=')[1]
 
@@ -314,8 +402,8 @@ describe('porteiro das rotas administrativas', () => {
     }
   }, TETO_HTTP)
 
-  it('sair revoga a sessão de verdade', async () => {
-    if (!noAr) return void console.warn('  (pulado)')
+  it('sair revoga a sessão de verdade', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const cookie = await entrar('master')
     const http = comSessao(cookie)
 
@@ -325,8 +413,8 @@ describe('porteiro das rotas administrativas', () => {
     expect((await http('/api/admin/eventos')).status).toBe(401)
   }, TETO_HTTP)
 
-  it('recusa POST vindo de outra origem', async () => {
-    if (!noAr) return void console.warn('  (pulado)')
+  it('recusa POST vindo de outra origem', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const cookie = await entrar('master')
     const r = await fetch(`${BASE}/api/admin/evento/id-exemplo/ingressos`, {
       method: 'POST',

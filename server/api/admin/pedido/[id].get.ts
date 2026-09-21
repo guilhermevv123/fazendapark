@@ -6,8 +6,28 @@
  * pessoa ao telefone), e vem o histórico bruto do gateway — cada evento que
  * o Asaas mandou, na ordem. É esse histórico que responde "o cliente jura
  * que pagou": ou tem o evento de pagamento, ou não tem.
+ *
+ * ## O TERCEIRO leitor de `is_courtesy` — este aqui
+ *
+ * Participantes e a tela do comprador já param de confundir "fechou em zero"
+ * com "é cortesia"; esta ficha ainda devolvia `cortesia: t.is_courtesy` cru, e
+ * é ela que o atendente abre com o cliente ao telefone. Medido antes do
+ * conserto, num pedido ONLINE com cupom de 100% (face 4000, desconto 4000,
+ * total 0): `ingressos[0].cortesia = true`. O atendente lia CORTESIA no
+ * ingresso de quem comprou com o cupom que ganhou — e é essa tela que ele usa
+ * pra responder "eu paguei ou me deram?".
+ *
+ * A régua é a mesma da casa (`utils/emissao.ts`), aplicada com o pedido que já
+ * está na mão — o canal dele decide, não o valor. E como aqui os dois recortes
+ * particionam o que saiu de graça, a ficha devolve os DOIS campos, nunca
+ * verdade juntos: `cortesia` (saiu pela porta da cortesia) e `gratuito`
+ * (é VENDA, e ela deu zero: promoção de 100%, criança, lote de R$ 0).
+ *
+ * `origemNaoRegistrada` não existe nesta rota de propósito: os ingressos vêm
+ * todos por `t.order_id = <este pedido>`, então origem aqui sempre existe.
  */
 import { q, q1 } from '../../../utils/db'
+import { eCortesia } from '../../../utils/emissao'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')!
@@ -74,11 +94,20 @@ export default defineEventHandler(async (event) => {
       totalCents: Number(i.unit_total_cents),
       somaCents: Number(i.unit_total_cents) * i.quantity,
     })),
-    ingressos: ingressos.map((t) => ({
-      id: t.id, codigo: t.code, situacao: t.status, titular: t.holder_name,
-      documento: t.holder_document, entrouEm: t.checked_in_at, validadoPor: t.validado_por,
-      cortesia: t.is_courtesy, setor: t.setor, lote: t.lote, tipo: t.tipo,
-    })),
+    ingressos: ingressos.map((t) => {
+      // `is_courtesy` é só "o pedido fechou em zero". Quem decide é a ORIGEM,
+      // e o pedido já está lido aqui — então é a régua em TypeScript, a mesma
+      // que a tela do comprador usa sobre o MESMO ingresso.
+      const cortesia = eCortesia(t.is_courtesy, pedido.channel)
+      return {
+        id: t.id, codigo: t.code, situacao: t.status, titular: t.holder_name,
+        documento: t.holder_document, entrouEm: t.checked_in_at, validadoPor: t.validado_por,
+        cortesia,
+        /** saiu de graça, mas é VENDA: promoção de 100%, criança, lote R$ 0 */
+        gratuito: Boolean(t.is_courtesy) && !cortesia,
+        setor: t.setor, lote: t.lote, tipo: t.tipo,
+      }
+    }),
     gateway: eventos.map((e) => ({
       id: e.id, tipo: e.event_name, em: e.created_at,
       processadoEm: e.processed_at, erro: e.error,

@@ -23,45 +23,77 @@
  *     pico das 14h pras 18h; aceitar o `pessoas` do tablet entrega o público do
  *     evento pra um aparelho que passou a noite fora de rede.
  *
- * Fixture própria, ids fixos, `DELETE` no fim. Nada do evento semeado é
- * tocado. Sem servidor de dev no ar, PULA em vez de falhar.
+ * Fixture própria, `DELETE` no fim. Nada do evento semeado é tocado. Sem
+ * servidor de dev no ar, PULA em vez de falhar — com `ctx.skip()`, que sai
+ * CONTADO como pulado. A saída seca que estava aqui saía como ✓: medido com a
+ * porta fechada, este arquivo imprimia `Tests 36 passed (36)` sem ter
+ * sincronizado uma fila; e com o servidor OCUPADO (proxy segurando a primeira
+ * resposta por 3 s e devolvendo 200) dava a mesma coisa, porque a sonda
+ * esperava 2,5 s, uma vez só.
+ *
+ * Os ids saíram de FIXOS pra marcados por corrida. Com dois `npx vitest run`
+ * ao mesmo tempo no mesmo banco — o dia a dia aqui — o `afterAll` de uma
+ * apagava a organização que a outra estava usando (`tickets_org_id_fkey`), e
+ * o slug fixo batia em `organizations_slug_key`. Ver `scripts/test-setup.ts`.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { db, q } from './db'
+import {
+  anunciarPulo, BASE_DE_TESTE, MARCA_MAIUSCULA, seForaDoArPula, sondarServidor,
+  uuidDaCorrida, type Sonda,
+} from '../../scripts/test-setup'
+import { db, q, tx } from './db'
 import { montarQr } from './ingresso'
 import {
   conferirRelogio, DOCUMENTO_GENERICO, MEIA_SEM_MOTIVO, meiaDoIngresso,
   normalizarFila, retratoDoPublico, SQL_GRAVA_ENTRADA,
 } from './catraca'
+import { emitirNaTransacao, EXIGENCIA_SEM_MOTIVO, exigenciaDeMeia } from './emissao'
+import { documentoExigido } from './meia-entrada'
 
-const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
+const BASE = BASE_DE_TESTE
 
-/* ids fixos, prefixo próprio desta suíte: o teste limpa exatamente o que criou */
-const ORG = '0000e013-0000-4000-8000-000000000001'
-const PORTEIRO = '0000e013-0000-4000-8000-000000000002'
-const EVENTO = '0000e013-0000-4000-8000-000000000003'
-const SESSAO = '0000e013-0000-4000-8000-000000000004'
-const SETOR = '0000e013-0000-4000-8000-000000000006'
-const LOTE = '0000e013-0000-4000-8000-000000000007'
-const SETOR_MESA = '0000e013-0000-4000-8000-000000000008'
-const LOTE_MESA = '0000e013-0000-4000-8000-000000000009'
-const FINANCEIRO = '0000e013-0000-4000-8000-00000000000a'
+/* ids DESTA corrida, prefixo próprio desta suíte: limpa o que criou, e só */
+const fixtura = (n: number) => uuidDaCorrida('utils/catraca', n)
+const ORG = fixtura(1)
+const PORTEIRO = fixtura(2)
+const EVENTO = fixtura(3)
+const SESSAO = fixtura(4)
+const SETOR = fixtura(6)
+const LOTE = fixtura(7)
+const SETOR_MESA = fixtura(8)
+const LOTE_MESA = fixtura(9)
+const FINANCEIRO = fixtura(10)
 /** tipo de ingresso com `kind = 'meia'` (coluna gerada: desconto + documento) */
-const TIPO_MEIA = '0000e013-0000-4000-8000-00000000000b'
+const TIPO_MEIA = fixtura(11)
+/** sessão que só abre daqui a semanas — é nela que mora o cliente que chega cedo */
+const SESSAO_FUTURA = fixtura(12)
 
-const ORG_VIZINHA = '0000e014-0000-4000-8000-000000000001'
-const EVENTO_VIZINHO = '0000e014-0000-4000-8000-000000000003'
-const SETOR_VIZINHO = '0000e014-0000-4000-8000-000000000006'
-const LOTE_VIZINHO = '0000e014-0000-4000-8000-000000000007'
+const ORG_VIZINHA = fixtura(21)
+const EVENTO_VIZINHO = fixtura(23)
+const SETOR_VIZINHO = fixtura(26)
+const LOTE_VIZINHO = fixtura(27)
 
-const EMAIL_PORTEIRO = 'porteiro.fila@entradas.invalido'
-const EMAIL_FINANCEIRO = 'financeiro.fila@entradas.invalido'
+const MARCA_MINUSCULA = MARCA_MAIUSCULA.toLowerCase()
+const EMAIL_PORTEIRO = `porteiro.${MARCA_MINUSCULA}@entradas.invalido`
+const EMAIL_FINANCEIRO = `financeiro.${MARCA_MINUSCULA}@entradas.invalido`
 const SENHA = 'diamond123'
 
-/** um uuid por passagem, como o tablet faria */
-const passagemId = (n: string) => `0000f113-0000-4000-8000-0000000000${n}`
+/**
+ * `code` é UNIQUE na tabela `tickets` inteira — não por evento.
+ *
+ * Com o código fixo, a segunda corrida simultânea reaproveitava o ingresso da
+ * primeira (`ON CONFLICT (code) DO NOTHING` engole calado) e passava a contar
+ * entradas que não eram dela. A marca da corrida separa os dois bancos de
+ * prova sem mudar nada do que o teste pergunta.
+ */
+const cod = (sufixo: string) => `ZZE-${MARCA_MAIUSCULA}-${sufixo}`
 
-let noAr = false
+/** um uuid por passagem, como o tablet faria */
+const passagemId = (n: string) => uuidDaCorrida('utils/catraca-passagem', Number(n))
+
+let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
 let cookie = ''
 let cookieFinanceiro = ''
 
@@ -148,23 +180,66 @@ async function semearMeiaSemMotivo(code: string, forma: 'velha' | 'balcao') {
        : null])
 }
 
-beforeAll(async () => {
-  try {
-    noAr = (await fetch(`${BASE}/api/auth/eu`, { signal: AbortSignal.timeout(2500) })).status < 500
-  } catch { noAr = false }
-  if (!noAr) return
+/**
+ * Uma venda de BALCÃO, pelo caminho de verdade: `emitirNaTransacao`, o mesmo
+ * que `pdv/venda.post.ts` chama dentro da transação do guichê.
+ *
+ * O item nasce SEM as três colunas de meia, exatamente como o PDV insere hoje
+ * (medido em `server/api/admin/evento/[id]/pdv/venda.post.ts`: o INSERT de
+ * `order_items` lista sete colunas e nenhuma delas é `half_*`). É esse buraco
+ * que faz o gatilho da migração 015 não ter o que copiar.
+ */
+let contadorDeVendas = 0
+async function venderNoBalcao(tipo: string | null) {
+  const codigo = `ZZ-BALCAO-${process.pid}-${++contadorDeVendas}`
+  return tx(async (c) => {
+    const ord = await c.query(
+      `INSERT INTO orders (org_id, event_id, code, status, channel,
+                           face_cents, fee_cents, platform_cents, discount_cents, total_cents,
+                           payment_method)
+       VALUES ($1,$2,$3,'aguardando_pagamento','bilheteria', 500,0,0,0,500,'dinheiro')
+       RETURNING id`, [ORG, EVENTO, codigo])
+    const orderId = ord.rows[0].id
 
+    await c.query(
+      `INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity,
+                                unit_face_cents, unit_fee_cents, unit_total_cents)
+       VALUES ($1,$2,$3,1,500,0,500)`, [orderId, LOTE, tipo])
+
+    // `confirmar()` exige reserva em pé — no guichê ela foi feita um instante
+    // antes, no mesmo commit. Sem isto a emissão estoura por outro motivo e o
+    // teste passaria a provar outra coisa.
+    await c.query(`UPDATE lots SET reserved = reserved + 1 WHERE id = $1`, [LOTE])
+
+    const emissao = await emitirNaTransacao(c, orderId)
+    const { rows } = await c.query(
+      `SELECT code, half_reason, half_document, half_document_required
+         FROM tickets WHERE order_id = $1`, [orderId])
+    return { emissao, ingressos: rows as any[] }
+  })
+}
+
+beforeAll(async () => {
+  sonda = await sondarServidor()
+  anunciarPulo('server/utils/catraca.test.ts', sonda)
+  if (!sonda.noAr) return
+
+  // nome e slug também levam a marca: `organizations_slug_key` e o slug do
+  // evento são UNIQUE, e `ON CONFLICT (id)` não cobre conflito em OUTRO
+  // índice único — foi esse o erro da segunda corrida simultânea.
   for (const [org, nome, slug] of [
-    [ORG, 'ZZ ENTRADAS CASA', 'zz-entradas-casa'],
-    [ORG_VIZINHA, 'ZZ ENTRADAS VIZINHA', 'zz-entradas-vizinha'],
+    [ORG, `ZZ ENTRADAS CASA ${MARCA_MAIUSCULA}`, `zz-entradas-casa-${MARCA_MINUSCULA}`],
+    [ORG_VIZINHA, `ZZ ENTRADAS VIZINHA ${MARCA_MAIUSCULA}`,
+     `zz-entradas-vizinha-${MARCA_MINUSCULA}`],
   ] as const) {
     await q(`INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3)
              ON CONFLICT (id) DO NOTHING`, [org, nome, slug])
   }
 
   for (const [ev, org, nome, slug] of [
-    [EVENTO, ORG, 'ZZ ENTRADAS', 'zz-entradas-ev'],
-    [EVENTO_VIZINHO, ORG_VIZINHA, 'ZZ ENTRADAS VZ', 'zz-entradas-vz-ev'],
+    [EVENTO, ORG, `ZZ ENTRADAS ${MARCA_MAIUSCULA}`, `zz-entradas-ev-${MARCA_MINUSCULA}`],
+    [EVENTO_VIZINHO, ORG_VIZINHA, `ZZ ENTRADAS VZ ${MARCA_MAIUSCULA}`,
+     `zz-entradas-vz-ev-${MARCA_MINUSCULA}`],
   ] as const) {
     await q(
       `INSERT INTO events (id, org_id, name, slug, starts_at, ends_at, status)
@@ -176,6 +251,15 @@ beforeAll(async () => {
     `INSERT INTO event_sessions (id, event_id, starts_at, ends_at, title)
      VALUES ($1,$2, now() - interval '1 hour', now() + interval '8 hours', 'Aberta')
      ON CONFLICT (id) DO NOTHING`, [SESSAO, EVENTO])
+
+  // A sessão de daqui a três semanas: é o estado em que os 23 ingressos de
+  // meia do evento semeado desta instalação estão hoje, e o estado em que o
+  // cliente pergunta "o que eu preciso levar?" enquanto ainda dá tempo de
+  // voltar em casa buscar.
+  await q(
+    `INSERT INTO event_sessions (id, event_id, starts_at, ends_at, title)
+     VALUES ($1,$2, now() + interval '21 days', now() + interval '21 days 8 hours', 'Ainda vem')
+     ON CONFLICT (id) DO NOTHING`, [SESSAO_FUTURA, EVENTO])
 
   // Setor comum (1 pessoa) e setor MESA (4 pessoas por unidade vendida) — é o
   // par que separa "contar leitura" de "contar gente".
@@ -232,24 +316,73 @@ beforeAll(async () => {
 }, 40_000)
 
 afterAll(async () => {
-  if (!noAr) return
+  if (!sonda.noAr) return
   await q(`DELETE FROM organizations WHERE id = ANY($1::uuid[])`, [[ORG, ORG_VIZINHA]])
   await db().end()
 })
 
-const pulado = () => void console.warn('  (pulado: servidor fora do ar)')
 
 describe('fila da portaria offline', () => {
-  it('o porteiro entrou (senão nada abaixo prova nada)', async () => {
-    if (!noAr) return pulado()
+  /**
+   * A TRAVA DA FIXTURA DESTA CORRIDA — e por que ela é um caso, não um comentário.
+   *
+   * Não precisa de servidor: lê o próprio arquivo. A corrida simultânea que
+   * expõe o defeito é, por definição, corrida de sorte; o que dá pra travar é a
+   * REGRA que a evita. Duas partes, e as duas já falharam de verdade aqui:
+   *
+   *  1. **nenhum id de fixtura é literal.** Com uuid fixo, duas corridas no
+   *     mesmo banco disputam a MESMA linha, e o `afterAll` de uma apaga a
+   *     organização que a outra está usando — medido:
+   *     `insert or update on table "tickets" violates foreign key constraint
+   *     "tickets_org_id_fkey"`, com os 12 casos saindo como "skipped";
+   *
+   *  2. **nenhum `code` de ingresso é literal.** `tickets.code` é UNIQUE na
+   *     tabela inteira: o `ON CONFLICT (code) DO NOTHING` da segunda corrida não
+   *     insere nada, calado, e ela passa a ler o ingresso da primeira — de outra
+   *     organização, de outro evento. A porta responde `invalido` e a mensagem
+   *     fala de assinatura. Este foi o defeito que sobreviveu à primeira rodada
+   *     do conserto, justamente porque os literais estavam DENTRO dos casos e
+   *     só os do topo tinham sido marcados.
+   *
+   * Comentário não é conferido: o corpo do arquivo é lido sem comentário pra
+   * esta varredura não acusar os parágrafos que explicam o defeito.
+   */
+  it('a fixtura é da corrida, não do repositório', () => {
+    const fonte = readFileSync(new URL(import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .map((linha) => {
+        const barras = linha.search(/(^|[^:])\/\//)
+        return barras >= 0 ? linha.slice(0, linha.indexOf('//', barras)) : linha
+      })
+      .join('\n')
+
+    const uuidsFixos = fonte.match(/'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'/g) ?? []
+    expect(uuidsFixos, 'id de fixtura literal: duas corridas disputam a mesma linha')
+      .toEqual([])
+
+    const codigosFixos = fonte.match(/'ZZ[A-Z]-[A-Z0-9]+-[A-Z0-9]+'/g) ?? []
+    expect(codigosFixos, '`code` literal: `tickets.code` é UNIQUE e a segunda corrida lê o ingresso da primeira')
+      .toEqual([])
+
+    // A varredura achou ALGUMA coisa? Sem isto, um dia a regex para de casar e
+    // as duas listas ficam vazias afirmando saúde que ninguém conferiu.
+    expect(fonte, 'a fixtura parou de carregar a marca da corrida').toContain('MARCA_MAIUSCULA')
+    expect(fonte.match(/uuidDaCorrida\(/g)?.length ?? 0,
+      'nenhum id sai mais de `uuidDaCorrida` — a marca da corrida sumiu')
+      .toBeGreaterThan(0)
+  })
+
+  it('o porteiro entrou (senão nada abaixo prova nada)', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     expect(cookie, 'login do porteiro falhou — o teste ficaria verde à toa').toBeTruthy()
   }, 20_000)
 
-  it('a MESMA fila sincronizada duas vezes conta cada pessoa uma vez', async () => {
-    if (!noAr) return pulado()
+  it('a MESMA fila sincronizada duas vezes conta cada pessoa uma vez', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const a = 'ZZE-FILA-AAAA'
-    const b = 'ZZE-FILA-BBBB'
+    const a = cod('FILA-AAAA')
+    const b = cod('FILA-BBBB')
     await semearIngresso(a)
     await semearIngresso(b)
 
@@ -289,10 +422,10 @@ describe('fila da portaria offline', () => {
     expect((await passagensDe(b)).length).toBe(1)
   }, 30_000)
 
-  it('id repetido dentro da mesma remessa não vira duas pessoas', async () => {
-    if (!noAr) return pulado()
+  it('id repetido dentro da mesma remessa não vira duas pessoas', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const c = 'ZZE-FILA-CCCC'
+    const c = cod('FILA-CCCC')
     await semearIngresso(c)
     const item = { id: passagemId('03'), qr: montarQr(c, EVENTO), gate: 'NORTE',
                    em: new Date().toISOString(), offline: true }
@@ -303,10 +436,10 @@ describe('fila da portaria offline', () => {
     expect((await passagensDe(c)).length).toBe(1)
   }, 30_000)
 
-  it('dois tablets sem rede deixam o mesmo QR entrar — e o conflito APARECE', async () => {
-    if (!noAr) return pulado()
+  it('dois tablets sem rede deixam o mesmo QR entrar — e o conflito APARECE', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const d = 'ZZE-FILA-DDDD'
+    const d = cod('FILA-DDDD')
     await semearIngresso(d)
     const qr = montarQr(d, EVENTO)
     const h1 = new Date(Date.now() - 60 * 60_000).toISOString()
@@ -338,10 +471,10 @@ describe('fila da portaria offline', () => {
     expect(new Date(t.checked_in_at).getTime()).toBe(new Date(h1).getTime())
   }, 30_000)
 
-  it('a hora é a da passagem no tablet, não a da sincronização', async () => {
-    if (!noAr) return pulado()
+  it('a hora é a da passagem no tablet, não a da sincronização', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const e = 'ZZE-FILA-EEEE'
+    const e = cod('FILA-EEEE')
     await semearIngresso(e)
     const passou = new Date(Date.now() - 4 * 3600_000).toISOString()
 
@@ -362,10 +495,10 @@ describe('fila da portaria offline', () => {
       'o ingresso ficou com a hora da sincronização').toBe(new Date(passou).getTime())
   }, 30_000)
 
-  it('mesa de 4 conta 4 pessoas, e o número do tablet é ignorado', async () => {
-    if (!noAr) return pulado()
+  it('mesa de 4 conta 4 pessoas, e o número do tablet é ignorado', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const f = 'ZZE-FILA-FFFF'
+    const f = cod('FILA-FFFF')
     await semearIngresso(f, SETOR_MESA, LOTE_MESA)
 
     const antes = await livroDoEvento()
@@ -385,10 +518,10 @@ describe('fila da portaria offline', () => {
     expect(depois.pessoas - antes.pessoas, 'uma mesa de 4 entrou contando 1 pessoa').toBe(4)
   }, 30_000)
 
-  it('ingresso de outra organização não entra no livro pela fila', async () => {
-    if (!noAr) return pulado()
+  it('ingresso de outra organização não entra no livro pela fila', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const vz = 'ZZE-FILA-VIZI'
+    const vz = cod('FILA-VIZI')
     await semearIngresso(vz, SETOR_VIZINHO, LOTE_VIZINHO, ORG_VIZINHA, EVENTO_VIZINHO, null)
 
     // O porteiro da CASA manda na fila dele um ingresso legítimo da vizinha,
@@ -403,10 +536,10 @@ describe('fila da portaria offline', () => {
     expect((await ingresso(vz)).status).toBe('valido')
   }, 30_000)
 
-  it('QR fabricado não vira gente no relatório', async () => {
-    if (!noAr) return pulado()
+  it('QR fabricado não vira gente no relatório', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const g = 'ZZE-FILA-GGGG'
+    const g = cod('FILA-GGGG')
     await semearIngresso(g)
     const antes = await livroDoEvento()
 
@@ -419,8 +552,8 @@ describe('fila da portaria offline', () => {
     expect((await ingresso(g)).status).toBe('valido')
   }, 30_000)
 
-  it('quem não é da portaria não sincroniza fila nenhuma', async () => {
-    if (!noAr) return pulado()
+  it('quem não é da portaria não sincroniza fila nenhuma', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     // `role = 'admin'` passa pela grade grossa legada. Se esta rota tivesse
     // nascido sem consultar a grade fina — e ela nasce assim, porque
@@ -429,10 +562,10 @@ describe('fila da portaria offline', () => {
     expect(r.status, 'o financeiro sincronizou a portaria').toBe(403)
   }, 30_000)
 
-  it('a leitura online também vai pro livro, e a recusa diz por onde a pessoa entrou', async () => {
-    if (!noAr) return pulado()
+  it('a leitura online também vai pro livro, e a recusa diz por onde a pessoa entrou', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const h = 'ZZE-FILA-HHHH'
+    const h = cod('FILA-HHHH')
     await semearIngresso(h)
 
     const r1 = await ler(montarQr(h, EVENTO), 'PORTAO-VIP')
@@ -471,10 +604,10 @@ describe('fila da portaria offline', () => {
    * nenhum teste a exercitava: trocar `entradaId ?? randomUUID()` por
    * `randomUUID()` em `checkin.post.ts` deixava a suíte inteira VERDE.
    */
-  it('recibo perdido: a passagem que voltou pela fila não vira uma segunda pessoa', async () => {
-    if (!noAr) return pulado()
+  it('recibo perdido: a passagem que voltou pela fila não vira uma segunda pessoa', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const i = 'ZZE-FILA-IIII'
+    const i = cod('FILA-IIII')
     // mesa de 4 de propósito: se o erro voltar, ele volta em quádruplo
     await semearIngresso(i, SETOR_MESA, LOTE_MESA)
     const qr = montarQr(i, EVENTO)
@@ -522,10 +655,10 @@ describe('fila da portaria offline', () => {
    * Aqui a instrução compartilhada é chamada na mão, que é o único jeito de
    * travar a cerca onde ela de fato está.
    */
-  it('o livro recusa ingresso de outra organização mesmo chamado direto', async () => {
-    if (!noAr) return pulado()
+  it('o livro recusa ingresso de outra organização mesmo chamado direto', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const vz = 'ZZE-FILA-CERCA'
+    const vz = cod('FILA-CERCA')
     await semearIngresso(vz, SETOR_VIZINHO, LOTE_VIZINHO, ORG_VIZINHA, EVENTO_VIZINHO, null)
     const [t] = await q<any>(`SELECT id FROM tickets WHERE code = $1`, [vz])
 
@@ -542,8 +675,8 @@ describe('fila da portaria offline', () => {
       'o livro recusou o ingresso da própria organização').toBe(1)
   }, 30_000)
 
-  it('o público sai de sum(people): a resposta bate com o banco', async () => {
-    if (!noAr) return pulado()
+  it('o público sai de sum(people): a resposta bate com o banco', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const r = await sincronizar({ deviceId: 'TABLET-NORTE', fila: [] })
     const banco = await livroDoEvento()
     // A rota responde o público do EVENTO; o livro conta o mesmo evento.
@@ -567,11 +700,11 @@ describe('fila da portaria offline', () => {
    * O que NÃO pode acontecer no conserto: descartar a passagem. A pessoa
    * passou pela roleta. O que é recusado é o INSTANTE.
    */
-  it('relógio do tablet fora da janela do evento não entra no livro', async () => {
-    if (!noAr) return pulado()
+  it('relógio do tablet fora da janela do evento não entra no livro', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const velho = 'ZZE-FILA-RLG1'
-    const futuro = 'ZZE-FILA-RLG2'
+    const velho = cod('FILA-RLG1')
+    const futuro = cod('FILA-RLG2')
     await semearIngresso(velho)
     await semearIngresso(futuro)
 
@@ -628,10 +761,10 @@ describe('fila da portaria offline', () => {
    * cobre a borda longe: uma fila de ONTEM à noite, dentro da janela do
    * evento, que só subiu agora.
    */
-  it('a hora boa do tablet continua passando — a cerca não carimba tudo com now()', async () => {
-    if (!noAr) return pulado()
+  it('a hora boa do tablet continua passando — a cerca não carimba tudo com now()', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const j = 'ZZE-FILA-RLG3'
+    const j = cod('FILA-RLG3')
     await semearIngresso(j)
     // o evento da fixture abre 1h atrás e fecha em 8h; 50 minutos atrás é uma
     // passagem legítima que o servidor não tem por que reescrever
@@ -663,10 +796,10 @@ describe('fila da portaria offline', () => {
    * exige que o retrato continue contando a pessoa. Voltar o numerador pra
    * `status = 'usado'` deixa o teste vermelho na hora.
    */
-  it('o retrato do público conta o livro, não o carimbo do ingresso', async () => {
-    if (!noAr) return pulado()
+  it('o retrato do público conta o livro, não o carimbo do ingresso', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const k = 'ZZE-FILA-KPI1'
+    const k = cod('FILA-KPI1')
     await semearIngresso(k)
     await sincronizar({ deviceId: 'TABLET-NORTE', fila: [
       { id: passagemId('16'), qr: montarQr(k, EVENTO), gate: 'NORTE',
@@ -710,10 +843,10 @@ describe('fila da portaria offline', () => {
    * só o nome do tipo ("Meia-entrada"), sem saber QUAL papel pedir — que é
    * exatamente o problema que aquela migração existe pra resolver.
    */
-  it('a portaria lê o que foi carimbado na meia — online e na lista offline', async () => {
-    if (!noAr) return pulado()
+  it('a portaria lê o que foi carimbado na meia — online e na lista offline', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const m = 'ZZE-FILA-MEIA'
+    const m = cod('FILA-MEIA')
     await semearMeia(m)
 
     // 1. "só conferir": a pergunta que o operador faz ANTES de deixar entrar
@@ -725,6 +858,19 @@ describe('fila da portaria offline', () => {
     })
     const c = await consulta.json() as any
     expect(c.resultado, JSON.stringify(c)).toBe('ok')
+    // O veredito do ingresso BOM, e ele precisa estar preso aqui: desde que a
+    // consulta passou a responder fora do horário, `ok` deixou de ser o
+    // literal `true` e virou conta (`!foraDaSessao`). Medido: trocando essa
+    // conta por `false`, a suíte INTEIRA seguia verde — e na tela o operador
+    // lia "AINDA NÃO" em faixa laranja num ingresso sem defeito nenhum, que é
+    // a classe de bug que só aparece olhando.
+    expect(c.ok,
+      'a consulta de um ingresso bom, dentro do horário, deixou de dizer que ele vale')
+      .toBe(true)
+    expect(c.mensagem, 'a consulta boa mudou de frase na cara do operador')
+      .toBe('Válido (não marcado)')
+    expect(c.consulta, 'a resposta parou de se identificar como consulta: a tela decide '
+      + 'entre "VÁLIDO" e "PODE ENTRAR" por este campo').toBe(true)
     expect(c.ingresso?.meia, 'a consulta não diz que o ingresso é meia-entrada').toBeTruthy()
     expect(c.ingresso.meia.rotulo).toBe('Estudante')
     expect(c.ingresso.meia.documento,
@@ -748,7 +894,7 @@ describe('fila da portaria offline', () => {
 
     // 4. ingresso inteira não ganha bloco de meia — senão a tela pede
     //    documento de todo mundo e o operador para de ler o aviso
-    const inteira = 'ZZE-FILA-INTE'
+    const inteira = cod('FILA-INTE')
     await semearIngresso(inteira)
     const ri = await ler(montarQr(inteira, EVENTO), 'PORTAO-MEIA')
     expect(ri.corpo.ingresso?.meia,
@@ -773,11 +919,11 @@ describe('fila da portaria offline', () => {
    * congelado do passo 5 da 015) e a do BALCÃO (não tem nem motivo nem texto;
    * só o tipo diz que é meia).
    */
-  it('a meia sem motivo — a velha e a do balcão — também diz qual papel pedir', async () => {
-    if (!noAr) return pulado()
+  it('a meia sem motivo — a velha e a do balcão — também diz qual papel pedir', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const velha = 'ZZE-MEIA-VELH'
-    const balcao = 'ZZE-MEIA-BALC'
+    const velha = cod('MEIA-VELH')
+    const balcao = cod('MEIA-BALC')
     await semearMeiaSemMotivo(velha, 'velha')
     await semearMeiaSemMotivo(balcao, 'balcao')
 
@@ -814,6 +960,149 @@ describe('fila da portaria offline', () => {
   }, 30_000)
 
   /**
+   * A meia que NASCE hoje no balcão chega na porta dizendo que é meia.
+   *
+   * ## O que estava errado, medido no banco em 21/09
+   *
+   * ```
+   * SELECT tt.kind, count(*), count(t.half_reason) FROM tickets t
+   *   JOIN ticket_types tt ON tt.id = t.ticket_type_id GROUP BY 1;
+   *   meia | 23 | 0
+   * ```
+   *
+   * Zero. E não é dívida de linha velha só: `pdv/venda.post.ts` insere
+   * `order_items` sem nenhuma coluna `half_*`, o gatilho da 015 copia do item
+   * (não tem o que copiar) e a `RAISE` daquela migração é restrita ao canal
+   * `online`. Então a meia vendida no guichê HOJE nasce com as três colunas
+   * nulas, e a única coisa no banco que sabe que aquele ingresso é meia é
+   * `ticket_types.kind` — coluna de outra tabela, que qualquer consulta pode
+   * esquecer de trazer. Foi exatamente esse esquecimento que deixou a portaria
+   * cega até a frota passada.
+   *
+   * Este teste prova que o ingresso passa a carregar a exigência no PRÓPRIO
+   * corpo, e prova as duas metades que se equilibram:
+   *
+   *  • a exigência é gravada (≠ NULL), então a porta não depende de JOIN;
+   *  • o MOTIVO continua nulo, porque ninguém perguntou. Carimbar "estudante"
+   *    aqui deixaria a portaria conferindo o papel errado e apagaria pra sempre
+   *    a chance de contar quantos ficaram sem.
+   */
+  it('a meia do balcão nasce com a exigência carimbada — e sem motivo inventado', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+
+    const { emissao, ingressos } = await venderNoBalcao(TIPO_MEIA)
+    expect(emissao.emitiu, JSON.stringify(emissao)).toBe(true)
+    expect(ingressos.length).toBe(1)
+    const t = ingressos[0]
+
+    expect(t.half_document_required,
+      'a meia do balcão nasceu muda: nada no corpo do ingresso diz que há documento a pedir')
+      .toBe(EXIGENCIA_SEM_MOTIVO)
+    expect(t.half_reason,
+      'a emissão inventou um motivo que ninguém declarou — rastro falso é pior que faltando')
+      .toBeNull()
+    expect(emissao.meiasSemMotivo,
+      'a emissão não relatou que saiu meia sem motivo, e o número não chega ao produtor')
+      .toBe(1)
+
+    // E a porta lê isso. Sem `tt.kind` na consulta o ingresso continuaria
+    // reconhecido, que é o ponto: a prova saiu do JOIN e entrou no ingresso.
+    const r = await ler(montarQr(t.code, EVENTO), 'PORTAO-BALCAO')
+    expect(r.corpo.resultado, JSON.stringify(r.corpo)).toBe('ok')
+    expect(r.corpo.ingresso?.meia?.documento,
+      'a exigência carimbada na emissão não chegou na portaria')
+      .toBe(EXIGENCIA_SEM_MOTIVO)
+    expect(r.corpo.ingresso.meia.motivo,
+      'a porta passou a afirmar um motivo que o ingresso não tem').toBeNull()
+  }, 30_000)
+
+  /**
+   * O contrapeso do teste acima: ingresso que NÃO é meia não pode sair
+   * carimbado.
+   *
+   * Um aviso que aparece em todo mundo é um aviso que o operador aprende a
+   * pular — e aí ele pula justamente no ingresso que precisava de conferência.
+   * Sem este teste, "carimbar sempre" é implementado como "carimbar tudo" e
+   * ninguém percebe até a portaria parar de olhar.
+   */
+  it('inteira vendida no mesmo guichê não ganha carimbo de documento', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+
+    const { emissao, ingressos } = await venderNoBalcao(null)
+    expect(emissao.emitiu, JSON.stringify(emissao)).toBe(true)
+    expect(ingressos[0].half_document_required,
+      'ingresso sem espécie de meia saiu pedindo documento').toBeNull()
+    expect(emissao.meiasSemMotivo).toBe(0)
+
+    const r = await ler(montarQr(ingressos[0].code, EVENTO), 'PORTAO-BALCAO')
+    expect(r.corpo.ingresso?.meia,
+      'inteira apareceu na porta como meia-entrada').toBeFalsy()
+  }, 30_000)
+
+  /**
+   * "Só conferir" responde mesmo fora do horário da sessão.
+   *
+   * Medido antes do conserto, nesta instalação: os 23 ingressos de meia do
+   * evento semeado estão numa sessão que abre em outubro, e
+   * `POST /api/checkin {apenasConsultar:true}` em qualquer um deles devolvia
+   * `{resultado:'fora_da_sessao', mensagem:'Fora do horário desta sessão'}` e
+   * mais nada — sem titular, sem setor, sem o bloco de meia. O operador
+   * pergunta "o que este cliente precisa trazer?" e recebe silêncio.
+   *
+   * É a pior hora possível pra receber silêncio: quem chega cedo é justamente
+   * quem ainda tem tempo de ir buscar a carteira de estudante em casa. A
+   * consulta não marca nada e não registra leitura — recusar a RESPOSTA não
+   * protege coisa nenhuma.
+   *
+   * O que ela não pode é mentir: o veredito segue negativo. As duas coisas
+   * juntas são a prova — dados presentes E `ok: false`.
+   */
+  it('"só conferir" fora do horário responde o que pedir, sem dizer que pode entrar', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+
+    // um ingresso de meia na sessão que só abre daqui a três semanas
+    const cedo = cod('MEIA-CEDO')
+    await q(
+      `INSERT INTO tickets (org_id, event_id, session_id, sector_id, lot_id,
+                            ticket_type_id, code, qr_secret, status, holder_name,
+                            half_document_required)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'teste','valido','Chegou Cedo',$8)
+       ON CONFLICT (code) DO NOTHING`,
+      [ORG, EVENTO, SESSAO_FUTURA, SETOR, LOTE, TIPO_MEIA, cedo, EXIGENCIA_SEM_MOTIVO])
+
+    const r = await fetch(`${BASE}/api/checkin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin: BASE },
+      body: JSON.stringify({ qr: montarQr(cedo, EVENTO), eventId: EVENTO,
+                             gate: 'NORTE', apenasConsultar: true }),
+    })
+    const c = await r.json() as any
+
+    expect(c.ingresso,
+      'a consulta fora do horário voltou vazia — o operador recebeu silêncio')
+      .toBeTruthy()
+    expect(c.ingresso.meia?.documento,
+      'o cliente que chegou cedo não descobriu qual papel precisa trazer')
+      .toBe(EXIGENCIA_SEM_MOTIVO)
+    expect(c.ok,
+      'a consulta disse que pode entrar fora do horário da sessão').toBe(false)
+    expect(c.resultado).toBe('fora_da_sessao')
+    expect(c.consulta, 'a consulta deixou de se identificar como consulta').toBe(true)
+
+    // E o ingresso NÃO foi queimado: consulta não marca.
+    const depois = await ingresso(cedo)
+    expect(depois.status,
+      '"só conferir" marcou entrada — o ingresso foi queimado antes da hora')
+      .toBe('valido')
+
+    // A validação de verdade continua barrando, e continua registrando.
+    const real = await ler(montarQr(cedo, EVENTO), 'PORTAO-CEDO')
+    expect(real.corpo.resultado,
+      'o conserto da consulta abriu a porta fora do horário').toBe('fora_da_sessao')
+    expect((await ingresso(cedo)).status).toBe('valido')
+  }, 30_000)
+
+  /**
    * A faixa do relógio torto descreve UMA passagem — e tem que ser a mesma nas
    * três partes.
    *
@@ -822,11 +1111,11 @@ describe('fila da portaria offline', () => {
    * passagem no futuro — a pior marcava 01/01/1970, 00:00": a frase não fecha,
    * e o operador manda acertar a coisa errada.
    */
-  it('a faixa do relógio descreve a MESMA passagem no motivo e na hora', async () => {
-    if (!noAr) return pulado()
+  it('a faixa do relógio descreve a MESMA passagem no motivo e na hora', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
-    const f = 'ZZE-FILA-RLG4'
-    const g = 'ZZE-FILA-RLG5'
+    const f = cod('FILA-RLG4')
+    const g = cod('FILA-RLG5')
     await semearIngresso(f)
     await semearIngresso(g)
 
@@ -880,6 +1169,49 @@ describe('meiaDoIngresso (sem banco)', () => {
     expect(meiaDoIngresso({ especie: 'gratuito' })).toBeNull()
     expect(meiaDoIngresso({}), 'ingresso sem tipo virou meia').toBeNull()
     expect(meiaDoIngresso(null)).toBeNull()
+  })
+})
+
+/**
+ * A régua que decide o que fica congelado no ingresso de meia.
+ *
+ * Mora aqui, no arquivo da portaria, porque é a portaria que sofre quando ela
+ * erra: o operador com fila na frente lendo um ingresso que não diz qual papel
+ * pedir é o sintoma, e a emissão é a causa.
+ */
+describe('exigenciaDeMeia (sem banco)', () => {
+  it('o texto congelado na compra vence tudo — foi o que foi prometido', () => {
+    expect(exigenciaDeMeia({
+      especie: 'meia', motivoDaMeia: 'idoso',
+      exigenciaCongelada: 'Certidão de nascimento — redação da época da compra',
+    })).toBe('Certidão de nascimento — redação da época da compra')
+  })
+
+  it('com motivo e sem texto, o texto sai da tabela de motivos', () => {
+    expect(exigenciaDeMeia({ especie: 'meia', motivoDaMeia: 'estudante' }))
+      .toBe(documentoExigido('estudante'))
+  })
+
+  it('sem motivo nenhum, o carimbo é explícito — e explícito não é NULL', () => {
+    const sem = exigenciaDeMeia({ especie: 'meia' })
+    expect(sem, 'a meia sem motivo voltou a nascer muda').toBe(EXIGENCIA_SEM_MOTIVO)
+    expect(sem).not.toBeNull()
+  })
+
+  it('motivo fora da lista não vira texto inventado', () => {
+    // dado velho, importação, rota de fora: o vocabulário é fechado por lei
+    // (db/015 e utils/meia-entrada.ts). Traduzir um motivo desconhecido seria
+    // mandar o operador pedir um papel que ninguém prometeu.
+    expect(exigenciaDeMeia({ especie: 'meia', motivoDaMeia: 'amigo_do_dono' }))
+      .toBe(EXIGENCIA_SEM_MOTIVO)
+  })
+
+  it('inteira e gratuidade não ganham exigência — aviso em todo mundo ninguém lê', () => {
+    expect(exigenciaDeMeia({ especie: 'inteira', motivoDaMeia: 'estudante' })).toBeNull()
+    expect(exigenciaDeMeia({ especie: 'gratuito' })).toBeNull()
+    // lote sem variação vende com `ticket_type_id` nulo: sem espécie, sem meia
+    expect(exigenciaDeMeia({ especie: null })).toBeNull()
+    expect(exigenciaDeMeia({})).toBeNull()
   })
 })
 
@@ -983,5 +1315,118 @@ describe('retratoDoPublico (sem banco)', () => {
 
   it('acima de 10% o número é inteiro — casa decimal ali é ruído', () => {
     expect(retratoDoPublico({ ingressos: 137, aptos: 442 }).comparecimentoPct).toBe(31)
+  })
+})
+
+/* ===========================================================================
+ * A faixa da meia sem motivo, e a marca de lista cortada que ela precisa
+ * ======================================================================== */
+
+/**
+ * A contagem que o leitor de entrada mostra pro produtor ("N de M meias deste
+ * evento sem motivo registrado") sai da LISTA baixada pelo tablet. Quando o
+ * servidor corta essa lista no teto (20 mil ingressos), a contagem cobre um
+ * pedaço do evento e a faixa tem que DIZER isso.
+ *
+ * ## O defeito, medido
+ *
+ * A marca do corte morava só em memória (`const listaTruncada = ref(false)`).
+ * `onMounted` restaurava a lista do `localStorage` — `{ em, ingressos }` — e
+ * mais nada, então depois de um F5 a marca voltava `false` com a lista cortada
+ * intacta na tela. Rodando o que a tela faz, linha por linha:
+ *
+ *     baixou (truncada: true) -> parcial = true
+ *     reabriu                 -> parcial = false   <-- a faixa mente
+ *
+ * E o F5 não é hipótese aqui: este leitor é a única tela do sistema feita pra
+ * **reabrir sem rede** (service worker + lista no `localStorage`). Reaberta
+ * offline, `sincronizar()` não roda e nada redescobre o corte — a faixa passa
+ * a apresentar um número parcial como se fosse o do evento inteiro, que é
+ * exatamente o que o comentário dela diz que ela existe pra não fazer.
+ *
+ * ## Por que o teste lê o fonte
+ *
+ * A trava é a gravação e a leitura andarem JUNTAS: uma gravação de
+ * `CHAVE_LISTA` que esqueça `truncada` desfaz o conserto sozinha, mesmo com o
+ * resto no lugar. O que este caso prende é que existe UM caminho de gravação
+ * (`guardarLista`) e que ele carrega a marca — e que a montagem a lê de volta.
+ * Montar a página inteira aqui exigiria `useRoute`, `$fetch`, service worker e
+ * `navigator.onLine` de mentira, e o que sobraria provado seria o dublê.
+ */
+describe('leitor de entrada — a marca de lista cortada sobrevive ao F5', () => {
+  const TELA = join(import.meta.dirname, '../../app/pages/admin/evento/[id]/validacao/index.vue')
+  const fonte = () => readFileSync(TELA, 'utf8')
+
+  it('a lista só é gravada por um caminho, e ele carrega a marca do corte', () => {
+    const tela = fonte()
+
+    // A varredura acha alguma coisa? Sem isto, a tela pode ter sido renomeada
+    // e os dois casos abaixo passariam afirmando saúde que ninguém conferiu.
+    expect(tela, 'a faixa da meia sem motivo sumiu da tela')
+      .toContain('meia(s)-entrada(s) deste evento sem motivo registrado')
+    expect(tela, 'a faixa parou de perguntar se a contagem está parcial')
+      .toContain('meiasDoEvento.parcial')
+
+    const gravacoes = tela.match(/guardar\(CHAVE_LISTA,/g) ?? []
+    expect(gravacoes.length,
+      'a lista voltou a ser gravada em mais de um lugar: a gravação que esquecer '
+      + '`truncada` apaga a marca do corte sozinha')
+      .toBe(1)
+
+    const guardarLista = tela.slice(tela.indexOf('function guardarLista()'))
+      .slice(0, tela.slice(tela.indexOf('function guardarLista()')).indexOf('\n}') + 2)
+    expect(guardarLista,
+      'a gravação da lista não leva a marca do corte: depois do F5 a faixa '
+      + 'apresenta uma contagem parcial como se fosse a do evento inteiro')
+      .toContain('truncada: listaTruncada.value')
+  })
+
+  /**
+   * Os dois casos da meia não podem voltar a ser a mesma tela.
+   *
+   * O defeito original: com motivo e sem motivo renderizavam idênticos — mesmo
+   * título de 24px, mesmo rótulo auxiliar em cinza — e a ausência de motivo
+   * aparecia só como um texto ocupando o lugar do motivo. Com o tablet na mão e
+   * sol batendo, o operador não repara.
+   *
+   * O que prende aqui é a DIFERENÇA: o bloco sem motivo tem borda de alerta e
+   * título maior, e diz o que pedir. Colapsar os dois num `v-if` só (que é o
+   * jeito natural de "simplificar" isto) fica vermelho.
+   *
+   * As medidas vêm do CSS compilado, não de fé: `text-3xl` = 1,875rem = 30px,
+   * `border-4` = 4px e `border-alerta` = rgb(178 106 0) — conferidos em
+   * `.output/public/_nuxt/entry.*.css` depois do `npm run build`. Classe que
+   * não existe não gera nada, e `app/composables/telas.test.ts` varre isso pra
+   * todas as telas.
+   */
+  it('a meia sem motivo é um bloco de natureza diferente, não o mesmo com outro texto', () => {
+    const tela = fonte()
+
+    expect(tela, 'o bloco da meia COM motivo sumiu')
+      .toContain('v-if="ultima.ingresso?.meia?.motivo"')
+    expect(tela, 'os dois casos da meia voltaram a ser o mesmo bloco: sem motivo declarado '
+      + 'o operador lê a mesma tela de sempre e libera por reflexo')
+      .toContain('v-else-if="ultima.ingresso?.meia"')
+
+    const semMotivo = tela.slice(tela.indexOf('v-else-if="ultima.ingresso?.meia"'))
+    const bloco = semMotivo.slice(0, semMotivo.indexOf('</div>'))
+
+    expect(bloco, 'o aviso da meia sem motivo perdeu a borda de alerta').toContain('border-4')
+    expect(bloco, 'a borda do aviso ficou sem cor de alerta').toContain('border-alerta')
+    expect(bloco, 'o título do aviso encolheu pro tamanho do bloco comum').toContain('text-3xl')
+    expect(bloco, 'o aviso parou de dizer com todas as letras que não há motivo registrado')
+      .toContain('MEIA-ENTRADA SEM MOTIVO REGISTRADO')
+    expect(bloco, 'o operador voltou a não saber QUAL papel pedir quando não há motivo')
+      .toMatch(/estudante, idoso \(60\+\), PCD, ID Jovem ou professor/)
+  })
+
+  it('a montagem lê a marca de volta — senão gravar não adianta', () => {
+    const tela = fonte()
+    const montagem = tela.slice(tela.indexOf('onMounted('), tela.indexOf('await registrarWorker'))
+
+    expect(montagem,
+      'a montagem restaura a lista guardada mas não a marca de corte dela: o tablet '
+      + 'que reabriu sem rede conta meia de um pedaço do evento e chama de total')
+      .toContain('listaTruncada.value = Boolean(guardada.truncada)')
   })
 })

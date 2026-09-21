@@ -35,6 +35,37 @@ const novo = reactive({
 // `reais` e `dataHora` vêm de `app/composables/formato.ts`.
 const quando = dataHora
 
+/**
+ * O BURACO ENTRE O CABEÇALHO E OS CARTÕES — medido aqui, não prometido.
+ *
+ * O cabeçalho ("Vendido na bilheteria") é o evento INTEIRO: todo pedido vivo
+ * de balcão, de qualquer dia, com guichê ou sem. Cada cartão de ponto mostra
+ * outra coisa — o total do CAIXA ABERTO quando há um, e só o de HOJE naquele
+ * ponto quando não há. São populações diferentes, e por isso a soma dos
+ * cartões quase nunca é o cabeçalho.
+ *
+ * A primeira versão desta tela nomeava só a venda sem guichê e escrevia, na
+ * cara do produtor, que ela era "exatamente a diferença entre os dois".
+ * Medido: cabeçalho R$ 2.465,00, cartões R$ 1.415,00, diferença REAL
+ * R$ 1.050,00 — e a linha dizia R$ 250,00. A frase estava errada em R$ 800,00
+ * (uma venda do mesmo guichê, de um caixa que já fechou) e o produtor que
+ * tentasse conferir a conta ia acabar em chamado.
+ *
+ * Agora a diferença é CALCULADA a partir dos números que estão na tela, e as
+ * duas partes que a compõem aparecem com nome. O que sobra depois da venda sem
+ * guichê é venda de guichê fora do caixa aberto — de um turno já fechado ou de
+ * outro dia.
+ */
+const somaDosCartoes = computed(() => (data.value?.pontos ?? []).reduce(
+  (s: number, p: any) => s + Number(p.turno ? p.turno.totalCents : p.hoje.totalCents), 0))
+
+const foraDosCartoes = computed(() =>
+  Number(data.value?.resumo?.brutoCents ?? 0) - somaDosCartoes.value)
+
+/** a parte do buraco que NÃO é venda órfã: guichê fora do caixa aberto */
+const emGuicheForaDoCaixa = computed(() =>
+  foraDosCartoes.value - Number(data.value?.resumo?.semPontoCents ?? 0))
+
 function alterna(lista: string[], v: string) {
   const i = lista.indexOf(v)
   if (i >= 0) lista.splice(i, 1)
@@ -203,6 +234,58 @@ async function abrirCaixa() {
         </footer>
       </article>
     </section>
+
+    <!--
+      O QUE NÃO ESTÁ EM NENHUM CARTÃO ACIMA — as DUAS partes, com nome.
+
+      O cabeçalho dizia R$ 2.202,80 e a soma dos cartões dava R$ 470,00, sem
+      nada explicando a diferença: o produtor via um total que não conseguia
+      rastrear até nenhum ponto da lista. Duas coisas moram nesse buraco, e a
+      primeira versão desta linha nomeava só uma:
+
+      1. venda de balcão SEM guichê registrado (`semPontoCents` — importação,
+         seed, venda anterior ao cadastro do ponto);
+      2. venda DE guichê que o cartão dele não mostra, porque o cartão exibe o
+         caixa ABERTO (ou só o dia de hoje, quando não há caixa aberto) e o
+         cabeçalho exibe o evento inteiro.
+
+      Chamar a parte 1 de "exatamente a diferença" era falso e MEDIDO como
+      falso: cabeçalho R$ 2.465,00, cartões R$ 1.415,00, diferença real
+      R$ 1.050,00 contra os R$ 250,00 impressos — R$ 800,00 de erro numa frase
+      que o produtor usaria pra conferir a conta. A diferença agora é calculada
+      a partir do que está na tela (`foraDosCartoes`) e as partes aparecem
+      separadas. Molde da linha "Sem ponto identificado" do extrato, em
+      `relatorios/extrato.vue`.
+    -->
+    <div v-if="foraDosCartoes > 0" class="card mt-3">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <span class="font-bold text-tinta-suave">Fora dos cartões acima</span>
+        <span class="tabular-nums font-bold text-tinta">{{ reais(foraDosCartoes) }}</span>
+      </div>
+
+      <dl class="mt-2 space-y-1 text-xs">
+        <div v-if="data.resumo.semPontoCents" class="flex justify-between gap-2">
+          <dt class="text-tinta-suave">
+            Sem ponto identificado —
+            {{ data.resumo.pedidosSemPonto }} venda(s) de balcão sem guichê registrado
+            (importação, seed ou venda anterior ao cadastro do ponto)
+          </dt>
+          <dd class="tabular-nums font-bold text-alerta">{{ reais(data.resumo.semPontoCents) }}</dd>
+        </div>
+        <div v-if="emGuicheForaDoCaixa > 0" class="flex justify-between gap-2">
+          <dt class="text-tinta-suave">
+            Em guichê, fora do caixa aberto — vendido num turno já fechado ou em outro dia
+          </dt>
+          <dd class="tabular-nums font-bold text-tinta-suave">{{ reais(emGuicheForaDoCaixa) }}</dd>
+        </div>
+      </dl>
+
+      <p class="mt-2 text-xs text-tinta-fraca">
+        O cabeçalho conta o evento inteiro ({{ reais(data.resumo.brutoCents) }}) e cada cartão
+        acima conta só o caixa aberto — ou só hoje, quando não há caixa aberto. Os cartões somam
+        {{ reais(somaDosCartoes) }}: a diferença é este valor.
+      </p>
+    </div>
 
     <p v-if="!data.pontos.length && !pending" class="card mt-4 text-center text-tinta-suave">
       Nenhum ponto de venda ainda. Crie o primeiro abaixo — normalmente é o guichê do portão.

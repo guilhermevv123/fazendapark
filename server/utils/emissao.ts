@@ -13,6 +13,7 @@ import type { PoolClient } from 'pg'
 import { confirmar } from './estoque'
 import { tx } from './db'
 import { gerarCodigo } from './ingresso'
+import { documentoExigido, motivoValido } from './meia-entrada'
 
 /* ===========================================================================
  * O que é cortesia — e por que `tickets.is_courtesy` não responde isso
@@ -106,6 +107,83 @@ export function eCortesia(
     && (canalDoPedido == null || canalDoPedido === CANAL_CORTESIA)
 }
 
+/* ===========================================================================
+ * O carimbo de meia-entrada — o que a portaria vai ler daqui a seis meses
+ * ======================================================================== */
+
+/**
+ * A exigência congelada no ingresso de meia que nasceu SEM motivo declarado.
+ *
+ * ## O furo que isto fecha, medido no banco em 21/09
+ *
+ * ```
+ * SELECT tt.kind, count(*), count(t.half_reason) FROM tickets t
+ *   JOIN ticket_types tt ON tt.id = t.ticket_type_id GROUP BY 1;
+ *   meia    | 23 | 0      <-- vinte e três meias, ZERO com motivo
+ * ```
+ *
+ * `half_reason` não é uma ponta solta que falta preencher: é o campo que quase
+ * nenhum ingresso deste banco tem, e **continua nascendo vazio hoje**. O
+ * gatilho da migração 015 só COPIA do item do pedido, e só o checkout online
+ * escreve motivo no item — `pdv/venda.post.ts` insere `order_items` sem as três
+ * colunas de meia (medido), e a `RAISE` da 015 é restrita ao canal `online` de
+ * propósito, pra não derrubar venda de guichê com fila na frente.
+ *
+ * Resultado: a meia do balcão nasce com as TRÊS colunas nulas, e a única coisa
+ * no banco que ainda diz que aquele ingresso é meia é `ticket_types.kind` —
+ * uma coluna de OUTRA tabela. Toda consulta que ler só as colunas do ingresso
+ * (que é o que a portaria fazia, e que é o furo que a `/api/checkin` levou uma
+ * frota inteira pra fechar) volta a tratar meia como inteira, em silêncio.
+ *
+ * Então a emissão passa a gravar a exigência SEMPRE que o tipo for meia. O
+ * ingresso passa a carregar no próprio corpo a prova de que é meia, sem
+ * depender de um JOIN que alguém pode esquecer.
+ *
+ * ## Por que isto não é "inventar motivo"
+ *
+ * Não é. Ninguém escreve em `half_reason` o que ninguém perguntou — esta
+ * frase não diz POR QUE a pessoa tem direito, diz O QUE pedir quando o direito
+ * não foi declarado. É a mesma escolha do passo 5 da migração 015, que
+ * carimbou texto genérico nas meias velhas exatamente pra portaria não ficar
+ * cega, e é o oposto de um backfill que chutaria "estudante" e viraria rastro
+ * falso no lugar de rastro faltando.
+ *
+ * `half_reason` segue NULL nesses ingressos, e é assim que a tela consegue
+ * contar quantos ficaram sem e mostrar o número pro produtor.
+ */
+export const EXIGENCIA_SEM_MOTIVO =
+  'Documento que comprove o direito à meia-entrada: carteira de estudante, '
+  + 'documento com foto que mostre a idade (60 anos ou mais), laudo ou cartão de PCD, '
+  + 'ID Jovem, ou carteira funcional de professor da rede pública.'
+
+/**
+ * O que vai para `tickets.half_document_required` — em três degraus, nesta
+ * ordem, e o primeiro que responde ganha:
+ *
+ *  1. **o texto congelado no item do pedido** — é a exigência PROMETIDA àquele
+ *     comprador. A lei muda; o que foi vendido não.
+ *  2. **o texto da tabela de motivos**, quando o motivo veio mas o texto não
+ *     (item escrito na mão, importação, rota que só gravou metade).
+ *  3. **`EXIGENCIA_SEM_MOTIVO`** — o carimbo explícito de "é meia e ninguém
+ *     registrou por quê". Explícito é diferente de NULL: NULL é indistinguível
+ *     de "não é meia", e é justamente essa confusão que deixa o operador sem
+ *     saber que tem um documento pra pedir.
+ *
+ * Devolve `null` para inteira e gratuidade: ingresso que não pede documento
+ * não pode ganhar bloco de documento, senão a tela passa a pedir papel de todo
+ * mundo e o operador para de ler o aviso — que é como um aviso morre.
+ */
+export function exigenciaDeMeia(item: {
+  especie?: string | null
+  motivoDaMeia?: string | null
+  exigenciaCongelada?: string | null
+}): string | null {
+  if (item?.especie !== 'meia') return null
+  if (item.exigenciaCongelada) return item.exigenciaCongelada
+  if (motivoValido(item.motivoDaMeia)) return documentoExigido(item.motivoDaMeia)
+  return EXIGENCIA_SEM_MOTIVO
+}
+
 export interface ResultadoEmissao {
   emitiu: boolean
   motivo?: string
@@ -113,6 +191,11 @@ export interface ResultadoEmissao {
   pedidoCode?: string
   /** a régua da casa aplicada ao que acabou de sair — nunca o valor zero */
   cortesia?: boolean
+  /**
+   * Quantos ingressos saíram carimbados como meia SEM motivo declarado.
+   * O balcão é o caminho que produz isso hoje; quem chama pode relatar.
+   */
+  meiasSemMotivo?: number
 }
 
 /**
@@ -156,13 +239,27 @@ export async function emitirNaTransacao(
   }
 
   const { rows: itens } = await c.query(
+    // `tt.kind` e as três colunas de meia entram aqui porque é NESTE INSERT que
+    // o ingresso ganha corpo. Sem elas, quem decide se aquele papel vai ser
+    // pedido na porta é um gatilho copiando de um item que metade das rotas
+    // não preenche — ver `exigenciaDeMeia`, acima.
+    //
+    // `LEFT JOIN ticket_types`: lote sem variação vende com `ticket_type_id`
+    // nulo, e um JOIN comum faria o item inteiro sumir do resultado — o
+    // pedido viraria "pedido sem itens" e a venda morreria com o dinheiro já
+    // na gaveta. É o mesmo cuidado que a migração 015 tomou no gatilho dela.
     `SELECT oi.id, oi.lot_id AS "lotId", oi.ticket_type_id AS "ticketTypeId",
             oi.quantity AS quantidade, s.id AS sector_id, s.session_id,
+            tt.kind AS especie,
+            oi.half_reason            AS "motivoDaMeia",
+            oi.half_document          AS "numeroDaMeia",
+            oi.half_document_required AS "exigenciaCongelada",
             c2.name AS comprador_nome, c2.email AS comprador_email,
             c2.document AS comprador_doc
        FROM order_items oi
        JOIN lots l  ON l.id = oi.lot_id
        JOIN sectors s ON s.id = l.sector_id
+       LEFT JOIN ticket_types tt ON tt.id = oi.ticket_type_id
        LEFT JOIN customers c2 ON c2.id = $2
       WHERE oi.order_id = $1`, [orderId, pedido.customer_id])
   if (!itens.length) return { emitiu: false, motivo: 'pedido sem itens', ingressos: 0 }
@@ -183,14 +280,29 @@ export async function emitirNaTransacao(
   const fechouEmZero = Number(pedido.total_cents) === 0
 
   let n = 0
+  let meiasSemMotivo = 0
   for (const item of itens) {
+    // A exigência é calculada UMA vez por item: ela é do tipo de ingresso
+    // vendido, não de cada unidade. Calcular dentro do laço só multiplicaria
+    // a mesma conta pela quantidade.
+    const exigencia = exigenciaDeMeia(item)
+    const semMotivo = exigencia != null && !motivoValido(item.motivoDaMeia)
+
     for (let k = 0; k < item.quantidade; k++) {
       await c.query(
+        // As três colunas de meia vêm explícitas. O gatilho da 015 continua
+        // sendo a rede (ele só escreve onde encontra NULL, então não briga com
+        // estes valores) — mas quem GARANTE que a meia sai carimbada é esta
+        // linha, porque o gatilho copia do item e há rota que não preenche o
+        // item. `half_reason` vai como veio: nulo quando ninguém perguntou.
+        // Chutar um motivo aqui seria rastro falso, que é pior que rastro
+        // faltando.
         `INSERT INTO tickets (org_id, event_id, session_id, order_id, order_item_id,
                               sector_id, lot_id, ticket_type_id, code, qr_secret,
-                              status, is_courtesy, holder_name, holder_email, holder_document)
+                              status, is_courtesy, holder_name, holder_email, holder_document,
+                              half_reason, half_document, half_document_required)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,encode(gen_random_bytes(16),'hex'),
-                 'valido',$10,$11,$12,$13)`,
+                 'valido',$10,$11,$12,$13,$14,$15,$16)`,
         [pedido.org_id, pedido.event_id, item.session_id, orderId, item.id,
          item.sector_id, item.lotId, item.ticketTypeId,
          gerarCodigo(prefixo), fechouEmZero,
@@ -199,8 +311,10 @@ export async function emitirNaTransacao(
          // portaria mais do que ajuda.
          k === 0 ? item.comprador_nome : null,
          k === 0 ? item.comprador_email : null,
-         k === 0 ? item.comprador_doc : null])
+         k === 0 ? item.comprador_doc : null,
+         item.motivoDaMeia ?? null, item.numeroDaMeia ?? null, exigencia])
       n++
+      if (semMotivo) meiasSemMotivo++
     }
   }
 
@@ -217,5 +331,6 @@ export async function emitirNaTransacao(
     // A pergunta respondida pela ORIGEM. Este caminho é o da VENDA (webhook do
     // Asaas e balcão): mesmo fechando em zero, o que sai por aqui é venda.
     cortesia: eCortesia(fechouEmZero, pedido.channel),
+    meiasSemMotivo,
   }
 }

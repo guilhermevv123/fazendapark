@@ -14,23 +14,31 @@
  *
  * Precisa do servidor de dev no ar. Sem ele, PULA em vez de falhar: teste que
  * fica vermelho por infra ausente treina todo mundo a ignorar vermelho.
+ *
+ * PULA DE VERDADE, com `ctx.skip()`. A convenção antiga — `return` seco
+ * dentro do `it()` — devolvia tique verde: medido neste arquivo, com a porta
+ * fechada, `Tests 5 passed (5)` sem uma única requisição. Com o servidor
+ * OCUPADO (proxy segurando a primeira resposta por 3 s e devolvendo 200) dava
+ * a mesma coisa, porque a sonda esperava 2,5 s e desistia na primeira
+ * tentativa. As duas coisas foram consertadas em `scripts/test-setup.ts`.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
+import {
+  anunciarPulo, BASE_DE_TESTE, seForaDoArPula, sondarServidor, type Sonda,
+} from '../../scripts/test-setup'
 import { comSessao, entrar } from '../../scripts/teste-sessao'
 
-const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
+const BASE = BASE_DE_TESTE
 const SLUG = 'conquista-park-4-edicao'
 
-let noAr = false
+let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
 /** Os testes de painel e portaria passam pelo mesmo login do navegador. */
 let http: ReturnType<typeof comSessao>
 beforeAll(async () => {
-  try {
-    const r = await fetch(`${BASE}/api/e/${SLUG}`, { signal: AbortSignal.timeout(2500) })
-    noAr = r.ok
-    if (noAr) http = comSessao(await entrar('master'))
-  } catch { noAr = false }
-})
+  sonda = await sondarServidor(`/api/e/${SLUG}`)
+  anunciarPulo('server/api/fluxo.test.ts', sonda)
+  if (sonda.noAr) http = comSessao(await entrar('master'))
+}, 60_000)
 
 /** CPF sintético que passa no dígito verificador. */
 function cpf() {
@@ -49,8 +57,8 @@ const post = (rota: string, body: unknown) =>
   })
 
 describe('fluxo de compra pela HTTP', () => {
-  it('vai de escolher ingresso até QR na mão', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar em ' + BASE + ')')
+  it('vai de escolher ingresso até QR na mão', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
 
     // ---------------------------------------------------- 1. vitrine
     const ev = await fetch(`${BASE}/api/e/${SLUG}`).then((r) => r.json())
@@ -132,8 +140,8 @@ describe('fluxo de compra pela HTTP', () => {
     expect(inexistente.ok).toBe(false)
   }, 30_000)
 
-  it('recusa preço vindo do navegador', async () => {
-    if (!noAr) return
+  it('recusa preço vindo do navegador', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const ev = await fetch(`${BASE}/api/e/${SLUG}`).then((r) => r.json())
     const setor = ev.setores.find((s: any) => s.lotes.some((l: any) => l.situacao === 'disponivel'))
     const lote = setor.lotes.find((l: any) => l.situacao === 'disponivel')
@@ -154,8 +162,8 @@ describe('fluxo de compra pela HTTP', () => {
     expect(ped.totalCents).toBeGreaterThan(1)
   }, 20_000)
 
-  it('não vende lote de outro evento no mesmo pedido', async () => {
-    if (!noAr) return
+  it('não vende lote de outro evento no mesmo pedido', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const r = await post('/api/checkout', {
       eventSlug: SLUG,
       itens: [{ lotId: '00000000-0000-0000-0000-000000000000', quantidade: 1 }],
@@ -165,8 +173,8 @@ describe('fluxo de compra pela HTTP', () => {
     expect(r.status).toBe(404)
   }, 20_000)
 
-  it('dashboard fecha a conta: soma dos lotes − descontos = total', async () => {
-    if (!noAr) return
+  it('dashboard fecha a conta: soma dos lotes − descontos = total', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     const eventos = await http('/api/admin/eventos').then((r) => r.json())
     const ev = eventos.find((e: any) => e.slug === SLUG)
     const d = await http(`/api/admin/evento/${ev.id}/dashboard`).then((r) => r.json())
@@ -187,8 +195,8 @@ describe('fluxo de compra pela HTTP', () => {
     }
   }, 20_000)
 
-  it('a rota de pagamento existe e não é engolida pela rota do evento', async () => {
-    if (!noAr) return
+  it('a rota de pagamento existe e não é engolida pela rota do evento', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
     // ← pegaria a colisão [slug].vue × [slug]/: a página pai renderizava no
     //   lugar da filha e o comprador nunca chegava no PIX
     const html = await fetch(`${BASE}/e/${SLUG}/pagamento`).then((r) => r.text())

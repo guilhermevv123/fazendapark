@@ -142,13 +142,34 @@ const ACAO_GRAVE = new Set([
 ])
 
 /**
+ * Dinheiro NEGATIVO, com o sinal do lado em que o resto do sistema põe.
+ *
+ * O `reais()` do formatador único escreve `R$ -20,00` — o menos DEPOIS do
+ * símbolo. As telas de dinheiro do painel (financeiro do evento, borderô,
+ * extrato, lotes) escrevem `-R$ 20,00`, que é como o pt-BR escreve valor
+ * negativo e como o contador espera ler. Esta tela era a única fora do padrão,
+ * e o campo onde isso aparece é o pior possível: `diferencaCents` do
+ * fechamento de caixa, que é negativo justamente quando FALTA dinheiro na
+ * gaveta. Sinal que troca de lado entre duas telas do mesmo número é o que faz
+ * quem confere desconfiar das duas.
+ *
+ * O sinal sai do número e vai pra frente do `R$`; o resto continua saindo de
+ * `reais()`, que é quem sabe fazer a conta sem float e sem o espaço fino
+ * (U+00A0) do `toLocaleString({ style: 'currency' })` — dois defeitos que esta
+ * tela já teve e que nenhum conserto de sinal pode trazer de volta.
+ */
+function dinheiro(cents: number): string {
+  return cents < 0 ? `-${reais(-cents)}` : reais(cents)
+}
+
+/**
  * Valor de campo em texto. `*Cents` vira moeda porque o número cru (`85000`)
  * é justamente onde alguém lê oitocentos e cinquenta mil.
  */
 function valorLegivel(campo: string, v: unknown): string {
   if (v === null || v === undefined || v === '') return '—'
   if (typeof v === 'boolean') return v ? 'sim' : 'não'
-  if (typeof v === 'number' && /cents$/i.test(campo)) return reais(v)
+  if (typeof v === 'number' && /cents$/i.test(campo)) return dinheiro(v)
   if (typeof v === 'number' && /bps$/i.test(campo)) return `${(v / 100).toLocaleString('pt-BR')}%`
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)

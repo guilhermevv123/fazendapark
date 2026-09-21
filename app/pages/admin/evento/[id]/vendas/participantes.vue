@@ -10,22 +10,61 @@
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id as string
 
-const busca = ref('')
-const status = ref('')
-const setor = ref('')
-const pagina = ref(1)
+/* ===========================================================================
+ * O filtro mora na URL
+ * ========================================================================
+ * Regra da casa: "o operador precisa mandar o link do que está vendo". Aqui
+ * ela custou mais do que um link perdido — foi ela que deixou o defeito da
+ * nota do KPI (logo abaixo) invisível: a tela filtrada não tinha endereço,
+ * então não dava pra abrir de novo nem pra medir do lado de fora.
+ *
+ * Sem parâmetro nenhum a tela é exatamente a de antes; quem chega com
+ * `?setor=…` já pinta filtrado no PRIMEIRO desenho (o `useFetch` lê estes
+ * mesmos refs no servidor), em vez de mostrar o total do evento e corrigir
+ * depois que o JavaScript acorda.
+ */
+const naUrl = (chave: string) => {
+  const v = route.query[chave]
+  return String((Array.isArray(v) ? v[0] : v) ?? '')
+}
+
+const busca = ref(naUrl('busca'))
+const status = ref(naUrl('status'))
+const setor = ref(naUrl('setor'))
+const pagina = ref(Math.max(1, Number(naUrl('pagina')) || 1))
 
 // Debounce: sem ele, cada tecla dispara uma consulta e a resposta da 3ª letra
 // pode chegar depois da 5ª, repintando a tela com um resultado velho.
-const buscaDebounce = ref('')
+// Começa com o que veio da URL, senão o primeiro desenho ignora a busca do link.
+const buscaDebounce = ref(busca.value)
 let timer: any
 watch(busca, (v) => {
   clearTimeout(timer)
   timer = setTimeout(() => { buscaDebounce.value = v; pagina.value = 1 }, 300)
 })
 watch([status, setor], () => { pagina.value = 1 })
+
+// `replace` e não `push`: filtrar não é navegar, e encher o histórico faz o
+// botão "voltar" do navegador percorrer cada tecla digitada na busca.
+watch([buscaDebounce, status, setor, pagina], () => {
+  const query: Record<string, string> = {}
+  if (buscaDebounce.value) query.busca = buscaDebounce.value
+  if (status.value) query.status = status.value
+  if (setor.value) query.setor = setor.value
+  if (pagina.value > 1) query.pagina = String(pagina.value)
+  router.replace({ query })
+})
+
+/**
+ * Tem recorte ligado? `pagina` fica de fora de propósito: o rodapé conta a
+ * consulta inteira, não a página, então virar de página não muda os números
+ * dos KPIs.
+ */
+const filtrando = computed(() =>
+  Boolean(buscaDebounce.value || status.value || setor.value))
 
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   () => `/api/admin/evento/${id}/participantes`,
@@ -63,21 +102,79 @@ const SELO: Record<string, string> = {
   valido: 'selo-ok', usado: 'selo-neutro', cancelado: 'selo-erro', transferido: 'selo-alerta',
 }
 
+/* ===========================================================================
+ * Três jeitos de entrar sem pagar — e três selos, porque são coisas diferentes
+ * ======================================================================== */
+/**
+ * A API manda a diferença em três campos (`cortesia`, `gratuito`,
+ * `origemNaoRegistrada`); esta tela mostrava UM selo e apagava os outros dois.
+ * Medido no navegador (1440×900, `getComputedStyle`), antes:
+ *
+ *   - a venda que fechou em zero ficava **sem selo nenhum** (`<span>` nem
+ *     existia, largura 0). O selo errado tinha sido removido e nada entrou no
+ *     lugar: o operador deixou de saber que aquele ingresso saiu sem dinheiro;
+ *   - o ingresso SEM PEDIDO recebia o selo IDÊNTICO ao da cortesia de verdade
+ *     (`selo-neutro ml-1`, `rgb(90, 107, 132)`, 73.8px nas duas linhas) — a
+ *     tela afirmava uma origem que ninguém consegue provar.
+ *
+ * Agora cada um tem nome próprio, e a ordem do `if` não é estética: ingresso
+ * sem pedido também vem com `cortesia: true` (a régua da casa conta o caso
+ * seguro), então ele precisa ser perguntado PRIMEIRO, senão volta a se
+ * disfarçar de convite.
+ *
+ * O KPI "Cortesias" continua contando o sem-origem — é o mesmo número que
+ * fecha com o borderô. Quem explica a diferença é a nota embaixo dele, não um
+ * recorte escondido: total do rodapé que não bate com os selos de cima é
+ * exatamente a contradição que esta tela já causou uma vez.
+ */
+interface Gratuidade { texto: string; classe: string; title: string }
+
+function gratuidade(p: any): Gratuidade | null {
+  if (p.origemNaoRegistrada) {
+    return {
+      texto: 'SEM ORIGEM', classe: 'selo-alerta',
+      title: 'Entrou de graça, mas não tem pedido: não dá pra provar se foi cortesia '
+        + 'ou venda. Conta no total de cortesias acima, pelo lado seguro.',
+    }
+  }
+  if (p.cortesia) {
+    return {
+      texto: 'CORTESIA', classe: 'selo-neutro',
+      title: 'Convite da casa: o pedido nasceu na rota de cortesia. Não passou por caixa.',
+    }
+  }
+  if (p.gratuito) {
+    return {
+      texto: 'VENDA R$ 0', classe: 'selo-ok',
+      title: 'Venda que fechou em zero — promoção de 100%, criança ou lote gratuito. '
+        + 'Não é cortesia: tem pedido, comprador e aparece em Vendas.',
+    }
+  }
+  return null
+}
+
+/** As linhas com o selo já resolvido: a tabela não decide isso três vezes por linha. */
+const linhas = computed<any[]>(() =>
+  (data.value?.participantes ?? []).map((p: any) => ({ ...p, gratuidade: gratuidade(p) })))
+
 // data pelo formatador de `app/composables/formato.ts`, que lê o relógio
 // local: a portaria confere entrada à noite, e um dia a mais na coluna
 // "Entrou" é discussão no balcão.
 const quando = dataHora
 
 function exportar() {
+  // "Entrada gratuita" sai do MESMO lugar que o selo da tela: planilha que
+  // discorda da tela sobre o mesmo ingresso é a discussão de sempre.
   const cab = ['Código', 'Portador', 'Documento', 'E-mail', 'Setor', 'Lote', 'Tipo',
-               'Situação', 'Entrou em', 'Pedido', 'Comprador']
-  const linhas = (data.value?.participantes ?? []).map((p: any) => [
+               'Situação', 'Entrada gratuita', 'Entrou em', 'Pedido', 'Comprador']
+  const corpo = linhas.value.map((p: any) => [
     p.codigo, p.nome ?? '', p.documento ?? '', p.email ?? '',
     p.setor, p.lote, p.tipo ?? '', p.status,
+    p.gratuidade?.texto ?? '',
     dataHoraSegundo(p.entrouEm, ''),
     p.pedido ?? '', p.comprador ?? '',
   ])
-  const csv = [cab, ...linhas]
+  const csv = [cab, ...corpo]
     .map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';'))
     .join('\r\n')
   const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
@@ -111,7 +208,7 @@ useHead({ title: 'Participantes' })
       {{ erro }}
     </p>
 
-    <div class="mt-5 grid gap-3 sm:grid-cols-3">
+    <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <div class="card">
         <p class="rotulo-kpi">Ingressos no filtro</p>
         <p class="numero-kpi mt-1">{{ data.resumo.total }}</p>
@@ -123,6 +220,45 @@ useHead({ title: 'Participantes' })
       <div class="card">
         <p class="rotulo-kpi">Cortesias</p>
         <p class="numero-kpi mt-1">{{ data.resumo.cortesias }}</p>
+        <!-- O que este número tem dentro e não dá pra provar. Calar isso é o
+             que transforma um total em certeza que ele não tem. -->
+        <p v-if="data.resumo.cortesiasSemOrigem" class="mt-1 text-xs text-alerta">
+          {{ data.resumo.cortesiasSemOrigem }} sem pedido — origem não registrada, conta aqui
+          pelo lado seguro
+        </p>
+        <!--
+          A nota fala pelo BORDERÔ, e o borderô conta o evento INTEIRO. Com um
+          recorte ligado, os números daqui são do recorte — e a frase virava
+          uma afirmação errada sobre a outra tela. Medido no navegador, evento
+          de fixture com 5 cortesias (1 cancelada) e o filtro de setor ligado
+          num setor que tem 2 (1 cancelada):
+
+              a tela dizia  "1 cancelada(s) — o borderô mostra 1"
+              o borderô diz  4
+
+          Errado por 3, com as duas telas abertas lado a lado — que é
+          exatamente a discussão com o sócio que esta nota nasceu pra evitar.
+          Então a tela só empresta o número do borderô quando está olhando o
+          mesmo conjunto que ele; filtrada, ela fala por si.
+        -->
+        <p v-if="data.resumo.cortesiasCanceladas" class="mt-1 text-xs text-tinta-fraca">
+          <template v-if="filtrando">
+            {{ data.resumo.cortesiasCanceladas }} cancelada(s) —
+            {{ data.resumo.cortesias - data.resumo.cortesiasCanceladas }} ocupa(m) lugar
+            dentro deste filtro
+          </template>
+          <template v-else>
+            {{ data.resumo.cortesiasCanceladas }} cancelada(s) — o borderô mostra
+            {{ data.resumo.cortesias - data.resumo.cortesiasCanceladas }}, que é o que ocupa lugar
+          </template>
+        </p>
+      </div>
+      <div class="card">
+        <p class="rotulo-kpi">Vendas R$ 0</p>
+        <p class="numero-kpi mt-1">{{ data.resumo.gratuitos }}</p>
+        <p class="mt-1 text-xs text-tinta-fraca">
+          promoção, criança ou lote gratuito — é venda, não cortesia
+        </p>
       </div>
     </div>
 
@@ -154,7 +290,7 @@ useHead({ title: 'Participantes' })
       </p>
     </div>
 
-    <p v-if="!data.participantes.length" class="card mt-4 py-12 text-center text-tinta-suave">
+    <p v-if="!linhas.length" class="card mt-4 py-12 text-center text-tinta-suave">
       Nenhum participante com esses filtros.
     </p>
 
@@ -172,10 +308,14 @@ useHead({ title: 'Participantes' })
           </tr>
         </thead>
         <tbody>
-          <tr v-for="p in data.participantes" :key="p.id" class="border-b border-linha last:border-0">
+          <tr v-for="p in linhas" :key="p.id" class="border-b border-linha last:border-0">
             <td class="px-4 py-3 font-mono text-xs text-acao">
               {{ p.codigo }}
-              <span v-if="p.cortesia" class="selo-neutro ml-1">CORTESIA</span>
+              <!-- Três selos, três nomes: CORTESIA (convite da casa),
+                   VENDA R$ 0 (promoção/criança/lote grátis) e SEM ORIGEM
+                   (ingresso sem pedido, que ninguém consegue distinguir). -->
+              <span v-if="p.gratuidade" :class="[p.gratuidade.classe, 'ml-1']"
+                    :title="p.gratuidade.title">{{ p.gratuidade.texto }}</span>
             </td>
             <td class="px-3 py-3">
               <p v-if="p.nome" class="font-medium text-tinta">{{ p.nome }}</p>
