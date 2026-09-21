@@ -165,6 +165,12 @@ export type RetratoDoPublico = {
   ultima: string | null
   /** ingressos que podiam entrar (o denominador) */
   aptos: number
+  /**
+   * ingressos aptos que ainda NÃO passaram — o "faltam validar" da portaria.
+   * Sai daqui, junto com o resto do retrato, e não de uma subtração feita na
+   * tela: é assim que os números deixam de discordar.
+   */
+  faltam: number
   comparecimentoPct: number
 }
 
@@ -192,6 +198,10 @@ export function retratoDoPublico(linha: any): RetratoDoPublico {
     offline: Number(linha?.offline ?? 0),
     ultima: linha?.ultima ?? null,
     aptos,
+    // Nunca negativo: `aptos` já conta o ingresso que entrou e depois foi
+    // cancelado, mas um retrato montado à mão (teste, lista velha do aparelho)
+    // pode ter mais entradas que aptos, e "faltam -3" na porta é pior que 0.
+    faltam: Math.max(0, aptos - ingressos),
     // Uma casa decimal abaixo de 10%. Com 2 ingressos de 442 dentro, o
     // arredondamento pro inteiro escreve "0%" ao lado de "2 entraram" — e
     // dois números da mesma coisa discordando na mesma tela é exatamente o

@@ -45,6 +45,12 @@ const gate = ref('')
 const apenasConsultar = ref(false)
 const lendo = ref(false)
 const campo = ref<HTMLInputElement | null>(null)
+/**
+ * Dois jeitos de ler, os mesmos do app da Funz: "campo" (coletor — leitor USB ou
+ * Bluetooth digita o código e dá Enter) e "câmera" (o celular lê o QR). Os dois
+ * caem na mesma `ler()`, então a decisão é uma só.
+ */
+const modoCamera = ref(false)
 
 /**
  * O que a portaria pede quando o ingresso é meia (migração 015).
@@ -60,7 +66,7 @@ type Meia = { motivo: string | null; rotulo: string; documento: string; numero: 
 /** o retrato do público — um objeto, uma consulta (ver `publico` abaixo) */
 type Publico = {
   pessoas: number; entradas: number; ingressos: number
-  offline: number; aptos: number; comparecimentoPct: number
+  offline: number; aptos: number; faltam: number; comparecimentoPct: number
 }
 
 type Resposta = {
@@ -255,6 +261,11 @@ onMounted(async () => {
   if (online.value) sincronizar({ comLista: true })
 
   campo.value?.focus()
+
+  try { modoCamera.value = localStorage.getItem('dt_modo_leitura') === 'camera' } catch { /* aba anônima */ }
+  // Aquece o decodificador de reserva do QR enquanto ainda há rede: o service
+  // worker guarda o pedaço, e a câmera abre mesmo que o 4G caia depois.
+  if (!('BarcodeDetector' in window)) import('jsqr').catch(() => {})
 })
 
 onBeforeUnmount(() => {
@@ -442,6 +453,65 @@ async function ler() {
     nextTick(() => campo.value?.focus())
   }
 }
+
+/* ------------------------------------------------------------------ câmera */
+
+/** Trocar de modo lembra a escolha do aparelho: quem opera com o celular abre já na câmera. */
+function escolherModo(camera: boolean) {
+  modoCamera.value = camera
+  try { localStorage.setItem('dt_modo_leitura', camera ? 'camera' : 'campo') } catch { /* aba anônima */ }
+  if (camera) destravarSom()
+  else nextTick(() => campo.value?.focus())
+}
+
+/** A leitura da câmera entra pelo MESMO `ler()` do campo: uma decisão só. */
+async function lerDaCamera(texto: string) {
+  if (lendo.value) return
+  codigo.value = texto
+  await ler()
+}
+
+let som: AudioContext | null = null
+/** Criado num toque (a troca de modo): o iOS só libera áudio depois de um gesto. */
+function destravarSom() {
+  try { som ??= new AudioContext(); void som.resume() } catch { /* sem áudio: sobram a cor e a vibração */ }
+}
+
+/** Com a câmera o operador olha pro QR, não pra tela: o veredito precisa ser ouvido e sentido. */
+function avisar(ok: boolean) {
+  navigator.vibrate?.(ok ? 60 : [140, 70, 140])
+  if (!som) return
+  try {
+    const osc = som.createOscillator()
+    const ganho = som.createGain()
+    osc.frequency.value = ok ? 880 : 220
+    ganho.gain.value = 0.15
+    osc.connect(ganho)
+    ganho.connect(som.destination)
+    osc.start()
+    osc.stop(som.currentTime + (ok ? 0.12 : 0.35))
+  } catch { /* ignora */ }
+}
+
+/** Conta leituras: duas respostas iguais seguidas precisam repintar o veredito da câmera. */
+const leituraN = ref(0)
+watch(ultima, (r) => {
+  if (!r) return
+  leituraN.value++
+  if (modoCamera.value) avisar(r.ok)
+})
+
+/** O veredito em cima da própria imagem da câmera — o mesmo texto e a mesma cor do cartão grande. */
+const vereditoCamera = computed(() => {
+  const r = ultima.value
+  if (!r) return null
+  return {
+    chave: leituraN.value,
+    titulo: r.consulta ? (r.ok ? 'VÁLIDO' : 'AINDA NÃO') : r.ok ? 'PODE ENTRAR' : 'BARRADO',
+    detalhe: [r.ingresso?.titular ?? r.titular, r.mensagem].filter(Boolean).join(' · '),
+    classe: CLASSE[r.resultado] ?? 'bg-erro text-white',
+  }
+})
 
 /* ------------------------------------------------------------ sincronização */
 
@@ -698,6 +768,32 @@ useHead({ title: 'Leitor de entrada' })
         {{ ultimoEnvio.recusadas }} recusada(s)</span>.
     </p>
 
+    <!-- O contador da porta — o que o operador olha de relance: quantos já foram
+         validados e quantos faltam. Sai do MESMO retrato (`publico`) dos cards
+         abaixo, nunca de uma conta feita aqui, pelo motivo do comentário deles. -->
+    <div class="card mt-4" data-parte="contador">
+      <div class="flex flex-wrap items-end gap-x-10 gap-y-3">
+        <div>
+          <p class="rotulo-kpi">Validados</p>
+          <p class="numero-kpi mt-1 text-ok">{{ publico ? publico.ingressos : '—' }}</p>
+        </div>
+        <div>
+          <p class="rotulo-kpi">Faltam validar</p>
+          <p class="numero-kpi mt-1">{{ publico ? publico.faltam : '—' }}</p>
+        </div>
+        <p v-if="publico" class="pb-0.5 text-sm text-tinta-suave">
+          de {{ publico.aptos }} ingressos · {{ pct(publico.comparecimentoPct) }}%
+          <template v-if="fila.length"> · +{{ fila.length }} lido(s) sem rede, ainda não enviado(s)</template>
+        </p>
+      </div>
+      <div v-if="publico" class="mt-3 h-2.5 overflow-hidden rounded-full bg-ink-100"
+           role="progressbar" aria-label="Ingressos validados"
+           :aria-valuenow="publico.ingressos" aria-valuemin="0" :aria-valuemax="publico.aptos">
+        <div class="h-full rounded-full bg-success-600 transition-[width] duration-300"
+             :style="{ width: `${publico.aptos ? Math.min(100, (publico.ingressos / publico.aptos) * 100) : 0}%` }" />
+      </div>
+    </div>
+
     <!-- Os três primeiros cards saem do MESMO objeto (`publico`), que sai de
          uma consulta só. Antes um contava o livro de passagens e os outros
          dois o carimbo do ingresso, e a tela exibia "2 dentro" ao lado de
@@ -748,10 +844,25 @@ useHead({ title: 'Leitor de entrada' })
     </div>
 
     <div class="card mt-4">
+      <div class="mb-4 inline-flex rounded-xl bg-ink-100 p-1" role="group" aria-label="Modo de leitura">
+        <button type="button" class="rounded-lg px-4 py-2 text-sm font-semibold"
+                :class="!modoCamera ? 'bg-white text-tinta shadow-card' : 'text-tinta-suave'"
+                :aria-pressed="!modoCamera" @click="escolherModo(false)">
+          Leitor / código
+        </button>
+        <button type="button" class="rounded-lg px-4 py-2 text-sm font-semibold"
+                :class="modoCamera ? 'bg-white text-tinta shadow-card' : 'text-tinta-suave'"
+                :aria-pressed="modoCamera" @click="escolherModo(true)">
+          Câmera
+        </button>
+      </div>
+      <LeitorCamera v-if="modoCamera" class="mb-4" :pausada="lendo" :veredito="vereditoCamera"
+                    @ler="lerDaCamera" />
       <form class="flex flex-wrap items-end gap-3" @submit.prevent="ler">
         <div class="min-w-[280px] flex-1">
           <label for="cod" class="rotulo">Código do ingresso</label>
           <input id="cod" ref="campo" v-model="codigo" autocomplete="off"
+                 :inputmode="modoCamera ? 'none' : undefined"
                  class="campo font-mono text-lg tracking-wider"
                  placeholder="CON-XXXX-XXXX ou leitura do QR">
         </div>

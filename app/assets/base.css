@@ -126,5 +126,29 @@ body {
   .selo-neutro { @apply selo bg-ink-100 text-ink-700 ring-ink-200; }
 }
 
+/* ---- Ficha do balcão -------------------------------------------------------
+   Uma ficha por ingresso, pra bobina térmica de 80mm. `FichasImpressas.vue`
+   monta as fichas FORA do app (Teleport pro <body>) e o `imprimir()` do PDV
+   liga `html.imprimindo-fichas` só durante o print: sem essa classe, nenhuma
+   outra impressão do sistema (borderô, relatórios) muda. Na tela as fichas
+   nunca aparecem. */
+.fichas-impressao { display: none; }
+@media print {
+  html.imprimindo-fichas #__nuxt { display: none !important; }
+  html.imprimindo-fichas .fichas-impressao { display: block; }
+  html.imprimindo-fichas body { margin: 0; background: #fff; }
+  .ficha {
+    width: 72mm; margin: 0 auto; padding: 4mm 1mm 5mm; text-align: center;
+    color: #000; background: #fff; break-after: page; page-break-after: always;
+  }
+  .ficha:last-child { break-after: auto; page-break-after: auto; }
+  .ficha-marca { font-size: 15pt; font-weight: 800; letter-spacing: .05em; line-height: 1.1; text-transform: uppercase; }
+  .ficha-evento { margin-top: 1mm; font-size: 10pt; line-height: 1.2; }
+  .ficha-qr { display: block; width: 54mm; height: 54mm; margin: 3mm auto 1mm; image-rendering: pixelated; }
+  .ficha-codigo { font-family: ui-monospace, Menlo, monospace; font-size: 12pt; font-weight: 700; letter-spacing: .06em; }
+  .ficha-item { font-size: 10pt; font-weight: 600; line-height: 1.25; }
+  .ficha-rodape { margin-top: 2mm; font-size: 7.5pt; line-height: 1.2; }
+}
+
 *:focus-visible { outline: 2px solid theme('colors.pool.600'); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

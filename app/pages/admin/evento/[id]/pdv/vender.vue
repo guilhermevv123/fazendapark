@@ -184,7 +184,36 @@ async function vender() {
   } finally { vendendo.value = false }
 }
 
-function imprimir() { window.print() }
+/**
+ * Imprime as fichas (uma por ingresso, com o QR) e NADA mais da tela.
+ *
+ * Antes isto era só `window.print()`: sem regra de impressão nenhuma, saía a
+ * página do PDV inteira com o recibo por cima — e sem o QR, que é o único
+ * motivo de a ficha existir. Duas coisas aqui só existem por causa da térmica:
+ *
+ *   • o `@page` de 80mm entra num <style> só ANTES do print e sai no
+ *     `afterprint`, pra o borderô e o resto do sistema seguirem em A4;
+ *   • os QRs precisam ter carregado: o print congela a página no instante da
+ *     chamada, e imagem que ainda baixa sai como um quadrado vazio.
+ */
+async function imprimir() {
+  const imgs = Array.from(document.querySelectorAll<HTMLImageElement>('.fichas-impressao img'))
+  await Promise.all(imgs.map((i) => i.complete
+    ? null
+    : new Promise((ok) => { i.onload = i.onerror = () => ok(null) })))
+  const estilo = document.createElement('style')
+  estilo.textContent = '@page { size: 80mm auto; margin: 0 }'
+  document.head.appendChild(estilo)
+  document.documentElement.classList.add('imprimindo-fichas')
+  const fim = () => {
+    estilo.remove()
+    document.documentElement.classList.remove('imprimindo-fichas')
+    window.removeEventListener('afterprint', fim)
+  }
+  window.addEventListener('afterprint', fim)
+  setTimeout(fim, 60_000) // Safari nem sempre dispara o afterprint
+  window.print()
+}
 </script>
 
 <template>
@@ -364,6 +393,10 @@ function imprimir() { window.print() }
         </div>
       </aside>
     </div>
+
+    <!-- as fichas: só existem na impressão (ver FichasImpressas.vue) -->
+    <FichasImpressas v-if="recibo && !recibo.cancelada" :evento="cat?.evento?.nome ?? ''"
+                     :pedido="recibo.pedido" :ingressos="recibo.ingressos" />
 
     <!-- recibo -->
     <div v-if="recibo" class="fixed inset-0 z-50 flex items-center justify-center bg-tinta/40 p-4"

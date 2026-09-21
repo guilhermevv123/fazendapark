@@ -834,6 +834,10 @@ describe('fila da portaria offline', () => {
     expect(pub.comparecimentoPct)
       .toBe(retratoDoPublico({ ...pub }).comparecimentoPct)
     expect(pub.pessoas).toBe(banco.pessoas)
+    // O "faltam validar" da porta sai do MESMO retrato, não de uma subtração
+    // na tela: denominador menos o que passou.
+    expect(pub.faltam, 'o "faltam" do retrato não fecha com aptos - ingressos')
+      .toBe(pub.aptos - pub.ingressos)
   }, 30_000)
 
   /**
@@ -1315,6 +1319,16 @@ describe('retratoDoPublico (sem banco)', () => {
 
   it('acima de 10% o número é inteiro — casa decimal ali é ruído', () => {
     expect(retratoDoPublico({ ingressos: 137, aptos: 442 }).comparecimentoPct).toBe(31)
+  })
+
+  it('faltam = ingressos aptos que ainda não passaram — e nunca negativo', () => {
+    expect(retratoDoPublico({ ingressos: 137, aptos: 442 }).faltam).toBe(305)
+    expect(retratoDoPublico({ ingressos: 0, aptos: 442 }).faltam).toBe(442)
+    // mesa de 4 lida uma vez: conta INGRESSO (1 de 4 aptos), não pessoa
+    expect(retratoDoPublico({ entradas: 1, pessoas: 4, ingressos: 1, aptos: 4 }).faltam).toBe(3)
+    // retrato montado à mão com mais entradas que aptos: 0, nunca "faltam -3"
+    expect(retratoDoPublico({ ingressos: 9, aptos: 6 }).faltam).toBe(0)
+    expect(retratoDoPublico(null).faltam).toBe(0)
   })
 })
 
