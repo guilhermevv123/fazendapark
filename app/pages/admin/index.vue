@@ -1,7 +1,23 @@
 <script setup lang="ts">
 definePageMeta({ layout: 'admin' })
 
-const { data: eventos, pending } = await useFetch<any[]>('/api/admin/eventos')
+const { data: eventos, pending, error: falha } = await useFetch<any[]>('/api/admin/eventos')
+
+/*
+ * "Nenhum evento aqui ainda" e "você não pode ver esta lista" são coisas
+ * diferentes, e a tela dizia a primeira nos dois casos.
+ *
+ * Medido com a sessão de portaria: `GET /api/admin/eventos` responde 403, a
+ * `useFetch` deixa `eventos` nulo, e a página imprimia "Nenhum evento aqui
+ * ainda" — abaixo de um botão "Criar evento" e dos filtros. O operador de
+ * portão via um painel que afirmava que a produtora não tem evento nenhum,
+ * com o parque vendendo ingresso naquele momento.
+ *
+ * A régua é a RESPOSTA do servidor, não um palpite de papel no front: quem
+ * decide o que este login alcança é `utils/papeis.ts`, e repetir a decisão
+ * aqui seria a segunda lista que um dia diverge da primeira.
+ */
+const semAcesso = computed(() => (falha.value as any)?.statusCode === 403)
 
 const busca = ref('')
 const filtro = ref<'todos' | 'ativo' | 'rascunho' | 'encerrado'>('todos')
@@ -34,12 +50,12 @@ useHead({ title: 'Eventos' })
         <h1 class="titulo text-2xl font-bold text-tinta">Eventos</h1>
         <p class="mt-1 text-tinta-suave">Todos os eventos das suas organizações</p>
       </div>
-      <NuxtLink to="/admin/evento/novo" class="btn-primario">
+      <NuxtLink v-if="!semAcesso" to="/admin/evento/novo" class="btn-primario">
         <IconeMenu nome="mais" :tamanho="18" /> Criar evento
       </NuxtLink>
     </div>
 
-    <div class="mb-5 flex flex-wrap items-center gap-2">
+    <div v-if="!semAcesso" class="mb-5 flex flex-wrap items-center gap-2">
       <div class="relative">
         <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-tinta-fraca">
           <IconeMenu nome="busca" :tamanho="18" />
@@ -53,6 +69,15 @@ useHead({ title: 'Eventos' })
     </div>
 
     <p v-if="pending" class="card text-tinta-suave">Carregando…</p>
+
+    <div v-else-if="semAcesso" class="card py-12 text-center">
+      <p class="rotulo-kpi">Esta lista não é do seu acesso</p>
+      <p class="mx-auto mt-2 max-w-md text-sm text-tinta-suave">
+        O seu login não alcança a lista de eventos da produtora — não quer dizer que
+        não exista evento. Se você precisa vê-la, peça a um master da sua organização
+        para mudar o seu acesso.
+      </p>
+    </div>
 
     <p v-else-if="!lista.length" class="card py-12 text-center text-tinta-suave">
       Nenhum evento aqui ainda.

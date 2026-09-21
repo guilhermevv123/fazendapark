@@ -1750,6 +1750,49 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
     expect((await bater('portaria', `/api/admin/evento/${EVENTO}/checkins`)).status).toBe(403)
   }, PRAZO_TELA)
 
+  /**
+   * Lista que não carregou não pode ser contada como lista vazia.
+   *
+   * `/admin` é o único endereço de painel que a portaria recebe (o link da
+   * logo). A página abre — 200 —, mas `GET /api/admin/eventos` responde 403,
+   * a `useFetch` deixa o dado nulo, e a tela imprimia **"Nenhum evento aqui
+   * ainda"**, abaixo de um botão "Criar evento" e dos filtros. Medido com
+   * sessão de portaria enquanto o parque vendia ingresso: o painel afirmava
+   * que a produtora não tem evento nenhum.
+   *
+   * É a falha muda da casa em estado puro — sem exceção, sem console, sem
+   * teste vermelho. A frase errada é pior que a tela em branco, porque quem
+   * lê não tem como desconfiar dela.
+   */
+  it('lista que deu 403 não vira "nenhum evento aqui ainda"', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    // primeiro a premissa: é porta fechada MESMO. Sem isto o caso ficaria
+    // verde no dia em que a rota abrisse, sem testar nada.
+    expect((await bater('portaria', '/api/admin/eventos')).status,
+      'a rota abriu pra portaria — este caso precisa de outro papel').toBe(403)
+
+    const html = await pagina('portaria', '/admin')
+    const texto = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+
+    expect(texto, 'a tela disse à portaria que a produtora não tem evento — e tem')
+      .not.toContain('Nenhum evento aqui ainda')
+    expect(texto, 'a recusa não foi nomeada: sem ela a tela fica muda em vez de honesta')
+      .toContain('não é do seu acesso')
+    expect(texto, 'ofereceu "Criar evento" a quem leva 403 até pra listar')
+      .not.toContain('Criar evento')
+  }, PRAZO_TELA)
+
+  /** O contrário: quem PODE ver a lista não pode ter perdido nada. */
+  it('quem enxerga a lista continua com a lista, o botão e os filtros', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+
+    const texto = (await pagina('master', '/admin')).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+    expect(texto, 'o master perdeu o botão de criar evento').toContain('Criar evento')
+    expect(texto, 'a recusa da portaria vazou pra quem tem acesso')
+      .not.toContain('não é do seu acesso')
+  }, PRAZO_TELA)
+
   /** O contrário: filtrar não pode ter apagado a aba de quem trabalha nela. */
   it('quem trabalha com as duas telas continua com as duas abas', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')

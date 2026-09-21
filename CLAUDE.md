@@ -160,6 +160,18 @@ explicando *por que* — o defeito que o commit fecha e a prova de que fechou.
 
 ---
 
+**Uma suíte por vez.** Dois `npx vitest run` ao mesmo tempo disputam o mesmo Postgres e o mesmo
+servidor de dev: 21 arquivos ainda usam uuid fixo de fixture, então o segundo processo colhe
+"já existe um ponto de venda com esse nome" e asserções de contagem que o vizinho mexeu. Isso
+produz vermelho que **não é defeito** — e, pior, ensina a ignorar vermelho. Antes de dar veredito
+sobre a suíte, pare a frota e rode sozinho.
+
+Para saber se a suíte está mentindo, rode contra uma porta morta:
+`BASE_TESTE=http://localhost:9999 npx vitest run`. O que depende do servidor tem que aparecer como
+**skipped**; o que aparecer como *passed* ali ou é teste de unidade/SQL direto, ou é tique oco.
+
+---
+
 ## Antes de dizer que terminou
 
 1. `npx vitest run` — suíte **inteira**, não só o arquivo novo

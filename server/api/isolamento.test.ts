@@ -124,7 +124,29 @@ describe('cerca de organização', () => {
     expect(eventoAlheio, 'não achei o evento do seed').toBeTruthy()
 
     const rotas = rotasDoEvento()
-    expect(rotas.length, 'a varredura não achou rota — o caminho mudou?').toBeGreaterThan(5)
+
+    /*
+     * Piso não serve: `toBeGreaterThan(5)` contra 42 rotas reais dá verde com
+     * a varredura tendo conferido SETE POR CENTO delas. Se a recursão à mão
+     * acima parar de descer — uma pasta nova, uma convenção de nome mudada, um
+     * `continue` a mais — ela devolve lista curta, o caso passa, e a cerca de
+     * organização fica sem quem a exercite justamente nas rotas novas.
+     *
+     * A conferência é uma contagem INDEPENDENTE (o `readdirSync` recursivo do
+     * Node, que não compartilha código com a recursão de cima) e IGUALDADE.
+     * Mesma receita de `server/api/autenticacao.test.ts`. Rota nova entra nos
+     * dois lados sozinha; rota que só um dos dois enxerga fica vermelha com o
+     * nome dela na mensagem.
+     */
+    const porNode = (readdirSync(
+      join(process.cwd(), 'server/api/admin/evento/[id]'),
+      { recursive: true, encoding: 'utf8' },
+    ) as string[])
+      .filter((f) => /\.(get|post|patch|delete|put)\.ts$/.test(f) && !f.includes('.test.'))
+    const soNaRecursao = rotas.length - porNode.length
+    expect(rotas.length, `a varredura achou ${rotas.length} rota(s) e o Node achou `
+      + `${porNode.length}: ${soNaRecursao > 0 ? 'a recursão inventou' : 'a recursão perdeu'} `
+      + 'arquivo — o caminho ou a convenção de nome mudou').toBe(porNode.length)
 
     const vazaram: string[] = []
     for (const { nome, metodo } of rotas) {
