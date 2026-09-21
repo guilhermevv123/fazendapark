@@ -20,6 +20,7 @@
  */
 import { q, q1 } from '../../../../utils/db'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../../../utils/retencao'
+import { SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY } from '../../../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -37,6 +38,8 @@ export default defineEventHandler(async (event) => {
   // dois casos mora em `utils/liquido.ts`; aqui ela é só somada.
   const v = await q1<any>(
     `SELECT ${SQL_LIQUIDO()}                                                        AS liquido,
+            ${SQL_LIQUIDO_GATEWAY()}                                                AS gateway,
+            ${SQL_LIQUIDO_DIRETO()}                                                 AS direto,
             COALESCE(SUM(face_cents) FILTER (WHERE status = 'pago'), 0)::bigint     AS bruto,
             COALESCE(SUM(discount_cents) FILTER (WHERE status = 'pago'), 0)::bigint AS descontos,
             COALESCE(SUM(refunded_cents), 0)::bigint                                AS estornado,
@@ -45,6 +48,11 @@ export default defineEventHandler(async (event) => {
        FROM orders WHERE event_id = $1`, [id])
 
   const liquido = Number(v.liquido)
+  // Só o que passou pelo gateway está NA PLATAFORMA. O recebido direto
+  // (notas na gaveta, pix na chave do produtor) já é dele e nunca entra no
+  // que dá pra transferir — ver `utils/liquido.ts`.
+  const gateway = Number(v.gateway)
+  const direto = Number(v.direto)
 
   const t = await q1<any>(
     `SELECT COALESCE(SUM(amount_cents) FILTER (WHERE status = 'concluida'), 0)::bigint AS concluido,
@@ -56,8 +64,8 @@ export default defineEventHandler(async (event) => {
   const emCurso = Number(t.em_curso)
   // Retido é tudo enquanto o prazo não vence. Depois, zero — o que sobra do
   // líquido já transferido é o disponível.
-  const retido = ev.liberado ? 0 : Math.max(liquido - transferido - emCurso, 0)
-  const disponivel = Math.max(liquido - transferido - emCurso - retido, 0)
+  const retido = ev.liberado ? 0 : Math.max(gateway - transferido - emCurso, 0)
+  const disponivel = Math.max(gateway - transferido - emCurso - retido, 0)
 
   const lista = await q<any>(
     `SELECT p.id, p.code, p.beneficiary_name, p.beneficiary_doc, p.destination_kind,
@@ -82,6 +90,11 @@ export default defineEventHandler(async (event) => {
       estornadoCents: Number(v.estornado),
       taxasCents: Number(v.taxas),
       liquidoCents: liquido,
+      // as duas metades do líquido, com nome — sem isso o produtor vê
+      // "disponível R$ 0" ao lado de um líquido de milhares e acha que
+      // o sistema perdeu a venda do balcão
+      naPlataformaCents: gateway,
+      recebidoDiretoCents: direto,
       retidoCents: retido,
       transferidoCents: transferido,
       emCursoCents: emCurso,

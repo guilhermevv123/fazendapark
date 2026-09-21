@@ -18,6 +18,7 @@
  */
 import { q, q1 } from '../../../../utils/db'
 import { SQL_LIBERA_EM } from '../../../../utils/retencao'
+import { SQL_LIQUIDO } from '../../../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')

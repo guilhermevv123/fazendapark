@@ -20,7 +20,7 @@
  * do evento sempre existe, então é ela que serializa.
  */
 import type { PoolClient } from 'pg'
-import { SQL_LIQUIDO } from './liquido'
+import { SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY } from './liquido'
 
 /**
  * Trava a linha do evento até o fim da transação.
@@ -39,32 +39,57 @@ export const SQL_TRAVA_EVENTO = `
 /**
  * Quanto ainda dá pra tirar, já com a trava na mão.
  *
+ * O teto é o líquido **que passou pelo gateway** — só esse dinheiro está na
+ * plataforma pra ser transferido. O que foi pago direto ao produtor (notas
+ * na gaveta, pix na chave dele) vem separado e rotulado, pra ninguém achar
+ * que sumiu: ele já o tem.
+ *
  * `comprometido` inclui o que está apenas `solicitada`: contar só o
  * concluído deixaria dois pedidos passarem, cada um enxergando o saldo
  * inteiro como seu.
  */
 export async function saldoParaSaque(c: PoolClient, eventoId: string): Promise<{
-  liquidoCents: number
+  /** na plataforma, esperando transferência */
+  gatewayCents: number
+  /** já com o produtor — nunca entra no disponível */
+  diretoCents: number
   comprometidoCents: number
   disponivelCents: number
 }> {
   const { rows: vs } = await c.query(
-    `SELECT ${SQL_LIQUIDO()} AS liquido FROM orders WHERE event_id = $1`, [eventoId])
+    `SELECT ${SQL_LIQUIDO_GATEWAY()} AS gateway,
+            ${SQL_LIQUIDO_DIRETO()}  AS direto
+       FROM orders WHERE event_id = $1`, [eventoId])
   const { rows: ts } = await c.query(
     `SELECT COALESCE(SUM(amount_cents), 0)::bigint AS comprometido
        FROM payouts
       WHERE event_id = $1 AND status IN ('solicitada','processando','concluida')`,
     [eventoId])
 
-  const liquidoCents = Number(vs[0].liquido)
+  const gatewayCents = Number(vs[0].gateway)
+  const diretoCents = Number(vs[0].direto)
   const comprometidoCents = Number(ts[0].comprometido)
-  return { liquidoCents, comprometidoCents, disponivelCents: liquidoCents - comprometidoCents }
+  return {
+    gatewayCents, diretoCents, comprometidoCents,
+    disponivelCents: gatewayCents - comprometidoCents,
+  }
 }
 
-/** a mensagem que o produtor lê quando pede mais do que tem */
-export function recusaDeSaque(disponivelCents: number): string {
-  return disponivelCents <= 0
+const brl = (c: number) =>
+  (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+
+/**
+ * A recusa explica onde está o dinheiro que o produtor está vendo.
+ *
+ * Sem a segunda frase, quem vendeu R$ 2.000 no balcão lê "não há saldo" com
+ * o borderô abrindo R$ 2.000 na tela ao lado e abre chamado achando que o
+ * sistema perdeu a venda.
+ */
+export function recusaDeSaque(disponivelCents: number, diretoCents = 0): string {
+  const base = disponivelCents <= 0
     ? 'Não há saldo disponível para transferir neste evento.'
-    : `Disponível: ${(disponivelCents / 100).toLocaleString('pt-BR',
-        { style: 'currency', currency: 'BRL' })}.`
+    : `Disponível para transferência: ${brl(disponivelCents)}.`
+  return diretoCents > 0
+    ? `${base} Os ${brl(diretoCents)} recebidos direto (dinheiro no balcão ou pix na sua chave) já estão com você e não passam pela plataforma.`
+    : base
 }

@@ -107,14 +107,25 @@ beforeAll(async () => {
   await sql(`DELETE FROM payouts WHERE event_id = $1`, [EVENTO])
   await sql(`DELETE FROM orders WHERE event_id = $1`, [EVENTO])
 
-  // UMA venda de balcão de R$ 100, taxa de 10% ABSORVIDA: o comprador pagou
-  // R$ 100 redondos e a plataforma retém R$ 10. Sobram R$ 90 pro produtor.
+  // Venda de balcão de R$ 100 COM cobrança no gateway, taxa de 10%
+  // ABSORVIDA: o comprador pagou R$ 100 redondos e a plataforma retém R$ 10.
+  // Sobram R$ 90 pro produtor, e esses R$ 90 estão na plataforma.
   await sql(
     `INSERT INTO orders (org_id, event_id, code, status, channel,
                          face_cents, fee_cents, platform_cents, discount_cents,
-                         total_cents, refunded_cents, paid_at)
+                         total_cents, refunded_cents, asaas_payment_id, paid_at)
      VALUES ($1,$2,'ZZ-SAQUE-1','pago','bilheteria',
-             10000, 0, 1000, 0, 10000, 0, now())`, [ORG, EVENTO])
+             10000, 0, 1000, 0, 10000, 0, 'pay_zz_saque_1', now())`, [ORG, EVENTO])
+
+  // Venda de R$ 50 em DINHEIRO no guichê — nenhuma cobrança no gateway. É do
+  // produtor (entra no líquido) e já está com ele: não existe conta da
+  // plataforma de onde tirar pra mandar de novo.
+  await sql(
+    `INSERT INTO orders (org_id, event_id, code, status, channel, payment_method,
+                         face_cents, fee_cents, platform_cents, discount_cents,
+                         total_cents, refunded_cents, asaas_payment_id, paid_at)
+     VALUES ($1,$2,'ZZ-SAQUE-2','pago','bilheteria','dinheiro',
+             5000, 0, 0, 0, 5000, 0, NULL, now())`, [ORG, EVENTO])
 }, 30_000)
 
 afterAll(async () => {
@@ -127,8 +138,33 @@ describe('teto do saque', () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
     expect(cookie, 'login falhou — o teste ficaria verde à toa').toBeTruthy()
 
+    // R$ 90 da venda com taxa absorvida + R$ 50 do dinheiro no guichê.
+    // O borderô conta o que é DO PRODUTOR, não o que dá pra transferir.
     expect(await liquidoDoPainel(),
-      'o painel prometeu a face cheia numa venda cuja taxa o produtor absorveu').toBe(9_000)
+      'o painel prometeu a face cheia numa venda cuja taxa o produtor absorveu').toBe(14_000)
+  }, 20_000)
+
+  it('o dinheiro do guichê não vira saldo transferível', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    await sql(`DELETE FROM payouts WHERE event_id = $1`, [EVENTO])
+
+    // O borderô abre R$ 140. Mas R$ 50 entraram em espécie na mão do
+    // produtor: mandar isso de novo é a plataforma pagando do próprio bolso.
+    const r = await sacar(14_000)
+    expect(r.status, `transferiu o dinheiro que já estava no caixa do guichê — ${r.mensagem}`).toBe(409)
+
+    // e a recusa precisa DIZER onde está o dinheiro que ele está vendo na
+    // tela ao lado — senão vira chamado de "o sistema perdeu minha venda".
+    // `toLocaleString` separa o R$ com espaço FINO (U+00A0), não com espaço
+    // normal: comparar sem normalizar falha com as duas strings idênticas na
+    // tela.
+    const msg = r.mensagem.replace(/ /g, ' ')
+    expect(msg, 'recusou sem explicar onde foi parar o dinheiro do balcão')
+      .toContain('R$ 50,00')
+    expect(msg, 'não disse quanto ele PODE transferir').toContain('R$ 90,00')
+
+    const { n } = await payoutsGravados()
+    expect(n, 'recusou na resposta e gravou o saque assim mesmo').toBe(0)
   }, 20_000)
 
   it('não deixa sacar a taxa que a plataforma reteve', async () => {
@@ -198,7 +234,12 @@ describe('teto do saque', () => {
       // B tenta pegar a mesma trava e FICA PENDURADO — a promessa não
       // resolve enquanto A não terminar. É isso que o teste precisa provar.
       let bPassou = false
-      const bEsperando = c2.query(SQL_TRAVA_EVENTO, [EVENTO]).then(() => { bPassou = true })
+      const bEsperando = c2.query(SQL_TRAVA_EVENTO, [EVENTO])
+        .then(() => { bPassou = true })
+        // se o caso falhar antes do COMMIT, o `finally` solta a trava e esta
+        // promessa resolve sozinha. Sem o catch isso viraria uma rejeição
+        // solta que derruba o processo do vitest em vez de mostrar a falha.
+        .catch(() => {})
 
       // dá tempo de sobra pro Postgres liberar B, se ele fosse liberar
       await new Promise((r) => setTimeout(r, 400))
@@ -220,6 +261,13 @@ describe('teto do saque', () => {
         'o segundo pedido não enxergou o saque do primeiro e sacaria de novo').toBe(0)
       await c2.query('ROLLBACK')
     } finally {
+      // ROLLBACK antes de devolver ao pool, SEMPRE. `release()` não desfaz
+      // transação aberta: uma falha de asserção no meio deixava o `FOR UPDATE`
+      // preso na conexão devolvida, e o caso SEGUINTE — que chama a rota de
+      // verdade — travava até estourar o timeout. Uma falha vira duas, e a
+      // segunda aponta pro lugar errado.
+      await c1.query('ROLLBACK').catch(() => {})
+      await c2.query('ROLLBACK').catch(() => {})
       c1.release()
       c2.release()
     }

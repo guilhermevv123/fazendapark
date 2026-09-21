@@ -1,60 +1,102 @@
 /**
- * Quanto do dinheiro é do produtor — a conta, num lugar só.
+ * Quanto do dinheiro é do produtor — e onde esse dinheiro está.
  *
- * Existia copiada em cinco: borderô, financeiro do evento, criação de
- * transferência, financeiro da plataforma e extrato. Todas escreviam
- * `face_cents - refunded_cents`, e todas erravam junto — inclusive a que
- * decide QUANTO PODE SAIR, o que faz desta uma conta que move dinheiro de
- * verdade, não um número de relatório.
+ * São DUAS perguntas diferentes e por muito tempo foram tratadas como uma.
+ * A primeira ("quanto é dele") virava relatório; a segunda ("quanto dá pra
+ * transferir") virava dinheiro saindo da conta da plataforma.
  *
- * ## Por que a face não serve
+ * ## 1. Quanto é do produtor
  *
- * `face - estornado` só acerta quando a taxa foi repassada ao comprador e
- * ninguém usou cupom. Dois casos comuns quebram isso:
+ * Existia copiada em cinco lugares, todas escrevendo `face_cents −
+ * refunded_cents`. Só acerta quando a taxa foi repassada ao comprador e
+ * ninguém usou cupom — que é exatamente o caso do seed, então nenhum teste
+ * ficava vermelho. Dois casos comuns quebram:
  *
- * - **Taxa absorvida** (`fee_mode` = `absorver`, o padrão do balcão): o
- *   comprador paga a face redonda e a taxa sai do produtor. A face inteira
- *   nunca foi dele.
- * - **Cupom de desconto**: o abatimento sai do bolso do produtor, mas a face
- *   dos ingressos continua cheia.
+ * - **Taxa absorvida** (padrão do balcão): o comprador paga a face redonda e
+ *   a taxa sai do produtor. A face inteira nunca foi dele.
+ * - **Cupom**: o abatimento sai do bolso do produtor, mas a face continua cheia.
  *
- * ## Por que não dá pra olhar a configuração
- *
- * A tentação é ler `fee_mode_online` / `fee_mode_pos` e decidir a partir
- * dali. Não funciona: o modo muda com o tempo e vale só dali pra frente. No
- * evento semeado, o MESMO canal de bilheteria tem 10 pedidos que repassaram
- * a taxa e 3 que a absorveram — qualquer modo que se escolha erra dez ou
- * três pedidos. O que aconteceu está gravado no pedido; a configuração só
- * diz o que vai acontecer no próximo.
- *
- * ## A conta
+ * E não dá pra decidir lendo `fee_mode_online` / `fee_mode_pos`: o modo muda
+ * com o tempo e vale dali pra frente. No evento semeado o MESMO canal de
+ * bilheteria tem 10 pedidos que repassaram a taxa e 3 que absorveram —
+ * qualquer modo que se escolha erra dez ou três. O que aconteceu está no
+ * pedido; a configuração só diz o que vai acontecer no próximo.
  *
  *     líquido = total_cents − platform_cents − refunded_cents
  *
- * `total_cents` é o que foi cobrado do comprador (o banco garante
- * `total = face + fee − desconto`), `platform_cents` é o que a plataforma
- * retém. Sai certo nos dois modos sem consultar nada:
+ * | modo      | total       | platform | líquido     |
+ * |-----------|-------------|----------|-------------|
+ * | repassar  | face + taxa | taxa     | face        |
+ * | absorver  | face        | taxa     | face − taxa |
  *
- * | modo      | total       | platform | líquido          |
- * |-----------|-------------|----------|------------------|
- * | repassar  | face + taxa | taxa     | face             |
- * | absorver  | face        | taxa     | face − taxa      |
+ * **`estornado_parcial` conta.** O webhook grava esse status quando o
+ * comprador é reembolsado em parte, e o valor devolvido já está em
+ * `refunded_cents`. Filtrar só por `'pago'` fazia o pedido INTEIRO sumir da
+ * conta: um estorno de R$ 20 tirava os R$ 850 do pedido do saldo do
+ * produtor. Quem fica de fora é só o estorno TOTAL, onde não sobrou líquido
+ * nenhum a apurar.
  *
- * E com cupom o desconto já saiu dentro do `total`, como tem que sair.
+ * ## 2. Onde o dinheiro está
+ *
+ * Essa é a pergunta que o teto do saque precisa responder, e a resposta não
+ * é o líquido. Venda no balcão em dinheiro nunca passou pela plataforma: o
+ * operador contou as notas e elas estão na gaveta do produtor. Somar isso no
+ * "disponível para transferência" faz a plataforma pagar do próprio caixa um
+ * dinheiro que ela nunca recebeu.
+ *
+ * A régua NÃO é o canal nem a forma de pagamento — é `asaas_payment_id`.
+ * Medido no banco: existe `bilheteria + pix` COM cobrança no Asaas (o
+ * comprador pagou o QR da plataforma) e `bilheteria + pix` SEM (pagou na
+ * chave do próprio produtor). Mesma forma, mesmo canal, bolsos diferentes.
+ * Só o gateway sabe, e ele deixa o rastro no pedido.
  */
 
+/** pedidos que ainda têm líquido a apurar — estorno TOTAL não tem */
+const VIVOS = `status IN ('pago','estornado_parcial')`
+
 /**
- * A expressão SQL, pra somar dentro de uma consulta.
+ * A mesma régua, pronta pra entrar num `WHERE` de relatório.
  *
- * `prefixo` é o alias da tabela quando a consulta tem JOIN (`'o.'`). Só
- * conta pedido `pago`: rascunho e expirado nunca viraram dinheiro, e
- * estornado já está dentro de `refunded_cents` do próprio pedido pago.
+ * Toda consulta que SOMA DINHEIRO precisa usar esta, e não `status = 'pago'`:
+ * um recorte por `'pago'` no `WHERE` derruba o pedido com estorno parcial
+ * antes de qualquer `FILTER` chegar nele, e aí o relatório mostra um total e
+ * o borderô mostra outro. Contagens de "quantos pedidos fecharam" podem
+ * continuar em `'pago'` — ali a pergunta é outra.
+ *
+ *     WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')}
+ */
+export const PEDIDO_VIVO = (prefixo = '') => `${prefixo}${VIVOS}`
+
+/**
+ * O que é do produtor, venha o dinheiro de onde vier. Serve pra relatório,
+ * borderô e extrato — NÃO serve de teto pra saque.
+ *
+ * `prefixo` é o alias da tabela quando a consulta tem JOIN (`'o.'`).
  */
 export const SQL_LIQUIDO = (prefixo = '') =>
   `COALESCE(SUM(${prefixo}total_cents - ${prefixo}platform_cents - ${prefixo}refunded_cents)
-            FILTER (WHERE ${prefixo}status = 'pago'), 0)::bigint`
+            FILTER (WHERE ${prefixo}${VIVOS}), 0)::bigint`
 
-/** a mesma conta pra uma linha já carregada — usada nos cortes do extrato */
+/**
+ * A parte que está NA PLATAFORMA, e portanto a única que ela pode
+ * transferir. É este o teto do saque.
+ */
+export const SQL_LIQUIDO_GATEWAY = (prefixo = '') =>
+  `COALESCE(SUM(${prefixo}total_cents - ${prefixo}platform_cents - ${prefixo}refunded_cents)
+            FILTER (WHERE ${prefixo}${VIVOS}
+                      AND ${prefixo}asaas_payment_id IS NOT NULL), 0)::bigint`
+
+/**
+ * A parte que JÁ ESTÁ COM O PRODUTOR — dinheiro contado na gaveta, pix na
+ * chave dele. Nunca entra no disponível; aparece na tela com esse nome, pra
+ * ninguém achar que sumiu.
+ */
+export const SQL_LIQUIDO_DIRETO = (prefixo = '') =>
+  `COALESCE(SUM(${prefixo}total_cents - ${prefixo}platform_cents - ${prefixo}refunded_cents)
+            FILTER (WHERE ${prefixo}${VIVOS}
+                      AND ${prefixo}asaas_payment_id IS NULL), 0)::bigint`
+
+/** a mesma conta pra uma linha já carregada */
 export function liquidoDoPedido(p: {
   totalCents: number; taxaPlataformaCents: number; estornadoCents?: number
 }): number {

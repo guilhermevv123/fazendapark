@@ -144,8 +144,26 @@ useHead({ title: 'Transferências' })
       <div class="card">
         <p class="rotulo-kpi">Total líquido</p>
         <p class="numero-kpi mt-1">{{ reais(data.resumo.liquidoCents) }}</p>
-        <p class="mt-1 text-xs text-tinta-fraca">
-          face das vendas pagas, menos estorno — sem a taxa de serviço
+        <!--
+          Quando parte do dinheiro entrou direto (espécie no guichê, pix na
+          chave do produtor), o líquido é maior que o disponível mesmo com
+          retenção zero. Sem estas duas linhas o produtor lê "líquido R$ 140"
+          ao lado de "disponível R$ 90" e abre chamado achando que o sistema
+          comeu uma venda.
+        -->
+        <!-- div, não p: o navegador fecha um <p> sozinho ao ver bloco dentro -->
+        <div v-if="data.resumo.recebidoDiretoCents" class="mt-2 space-y-0.5 text-xs">
+          <p class="flex justify-between text-tinta-fraca">
+            <span>na plataforma</span>
+            <span class="tabular-nums text-tinta">{{ reais(data.resumo.naPlataformaCents) }}</span>
+          </p>
+          <p class="flex justify-between text-tinta-fraca">
+            <span>recebido direto por você</span>
+            <span class="tabular-nums text-tinta">{{ reais(data.resumo.recebidoDiretoCents) }}</span>
+          </p>
+        </div>
+        <p v-else class="mt-1 text-xs text-tinta-fraca">
+          o que sobra das vendas pagas depois da taxa de serviço e dos estornos
         </p>
       </div>
       <div class="card" :class="data.resumo.retidoCents && 'border-alerta/50'">
@@ -177,7 +195,10 @@ useHead({ title: 'Transferências' })
           {{ reais(data.resumo.disponivelCents) }}
         </p>
         <p class="mt-1 text-xs text-tinta-fraca">
-          já descontado o que está solicitado
+          <template v-if="data.resumo.recebidoDiretoCents">
+            só o que passou pela plataforma, já descontado o solicitado
+          </template>
+          <template v-else>já descontado o que está solicitado</template>
         </p>
       </div>
     </div>

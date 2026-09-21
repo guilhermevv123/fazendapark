@@ -11,6 +11,7 @@
  */
 import { q, q1 } from '../../utils/db'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../utils/retencao'
+import { SQL_LIQUIDO } from '../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const orgId = (event.context as any).sessao?.orgId
@@ -30,10 +31,18 @@ export default defineEventHandler(async (event) => {
               COALESCE(t.em_curso, 0)::bigint    AS em_curso
          FROM events e
          LEFT JOIN LATERAL (
-           SELECT SUM(face_cents) AS face, SUM(fee_cents) AS taxa,
-                  SUM(refunded_cents) AS estornado, COUNT(*) AS pedidos,
+           -- O recorte é por FILTER em cada soma, nunca por um WHERE que vale
+           -- pra todas. Enquanto era WHERE status = 'pago', o pedido com
+           -- estorno PARCIAL — que o webhook marca 'estornado_parcial' — caía
+           -- fora antes de a conta do líquido filtrar: uma devolução de
+           -- R$ 20 apagava um pedido de R$ 850 do caixa da organização, e o
+           -- estorno em si também sumia da coluna que devia mostrá-lo.
+           SELECT SUM(face_cents) FILTER (WHERE status = 'pago')  AS face,
+                  SUM(fee_cents)  FILTER (WHERE status = 'pago')  AS taxa,
+                  SUM(refunded_cents)                             AS estornado,
+                  COUNT(*)        FILTER (WHERE status = 'pago')  AS pedidos,
                   ${SQL_LIQUIDO()} AS liquido
-             FROM orders WHERE event_id = e.id AND status = 'pago'
+             FROM orders WHERE event_id = e.id
          ) v ON true
          LEFT JOIN LATERAL (
            SELECT SUM(amount_cents) FILTER (WHERE status = 'concluida') AS transferido,

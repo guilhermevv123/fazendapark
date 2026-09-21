@@ -63,10 +63,13 @@ export default defineEventHandler(async (event) => {
     // mão. Enquanto eram duas contas, esta aqui usava a face cheia e
     // liberava pra saque a taxa que o produtor tinha absorvido no balcão —
     // dinheiro que nunca chegou a ser dele. Ver `utils/liquido.ts`.
-    const { disponivelCents } = await saldoParaSaque(c, eventoId!)
+    const { disponivelCents, diretoCents } = await saldoParaSaque(c, eventoId!)
 
     if (d.valorCents > disponivelCents) {
-      throw createError({ statusCode: 409, statusMessage: recusaDeSaque(disponivelCents) })
+      throw createError({
+        statusCode: 409,
+        statusMessage: recusaDeSaque(disponivelCents, diretoCents),
+      })
     }
 
     const { rows } = await c.query(
