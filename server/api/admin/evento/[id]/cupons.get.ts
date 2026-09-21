@@ -4,8 +4,14 @@
  * Devolve o uso junto (`uses` de `max_uses`) porque cupom sem contador é
  * cupom que vaza: o código de 50% combinado pra 20 pessoas circula num grupo
  * de mil e ninguém percebe antes do fechamento do caixa.
+ *
+ * O quanto o cupom custou recortava por `status = 'pago'` e perdia o pedido
+ * com estorno parcial inteiro — o desconto desaparecia daqui e continuava no
+ * relatório, que já usa a régua certa. Agora é `PEDIDO_VIVO()`, de
+ * `utils/liquido.ts`.
  */
 import { q, q1 } from '../../../../utils/db'
+import { PEDIDO_VIVO } from '../../../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -19,8 +25,11 @@ export default defineEventHandler(async (event) => {
             -- Quanto o cupom já tirou do caixa. É a pergunta que o produtor
             -- faz depois, e ela não se responde com o contador de usos: dez
             -- usos de R$ 5 e dez de R$ 50 aparecem iguais lá.
+            --
+            -- Sai como bigint, e não como int: dinheiro em centavos num evento
+            -- grande passa de 2,1 bilhões e o cast estoura a consulta inteira.
             COALESCE((SELECT SUM(o.discount_cents) FROM orders o
-                       WHERE o.promo_code_id = p.id AND o.status = 'pago'), 0)::int AS desconto_dado
+                       WHERE o.promo_code_id = p.id AND ${PEDIDO_VIVO('o.')}), 0)::bigint AS desconto_dado
        FROM promo_codes p
       WHERE p.event_id = $1
       ORDER BY p.created_at DESC`, [id])

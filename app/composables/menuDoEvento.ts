@@ -30,6 +30,7 @@ export function menuDoEvento(eventoId: string): GrupoDoEvento[] {
 
     { nome: 'Ingressos', icone: 'ingresso', para: `${b}/ingressos`, filhos: [
       { nome: 'Configurar ingressos', aba: 'Ingressos', para: `${b}/ingressos` },
+      { nome: 'Sessões / Datas', aba: 'Sessões', para: `${b}/ingressos/sessoes` },
       { nome: 'Ordenar setores', aba: 'Ordenar setores', para: `${b}/ingressos/ordenar` },
       { nome: 'Passaportes / Grupos', aba: 'Passaportes', para: `${b}/ingressos/passaportes` },
       { nome: 'Códigos promocionais', aba: 'Códigos promocionais', para: `${b}/ingressos/cupons` },

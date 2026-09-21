@@ -18,8 +18,10 @@ const id = route.params.id as string
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   `/api/admin/evento/${id}/relatorios`)
 
-const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
-  { style: 'currency', currency: 'BRL' })
+// dinheiro e data saem de `app/composables/formato.ts`, num lugar só: cada
+// tela que refazia `(c / 100).toLocaleString(...)` e `new Date(x).toLocale…`
+// na mão era mais uma chance de perder centavo ou de escorregar um dia.
+const brl = reais
 
 const picoDia = computed(() =>
   (data.value?.porDia ?? []).reduce((m: number, d: any) => Math.max(m, d.cobradoCents), 0))
@@ -75,7 +77,7 @@ function exportar() {
          ['Conversão', `${data.value.funil.conversaoPct}%`])
   l.push([], ['Dia', 'Pedidos', 'Cobrado', 'Face'])
   for (const d of data.value.porDia) {
-    l.push([new Date(d.dia).toLocaleDateString('pt-BR'), String(d.pedidos),
+    l.push([dataCurta(d.dia), String(d.pedidos),
             brl(d.cobradoCents), brl(d.faceCents)])
   }
   const csv = l.map((x) => x.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n')
@@ -143,15 +145,15 @@ useHead({ title: 'Relatórios' })
       <div class="mt-3 flex items-end gap-1.5" style="height: 130px">
         <div v-for="d in data.porDia" :key="d.dia"
              class="group relative flex-1 min-w-[6px]"
-             :title="`${new Date(d.dia).toLocaleDateString('pt-BR')} — ${d.pedidos} pedidos, ${brl(d.cobradoCents)}`">
+             :title="`${dataCurta(d.dia)} — ${d.pedidos} pedidos, ${brl(d.cobradoCents)}`">
           <div class="rounded-t bg-acao transition-opacity group-hover:opacity-75"
                :style="{ height: `${picoDia ? Math.max((d.cobradoCents / picoDia) * 118, 2) : 2}px` }" />
         </div>
       </div>
       <div class="mt-1 flex justify-between text-xs text-tinta-fraca">
-        <span>{{ new Date(data.porDia[0].dia).toLocaleDateString('pt-BR') }}</span>
+        <span>{{ dataCurta(data.porDia[0].dia) }}</span>
         <span>{{ data.porDia.length }} dias com venda</span>
-        <span>{{ new Date(data.porDia[data.porDia.length - 1].dia).toLocaleDateString('pt-BR') }}</span>
+        <span>{{ dataCurta(data.porDia[data.porDia.length - 1].dia) }}</span>
       </div>
     </div>
 

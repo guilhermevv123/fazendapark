@@ -20,9 +20,32 @@
  * - **quantos ingressos por pessoa** — quem leva 1 e quem leva 6 se comporta
  *   diferente na porta e na fila;
  * - **a que horas compram** — define quando a campanha vai ao ar.
+ *
+ * ## Duas coisas que esta rota contava errado
+ *
+ * 1. **`WHERE o.status = 'pago'` apagava o comprador com estorno parcial.**
+ *    Quem devolveu R$ 20 de uma compra de R$ 850 sumia da base inteira: das
+ *    pessoas, do DDD, da hora, do top. Agora o recorte é `PEDIDO_VIVO()`, de
+ *    `utils/liquido.ts` — o mesmo que o borderô e os financeiros usam.
+ *
+ * 2. **O top de compradores multiplicava o gasto pelo número de ingressos.**
+ *    Com `LEFT JOIN tickets` na mesma consulta, o pedido aparecia uma vez por
+ *    ingresso e `sum(o.total_cents)` somava o mesmo pedido quatro vezes. Medido
+ *    no evento semeado: um comprador de R$ 220,97 aparecia com R$ 883,88 na
+ *    tela. A contagem de ingressos agora sai de subconsulta lateral e o pedido
+ *    é somado uma vez só.
+ *
+ * ## Público é quem ENTROU
+ *
+ * "Quantas pessoas vieram" não se responde por ingresso emitido — ingresso
+ * vendido que não apareceu não é público, e uma mesa de 4 é um ingresso com
+ * quatro pessoas dentro. A resposta mora em `entries` (`SQL_PUBLICO`,
+ * `sum(people)`), a mesma expressão que a portaria usa.
  */
 import { q, q1 } from '../../../../utils/db'
 import { DDD_UF, REGIAO_DDD } from '../../../../utils/ddd'
+import { PEDIDO_VIVO } from '../../../../utils/liquido'
+import { SQL_PUBLICO } from '../../../../utils/catraca'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -30,13 +53,13 @@ export default defineEventHandler(async (event) => {
   const ev = await q1<any>(`SELECT id, org_id, name FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
 
-  const [pessoas, porPessoa, origem, hora, topo, titulares] = await Promise.all([
+  const [pessoas, porPessoa, origem, hora, topo, titulares, presenca] = await Promise.all([
     // novos × recorrentes, numa passada só
     q1<any>(
       `WITH meus AS (
          SELECT o.customer_id, min(o.paid_at) AS primeira
            FROM orders o
-          WHERE o.event_id = $1 AND o.status = 'pago' AND o.customer_id IS NOT NULL
+          WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.customer_id IS NOT NULL
           GROUP BY o.customer_id)
        SELECT count(*)::int AS compradores,
               count(*) FILTER (WHERE NOT ja)::int  AS novos,
@@ -45,20 +68,23 @@ export default defineEventHandler(async (event) => {
          FROM (SELECT m.customer_id, m.primeira,
                       EXISTS (SELECT 1 FROM orders x
                                WHERE x.customer_id = m.customer_id
-                                 AND x.status = 'pago' AND x.event_id <> $1
+                                 AND ${PEDIDO_VIVO('x.')} AND x.event_id <> $1
                                  AND x.paid_at < m.primeira) AS ja
                  FROM meus m) t
          JOIN customers c ON c.id = t.customer_id`, [id]),
 
     // ingressos por pessoa — conta INGRESSO na tabela de ingresso, nunca a
     // quantidade do item do pedido: cortesia cancelada deixa o item lá.
+    //
+    // Sem soma de dinheiro aqui de propósito: a única que existia era um
+    // `sum(oi.unit_total_cents)` que ninguém lia e que somava o preço unitário
+    // uma vez por INGRESSO, com o pedido repetido no meio. Soma de dinheiro
+    // sem leitor é a que ninguém confere e que um dia alguém coloca na tela.
     q<any>(
-      `SELECT o.customer_id, count(*)::int AS ingressos,
-              sum(oi.unit_total_cents)::bigint AS gasto
+      `SELECT o.customer_id, count(*)::int AS ingressos
          FROM tickets t
          JOIN orders o ON o.id = t.order_id
-         LEFT JOIN order_items oi ON oi.id = t.order_item_id
-        WHERE t.event_id = $1 AND t.status <> 'cancelado' AND o.status = 'pago'
+        WHERE t.event_id = $1 AND t.status <> 'cancelado' AND ${PEDIDO_VIVO('o.')}
           AND o.customer_id IS NOT NULL
         GROUP BY o.customer_id`, [id]),
 
@@ -66,26 +92,33 @@ export default defineEventHandler(async (event) => {
       `SELECT left(regexp_replace(c.phone, '\\D', '', 'g'), 2) AS ddd,
               count(DISTINCT c.id)::int AS pessoas
          FROM orders o JOIN customers c ON c.id = o.customer_id
-        WHERE o.event_id = $1 AND o.status = 'pago' AND c.phone IS NOT NULL
+        WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND c.phone IS NOT NULL
         GROUP BY 1 ORDER BY 2 DESC`, [id]),
 
     q<any>(
       `SELECT extract(hour FROM o.paid_at AT TIME ZONE 'America/Bahia')::int AS hora,
               count(*)::int AS pedidos
          FROM orders o
-        WHERE o.event_id = $1 AND o.status = 'pago' AND o.paid_at IS NOT NULL
+        WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.paid_at IS NOT NULL
         GROUP BY 1 ORDER BY 1`, [id]),
 
+    // O ingresso vem de subconsulta lateral, e não de um JOIN na mesma
+    // consulta: com o JOIN, o pedido aparecia uma vez POR INGRESSO e
+    // `sum(o.total_cents)` contava o mesmo pedido quatro vezes. `gasto` é o
+    // que o comprador deixou — cobrado menos o que voltou pra ele.
     q<any>(
       `SELECT c.name, c.email,
-              count(t.id)::int AS ingressos,
-              sum(o.total_cents)::bigint AS gasto,
-              count(DISTINCT o.id)::int AS pedidos
+              COALESCE(SUM(tk.n),0)::int AS ingressos,
+              COALESCE(SUM(o.total_cents - o.refunded_cents),0)::bigint AS gasto,
+              COALESCE(SUM(o.refunded_cents),0)::bigint AS devolvido,
+              count(*)::int AS pedidos
          FROM orders o
          JOIN customers c ON c.id = o.customer_id
-         LEFT JOIN tickets t ON t.order_id = o.id AND t.status <> 'cancelado'
-        WHERE o.event_id = $1 AND o.status = 'pago'
-        GROUP BY c.id ORDER BY 3 DESC, 4 DESC LIMIT 12`, [id]),
+         LEFT JOIN LATERAL (SELECT count(*)::int AS n FROM tickets t
+                             WHERE t.order_id = o.id AND t.status <> 'cancelado') tk ON true
+        WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')}
+        GROUP BY c.id, c.name, c.email
+        ORDER BY ingressos DESC, gasto DESC LIMIT 12`, [id]),
 
     // quem ainda não disse quem vai usar o ingresso — trabalho de portaria,
     // não estatística: sem titular a entrada vira conferência na mão.
@@ -93,6 +126,9 @@ export default defineEventHandler(async (event) => {
       `SELECT count(*) FILTER (WHERE holder_name IS NOT NULL AND holder_name <> '')::int AS com_nome,
               count(*) FILTER (WHERE holder_name IS NULL OR holder_name = '')::int AS sem_nome
          FROM tickets WHERE event_id = $1 AND status <> 'cancelado'`, [id]),
+
+    // quem de fato ENTROU — livro da porta, `sum(people)`
+    q1<any>(SQL_PUBLICO, [id]),
   ])
 
   // faixas de quantidade: 1, 2, 3-4, 5-9, 10+
@@ -140,11 +176,23 @@ export default defineEventHandler(async (event) => {
     horaDaCompra: hora.map((h: any) => ({ hora: h.hora, pedidos: h.pedidos })),
     topCompradores: topo.map((t: any) => ({
       nome: t.name, email: t.email,
-      ingressos: t.ingressos, gastoCents: Number(t.gasto ?? 0), pedidos: t.pedidos,
+      ingressos: t.ingressos,
+      gastoCents: Number(t.gasto ?? 0), devolvidoCents: Number(t.devolvido ?? 0),
+      pedidos: t.pedidos,
     })),
     titulares: {
       comNome: titulares?.com_nome ?? 0,
       semNome: titulares?.sem_nome ?? 0,
+    },
+    // Quem ENTROU, contado no livro da porta. Fica ao lado de "compradores"
+    // de propósito: comprador é quem pagou, público é quem apareceu, e a
+    // distância entre os dois é o que a produção quer saber.
+    presenca: {
+      pessoas: Number(presenca?.pessoas ?? 0),
+      passagens: Number(presenca?.entradas ?? 0),
+      ingressosComEntrada: Number(presenca?.ingressos ?? 0),
+      passagensOffline: Number(presenca?.offline ?? 0),
+      ultimaEm: presenca?.ultima ?? null,
     },
     // a tela mostra isto como aviso, não como número: é o que a casa NÃO
     // coletou, e some sozinho no dia em que o checkout perguntar

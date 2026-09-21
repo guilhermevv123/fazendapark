@@ -5,6 +5,13 @@
  * A lista de recusas é o produto principal desta tela. Ingresso que entrou
  * já aparece em Participantes; o que NÃO entrou só existe aqui, e é dele que
  * sai a resposta pra "por que não me deixaram entrar" no dia seguinte.
+ *
+ * Desde a portaria offline, esta tela ganhou um segundo produto: o CONFLITO.
+ * Dois tablets sem rede não se enxergam — os dois têm o ingresso como válido
+ * na lista baixada e os dois deixam entrar. As duas passagens existem no livro
+ * de entradas, e é aqui que elas aparecem lado a lado, com a hora, o portão e
+ * o aparelho de cada uma. Esconder isso "arrumaria" o número e deixaria a
+ * fraude invisível.
  */
 definePageMeta({ layout: 'admin' })
 
@@ -27,6 +34,29 @@ watch([resultado, gate], () => { pagina.value = 1 })
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/checkins`,
   { query: { resultado, gate, busca: buscaDebounce, pagina } })
+
+/**
+ * O livro de entradas: quantas PESSOAS entraram e quais ingressos entraram
+ * mais de uma vez.
+ *
+ * Vem da rota de sincronização da portaria com a fila vazia — sincronizar sem
+ * nada pra enviar é só ler o estado, e não escreve linha nenhuma. A alternativa
+ * seria pendurar isto no `GET /checkins`, que hoje é de outro dono; duplicar a
+ * consulta numa terceira rota é como os dois números começam a divergir.
+ *
+ * `server: false`: é uma requisição POST autenticada que só interessa depois
+ * que a tela está na mão de alguém.
+ */
+const { data: livro } = await useFetch<any>('/api/portaria/sincronizar', {
+  method: 'POST',
+  body: { eventId: id, fila: [], comLista: false },
+  server: false,
+})
+
+const conflitos = computed<any[]>(() => livro.value?.conflitos ?? [])
+
+const hora = (v: string | null) =>
+  v ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' }) : '—'
 
 const SELO: Record<string, string> = {
   ok: 'selo-ok', ja_usado: 'selo-alerta', fora_da_sessao: 'selo-alerta',
@@ -78,7 +108,21 @@ useHead({ title: 'Histórico de leituras' })
 
     <AbasSecao :evento-id="id" />
 
-    <div class="grid gap-3 sm:grid-cols-4">
+    <div class="grid gap-3 sm:grid-cols-5">
+      <!-- Pessoas ≠ leituras, e a distância entre os dois números é o motivo
+           deste card existir: uma mesa de 4 é UMA leitura e QUATRO pessoas
+           dentro do parque. Quem dimensiona brinquedo, banheiro e salva-vidas
+           precisa do segundo número, não do primeiro. -->
+      <div class="card">
+        <p class="rotulo-kpi">Pessoas dentro</p>
+        <p class="numero-kpi mt-1">{{ livro ? livro.publico.pessoas : '—' }}</p>
+        <p v-if="livro" class="mt-1 text-xs text-tinta-fraca">
+          em {{ livro.publico.entradas }} passagem(ns)
+          <template v-if="livro.publico.offline">
+            · {{ livro.publico.offline }} sem rede
+          </template>
+        </p>
+      </div>
       <div class="card">
         <p class="rotulo-kpi">Leituras</p>
         <p class="numero-kpi mt-1">{{ data.resumo.leituras }}</p>
@@ -99,6 +143,55 @@ useHead({ title: 'Histórico de leituras' })
         <p class="mt-1 text-xs text-tinta-fraca">
           {{ data.resumo.entraram }} de {{ data.resumo.aptos }}
         </p>
+      </div>
+    </div>
+
+    <!-- Entradas repetidas: o que a portaria offline produz e nenhuma outra
+         tela mostra. Fica ANTES do gráfico de propósito — é a coisa que alguém
+         precisa agir sobre hoje, não amanhã. -->
+    <div v-if="conflitos.length" class="card mt-4 border-alerta bg-alerta-claro">
+      <p class="rotulo-kpi text-alerta">
+        {{ conflitos.length }} ingresso(s) entraram mais de uma vez
+      </p>
+      <p class="mt-1 text-sm text-tinta-corpo">
+        Acontece quando dois portões validam sem rede ao mesmo tempo: nenhum dos
+        dois enxerga o outro. As passagens estão todas registradas — confira o
+        aparelho e o horário de cada uma antes de tratar como fraude.
+      </p>
+
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full min-w-[720px] border-collapse text-sm">
+          <thead>
+            <tr class="border-b border-linha-forte text-left">
+              <th class="titulo px-2 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ingresso</th>
+              <th class="titulo px-2 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Passagens</th>
+              <th class="titulo px-2 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Quando / onde / qual aparelho</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in conflitos" :key="c.ticketId" class="border-b border-linha last:border-0">
+              <td class="px-2 py-2.5 align-top">
+                <p class="font-mono text-xs text-acao">{{ c.codigo }}</p>
+                <p class="text-xs text-tinta-fraca">{{ c.titular || 'sem nome' }}</p>
+              </td>
+              <td class="px-2 py-2.5 align-top text-tinta">
+                <strong>{{ c.passagens }}</strong> em {{ c.dispositivos }} aparelho(s)
+                <p v-if="c.offline" class="text-xs text-tinta-fraca">
+                  {{ c.offline }} validada(s) sem rede
+                </p>
+              </td>
+              <td class="px-2 py-2.5 align-top">
+                <p v-for="d in c.detalhe" :key="d.id" class="text-xs text-tinta-suave">
+                  <span class="tabular-nums">{{ hora(d.em) }}</span>
+                  · portão {{ d.gate || '—' }}
+                  · aparelho <span class="font-mono">{{ d.dispositivo || '—' }}</span>
+                  <template v-if="d.operador"> · {{ d.operador }}</template>
+                  <span v-if="d.offline" class="ml-1 selo-alerta">sem rede</span>
+                </p>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 

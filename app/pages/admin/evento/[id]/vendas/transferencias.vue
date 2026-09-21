@@ -27,10 +27,9 @@ const enviando = ref(false)
 const novo = reactive({ codigo: '', paraNome: '', paraEmail: '', paraTelefone: '', paraDocumento: '' })
 const ultimoLink = ref('')
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const quando = (v: string | null) => v
-  ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
-  : '—'
+// `reais` e `dataHora` vêm de `app/composables/formato.ts` — centavo e dia
+// formatados num lugar só, no fuso de quem está lendo.
+const quando = dataHora
 
 const COR: Record<string, string> = {
   aguardando: 'selo-alerta',

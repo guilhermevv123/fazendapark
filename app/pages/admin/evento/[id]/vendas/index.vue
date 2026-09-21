@@ -32,9 +32,9 @@ const { data, pending, error: falha, refresh } = await useFetch<any>(
     query: { busca: buscaDebounced, situacao, canal, pagina },
   })
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const quando = (d: string | null) =>
-  d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'
+// `reais` e `diaMesHora` vêm de `app/composables/formato.ts` — a formatação
+// de centavo e de data mora num lugar só.
+const quando = diaMesHora
 
 const SITUACOES: Record<string, { texto: string; classe: string }> = {
   pago:                 { texto: 'PAGO',      classe: 'selo-ok' },

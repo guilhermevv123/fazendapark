@@ -12,10 +12,10 @@ const lista = computed(() => (eventos.value ?? []).filter((e) => {
   return !t || `${e.nome} ${e.cidade ?? ''} ${e.organizacao}`.toLowerCase().includes(t)
 }))
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const dia = (d: string | null) => d
-  ? new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
-  : '—'
+// `reais` e `dataPorExtenso` vêm de `app/composables/formato.ts`: a conta de
+// centavo e o corte do dia moram num lugar só, e nenhum dos dois passa por
+// float nem por UTC.
+const dia = dataPorExtenso
 
 const selo: Record<string, { t: string; c: string }> = {
   ativo: { t: 'PUBLICADO', c: 'selo-ok' },

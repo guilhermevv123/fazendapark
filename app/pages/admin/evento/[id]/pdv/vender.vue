@@ -32,19 +32,70 @@ const FORMA_NOME: Record<string, string> = {
 /** carrinho: chave = lote|tipo, pra o mesmo lote com tipos diferentes não somar junto */
 const carrinho = ref<any[]>([])
 const forma = ref('')
-const recebido = ref('')
+
+/**
+ * O que o cliente entregou, em centavos INTEIROS, pela máscara do `CampoMoeda`.
+ *
+ * Era texto livre reinterpretado na hora de calcular o troco, e a
+ * reinterpretação (`Number(texto.replace(/\./g, '').replace(',', '.')) * 100`)
+ * apagava TODO ponto antes de converter: "8.15" digitado no teclado numérico
+ * virava 815 reais em vez de 8 reais e 15. O troco gigante desta tela — o
+ * número que o operador confere em voz alta com fila na frente — saía cem
+ * vezes maior, e nada avisava.
+ *
+ * Com centavos inteiros na mão, os botões de nota e o "certo" viram soma de
+ * inteiro: não existe mais ida e volta por texto pra perder centavo.
+ */
+const recebidoCents = ref(0)
 const comprador = reactive({ nome: '', email: '', documento: '' })
 const vendendo = ref(false)
 const erro = ref('')
 const recibo = ref<any>(null)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+/**
+ * Desfazer, no próprio recibo.
+ *
+ * O erro do balcão aparece em segundos — quantidade digitada errada, cliente
+ * que desiste vendo o total, cartão passado na maquininha errada. Se o
+ * desfazer só existisse na tela de conferência, o operador com fila na frente
+ * "consertaria" no papel e o caixa fecharia torto.
+ */
+const cancelandoRecibo = ref(false)
+const motivoCancelamento = ref('')
+const enviandoCancelamento = ref(false)
 
+async function cancelarVenda() {
+  if (motivoCancelamento.value.trim().length < 3) {
+    erro.value = 'Diga por que está cancelando — pelo menos 3 letras.'
+    return
+  }
+  enviandoCancelamento.value = true; erro.value = ''
+  try {
+    const r: any = await $fetch(`/api/admin/evento/${id}/pdv/cancelamento`, {
+      method: 'POST',
+      body: { pedidoId: recibo.value.pedidoId, motivo: motivoCancelamento.value.trim() },
+    })
+    // o recibo continua na tela, agora marcado como cancelado: é o papel que
+    // o operador mostra pro cliente que está do outro lado do balcão
+    recibo.value = { ...recibo.value, cancelada: true, avisoCancelamento: r.aviso }
+    cancelandoRecibo.value = false
+    motivoCancelamento.value = ''
+    await recarregarTurno()
+  } catch (e: any) {
+    erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar a venda.'
+  } finally { enviandoCancelamento.value = false }
+}
+
+function fecharRecibo() {
+  recibo.value = null
+  cancelandoRecibo.value = false
+  motivoCancelamento.value = ''
+  erro.value = ''
+}
+
+// `reais` e `dataHora` vêm de `app/composables/formato.ts`.
 const totalCents = computed(() =>
   carrinho.value.reduce((s, i) => s + i.precoCents * i.quantidade, 0))
-
-const recebidoCents = computed(() =>
-  Math.round(Number(String(recebido.value).replace(/\./g, '').replace(',', '.') || 0) * 100))
 
 const trocoCents = computed(() =>
   forma.value === 'dinheiro' ? recebidoCents.value - totalCents.value : 0)
@@ -93,16 +144,15 @@ function menos(i: any) {
 function limpar() {
   carrinho.value = []
   forma.value = ''
-  recebido.value = ''
+  recebidoCents.value = 0
   comprador.nome = ''; comprador.email = ''; comprador.documento = ''
   erro.value = ''
 }
 
 /** notas que o operador recebe de verdade — evita digitar com fila na frente */
 const NOTAS = [500, 1000, 2000, 5000, 10000, 20000]
-function nota(c: number) {
-  recebido.value = ((recebidoCents.value + c) / 100).toFixed(2).replace('.', ',')
-}
+/** soma de inteiro: a nota entra no valor, não num texto que depois é relido */
+function nota(c: number) { recebidoCents.value += c }
 
 async function vender() {
   vendendo.value = true; erro.value = ''
@@ -167,7 +217,7 @@ function imprimir() { window.print() }
     </p>
 
     <p v-else-if="turno && turno.turno.status !== 'aberto'" class="faixa-erro mt-4">
-      Este caixa já foi fechado em {{ new Date(turno.turno.fechouEm).toLocaleString('pt-BR') }}.
+      Este caixa já foi fechado em {{ dataHora(turno.turno.fechouEm) }}.
       Abra um novo caixa para vender.
     </p>
 
@@ -261,15 +311,15 @@ function imprimir() { window.print() }
           </div>
 
           <template v-if="forma === 'dinheiro'">
-            <label class="rotulo mt-4">Recebeu quanto</label>
-            <input v-model="recebido" class="campo text-xl tabular-nums" inputmode="decimal"
-                   placeholder="0,00">
+            <label for="recebido" class="rotulo mt-4">Recebeu quanto</label>
+            <CampoMoeda id="recebido" v-model="recebidoCents" />
             <div class="mt-2 flex flex-wrap gap-1">
               <button v-for="n in NOTAS" :key="n" type="button"
                       class="chip px-3 py-1 text-sm" @click="nota(n)">+{{ reais(n) }}</button>
               <button type="button" class="chip px-3 py-1 text-sm"
-                      @click="recebido = (totalCents / 100).toFixed(2).replace('.', ',')">certo</button>
-              <button type="button" class="chip px-3 py-1 text-sm" @click="recebido = ''">limpar</button>
+                      @click="recebidoCents = totalCents">certo</button>
+              <button type="button" class="chip px-3 py-1 text-sm"
+                      @click="recebidoCents = 0">limpar</button>
             </div>
             <div class="mt-3 rounded-card p-3"
                  :class="trocoCents < 0 ? 'bg-erro-claro' : 'bg-ok-claro'">
@@ -317,10 +367,19 @@ function imprimir() { window.print() }
 
     <!-- recibo -->
     <div v-if="recibo" class="fixed inset-0 z-50 flex items-center justify-center bg-tinta/40 p-4"
-         @click.self="recibo = null">
-      <div class="w-full max-w-md rounded-card bg-fundo-card p-5">
-        <p class="selo-ok">Venda registrada</p>
+         @click.self="fecharRecibo">
+      <div class="max-h-full w-full max-w-md overflow-auto rounded-card bg-fundo-card p-5">
+        <p :class="recibo.cancelada ? 'selo-erro' : 'selo-ok'">
+          {{ recibo.cancelada ? 'Venda cancelada' : 'Venda registrada' }}
+        </p>
         <h2 class="titulo mt-2 text-xl font-bold text-tinta">Pedido {{ recibo.pedido }}</h2>
+
+        <p v-if="erro" class="faixa-erro mt-3">{{ erro }}</p>
+
+        <div v-if="recibo.cancelada" class="mt-3 rounded-card bg-alerta-claro p-3">
+          <p class="text-xs font-bold uppercase text-alerta">O que fazer agora</p>
+          <p class="mt-1 text-sm text-tinta-corpo">{{ recibo.avisoCancelamento }}</p>
+        </div>
 
         <dl class="mt-4 space-y-1 text-sm">
           <div class="flex justify-between">
@@ -337,7 +396,8 @@ function imprimir() { window.print() }
           </div>
         </dl>
 
-        <div v-if="recibo.trocoCents" class="mt-3 rounded-card bg-ok-claro p-3 text-center">
+        <div v-if="recibo.trocoCents && !recibo.cancelada"
+             class="mt-3 rounded-card bg-ok-claro p-3 text-center">
           <p class="text-xs font-bold uppercase text-ok">Troco a devolver</p>
           <p class="titulo text-4xl font-bold text-ok tabular-nums">{{ reais(recibo.trocoCents) }}</p>
         </div>
@@ -345,13 +405,44 @@ function imprimir() { window.print() }
         <ul class="mt-4 space-y-1 border-t border-linha pt-3 text-sm">
           <li v-for="t in recibo.ingressos" :key="t.id" class="flex justify-between gap-2">
             <span class="truncate text-tinta-suave">{{ t.setor }} — {{ t.lote }}</span>
-            <span class="font-bold tabular-nums">{{ t.codigo }}</span>
+            <span class="font-bold tabular-nums" :class="recibo.cancelada ? 'line-through text-tinta-fraca' : ''">
+              {{ t.codigo }}
+            </span>
           </li>
         </ul>
 
         <div class="mt-5 flex gap-2">
-          <button type="button" class="btn-secundario flex-1" @click="imprimir">Imprimir</button>
-          <button type="button" class="btn-primario flex-1" @click="recibo = null">Próximo cliente</button>
+          <button v-if="!recibo.cancelada" type="button" class="btn-secundario flex-1"
+                  @click="imprimir">Imprimir</button>
+          <button type="button" class="btn-primario flex-1" @click="fecharRecibo">Próximo cliente</button>
+        </div>
+
+        <!-- desfazer: fica embaixo e discreto, mas na mesma tela em que o
+             erro é percebido. O motivo é obrigatório porque é ele que sobra
+             no rastro quando o gerente perguntar amanhã. -->
+        <div v-if="!recibo.cancelada" class="mt-4 border-t border-linha pt-3">
+          <button v-if="!cancelandoRecibo" type="button"
+                  class="text-sm font-bold text-erro underline"
+                  @click="cancelandoRecibo = true">
+            Cancelar esta venda
+          </button>
+          <template v-else>
+            <label class="rotulo">Por que está cancelando?</label>
+            <input v-model="motivoCancelamento" class="campo"
+                   placeholder="Ex.: cliente desistiu no balcão">
+            <p class="mt-2 text-xs text-tinta-corpo">
+              Os {{ recibo.ingressos.length }} ingresso(s) deixam de valer na portaria e o
+              valor sai da conferência deste caixa.
+            </p>
+            <div class="mt-3 flex gap-2">
+              <button type="button" class="btn-secundario flex-1"
+                      @click="cancelandoRecibo = false">Voltar</button>
+              <button type="button" class="btn-erro flex-1" :disabled="enviandoCancelamento"
+                      @click="cancelarVenda">
+                {{ enviandoCancelamento ? 'Cancelando…' : `Cancelar ${reais(recibo.totalCents)}` }}
+              </button>
+            </div>
+          </template>
         </div>
       </div>
     </div>

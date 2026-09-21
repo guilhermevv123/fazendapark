@@ -18,7 +18,7 @@ no portão.
 | testes | `npx vitest run` (raiz do projeto) |
 | build de verdade | `npm run build` — **o único que pega template .vue quebrado e template literal aberta** |
 | banco | `/opt/homebrew/opt/postgresql@16/bin/psql -d diamond_tickets` |
-| migração | arquivo novo em `db/`, numerado; aplicar com `npm run db:push` |
+| migração | arquivo novo em `db/`, numerado; aplicar com `psql -d diamond_tickets -f db/0NN_nome.sql` (o `npm run db:push` aponta pra um script que não existe) |
 | curl logado | `/tmp/dt.sh <url-completa> [args do curl]` — entra como `dono@fazendapark.com.br` |
 
 Login: `http://localhost:3100/entrar` — `dono@fazendapark.com.br` (master) e

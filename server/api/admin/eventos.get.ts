@@ -8,8 +8,16 @@
  * O `WHERE e.org_id` não é detalhe: sem ele esta rota listava o evento de
  * TODO cliente da instalação — nome, local, data e faturamento — pra
  * qualquer login. O recorte vem da sessão, nunca de parâmetro.
+ *
+ * O `cobrado` da linha recortava por `status = 'pago'` e por isso o evento com
+ * estorno parcial aparecia aqui menor do que no próprio painel dele: o pedido
+ * inteiro sumia por causa da devolução de uma parte. A régua agora é
+ * `PEDIDO_VIVO()`, de `utils/liquido.ts`, e o líquido — o que sobra pro
+ * produtor — vem junto pela mesma `SQL_LIQUIDO()` do borderô e dos
+ * financeiros. Lista e detalhe têm que dizer o mesmo número.
  */
 import { q } from '../../utils/db'
+import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../utils/liquido'
 
 export default defineEventHandler(async (event) => {
   const orgId = (event.context as any).sessao?.orgId
@@ -18,15 +26,16 @@ export default defineEventHandler(async (event) => {
   const linhas = await q<any>(
     `SELECT e.id, e.name, e.slug, e.status, e.starts_at, e.ends_at,
             e.venue_name, e.city, e.state, e.thumb_url, o.name AS organizacao,
-            v.cobrado, v.pedidos, v.ingressos,
+            v.cobrado, v.liquido, v.pedidos, v.ingressos,
             est.quantidade, est.vendidos
        FROM events e
        JOIN organizations o ON o.id = e.org_id
        LEFT JOIN LATERAL (
          SELECT COALESCE(SUM(ord.total_cents),0)::bigint AS cobrado,
+                ${SQL_LIQUIDO('ord.')} AS liquido,
                 COUNT(*)::int AS pedidos,
                 COALESCE(SUM((SELECT SUM(quantity) FROM order_items WHERE order_id = ord.id)),0)::int AS ingressos
-           FROM orders ord WHERE ord.event_id = e.id AND ord.status = 'pago'
+           FROM orders ord WHERE ord.event_id = e.id AND ${PEDIDO_VIVO('ord.')}
        ) v ON true
        LEFT JOIN LATERAL (
          SELECT COALESCE(SUM(l.quantity),0)::int AS quantidade,
@@ -42,6 +51,8 @@ export default defineEventHandler(async (event) => {
     local: e.venue_name, cidade: e.city, estado: e.state, thumb: e.thumb_url,
     organizacao: e.organizacao,
     cobradoCents: Number(e.cobrado ?? 0),
+    // o mesmo líquido do borderô e dos dois financeiros deste evento
+    liquidoCents: Number(e.liquido ?? 0),
     pedidos: Number(e.pedidos ?? 0),
     ingressos: Number(e.ingressos ?? 0),
     estoque: { total: Number(e.quantidade ?? 0), vendidos: Number(e.vendidos ?? 0) },

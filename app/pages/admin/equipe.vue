@@ -13,19 +13,21 @@ const { data, refresh, pending, error: falha } = await useFetch<any>('/api/admin
 
 const erro = ref('')
 const salvando = ref(false)
-const senhaNaTela = ref<{ nome: string; email: string; senha: string } | null>(null)
+const senhaNaTela = ref<{ nome: string; email: string; senha: string; papel?: string } | null>(null)
 const confirmando = ref('')
 
-const PAPEIS = [
-  { v: 'master', r: 'Master', d: 'Tudo, inclusive mexer em outros masters' },
-  { v: 'admin', r: 'Administrador', d: 'Tudo, menos mexer em master' },
-  { v: 'financeiro', r: 'Financeiro', d: 'Borderô, transferências e relatórios' },
-  { v: 'marketing', r: 'Marketing', d: 'Cupons, promoters e relatórios' },
-  { v: 'operacional', r: 'Operacional', d: 'Ingressos, cortesias e vendas' },
-  { v: 'portaria', r: 'Portaria', d: 'Só o leitor de entrada' },
-  { v: 'leitura', r: 'Leitura', d: 'Vê tudo, não muda nada' },
-]
-const novo = reactive({ aberto: false, nome: '', email: '', papel: 'operacional' })
+/**
+ * A lista de papéis vem do SERVIDOR (`data.papeis`), não daqui. Ela já foi
+ * uma cópia escrita nesta página, e cópia de regra de permissão envelhece
+ * calada: a grade muda no servidor e a tela continua prometendo o antigo,
+ * sem erro, sem aviso, até alguém descobrir que "Marketing" não existe mais.
+ */
+type PapelDoCatalogo = { valor: string; rotulo: string; resumo: string; areas: string[] }
+const papeis = computed<PapelDoCatalogo[]>(() => data.value?.papeis ?? [])
+const rotuloDoPapel = (v: string) =>
+  papeis.value.find((p) => p.valor === v)?.rotulo ?? v
+
+const novo = reactive({ aberto: false, nome: '', email: '', papel: 'operacao' })
 
 async function criar() {
   erro.value = ''
@@ -35,8 +37,9 @@ async function criar() {
       method: 'POST',
       body: { nome: novo.nome, email: novo.email, papel: novo.papel },
     })
-    senhaNaTela.value = { nome: r.usuario.nome, email: r.usuario.email, senha: r.senhaProvisoria }
-    Object.assign(novo, { aberto: false, nome: '', email: '', papel: 'operacional' })
+    senhaNaTela.value = { nome: r.usuario.nome, email: r.usuario.email,
+                          senha: r.senhaProvisoria, papel: r.usuario.papel }
+    Object.assign(novo, { aberto: false, nome: '', email: '', papel: 'operacao' })
     await refresh()
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível criar o acesso.'
@@ -115,6 +118,7 @@ useHead({ title: 'Equipe' })
       </div>
       <p class="mt-2 text-xs text-tinta-fraca">
         Login: <strong>{{ senhaNaTela.email }}</strong>
+        <span v-if="senhaNaTela.papel"> — acesso de {{ rotuloDoPapel(senhaNaTela.papel) }}</span>
       </p>
     </div>
 
@@ -144,7 +148,7 @@ useHead({ title: 'Equipe' })
               <select :value="p.papel" class="campo py-1 text-sm"
                       :disabled="salvando || p.id === data.eu"
                       @change="mudar(p, { papel: ($event.target as HTMLSelectElement).value })">
-                <option v-for="o in PAPEIS" :key="o.v" :value="o.v">{{ o.r }}</option>
+                <option v-for="o in papeis" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
               </select>
             </td>
             <td class="px-3 py-3 text-xs text-tinta-suave">
@@ -179,11 +183,15 @@ useHead({ title: 'Equipe' })
     <div class="card mt-4">
       <p class="rotulo-kpi">O que cada papel pode</p>
       <dl class="mt-3 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
-        <div v-for="o in PAPEIS" :key="o.v" class="flex gap-2">
-          <dt class="w-28 shrink-0 font-medium text-tinta">{{ o.r }}</dt>
-          <dd class="text-tinta-suave">{{ o.d }}</dd>
+        <div v-for="o in papeis" :key="o.valor" class="flex gap-2">
+          <dt class="w-28 shrink-0 font-medium text-tinta">{{ o.rotulo }}</dt>
+          <dd class="text-tinta-suave">{{ o.resumo }}</dd>
         </div>
       </dl>
+      <p class="mt-3 border-t border-linha pt-3 text-xs text-tinta-fraca">
+        Quem tranca é o servidor, em toda chamada — não o menu. Rebaixar alguém
+        aqui vale na requisição seguinte, mesmo com a tela dele já aberta.
+      </p>
     </div>
 
     <ModalLateral v-if="novo.aberto" titulo="Dar acesso a alguém" @fechar="novo.aberto = false">
@@ -199,8 +207,11 @@ useHead({ title: 'Equipe' })
         <div>
           <label class="rotulo">Papel</label>
           <select v-model="novo.papel" class="campo">
-            <option v-for="o in PAPEIS" :key="o.v" :value="o.v">{{ o.r }} — {{ o.d }}</option>
+            <option v-for="o in papeis" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
           </select>
+          <p class="mt-1 text-xs text-tinta-suave">
+            {{ papeis.find((o) => o.valor === novo.papel)?.resumo }}
+          </p>
         </div>
         <p class="rounded-card bg-fundo-cinza px-3 py-2 text-xs text-tinta-suave">
           A senha é sorteada pelo sistema e aparece uma vez, na tela, depois de criar.

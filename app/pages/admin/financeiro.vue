@@ -13,8 +13,9 @@ definePageMeta({ layout: 'admin' })
 
 const { data, pending, error: falha, refresh } = await useFetch<any>('/api/admin/financeiro')
 
-const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
-  { style: 'currency', currency: 'BRL' })
+// dinheiro e data vêm de `app/composables/formato.ts` — a conta de centavo e
+// o corte do dia moram num lugar só.
+const brl = reais
 
 const SELO: Record<string, string> = {
   concluida: 'selo-ok', solicitada: 'selo-alerta', processando: 'selo-alerta',
@@ -36,7 +37,7 @@ function exportar() {
   const cab = ['Evento', 'Situação', 'Termina', 'Pedidos', 'Face', 'Taxa', 'Estornado',
                'Líquido', 'Transferido', 'Em curso', 'Retido', 'Disponível']
   const l = comMovimento.value.map((e: any) => [
-    e.nome, e.status, e.termina ? new Date(e.termina).toLocaleDateString('pt-BR') : '',
+    e.nome, e.status, dataCurta(e.termina, ''),
     String(e.pedidos), brl(e.faceCents), brl(e.taxaCents), brl(e.estornadoCents),
     brl(e.liquidoCents), brl(e.transferidoCents), brl(e.emCursoCents),
     brl(e.retidoCents), brl(e.disponivelCents),
@@ -105,14 +106,14 @@ useHead({ title: 'Financeiro' })
       <p class="rotulo-kpi">Entrada por mês</p>
       <div class="mt-3 flex items-end gap-2" style="height: 110px">
         <div v-for="m in [...data.porMes].reverse()" :key="m.mes" class="flex-1"
-             :title="`${new Date(m.mes).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })} — ${m.pedidos} pedidos, ${brl(m.faceCents)}`">
+             :title="`${mesAno(m.mes)} — ${m.pedidos} pedidos, ${brl(m.faceCents)}`">
           <div class="rounded-t bg-acao"
                :style="{ height: `${picoMes ? Math.max((m.faceCents / picoMes) * 96, 2) : 2}px` }" />
         </div>
       </div>
       <div class="mt-1 flex gap-2 text-center text-xs text-tinta-fraca">
         <span v-for="m in [...data.porMes].reverse()" :key="m.mes" class="flex-1">
-          {{ new Date(m.mes).toLocaleDateString('pt-BR', { month: 'short' }) }}
+          {{ mesCurto(m.mes) }}
         </span>
       </div>
     </div>
@@ -144,7 +145,7 @@ useHead({ title: 'Financeiro' })
                 {{ e.pedidos }} pedidos ·
                 <template v-if="e.liberado">liberado</template>
                 <template v-else>
-                  libera em {{ new Date(e.liberaEm).toLocaleDateString('pt-BR') }}
+                  libera em {{ dataCurta(e.liberaEm) }}
                 </template>
               </p>
             </td>
@@ -206,7 +207,7 @@ useHead({ title: 'Financeiro' })
               <td class="px-3 py-2.5 text-xs text-tinta-suave">
                 {{ t.evento ?? '—' }}
                 <span class="block text-tinta-fraca">
-                  {{ new Date(t.solicitadaEm).toLocaleDateString('pt-BR') }}
+                  {{ dataCurta(t.solicitadaEm) }}
                   <template v-if="t.pedidoPor"> · {{ t.pedidoPor }}</template>
                 </span>
               </td>

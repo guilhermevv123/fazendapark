@@ -16,6 +16,13 @@
  */
 definePageMeta({ layout: 'admin' })
 
+// A lista de motivos e o teto de 40% vêm do MESMO módulo que o checkout usa
+// (server/utils/meia-entrada.ts). Copiar os textos para cá criaria duas
+// verdades sobre o que a portaria pede — e a da tela é a que o produtor lê
+// antes de configurar. O módulo é regra pura: não importa `pg` em valor, não
+// toca banco, não tem efeito colateral nenhum ao ser carregado.
+import { COTA_LEGAL_BPS, cotaDeMeias, MOTIVOS } from '~~/server/utils/meia-entrada'
+
 const route = useRoute()
 const id = route.params.id as string
 
@@ -199,6 +206,53 @@ async function aplicarAlvo(loteId: string) {
   if (ok) Object.assign(alvo, { loteId: '', totalCents: 0 })
 }
 
+/* -------------------------------------------------------- meia-entrada ---- */
+/**
+ * A espécie do tipo, decidida do MESMO jeito que a coluna gerada
+ * `ticket_types.kind` decide (db/015_meia_entrada.sql): desconto de 100% é
+ * gratuidade, desconto COM documento é meia-entrada legal, o resto é inteira
+ * (inclusive uma promoção de 50% — promoção não pede documento no portão e não
+ * consome cota).
+ *
+ * Está espelhada aqui, e não lida do servidor, porque o GET desta tela ainda
+ * não devolve a coluna `kind` — e a rota do GET não é deste pacote de
+ * alteração. Quando ela passar a devolver, esta função sai e a tela lê o valor
+ * do banco. Enquanto isso: mudou a regra na migração, muda aqui.
+ */
+function especieDoTipo(t: any): 'inteira' | 'meia' | 'gratuito' {
+  const desconto = Number(t?.descontoBps ?? 0)
+  if (desconto >= 10_000) return 'gratuito'
+  if (desconto > 0 && t?.exigeDocumento) return 'meia'
+  return 'inteira'
+}
+
+const SELO_ESPECIE: Record<string, { texto: string; classe: string }> = {
+  meia: { texto: 'Meia-entrada', classe: 'selo-alerta' },
+  gratuito: { texto: 'Gratuito', classe: 'selo-ok' },
+}
+
+/**
+ * Quanto da cota legal deste lote já saiu.
+ *
+ * A cota é do LOTE e vale para todos os tipos de meia dele somados: um lote
+ * com "Meia estudante" e "Meia idoso" tem uma cota só, não duas. O número sai
+ * da mesma função que o checkout usa para recusar a venda — se as duas
+ * discordassem, o produtor veria vaga onde o comprador ouve "acabou".
+ *
+ * Usa o teto legal (40%). O servidor lê `lots.half_quota_bps`, que hoje nasce
+ * nesse mesmo valor em todo lote e não tem tela que mude — quando tiver, este
+ * número precisa vir do GET junto com o resto do lote.
+ */
+function cotaDoLote(lote: any) {
+  const meias = (lote.tipos ?? []).filter((t: any) => especieDoTipo(t) === 'meia')
+  if (!meias.length) return null
+  const cota = cotaDeMeias(Number(lote.quantidade), COTA_LEGAL_BPS)
+  const vendidas = meias.reduce((s: number, t: any) => s + Number(t.vendidos), 0)
+  return { cota, vendidas, restam: Math.max(cota - vendidas, 0) }
+}
+
+const inteiro = (n: number) => n.toLocaleString('pt-BR')
+
 /* --------------------------------------------------------------- tipos ---- */
 const tipoForm = reactive({
   aberto: false, id: '', loteId: '', nome: '', quantidade: 50,
@@ -228,6 +282,20 @@ async function salvarTipo() {
     : await chamar('POST', { o: 'tipo', loteId: tipoForm.loteId, ...campos })
   if (ok) tipoForm.aberto = false
 }
+
+/** Que espécie este tipo VAI ser quando salvar, com o que está no formulário. */
+const especieDoForm = computed(() => especieDoTipo({
+  descontoBps: tipoForm.descontoBps, exigeDocumento: tipoForm.exigeDocumento,
+}))
+
+/** O lote que o formulário está editando — é a cota DELE que a janela mostra. */
+const loteDoForm = computed(() => {
+  for (const s of data.value?.setores ?? []) {
+    const l = s.lotes.find((x: any) => x.id === tipoForm.loteId)
+    if (l) return l
+  }
+  return null
+})
 
 /* -------------------------------------------------------------- apagar ---- */
 const confirmando = ref('')
@@ -467,11 +535,48 @@ useHead({ title: 'Ingressos' })
 
               <!-- tipos do lote -->
               <template v-if="expandidos.includes(lote.id)">
+                <!-- A cota legal da meia deste lote. Fica ACIMA dos tipos
+                     porque ela vale para todos eles somados: o produtor
+                     precisa ver que "Meia estudante" e "Meia idoso" dividem o
+                     mesmo teto, e não têm um cada. -->
+                <tr v-if="cotaDoLote(lote)" class="border-b border-linha bg-alerta-claro">
+                  <td />
+                  <td colspan="7" class="px-3 py-2 pl-6">
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span class="selo-alerta">Meia-entrada</span>
+                      <span class="text-sm text-tinta-corpo">
+                        Cota legal de 40% deste lote:
+                        <strong class="tabular-nums text-tinta">{{ inteiro(cotaDoLote(lote)!.vendidas) }}</strong>
+                        de <strong class="tabular-nums text-tinta">{{ inteiro(cotaDoLote(lote)!.cota) }}</strong>
+                        vendidas ·
+                        <strong class="tabular-nums text-tinta">{{ inteiro(cotaDoLote(lote)!.restam) }}</strong>
+                        ainda cabem
+                      </span>
+                      <span v-if="!cotaDoLote(lote)!.restam" class="selo-erro">Cota esgotada</span>
+                      <span class="ml-auto w-40 shrink-0">
+                        <span class="block h-2 w-full overflow-hidden rounded-full bg-white">
+                          <span class="block h-full rounded-full bg-alerta"
+                                :style="{ width: `${cotaDoLote(lote)!.cota
+                                  ? Math.min(100, (cotaDoLote(lote)!.vendidas / cotaDoLote(lote)!.cota) * 100) : 0}%` }" />
+                        </span>
+                      </span>
+                    </div>
+                    <p class="mt-1 text-xs text-tinta-suave">
+                      Lei 12.933/2013: quando a cota acaba, o comprador ouve que a meia
+                      esgotou e a inteira deste lote segue à venda.
+                    </p>
+                  </td>
+                </tr>
+
                 <tr v-for="t in lote.tipos" :key="t.id" class="border-b border-linha bg-fundo-cinza/40">
                   <td />
                   <td class="px-3 py-2 pl-6">
                     <span class="font-medium text-tinta">{{ t.nome }}</span>
                     <span v-if="t.descontoBps" class="selo-neutro ml-2">−{{ (t.descontoBps / 100).toFixed(0) }}%</span>
+                    <span v-if="SELO_ESPECIE[especieDoTipo(t)]"
+                          class="ml-2" :class="SELO_ESPECIE[especieDoTipo(t)].classe">
+                      {{ SELO_ESPECIE[especieDoTipo(t)].texto }}
+                    </span>
                     <span v-if="t.exigeDocumento" class="ml-2 text-xs text-tinta-fraca">com documento</span>
                   </td>
                   <td class="px-3 py-2 text-right">
@@ -651,6 +756,45 @@ useHead({ title: 'Ingressos' })
           <input v-model="tipoForm.exigeDocumento" type="checkbox"> Exige documento
         </label>
       </div>
+
+      <!-- O que este tipo VAI ser. A espécie não é um campo separado: ela sai
+           do desconto + "exige documento", que é o que o produtor já preenche.
+           Mostrar o resultado aqui é o que impede a confusão cara — criar
+           "Meia-entrada" sem marcar o documento e achar que a cota de 40%
+           está valendo quando não está. -->
+      <div v-if="especieDoForm === 'meia'" class="faixa-aviso mt-3">
+        <p class="font-bold text-tinta">Isto é uma meia-entrada legal.</p>
+        <p class="mt-1">
+          Vale para até 40% dos ingressos do lote<template v-if="loteDoForm">
+            — <strong class="tabular-nums">{{ inteiro(cotaDeMeias(Number(loteDoForm.quantidade))) }}</strong>
+            em "{{ loteDoForm.nome }}"</template>. O comprador escolhe o motivo na compra
+          e a portaria confere:
+        </p>
+        <ul class="mt-2 space-y-1">
+          <li v-for="(m, chave) in MOTIVOS" :key="chave" class="text-xs">
+            <strong class="text-tinta">{{ m.rotulo }}</strong> — {{ m.documento }}
+          </li>
+        </ul>
+      </div>
+
+      <div v-else-if="tipoForm.descontoBps > 0 && tipoForm.descontoBps < 10000"
+           class="faixa-aviso mt-3">
+        <p class="font-bold text-tinta">Isto é uma promoção, não meia-entrada.</p>
+        <p class="mt-1">
+          Desconto sem documento não entra na cota de 40% e a portaria não vai pedir
+          comprovação nenhuma na entrada. Marque <strong>Exige documento</strong> para
+          valer como meia-entrada da Lei 12.933/2013.
+        </p>
+      </div>
+
+      <div v-else-if="especieDoForm === 'gratuito'" class="faixa-aviso mt-3">
+        <p class="font-bold text-tinta">Isto é uma gratuidade.</p>
+        <p class="mt-1">
+          Sai por R$ 0,00 e não consome a cota de meia-entrada do lote — mas continua
+          tirando ingresso do estoque.
+        </p>
+      </div>
+
       <template #acoes>
         <button type="button" class="btn-secundario" @click="tipoForm.aberto = false">Cancelar</button>
         <button type="button" class="btn-primario" :disabled="salvando" @click="salvarTipo">

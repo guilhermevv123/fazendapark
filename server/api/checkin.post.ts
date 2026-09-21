@@ -11,11 +11,16 @@
  * passarem.
  *
  * TODA leitura vira linha em checkins, inclusive a recusada — é o que permite
- * auditar fila, portão e tentativa de fraude depois.
+ * auditar fila, portão e tentativa de fraude depois. E toda leitura ACEITA
+ * vira também uma linha em `entries`, o livro de quem entrou: é de lá que sai
+ * a contagem de PESSOAS (uma mesa de 4 é uma leitura e quatro pessoas) e é lá
+ * que a entrada feita offline, sem servidor, vai parar quando a rede voltar.
+ * Os dois caminhos gravam no mesmo livro, com o mesmo formato de id.
  */
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import { q, q1, tx } from '../utils/db'
-import { SQL_MARCA_ENTRADA } from '../utils/catraca'
+import { SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA, SQL_PRIMEIRA_ENTRADA } from '../utils/catraca'
 import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingresso'
 
 const Entrada = z.object({
@@ -24,12 +29,21 @@ const Entrada = z.object({
   gate: z.string().max(40).optional(),
   /** só confere, não marca — pro operador checar antes de deixar entrar */
   apenasConsultar: z.boolean().default(false),
+  /**
+   * id da passagem, criado no DISPOSITIVO antes de mandar. Opcional: quem não
+   * manda ganha um do servidor. Mandar é melhor — se a resposta se perder no
+   * caminho e o operador ler de novo, a segunda tentativa carrega o mesmo id e
+   * o livro não ganha duas linhas pra uma pessoa só.
+   */
+  entradaId: z.string().uuid().optional(),
+  /** qual tablet. Vira a coluna que explica duas entradas do mesmo ingresso. */
+  deviceId: z.string().max(60).optional(),
 })
 
 export default defineEventHandler(async (event) => {
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Dados inválidos' })
-  const { qr, eventId, gate, apenasConsultar } = p.data
+  const { qr, eventId, gate, apenasConsultar, entradaId, deviceId } = p.data
 
   // Quem leu. O middleware já exigiu sessão nesta rota, então o operador
   // SEMPRE existe aqui. Sem este carimbo, `checkins.operator_id` e
@@ -98,7 +112,7 @@ export default defineEventHandler(async (event) => {
   if (ingresso.status === 'cancelado') return registrar('cancelado', ingresso.id, codigo)
   if (ingresso.status === 'usado') {
     const r = await registrar('ja_usado', ingresso.id, codigo)
-    return { ...r, entrouEm: ingresso.checked_in_at, titular: ingresso.holder_name }
+    return { ...r, ...(await ondeEntrou(ingresso)), titular: ingresso.holder_name }
   }
 
   // janela da sessão, com 2h de folga antes e depois — chegar cedo é normal
@@ -120,18 +134,34 @@ export default defineEventHandler(async (event) => {
   // ---- a trava: só um UPDATE consegue virar 'usado' -----------------------
   // A instrução mora em utils/catraca.ts pra que o teste rode exatamente
   // esta, e não uma cópia que envelhece sozinha.
-  const venceu = await tx(async (c) => {
+  //
+  // O livro de entradas é escrito na MESMA transação: um carimbo sem linha no
+  // livro é uma pessoa dentro do parque que o relatório de público não conta,
+  // e é o tipo de furo que só aparece no fim da noite, quando a conferência
+  // não fecha e ninguém sabe qual das duas telas está errada.
+  const passagem = await tx(async (c) => {
     const r = await c.query(SQL_MARCA_ENTRADA, [ingresso.id, operador])
-    return r.rowCount === 1
+    if (r.rowCount !== 1) return null
+
+    const gravar = (id: string) => c.query(SQL_GRAVA_ENTRADA,
+      [id, ingresso.id, orgDaSessao, gate ?? null, deviceId ?? null, operador, false, null])
+
+    let livro = await gravar(entradaId ?? randomUUID())
+    // `RETURNING` vazio só acontece se o id mandado pelo dispositivo já estiver
+    // no livro (dois eventos diferentes reusando o mesmo uuid — bug de quem
+    // chama). O carimbo já foi dado e a pessoa está passando: a saída certa é
+    // registrar com um id novo, não devolver erro pra uma fila que anda.
+    if (livro.rowCount !== 1) livro = await gravar(randomUUID())
+    return { pessoas: Number(livro.rows[0]?.people ?? 1) }
   })
 
-  if (!venceu) {
+  if (!passagem) {
     const r = await registrar('ja_usado', ingresso.id, codigo)
-    return { ...r, titular: ingresso.holder_name }
+    return { ...r, ...(await ondeEntrou(ingresso)), titular: ingresso.holder_name }
   }
 
   const r = await registrar('ok', ingresso.id, codigo)
-  return { ...r, ingresso: dadosDoIngresso(ingresso) }
+  return { ...r, ingresso: dadosDoIngresso(ingresso), pessoas: passagem.pessoas }
 })
 
 function dadosDoIngresso(i: any) {
@@ -140,5 +170,23 @@ function dadosDoIngresso(i: any) {
     setor: i.setor,
     lote: i.lote,
     tipo: i.tipo,
+  }
+}
+
+/**
+ * Onde e quando este ingresso já passou.
+ *
+ * "Este ingresso já entrou" com a fila andando e o cliente jurando que não
+ * entrou não resolve nada — e era só isso que a porta dizia. Com o portão e a
+ * hora, o operador responde em dois segundos e a fila volta a andar. Cai pro
+ * `checked_in_at` do ingresso quando a passagem é anterior ao livro.
+ */
+async function ondeEntrou(i: any) {
+  const e = await q1<any>(SQL_PRIMEIRA_ENTRADA, [i.id])
+  return {
+    entrouEm: e?.entered_at ?? i.checked_in_at,
+    portao: e?.gate ?? null,
+    operadorEntrada: e?.operador ?? null,
+    entrouOffline: e?.offline ?? false,
   }
 }

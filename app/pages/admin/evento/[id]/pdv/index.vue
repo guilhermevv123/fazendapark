@@ -32,10 +32,8 @@ const novo = reactive({
   formas: ['dinheiro', 'debito', 'credito', 'pix'] as string[],
 })
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const quando = (v: string | null) => v
-  ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
-  : '—'
+// `reais` e `dataHora` vêm de `app/composables/formato.ts`.
+const quando = dataHora
 
 function alterna(lista: string[], v: string) {
   const i = lista.indexOf(v)
@@ -84,16 +82,25 @@ async function ativar(p: any, v: boolean) {
 }
 
 const abrindo = ref<any>(null)
-const fundo = ref('')
+
+/**
+ * Fundo de troco em centavos INTEIROS, pela máscara do `CampoMoeda`.
+ *
+ * Aqui morava um `Number(texto.replace(',', '.')) * 100`: ele troca só a
+ * PRIMEIRA vírgula e não sabe o que fazer com o ponto de milhar, então quem
+ * digitasse "1.200,00" mandava `NaN` pro servidor — o fundo entrava zerado e
+ * a conferência do fim da noite acusava R$ 1.200,00 de sobra na gaveta.
+ */
+const fundoCents = ref(0)
+
 async function abrirCaixa() {
   const p = abrindo.value
   salvando.value = true; erro.value = ''
   try {
-    const centavos = Math.round(Number(String(fundo.value).replace(',', '.') || 0) * 100)
     const r: any = await $fetch(`/api/admin/evento/${id}/pdv/turno`, {
-      method: 'POST', body: { pontoId: p.id, fundoCents: centavos },
+      method: 'POST', body: { pontoId: p.id, fundoCents: fundoCents.value },
     })
-    abrindo.value = null; fundo.value = ''
+    abrindo.value = null; fundoCents.value = 0
     await navigateTo(`/admin/evento/${id}/pdv/vender?turno=${r.turnoId}`)
   } catch (e: any) { erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra abrir o caixa.' }
   finally { salvando.value = false }
@@ -180,7 +187,7 @@ async function abrirCaixa() {
           <NuxtLink v-if="p.turno" :to="`/admin/evento/${id}/pdv/vender?turno=${p.turno.id}`"
                     class="btn-primario">Vender</NuxtLink>
           <button v-else-if="p.ativo" type="button" class="btn-primario"
-                  @click="abrindo = p; fundo = ''">Abrir caixa</button>
+                  @click="abrindo = p; fundoCents = 0">Abrir caixa</button>
 
           <NuxtLink v-if="p.turno" :to="`/admin/evento/${id}/pdv/caixa?turno=${p.turno.id}`"
                     class="btn-secundario">Conferir e fechar</NuxtLink>
@@ -289,9 +296,8 @@ async function abrirCaixa() {
           Quanto de troco está na gaveta agora, antes de vender qualquer coisa?
           Esse número é o que faz a conferência do fim da noite bater.
         </p>
-        <label class="rotulo mt-4">Fundo de troco</label>
-        <input v-model="fundo" class="campo" inputmode="decimal" placeholder="200,00"
-               @keyup.enter="abrirCaixa">
+        <label for="fundo" class="rotulo mt-4">Fundo de troco</label>
+        <CampoMoeda id="fundo" v-model="fundoCents" @keyup.enter="abrirCaixa" />
         <div class="mt-5 flex gap-2">
           <button type="button" class="btn-secundario flex-1" @click="abrindo = null">Cancelar</button>
           <button type="button" class="btn-primario flex-1" :disabled="salvando" @click="abrirCaixa">

@@ -7,22 +7,25 @@ const id = route.params.id as string
 const periodo = ref<'tudo' | 'hoje' | '7d'>('tudo')
 const aba = ref<'geral' | 'publico'>('geral')
 
+/**
+ * A régua de período sai de `diaLocal`, não de `toISOString().slice(0, 10)`.
+ *
+ * O `toISOString` converte pra UTC antes de cortar: às 21h da Bahia ele já
+ * devolve amanhã. O botão "Hoje" pedia `de=amanhã&ate=amanhã` e o dashboard
+ * mostrava a noite de venda vazia — na noite do evento, que é quando esta
+ * tela é aberta. Nada quebrava, nada aparecia no console: o número só ficava
+ * errado.
+ */
 const janela = computed(() => {
-  const hoje = new Date()
-  if (periodo.value === 'hoje') return { de: iso(hoje), ate: iso(hoje) }
-  if (periodo.value === '7d') {
-    const d = new Date(hoje); d.setDate(d.getDate() - 6)
-    return { de: iso(d), ate: iso(hoje) }
-  }
+  if (periodo.value === 'hoje') return { de: diaLocal(), ate: diaLocal() }
+  if (periodo.value === '7d') return { de: diaLocalMais(-6), ate: diaLocal() }
   return {}
 })
-const iso = (d: Date) => d.toISOString().slice(0, 10)
 
 const { data, pending } = await useFetch<any>(
   () => `/api/admin/evento/${id}/dashboard`,
   { query: janela, watch: [janela] })
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const num = (n: number) => n.toLocaleString('pt-BR')
 
 // ---------------------------------------------------- gráfico de linha (SVG)
@@ -42,8 +45,8 @@ const linha = computed(() => {
     area: `M${x(0)},${y(0)} ` +
       serie.map((s, i) => `L${x(i).toFixed(1)},${y(s.v).toFixed(1)}`).join(' ') +
       ` L${x(serie.length - 1)},${y(0)} Z`,
-    grade: [0, 0.25, 0.5, 0.75, 1].map((f) => ({ y: y(max * f), rotulo: reais(max * f) })),
-    rotulosX: serie.map((s, i) => ({ x: x(i), texto: new Date(s.dia).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) })),
+    grade: [0, 0.25, 0.5, 0.75, 1].map((f) => ({ y: y(max * f), rotulo: reais(Math.round(max * f)) })),
+    rotulosX: serie.map((s, i) => ({ x: x(i), texto: diaMes(s.dia) })),
     fim: { x: x(serie.length - 1), y: y(serie[serie.length - 1].v) },
   }
 })

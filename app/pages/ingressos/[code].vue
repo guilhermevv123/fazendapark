@@ -5,22 +5,79 @@
  * Um ingresso por bloco, QR grande, e o código legível embaixo — porque
  * quando a internet da portaria cai (e cai), o que salva a fila é o operador
  * conseguir digitar o código à mão.
+ *
+ * `reais` e `dataHora` vêm de `app/composables/formato.ts`. A cópia local que
+ * existia aqui montava o `R$` com `toLocaleString('pt-BR', { style:
+ * 'currency' })`, que separa o símbolo com espaço FINO (U+00A0): duas strings
+ * idênticas na tela que não são iguais na comparação.
  */
 const route = useRoute()
 const code = route.params.code as string
 
 const { data, error, refresh } = await useFetch<any>(`/api/pedido/${code}`)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const quando = (d: string) => new Date(d).toLocaleString('pt-BR', {
-  day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
-})
+const quando = (v: any) => {
+  const d = paraData(v)
+  return d
+    ? d.toLocaleString('pt-BR', {
+        day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+      })
+    : '—'
+}
 
 const estado: Record<string, { t: string; c: string }> = {
   valido: { t: 'VÁLIDO', c: 'selo-ok' },
   usado: { t: 'JÁ UTILIZADO', c: 'selo-neutro' },
   cancelado: { t: 'CANCELADO', c: 'selo-erro' },
 }
+
+/* ------------------------------------------- pedido ainda não pago ------- */
+/**
+ * Quem cai aqui com o pedido em aberto fechou a aba do pagamento (ou pagou por
+ * outro aparelho). O que ele precisa é a MESMA coisa daquela tela: o
+ * copia-e-cola, o prazo e a certeza de que a página se atualiza sozinha. Sem
+ * isso, o caminho dele é ligar pra bilheteria.
+ */
+const copiado = ref(false)
+const restante = ref(0)
+let timerContagem: any, timerVigia: any
+
+const relogio = computed(() => {
+  const m = Math.floor(restante.value / 60), s = restante.value % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+})
+
+async function copiarPix() {
+  try {
+    await navigator.clipboard.writeText(data.value.pagamento.pixPayload)
+    copiado.value = true
+    setTimeout(() => (copiado.value = false), 2500)
+  } catch { /* sem permissão de área de transferência: o texto está na tela */ }
+}
+
+onMounted(() => {
+  if (data.value?.status !== 'aguardando_pagamento') return
+
+  if (data.value.expiraEm) {
+    const fim = new Date(data.value.expiraEm).getTime()
+    const tick = () => { restante.value = Math.max(0, Math.floor((fim - Date.now()) / 1000)) }
+    tick()
+    timerContagem = setInterval(tick, 1000)
+  }
+  // O `catch` não é mudo: uma consulta que falha em silêncio aqui é a tela que
+  // fica em "aguardando" pra sempre depois de o pagamento já ter caído.
+  timerVigia = setInterval(async () => {
+    try {
+      await refresh()
+      if (data.value?.status !== 'aguardando_pagamento') {
+        clearInterval(timerVigia); clearInterval(timerContagem)
+      }
+    } catch (e: any) {
+      console.error('[ingressos] não deu pra reconsultar o pedido', e?.data ?? e)
+    }
+  }, 6000)
+})
+onUnmounted(() => { clearInterval(timerVigia); clearInterval(timerContagem) })
 
 useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingressos' }))
 </script>
@@ -73,21 +130,79 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
           <p class="text-tinta-corpo">
             Este pedido ainda não foi pago, então os ingressos não foram emitidos.
           </p>
-          <div v-if="data.pagamento?.pixQrBase64" class="mt-4 text-center">
-            <img :src="`data:image/png;base64,${data.pagamento.pixQrBase64}`"
-                 alt="QR Code do PIX" class="mx-auto h-52 w-52">
-            <p class="mt-2 text-sm text-tinta-suave">Pague o PIX acima para receber seus ingressos.</p>
+
+          <div v-if="data.pagamento?.pixQrBase64 || data.pagamento?.pixPayload" class="mt-4">
+            <img v-if="data.pagamento.pixQrBase64"
+                 :src="`data:image/png;base64,${data.pagamento.pixQrBase64}`"
+                 alt="QR Code do PIX" class="mx-auto h-52 w-52 max-w-full">
+            <p v-if="data.pagamento.pixPayload"
+               class="mt-3 break-all rounded-card bg-fundo-cinza p-3 text-left font-mono text-[11px] text-tinta-corpo">
+              {{ data.pagamento.pixPayload }}
+            </p>
+            <button v-if="data.pagamento.pixPayload" type="button"
+                    class="btn-secundario mt-3 w-full py-2.5" @click="copiarPix">
+              {{ copiado ? 'Copiado!' : 'Copiar código PIX' }}
+            </button>
+            <p class="mt-3 text-center text-sm text-tinta-suave">
+              Pague o PIX acima e espere aqui: a página se atualiza sozinha.
+            </p>
           </div>
+
+          <p v-if="data.status === 'aguardando_pagamento' && restante > 0"
+             class="mt-3 text-center text-sm text-tinta-suave">
+            Reserva garantida por <span class="font-bold tabular-nums text-acao">{{ relogio }}</span>
+          </p>
         </div>
 
         <!-- ingressos -->
         <section v-else class="mt-4 space-y-4">
+          <!--
+            Onde mais o ingresso está. Quem paga online espera o e-mail em
+            segundos; quando ele não aparece, a pessoa não sabe se o problema
+            é a compra ou a caixa de entrada — e liga pra bilheteria
+            perguntando se o pagamento passou. Dizer aqui pra onde foi, e que
+            ESTE link vale sozinho, responde a ligação antes dela acontecer.
+
+            O e-mail chega mascarado da API de propósito: o código do pedido é
+            a credencial desta página, e quem chutar um código não descobre de
+            quem ele é.
+
+            NÃO diz "mandamos", diz "se não chegou". A diferença não é estilo:
+            esta tela não sabe se o e-mail saiu. Ela lê `/api/pedido/:code`, que
+            não consulta `email_sends` — então afirmar o envio seria afirmar o
+            que não foi conferido, e está errado em três casos reais: pedido
+            pago ANTES desta entrega existir (medido: 60 pedidos pagos neste
+            banco, todos com e-mail no cadastro e ZERO linha na fila), envio que
+            terminou em `falhou`, e pagamento com `paid_at` velho, que o gatilho
+            da 018 ignora de propósito. Os três levam a pessoa a esta página
+            justamente porque nada chegou — e ler "também mandamos" aqui é o
+            sistema mentindo na cara de quem já está reclamando. Para afirmar,
+            a rota precisa devolver o estado do envio.
+
+            Fica DENTRO desta seção e não entre ela e o bloco de cima: `v-else`
+            precisa ser irmão imediato do `v-if`, e um elemento no meio quebra
+            a cadeia inteira — a tela do pedido não pago some sem erro nenhum.
+          -->
+          <p v-if="data.comprador.email" class="faixa-aviso print:hidden">
+            Guarde este link: ele é o próprio ingresso e vale sozinho, sem depender de e-mail.
+            Se a confirmação não chegou em
+            <strong class="text-tinta">{{ data.comprador.email }}</strong>, procure por
+            <strong class="text-tinta">diamond.tickets</strong> no spam — ou peça o reenvio na
+            bilheteria com o pedido <strong class="text-tinta">{{ data.pedido }}</strong>.
+          </p>
+
           <article v-for="(t, i) in data.ingressos" :key="t.id"
                    class="card flex flex-col gap-4 sm:flex-row sm:items-center">
+            <!-- O primeiro QR carrega `eager`: é ele que a portaria lê, e é o
+                 que precisa estar pronto antes de a pessoa chegar na catraca.
+                 Do segundo em diante vale adiar — pedido de 10 ingressos são
+                 10 PNGs, e os de baixo esperam a rolagem sem prejudicar
+                 ninguém. `lazy` no primeiro já rendeu `complete: false` com a
+                 rota devolvendo 200 na medição do navegador. -->
             <img :src="`/api/ingresso/${t.id}/qr.png?pedido=${data.pedido}`"
                  :alt="`QR do ingresso ${t.codigo}`"
                  class="mx-auto h-40 w-40 shrink-0 rounded-card border border-linha bg-white p-1 sm:mx-0"
-                 loading="lazy">
+                 :loading="i === 0 ? 'eager' : 'lazy'" decoding="async">
 
             <div class="min-w-0 flex-1">
               <div class="flex items-start justify-between gap-3">

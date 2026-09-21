@@ -33,7 +33,20 @@ const { data, refresh } = await useFetch<any>(
 
 watch(turnoId, (v) => { if (v) refresh() }, { immediate: true })
 
-const contado = ref('')
+/**
+ * O que o operador contou, em centavos INTEIROS, pela máscara do `CampoMoeda`.
+ *
+ * Era texto livre reinterpretado no envio, e a reinterpretação tirava TODO
+ * ponto antes de converter: quem contasse a gaveta e digitasse "500.00" no
+ * teclado numérico mandava 50000 reais. A conferência acusava uma falta de
+ * R$ 49.500,00 numa gaveta certinha — e a diferença de caixa é justamente o
+ * número que esta tela existe pra dizer.
+ *
+ * `contou` separa "ainda não digitou nada" de "contou zero": sem ele o botão
+ * de fechar ficava preso quando a gaveta realmente zerou.
+ */
+const contadoCents = ref(0)
+const contou = ref(false)
 const observacao = ref('')
 const fechando = ref(false)
 const erro = ref('')
@@ -42,32 +55,71 @@ const resultado = ref<any>(null)
 /** a gaveta só revela o esperado depois que o operador se compromete */
 const revelou = ref(false)
 
-const mov = reactive({ tipo: 'sangria', valor: '', motivo: '' })
+const mov = reactive({ tipo: 'sangria', valorCents: 0, motivo: '' })
 const movendo = ref(false)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const quando = (v: string | null) => v
-  ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
-  : '—'
+/**
+ * Cancelamento: qual venda está com o formulário aberto, e o que o operador
+ * precisa fazer depois de confirmar.
+ *
+ * O aviso fica na tela até ele fechar. É ali que aparece "devolva R$ 90,00" —
+ * a única parte do cancelamento que acontece fora do sistema, e a que o caixa
+ * cobra de volta no fim da noite se ninguém fizer.
+ */
+const cancelando = ref('')
+const motivoCancelamento = ref('')
+const enviandoCancelamento = ref(false)
+const avisoCancelamento = ref('')
+
+function abrirCancelamento(pedidoId: string) {
+  cancelando.value = pedidoId
+  motivoCancelamento.value = ''
+  erro.value = ''
+}
+
+async function confirmarCancelamento(pedidoId: string) {
+  if (motivoCancelamento.value.trim().length < 3) {
+    erro.value = 'Diga por que está cancelando — pelo menos 3 letras.'
+    return
+  }
+  enviandoCancelamento.value = true; erro.value = ''
+  try {
+    const r: any = await $fetch(`/api/admin/evento/${id}/pdv/cancelamento`, {
+      method: 'POST',
+      body: { pedidoId, motivo: motivoCancelamento.value.trim() },
+    })
+    avisoCancelamento.value = r.aviso
+    cancelando.value = ''
+    motivoCancelamento.value = ''
+    await refresh()
+  } catch (e: any) {
+    erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar a venda.'
+  } finally { enviandoCancelamento.value = false }
+}
+
+// `reais` e `dataHora` vêm de `app/composables/formato.ts`.
+const quando = dataHora
 const FORMA_NOME: Record<string, string> = {
   dinheiro: 'Dinheiro', debito: 'Débito', credito: 'Crédito', pix: 'Pix',
 }
 
-const centavos = (v: string) =>
-  Math.round(Number(String(v).replace(/\./g, '').replace(',', '.') || 0) * 100)
-
 const aberto = computed(() => data.value?.turno?.status === 'aberto')
 
 async function registrarMovimento() {
-  const v = centavos(mov.valor)
-  if (v <= 0) { erro.value = 'Informe o valor.'; return }
+  if (mov.valorCents <= 0) {
+    erro.value = 'Diga quanto saiu ou entrou na gaveta antes de registrar.'
+    return
+  }
   movendo.value = true; erro.value = ''
   try {
     await $fetch(`/api/admin/evento/${id}/pdv/gaveta`, {
       method: 'POST',
-      body: { turnoId: turnoId.value, tipo: mov.tipo, valorCents: v, motivo: mov.motivo.trim() || null },
+      body: {
+        turnoId: turnoId.value, tipo: mov.tipo,
+        valorCents: mov.valorCents, motivo: mov.motivo.trim() || null,
+      },
     })
-    mov.valor = ''; mov.motivo = ''
+    mov.valorCents = 0; mov.motivo = ''
     await refresh()
   } catch (e: any) { erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra registrar.' }
   finally { movendo.value = false }
@@ -80,7 +132,7 @@ async function fechar() {
       method: 'PATCH',
       body: {
         turnoId: turnoId.value,
-        contadoCents: centavos(contado.value),
+        contadoCents: contadoCents.value,
         observacao: observacao.value.trim() || null,
       },
     })
@@ -107,6 +159,17 @@ async function fechar() {
     <AbasSecao :evento-id="id" />
 
     <p v-if="erro" class="faixa-erro mt-4">{{ erro }}</p>
+
+    <!-- o que fazer com o dinheiro depois de cancelar: fica até o operador
+         fechar, porque é a parte que acontece fora do sistema -->
+    <div v-if="avisoCancelamento"
+         class="card mt-4 flex flex-wrap items-center justify-between gap-3 border-alerta bg-alerta-claro">
+      <div>
+        <p class="rotulo-kpi">Venda cancelada</p>
+        <p class="mt-1 text-sm text-tinta-corpo">{{ avisoCancelamento }}</p>
+      </div>
+      <button type="button" class="btn-secundario" @click="avisoCancelamento = ''">Entendi</button>
+    </div>
 
     <!-- escolher o caixa -->
     <section v-if="lista" class="card mt-4">
@@ -162,10 +225,20 @@ async function fechar() {
             </div>
           </dl>
 
-          <div v-if="data.contagem.sangriaCents || data.contagem.suprimentoCents"
+          <div v-if="data.contagem.sangriaCents || data.contagem.suprimentoCents
+                     || data.contagem.cancelamentos.length"
                class="mt-4 flex flex-wrap gap-4 border-t border-linha pt-3 text-sm">
             <span>Sangrias: <strong class="tabular-nums">−{{ reais(data.contagem.sangriaCents) }}</strong></span>
             <span>Suprimentos: <strong class="tabular-nums">+{{ reais(data.contagem.suprimentoCents) }}</strong></span>
+            <span v-if="data.contagem.devolvidoDinheiroCents">
+              Devolvido em cancelamento:
+              <strong class="tabular-nums text-alerta">−{{ reais(data.contagem.devolvidoDinheiroCents) }}</strong>
+              <span class="text-tinta-fraca"> (já fora das vendas acima)</span>
+            </span>
+            <span v-if="data.contagem.devolvidoEletronicoCents">
+              Estornado em cartão/pix:
+              <strong class="tabular-nums">−{{ reais(data.contagem.devolvidoEletronicoCents) }}</strong>
+            </span>
           </div>
         </div>
 
@@ -219,22 +292,79 @@ async function fechar() {
                   <th class="px-4 py-2 text-right">Ingressos</th>
                   <th class="px-4 py-2 text-right">Total</th>
                   <th class="px-4 py-2 text-right">Troco</th>
+                  <th v-if="aberto" class="px-4 py-2" />
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="v in data.vendas" :key="v.id" class="border-t border-linha">
-                  <td class="px-4 py-2 font-bold tabular-nums">{{ v.codigo }}</td>
-                  <td class="px-4 py-2">{{ v.comprador }}</td>
-                  <td class="px-4 py-2">{{ FORMA_NOME[v.forma] ?? v.forma }}</td>
-                  <td class="px-4 py-2 text-right tabular-nums">{{ v.ingressos }}</td>
-                  <td class="px-4 py-2 text-right font-bold tabular-nums">{{ reais(v.totalCents) }}</td>
-                  <td class="px-4 py-2 text-right tabular-nums text-tinta-suave">
-                    {{ v.trocoCents ? reais(v.trocoCents) : '—' }}
-                  </td>
-                </tr>
+                <template v-for="v in data.vendas" :key="v.id">
+                  <tr class="border-t border-linha">
+                    <td class="px-4 py-2 font-bold tabular-nums">{{ v.codigo }}</td>
+                    <td class="px-4 py-2">{{ v.comprador }}</td>
+                    <td class="px-4 py-2">{{ FORMA_NOME[v.forma] ?? v.forma }}</td>
+                    <td class="px-4 py-2 text-right tabular-nums">{{ v.ingressos }}</td>
+                    <td class="px-4 py-2 text-right font-bold tabular-nums">{{ reais(v.totalCents) }}</td>
+                    <td class="px-4 py-2 text-right tabular-nums text-tinta-suave">
+                      {{ v.trocoCents ? reais(v.trocoCents) : '—' }}
+                    </td>
+                    <td v-if="aberto" class="px-4 py-2 text-right">
+                      <button type="button" class="text-sm font-bold text-erro underline"
+                              @click="abrirCancelamento(v.id)">
+                        Cancelar
+                      </button>
+                    </td>
+                  </tr>
+                  <!-- o motivo é obrigatório: é ele que vira o rastro -->
+                  <tr v-if="cancelando === v.id" class="border-t border-linha bg-erro-claro">
+                    <td colspan="7" class="px-4 py-3">
+                      <label class="rotulo">Por que está cancelando a venda {{ v.codigo }}?</label>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <input v-model="motivoCancelamento" class="campo flex-1"
+                               placeholder="Ex.: operador digitou 3 em vez de 2">
+                        <button type="button" class="btn-erro" :disabled="enviandoCancelamento"
+                                @click="confirmarCancelamento(v.id)">
+                          {{ enviandoCancelamento ? 'Cancelando…' : `Cancelar ${reais(v.totalCents)}` }}
+                        </button>
+                        <button type="button" class="btn-secundario" @click="cancelando = ''">
+                          Voltar
+                        </button>
+                      </div>
+                      <p class="mt-2 text-xs text-tinta-corpo">
+                        Os {{ v.ingressos }} ingresso(s) desta venda deixam de valer na portaria.
+                        Ingresso que já entrou no parque não deixa cancelar.
+                      </p>
+                    </td>
+                  </tr>
+                </template>
               </tbody>
             </table>
           </div>
+        </div>
+
+        <!-- cancelamentos -->
+        <div v-if="data.contagem.cancelamentos.length" class="card mt-4">
+          <h3 class="rotulo-kpi">Vendas canceladas neste caixa</h3>
+          <p class="mt-1 text-xs text-tinta-fraca">
+            O valor já saiu das vendas acima. Em dinheiro, saiu também da gaveta —
+            por isso o esperado do fechamento não desconta de novo.
+          </p>
+          <table class="mt-3 w-full text-sm">
+            <tbody>
+              <tr v-for="k in data.contagem.cancelamentos" :key="k.id" class="border-t border-linha">
+                <td class="py-2 font-bold tabular-nums">{{ k.pedido }}</td>
+                <td class="py-2">
+                  <span :class="k.saiuDaGaveta ? 'selo-alerta' : 'selo-neutro'">
+                    {{ k.saiuDaGaveta ? 'Saiu da gaveta' : 'Estorno' }}
+                  </span>
+                  <span v-if="k.estorno === 'falhou'" class="selo-erro ml-1">estorno não saiu</span>
+                </td>
+                <td class="py-2 text-tinta-suave">{{ k.motivo }}</td>
+                <td class="py-2 text-xs text-tinta-fraca tabular-nums">
+                  {{ quando(k.em) }} · {{ k.por ?? '—' }}
+                </td>
+                <td class="py-2 text-right font-bold tabular-nums">−{{ reais(k.totalCents) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -253,8 +383,8 @@ async function fechar() {
             <button type="button" :class="mov.tipo === 'suprimento' ? 'chip-ativo' : 'chip'"
                     @click="mov.tipo = 'suprimento'">Suprimento (entra)</button>
           </div>
-          <input v-model="mov.valor" class="campo mt-2 tabular-nums" inputmode="decimal"
-                 placeholder="Valor — 500,00">
+          <label for="mov-valor" class="rotulo mt-2">Quanto</label>
+          <CampoMoeda id="mov-valor" v-model="mov.valorCents" />
           <input v-model="mov.motivo" class="campo mt-2" placeholder="Motivo (recolhido pelo gerente)">
           <button type="button" class="btn-secundario mt-2 w-full" :disabled="movendo"
                   @click="registrarMovimento">
@@ -270,16 +400,15 @@ async function fechar() {
             aparece depois — conferir sabendo a resposta não confere nada.
           </p>
 
-          <label class="rotulo mt-4">Quanto tem na gaveta</label>
-          <input v-model="contado" class="campo text-2xl tabular-nums" inputmode="decimal"
-                 placeholder="0,00">
+          <label for="contado" class="rotulo mt-4">Quanto tem na gaveta</label>
+          <CampoMoeda id="contado" v-model="contadoCents" @input="contou = true" />
 
           <label class="rotulo mt-3">Observação</label>
           <textarea v-model="observacao" class="campo" rows="2"
                     placeholder="Ex.: faltou nota de 5, cliente pagou com nota rasgada" />
 
           <button type="button" class="btn-erro mt-4 w-full py-3"
-                  :disabled="fechando || !contado" @click="fechar">
+                  :disabled="fechando || !contou" @click="fechar">
             {{ fechando ? 'Fechando…' : 'Conferir e fechar o caixa' }}
           </button>
         </section>

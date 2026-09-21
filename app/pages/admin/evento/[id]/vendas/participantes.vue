@@ -63,13 +63,18 @@ const SELO: Record<string, string> = {
   valido: 'selo-ok', usado: 'selo-neutro', cancelado: 'selo-erro', transferido: 'selo-alerta',
 }
 
+// data pelo formatador de `app/composables/formato.ts`, que lê o relógio
+// local: a portaria confere entrada à noite, e um dia a mais na coluna
+// "Entrou" é discussão no balcão.
+const quando = dataHora
+
 function exportar() {
   const cab = ['Código', 'Portador', 'Documento', 'E-mail', 'Setor', 'Lote', 'Tipo',
                'Situação', 'Entrou em', 'Pedido', 'Comprador']
   const linhas = (data.value?.participantes ?? []).map((p: any) => [
     p.codigo, p.nome ?? '', p.documento ?? '', p.email ?? '',
     p.setor, p.lote, p.tipo ?? '', p.status,
-    p.entrouEm ? new Date(p.entrouEm).toLocaleString('pt-BR') : '',
+    dataHoraSegundo(p.entrouEm, ''),
     p.pedido ?? '', p.comprador ?? '',
   ])
   const csv = [cab, ...linhas]
@@ -194,7 +199,7 @@ useHead({ title: 'Participantes' })
             </td>
             <td class="px-3 py-3 text-xs text-tinta-suave">
               <template v-if="p.entrouEm">
-                {{ new Date(p.entrouEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }}
+                {{ quando(p.entrouEm) }}
                 <span v-if="p.validadoPor" class="block text-tinta-fraca">por {{ p.validadoPor }}</span>
               </template>
               <template v-else>—</template>
