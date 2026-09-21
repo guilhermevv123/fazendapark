@@ -108,16 +108,13 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
 
 <template>
   <div class="min-h-screen">
-    <header class="bg-menu text-white print:hidden">
-      <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-        <span class="titulo text-lg font-black tracking-tight">
-          diamond<span class="font-normal opacity-70">.tickets</span>
-        </span>
-        <button type="button" class="ml-auto text-sm text-white/80 hover:text-white" @click="refresh()">
-          Atualizar
-        </button>
-      </div>
-    </header>
+    <CabecalhoPublico largura="max-w-3xl">
+      <button type="button"
+              class="rounded-lg px-3 py-2 text-sm font-semibold text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900"
+              @click="refresh()">
+        Atualizar
+      </button>
+    </CabecalhoPublico>
 
     <div class="mx-auto max-w-3xl px-4 py-6">
       <p v-if="error" class="card py-12 text-center text-tinta-suave">
@@ -125,7 +122,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
       </p>
 
       <template v-else-if="data">
-        <h1 class="titulo text-2xl font-bold text-tinta">{{ data.evento.nome }}</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">{{ data.evento.nome }}</h1>
         <p class="mt-1 text-tinta-suave">
           {{ quando(data.evento.inicio) }}
           <template v-if="data.evento.local"> · {{ data.evento.local }}</template>
@@ -178,7 +175,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
 
           <p v-if="data.status === 'aguardando_pagamento' && restante > 0"
              class="mt-3 text-center text-sm text-tinta-suave">
-            Reserva garantida por <span class="font-bold tabular-nums text-acao">{{ relogio }}</span>
+            Reserva garantida por <span class="font-semibold tabular-nums text-acao">{{ relogio }}</span>
           </p>
         </div>
 
@@ -215,7 +212,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
             Guarde este link: ele é o próprio ingresso e vale sozinho, sem depender de e-mail.
             Se a confirmação não chegou em
             <strong class="text-tinta">{{ data.comprador.email }}</strong>, procure por
-            <strong class="text-tinta">diamond.tickets</strong> no spam — ou peça o reenvio na
+            <strong class="text-tinta">Conquista Park</strong> no spam — ou peça o reenvio na
             bilheteria com o pedido <strong class="text-tinta">{{ data.pedido }}</strong>.
           </p>
 
@@ -235,7 +232,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
             <div class="min-w-0 flex-1">
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <p class="titulo text-base font-bold text-tinta">
+                  <p class="titulo text-base font-semibold text-tinta">
                     {{ t.tipo ?? 'Ingresso' }} {{ i + 1 }}/{{ data.ingressos.length }}
                   </p>
                   <p class="text-sm text-tinta-suave">{{ t.setor }}<template v-if="t.lote"> · {{ t.lote }}</template></p>

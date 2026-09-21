@@ -152,7 +152,7 @@ useHead({ title: 'Mapa de assentos' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Mapa de assentos</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Mapa de assentos</h1>
         <p class="mt-1 text-tinta-suave">
           Setor numerado vende lugar, não quantidade. Clique pra selecionar;
           Shift pega a faixa inteira.
@@ -190,7 +190,7 @@ useHead({ title: 'Mapa de assentos' })
         </div>
 
         <div v-else-if="!setor.total" class="card py-12 text-center">
-          <p class="titulo text-lg font-bold text-tinta">{{ setor.nome }} não tem mapa</p>
+          <p class="titulo text-lg font-semibold text-tinta">{{ setor.nome }} não tem mapa</p>
           <p class="mx-auto mt-2 max-w-md text-sm text-tinta-suave">
             Hoje este setor vende por quantidade: {{ setor.estoque }} no estoque,
             {{ setor.vendidos }} vendidos. Gerar um mapa transforma cada vaga num lugar
@@ -247,13 +247,13 @@ useHead({ title: 'Mapa de assentos' })
           </div>
 
           <div class="card mt-3 overflow-x-auto">
-            <p class="titulo mx-auto mb-5 w-2/3 rounded-card bg-tinta py-1.5 text-center text-xs font-bold uppercase tracking-widest text-white">
+            <p class="titulo mx-auto mb-5 w-2/3 rounded-card bg-tinta py-1.5 text-center text-xs font-semibold uppercase tracking-widest text-white">
               Palco
             </p>
             <div class="inline-grid gap-1.5">
               <div v-for="f in setor.fileiras" :key="f.nome" class="flex items-center gap-1.5">
                 <button type="button"
-                        class="w-7 shrink-0 text-right text-xs font-bold text-tinta-fraca hover:text-acao"
+                        class="w-7 shrink-0 text-right text-xs font-semibold text-tinta-fraca hover:text-acao"
                         :title="`Selecionar a fileira ${f.nome} inteira`"
                         @click="selecionarFileira(f)">{{ f.nome }}</button>
                 <button v-for="l in f.lugares" :key="l.id" type="button"

@@ -97,7 +97,7 @@ useHead({ title: 'Promoters' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Promoters / Divulgadores</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Promoters / Divulgadores</h1>
         <p class="mt-1 text-tinta-suave">
           Cada um com seu link. A venda que entra por ele fica atribuída e gera comissão sobre a face.
         </p>
@@ -121,13 +121,13 @@ useHead({ title: 'Promoters' })
       <table class="w-full min-w-[920px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Divulgador</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Link</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ingressos</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Faturado</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Comissão</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Situação</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ações</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Divulgador</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Link</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ingressos</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Faturado</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Comissão</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Situação</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
           </tr>
         </thead>
         <tbody>
@@ -151,7 +151,7 @@ useHead({ title: 'Promoters' })
               <span class="block text-xs text-tinta-fraca">{{ p.pedidos }} pedido(s)</span>
             </td>
             <td class="px-3 py-3 text-right">
-              <span class="titulo font-bold tabular-nums text-tinta">{{ reais(p.faturadoCents) }}</span>
+              <span class="titulo font-semibold tabular-nums text-tinta">{{ reais(p.faturadoCents) }}</span>
             </td>
             <td class="px-3 py-3 text-right">
               <span class="tabular-nums" :class="p.comissaoCents ? 'text-alerta' : 'text-tinta-fraca'">
@@ -188,10 +188,10 @@ useHead({ title: 'Promoters' })
         </tbody>
         <tfoot>
           <tr class="border-t-2 border-linha-forte bg-fundo-cinza/60">
-            <td class="px-4 py-3 font-bold text-tinta" colspan="2">Total</td>
-            <td class="px-3 py-3 text-right font-bold tabular-nums text-tinta">{{ totais.ingressos }}</td>
-            <td class="px-3 py-3 text-right font-bold tabular-nums text-tinta">{{ reais(totais.faturado) }}</td>
-            <td class="px-3 py-3 text-right font-bold tabular-nums text-alerta">{{ reais(totais.comissao) }}</td>
+            <td class="px-4 py-3 font-semibold text-tinta" colspan="2">Total</td>
+            <td class="px-3 py-3 text-right font-semibold tabular-nums text-tinta">{{ totais.ingressos }}</td>
+            <td class="px-3 py-3 text-right font-semibold tabular-nums text-tinta">{{ reais(totais.faturado) }}</td>
+            <td class="px-3 py-3 text-right font-semibold tabular-nums text-alerta">{{ reais(totais.comissao) }}</td>
             <td colspan="2" />
           </tr>
         </tfoot>

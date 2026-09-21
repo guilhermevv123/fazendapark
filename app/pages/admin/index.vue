@@ -47,7 +47,7 @@ useHead({ title: 'Eventos' })
   <div>
     <div class="flex flex-wrap items-center justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Eventos</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Eventos</h1>
         <p class="mt-1 text-tinta-suave">Todos os eventos das suas organizações</p>
       </div>
       <NuxtLink v-if="!semAcesso" to="/admin/evento/novo" class="btn-primario">
@@ -88,7 +88,7 @@ useHead({ title: 'Eventos' })
                 class="card flex flex-col transition-shadow hover:border-acao/40 hover:shadow-sm">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <h2 class="titulo truncate text-base font-bold text-tinta">{{ e.nome }}</h2>
+            <h2 class="titulo truncate text-base font-semibold text-tinta">{{ e.nome }}</h2>
             <p class="mt-0.5 truncate text-sm text-tinta-suave">{{ e.organizacao }}</p>
           </div>
           <span :class="selo[e.status]?.c ?? 'selo-neutro'">{{ selo[e.status]?.t ?? e.status }}</span>
@@ -107,15 +107,15 @@ useHead({ title: 'Eventos' })
 
         <div class="mt-4 grid grid-cols-3 gap-2 border-t border-linha pt-3 text-center">
           <div>
-            <p class="titulo text-base font-bold tabular-nums text-tinta">{{ reais(e.cobradoCents) }}</p>
+            <p class="titulo text-base font-semibold tabular-nums text-tinta">{{ reais(e.cobradoCents) }}</p>
             <p class="text-xs text-tinta-fraca">vendido</p>
           </div>
           <div>
-            <p class="titulo text-base font-bold tabular-nums text-tinta">{{ e.ingressos }}</p>
+            <p class="titulo text-base font-semibold tabular-nums text-tinta">{{ e.ingressos }}</p>
             <p class="text-xs text-tinta-fraca">ingressos</p>
           </div>
           <div>
-            <p class="titulo text-base font-bold tabular-nums text-tinta">{{ e.pedidos }}</p>
+            <p class="titulo text-base font-semibold tabular-nums text-tinta">{{ e.pedidos }}</p>
             <p class="text-xs text-tinta-fraca">pedidos</p>
           </div>
         </div>

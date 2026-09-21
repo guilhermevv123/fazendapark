@@ -1567,9 +1567,17 @@ describe('o topo da tela não oferece porta fechada', () => {
    */
   const PRAZO_TELA = 180_000
 
-  /** os caminhos de /admin que o cabeçalho (trilha + ícones) oferece */
+  /**
+   * os caminhos de /admin que o cabeçalho (trilha + ícones) oferece.
+   *
+   * O cabeçalho, o miolo e a barra de abas são achados pela marca `data-parte`
+   * que o layout escreve neles, e NÃO pela lista de classes do desenho: em
+   * 21/09/2026 o redesenho do painel trocou as classes e este caso ficou
+   * vermelho por "não achei o cabeçalho" — o sentinela abaixo faz o papel de
+   * alarme quando a marca some, em vez de deixar o caso passar vazio.
+   */
   const linksDoTopo = (html: string): string[] => {
-    const cabecalho = html.match(/<header class="flex h-\[59px\][\s\S]*?<\/header>/)
+    const cabecalho = html.match(/<header\b[^>]*\bdata-parte="topo"[\s\S]*?<\/header>/)
     if (!cabecalho) return ['(esta tela não tem o cabeçalho do painel)']
     return [...cabecalho[0].matchAll(/href="([^"]+)"/g)]
       .map((m) => m[1]!)
@@ -1682,7 +1690,7 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
    * que não é assunto destes casos.
    */
   const linksDoMiolo = (html: string): string[] => {
-    const main = html.match(/<main class="px-6 pb-12">[\s\S]*<\/main>/)
+    const main = html.match(/<main\b[^>]*\bdata-parte="miolo"[\s\S]*<\/main>/)
     if (!main) return ['(esta tela não tem o miolo do painel)']
     return [...main[0].matchAll(/href="([^"]+)"/g)]
       .map((m) => m[1]!)
@@ -1691,7 +1699,7 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
 
   /** os links da BARRA DE ABAS, só dela */
   const abasDaTela = (html: string): string[] => {
-    const nav = html.match(/<nav class="-mb-px flex gap-6[\s\S]*?<\/nav>/)
+    const nav = html.match(/<nav\b[^>]*\bdata-parte="abas"[\s\S]*?<\/nav>/)
     if (!nav) return [] // grupo de uma tela só não desenha barra — é o esperado
     return [...nav[0].matchAll(/href="([^"]+)"/g)].map((m) => m[1]!)
   }
@@ -1860,7 +1868,7 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
     }
 
     const html = await pagina('operacao', '/admin/suporte')
-    const main = html.match(/<main class="px-6 pb-12">[\s\S]*<\/main>/)?.[0] ?? ''
+    const main = html.match(/<main\b[^>]*\bdata-parte="miolo"[\s\S]*<\/main>/)?.[0] ?? ''
     expect(main, 'o card fechado sumiu inteiro: quem é de operação passa a ler '
       + '"o sistema não cobre o meu caso" em vez de "não é o meu acesso"')
       .toContain('Alguém da equipe saiu e ainda tem acesso')

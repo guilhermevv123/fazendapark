@@ -83,7 +83,7 @@ useHead({ title: 'Configurações' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Configurações</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Configurações</h1>
         <p class="mt-1 text-tinta-suave">Cadastro da organização e a ligação com o Asaas.</p>
       </div>
       <button type="button" class="btn-primario" :disabled="salvando || !mudou" @click="salvar">
@@ -101,7 +101,7 @@ useHead({ title: 'Configurações' })
     <div class="mt-4 grid gap-4 lg:grid-cols-3">
       <div class="grid content-start gap-4 lg:col-span-2">
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Organização</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Organização</h2>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
             <div class="sm:col-span-2">
               <label class="rotulo">Nome</label>
@@ -120,7 +120,7 @@ useHead({ title: 'Configurações' })
 
         <section class="card">
           <div class="flex items-center justify-between">
-            <h2 class="titulo text-base font-bold text-tinta">Recebimento — Asaas</h2>
+            <h2 class="titulo text-base font-semibold text-tinta">Recebimento — Asaas</h2>
             <span :class="data.ambienteAsaas === 'production' ? 'selo-ok' : 'selo-alerta'">
               {{ data.ambienteAsaas === 'production' ? 'PRODUÇÃO' : 'TESTES' }}
             </span>
@@ -181,7 +181,7 @@ useHead({ title: 'Configurações' })
 
       <div class="grid content-start gap-4">
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Em números</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Em números</h2>
           <dl class="mt-3 grid grid-cols-2 gap-y-2 text-sm text-tinta-suave">
             <dt>Eventos</dt><dd class="text-right text-tinta">{{ data.eventos }}</dd>
             <dt>Pessoas com acesso</dt><dd class="text-right text-tinta">{{ data.pessoas }}</dd>
@@ -197,7 +197,7 @@ useHead({ title: 'Configurações' })
         </section>
 
         <section class="card text-sm text-tinta-suave">
-          <h2 class="titulo text-base font-bold text-tinta">Por que a chave não aparece</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Por que a chave não aparece</h2>
           <p class="mt-2">
             Chave que uma tela consegue mostrar é chave que fica no cache do navegador,
             no log do servidor e no print que alguém manda no grupo. Aqui ela entra

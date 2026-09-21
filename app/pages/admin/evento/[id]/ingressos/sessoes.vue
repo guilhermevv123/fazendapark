@@ -176,7 +176,7 @@ useHead({ title: 'Sessões e datas' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Sessões e datas</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Sessões e datas</h1>
         <p class="mt-1 text-tinta-suave">
           Os dias e horários que este evento vende, com o teto de gente de cada um.
         </p>
@@ -301,7 +301,7 @@ useHead({ title: 'Sessões e datas' })
     <section v-for="s in visiveis" :key="s.id" class="card mt-4 p-0">
       <header class="flex flex-wrap items-center gap-3 border-b border-linha px-4 py-3">
         <div>
-          <h2 class="titulo text-base font-bold uppercase tracking-wide text-acao">
+          <h2 class="titulo text-base font-semibold uppercase tracking-wide text-acao">
             {{ s.titulo ?? diaLongo(s.inicio) }}
           </h2>
           <p class="text-sm text-tinta-suave">
@@ -382,7 +382,7 @@ useHead({ title: 'Sessões e datas' })
 
     <div v-if="visiveis.length"
          class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 rounded-card bg-acao px-5 py-3 text-white">
-      <p class="titulo text-base font-bold">
+      <p class="titulo text-base font-semibold">
         Pessoas confirmadas no período: <span class="tabular-nums">{{ totalPessoas }}</span>
       </p>
       <p class="text-sm opacity-90">{{ visiveis.length }} dia(s) no calendário</p>
@@ -425,7 +425,7 @@ useHead({ title: 'Sessões e datas' })
                   ? 'border-acao-forte bg-acao-claro' : 'border-linha bg-white'"
                 @click="alternarEscolha(l.id)">
           <span>
-            <span class="font-bold text-tinta">{{ l.nome }}</span>
+            <span class="font-semibold text-tinta">{{ l.nome }}</span>
             <span class="text-tinta-suave"> · {{ l.setor }}</span>
             <!-- Sem isto o lote que já vende o dia pelo setor apareceria
                  desmarcado, e o operador marcaria de novo achando que estava

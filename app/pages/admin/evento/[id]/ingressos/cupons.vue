@@ -127,7 +127,7 @@ useHead({ title: 'Códigos promocionais' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Códigos promocionais</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Códigos promocionais</h1>
         <p class="mt-1 text-tinta-suave">
           Desconto por código, com teto de uso e validade. O que já foi usado não some.
         </p>
@@ -151,20 +151,20 @@ useHead({ title: 'Códigos promocionais' })
       <table class="w-full min-w-[900px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Código</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Desconto</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Vale em</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Usos</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Já descontou</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Validade</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Situação</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ações</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Código</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Desconto</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Vale em</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Usos</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Já descontou</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Validade</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Situação</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="c in data.cupons" :key="c.id" class="border-b border-linha last:border-0">
             <td class="px-4 py-3">
-              <button type="button" class="flex items-center gap-2 font-bold text-acao hover:underline"
+              <button type="button" class="flex items-center gap-2 font-semibold text-acao hover:underline"
                       @click="copiar(c.codigo)">
                 {{ c.codigo }}
                 <IconeMenu :nome="copiado === c.codigo ? 'check' : 'copia'" :tamanho="14" />

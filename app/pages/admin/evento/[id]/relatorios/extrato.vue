@@ -149,7 +149,7 @@ useHead({ title: 'Extrato' })
   <div>
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Extrato</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Extrato</h1>
         <p class="mt-1 text-tinta-suave">
           Todo dinheiro que entrou, linha a linha. Data de pagamento, não de criação.
         </p>
@@ -258,7 +258,7 @@ useHead({ title: 'Extrato' })
       <!-- cortes -->
       <div class="mt-4 grid gap-3 lg:grid-cols-3">
         <div class="card p-0">
-          <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta">
+          <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta">
             Por canal
           </p>
           <p v-if="!data.porCanal.length" class="px-4 py-6 text-sm text-tinta-fraca">
@@ -284,7 +284,7 @@ useHead({ title: 'Extrato' })
         </div>
 
         <div class="card p-0">
-          <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta">
+          <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta">
             Por ponto de venda
           </p>
           <p v-if="!data.porPonto.length" class="px-4 py-6 text-sm text-tinta-fraca">
@@ -312,7 +312,7 @@ useHead({ title: 'Extrato' })
         </div>
 
         <div class="card p-0">
-          <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta">
+          <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta">
             Por forma de pagamento
           </p>
           <p v-if="!data.porForma.length" class="px-4 py-6 text-sm text-tinta-fraca">
@@ -331,19 +331,19 @@ useHead({ title: 'Extrato' })
 
       <!-- por dia -->
       <div v-if="data.porDia.length > 1" class="card mt-4 p-0">
-        <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta">
+        <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta">
           Por dia de pagamento
         </p>
         <div class="overflow-x-auto">
           <table class="w-full min-w-[520px] border-collapse text-sm">
             <thead>
               <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-                <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Dia</th>
-                <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pedidos</th>
-                <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ingressos</th>
-                <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Face</th>
-                <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Taxa</th>
-                <th class="titulo px-4 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Cobrado</th>
+                <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Dia</th>
+                <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pedidos</th>
+                <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ingressos</th>
+                <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Face</th>
+                <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Taxa</th>
+                <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Cobrado</th>
               </tr>
             </thead>
             <tbody>
@@ -367,7 +367,7 @@ useHead({ title: 'Extrato' })
 
       <div v-else class="card mt-4 overflow-x-auto p-0">
         <div class="flex items-center justify-between border-b border-linha px-4 py-3">
-          <p class="titulo text-sm font-bold text-tinta">
+          <p class="titulo text-sm font-semibold text-tinta">
             {{ data.linhas.length }} {{ data.linhas.length === 1 ? 'pedido' : 'pedidos' }}
           </p>
           <p v-if="data.truncado" class="text-xs text-alerta">
@@ -378,15 +378,15 @@ useHead({ title: 'Extrato' })
         <table class="w-full min-w-[1080px] border-collapse text-sm">
           <thead>
             <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-              <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pedido</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pago em</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Comprador</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Canal</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Forma</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ingr.</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Face</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Taxa</th>
-              <th class="titulo px-4 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Cobrado</th>
+              <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pedido</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pago em</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Comprador</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Canal</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Forma</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ingr.</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Face</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Taxa</th>
+              <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Cobrado</th>
             </tr>
           </thead>
           <tbody>
@@ -432,7 +432,7 @@ useHead({ title: 'Extrato' })
             </tr>
           </tbody>
           <tfoot>
-            <tr class="border-t-2 border-linha-forte bg-fundo-cinza/40 font-bold">
+            <tr class="border-t-2 border-linha-forte bg-fundo-cinza/40 font-semibold">
               <td class="titulo px-4 py-3 text-tinta" colspan="5">
                 Total<template v-if="data.truncado"> das linhas visíveis</template>
               </td>

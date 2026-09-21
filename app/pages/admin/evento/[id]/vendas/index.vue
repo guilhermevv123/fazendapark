@@ -67,7 +67,7 @@ useHead({ title: 'Vendas' })
   <div>
     <div class="flex flex-wrap items-end justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Vendas</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Vendas</h1>
         <p class="mt-1 text-tinta-suave">Todo pedido do evento, pago ou não.</p>
       </div>
     </div>
@@ -191,7 +191,7 @@ useHead({ title: 'Vendas' })
          @click.self="abertoId = ''">
       <aside class="flex h-full w-full max-w-lg flex-col overflow-y-auto bg-white shadow-xl">
         <header class="sticky top-0 flex items-center gap-3 border-b border-linha bg-white px-5 py-4">
-          <h2 class="titulo text-lg font-bold text-tinta">
+          <h2 class="titulo text-lg font-semibold text-tinta">
             {{ ficha?.pedido?.codigo ?? 'Pedido' }}
           </h2>
           <span v-if="ficha" :class="SITUACOES[ficha.pedido.situacao]?.classe ?? 'selo-neutro'">
@@ -242,7 +242,7 @@ useHead({ title: 'Vendas' })
                 </tr>
                 <tr>
                   <td colspan="2" class="py-1 text-right font-medium text-tinta">Total</td>
-                  <td class="py-1 text-right tabular-nums font-bold text-tinta">
+                  <td class="py-1 text-right tabular-nums font-semibold text-tinta">
                     {{ reais(ficha.pedido.totalCents) }}
                   </td>
                 </tr>

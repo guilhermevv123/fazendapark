@@ -51,12 +51,12 @@ const RECADO: Record<string, string> = {
 <template>
   <div class="min-h-screen bg-fundo-cinza px-4 py-10">
     <div class="mx-auto max-w-lg">
-      <p class="titulo text-center text-lg font-black text-tinta">
-        diamond<span class="text-acao">.tickets</span>
-      </p>
+      <div class="flex justify-center">
+        <LogoMarca class="h-12" />
+      </div>
 
       <div v-if="falha" class="card mt-6 text-center">
-        <h1 class="titulo text-xl font-bold text-tinta">Link não encontrado</h1>
+        <h1 class="titulo text-xl font-semibold text-tinta">Link não encontrado</h1>
         <p class="mt-2 text-tinta-suave">
           Confira se o endereço veio completo. Se veio por mensagem, às vezes a última parte
           do link fica de fora.
@@ -67,7 +67,7 @@ const RECADO: Record<string, string> = {
         <!-- acabou de aceitar -->
         <div v-if="pronto" class="card mt-6 text-center">
           <p class="text-4xl">🎟️</p>
-          <h1 class="titulo mt-3 text-xl font-bold text-tinta">Ingresso é seu, {{ pronto.titular }}</h1>
+          <h1 class="titulo mt-3 text-xl font-semibold text-tinta">Ingresso é seu, {{ pronto.titular }}</h1>
           <p class="mt-2 text-tinta-suave">
             Ele já está no seu nome para {{ data.evento.nome }}.
           </p>
@@ -81,7 +81,7 @@ const RECADO: Record<string, string> = {
 
         <!-- nada a fazer -->
         <div v-else-if="!data.podeAceitar" class="card mt-6 text-center">
-          <h1 class="titulo text-xl font-bold text-tinta">{{ data.statusTexto }}</h1>
+          <h1 class="titulo text-xl font-semibold text-tinta">{{ data.statusTexto }}</h1>
           <p class="mt-2 text-tinta-suave">{{ RECADO[data.status] }}</p>
           <p v-if="data.ingresso.codigo" class="mt-4 font-mono text-sm text-tinta-corpo">
             {{ data.ingresso.codigo }}
@@ -92,7 +92,7 @@ const RECADO: Record<string, string> = {
         <template v-else>
           <div class="card mt-6">
             <p class="rotulo-kpi">Você recebeu um ingresso</p>
-            <h1 class="titulo mt-2 text-2xl font-bold text-tinta">{{ data.evento.nome }}</h1>
+            <h1 class="titulo mt-2 text-2xl font-semibold text-tinta">{{ data.evento.nome }}</h1>
             <p class="mt-1 text-tinta-suave">
               {{ quando(data.ingresso.sessaoInicio ?? data.evento.comecaEm) }}
             </p>
@@ -145,7 +145,7 @@ const RECADO: Record<string, string> = {
               {{ erro }}
             </p>
 
-            <button class="btn-primario mt-5 w-full" :disabled="aceitando">
+            <button class="btn-cta mt-5 w-full" :disabled="aceitando">
               {{ aceitando ? 'Aceitando…' : 'Aceitar ingresso' }}
             </button>
             <p class="mt-3 text-center text-xs text-tinta-fraca">

@@ -185,6 +185,7 @@ const STUBS: Record<string, any> = {
   NuxtLayout: soOConteudo('div'),
   ClientOnly: soOConteudo('div'),
   IconeMenu: defineComponent({ props: { nome: String, tamanho: Number }, setup: () => () => h('i') }),
+  LogoMarca: defineComponent({ props: { clara: Boolean }, setup: () => () => h('i') }),
 }
 
 export interface OpcoesDaTela {

@@ -96,7 +96,7 @@ useHead({ title: 'Relatórios' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Relatórios</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Relatórios</h1>
         <p class="mt-1 text-tinta-suave">
           Como a venda chegou até aqui — curva, funil e origem.
         </p>
@@ -241,7 +241,7 @@ useHead({ title: 'Relatórios' })
 
     <div v-if="data.porPromoter.length || data.porCupom.length" class="mt-4 grid gap-3 lg:grid-cols-2">
       <div v-if="data.porPromoter.length" class="card p-0">
-        <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta-rotulo">
+        <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
           O que cada promoter trouxe
         </p>
         <table class="w-full text-sm">
@@ -265,7 +265,7 @@ useHead({ title: 'Relatórios' })
       </div>
 
       <div v-if="data.porCupom.length" class="card p-0">
-        <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta-rotulo">
+        <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
           Cupons usados
         </p>
         <table class="w-full text-sm">
@@ -285,7 +285,7 @@ useHead({ title: 'Relatórios' })
     </div>
 
     <div v-if="data.topCompradores.length" class="card mt-4 p-0">
-      <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta-rotulo">
+      <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
         Quem mais comprou
       </p>
       <table class="w-full text-sm">
@@ -312,7 +312,7 @@ useHead({ title: 'Relatórios' })
       <p class="rotulo-kpi">Parcelamento no crédito</p>
       <div class="mt-3 flex flex-wrap gap-4">
         <div v-for="p in data.porParcela" :key="p.parcelas">
-          <p class="titulo text-lg font-bold text-tinta">{{ p.parcelas }}×</p>
+          <p class="titulo text-lg font-semibold text-tinta">{{ p.parcelas }}×</p>
           <p class="text-xs text-tinta-fraca">{{ p.pedidos }} pedidos · {{ brl(p.cobradoCents) }}</p>
         </div>
       </div>

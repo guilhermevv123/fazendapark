@@ -338,7 +338,7 @@ useHead({ title: 'Ingressos' })
     <!-- ======================================================= cabeçalho -->
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Ingressos</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Ingressos</h1>
         <p class="mt-1 text-tinta-suave">
           Crie, configure e gerencie os ingressos pagos e gratuitos do seu evento.
         </p>
@@ -383,7 +383,7 @@ useHead({ title: 'Ingressos' })
     <!-- ======================================================== setores -->
     <section v-for="setor in data.setores" :key="setor.id" class="card mt-4 p-0">
       <header class="flex flex-wrap items-center gap-2 px-4 py-3">
-        <h2 class="titulo text-base font-bold uppercase tracking-wide text-acao">{{ setor.nome }}</h2>
+        <h2 class="titulo text-base font-semibold uppercase tracking-wide text-acao">{{ setor.nome }}</h2>
         <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
                 :aria-label="`Editar ${setor.nome}`" @click="abrirSetor(setor)">
           <IconeMenu nome="lapis" :tamanho="16" />
@@ -418,13 +418,13 @@ useHead({ title: 'Ingressos' })
           <thead>
             <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
               <th class="w-8" />
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Lote</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Valor</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Vendido + Pendente</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Disponível</th>
-              <th class="titulo w-40 px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ocupação</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Disponibilidade</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ações</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Lote</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Valor</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Vendido + Pendente</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Disponível</th>
+              <th class="titulo w-40 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ocupação</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Disponibilidade</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
             </tr>
           </thead>
 
@@ -451,7 +451,7 @@ useHead({ title: 'Ingressos' })
 
                 <!-- as quatro pontas do dinheiro, empilhadas na coluna de valor -->
                 <td class="px-3 py-3 text-right">
-                  <p class="titulo font-bold tabular-nums text-tinta">{{ reais(lote.totalCents) }}</p>
+                  <p class="titulo font-semibold tabular-nums text-tinta">{{ reais(lote.totalCents) }}</p>
                   <p class="text-xs tabular-nums text-tinta-fraca">
                     face {{ reais(lote.faceCents) }} + taxa {{ reais(lote.taxaCents) }}
                   </p>
@@ -632,7 +632,7 @@ useHead({ title: 'Ingressos' })
     <!-- ================================================ rodapé do total -->
     <div v-if="data.setores.length"
          class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 gap-y-1 rounded-card bg-acao px-5 py-3 text-white">
-      <p class="titulo text-base font-bold">
+      <p class="titulo text-base font-semibold">
         Quantidade Total: <span class="tabular-nums">{{ totais.quantidade }}</span>
         <span v-if="totais.teto" class="font-normal opacity-80"> / {{ totais.teto }}</span>
       </p>
@@ -643,7 +643,7 @@ useHead({ title: 'Ingressos' })
         Disponível: <span class="tabular-nums">{{ totais.disponivel }}</span>
       </p>
       <NuxtLink :to="`/admin/evento/${id}/dashboard`"
-                class="ml-auto rounded-card border border-white/60 px-3 py-1.5 text-sm font-bold hover:bg-white/10">
+                class="ml-auto rounded-card border border-white/60 px-3 py-1.5 text-sm font-semibold hover:bg-white/10">
         Ir para o dashboard
       </NuxtLink>
     </div>
@@ -776,7 +776,7 @@ useHead({ title: 'Ingressos' })
            "Meia-entrada" sem marcar o documento e achar que a cota de 40%
            está valendo quando não está. -->
       <div v-if="especieDoForm === 'meia'" class="faixa-aviso mt-3">
-        <p class="font-bold text-tinta">Isto é uma meia-entrada legal.</p>
+        <p class="font-semibold text-tinta">Isto é uma meia-entrada legal.</p>
         <p class="mt-1">
           Vale para até 40% dos ingressos do lote<template v-if="loteDoForm">
             — <strong class="tabular-nums">{{ inteiro(cotaDeMeias(Number(loteDoForm.quantidade))) }}</strong>
@@ -792,7 +792,7 @@ useHead({ title: 'Ingressos' })
 
       <div v-else-if="tipoForm.descontoBps > 0 && tipoForm.descontoBps < 10000"
            class="faixa-aviso mt-3">
-        <p class="font-bold text-tinta">Isto é uma promoção, não meia-entrada.</p>
+        <p class="font-semibold text-tinta">Isto é uma promoção, não meia-entrada.</p>
         <p class="mt-1">
           Desconto sem documento não entra na cota de 40% e a portaria não vai pedir
           comprovação nenhuma na entrada. Marque <strong>Exige documento</strong> para
@@ -801,7 +801,7 @@ useHead({ title: 'Ingressos' })
       </div>
 
       <div v-else-if="especieDoForm === 'gratuito'" class="faixa-aviso mt-3">
-        <p class="font-bold text-tinta">Isto é uma gratuidade.</p>
+        <p class="font-semibold text-tinta">Isto é uma gratuidade.</p>
         <p class="mt-1">
           Sai por R$ 0,00 e não consome a cota de meia-entrada do lote — mas continua
           tirando ingresso do estoque.

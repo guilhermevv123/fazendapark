@@ -59,7 +59,7 @@ export interface Entrega {
 /* ------------------------------------------------------------ remetente */
 
 export function remetente(): string {
-  return process.env.EMAIL_REMETENTE || 'Diamond Tickets <nao-responda@diamond-tickets.local>'
+  return process.env.EMAIL_REMETENTE || 'Conquista Park <nao-responda@diamond-tickets.local>'
 }
 
 /** Só o endereço, sem o nome de exibição — é o que o SMTP quer no MAIL FROM. */
@@ -452,25 +452,25 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
       const cid = `qr-${t.codigo.replace(/[^a-zA-Z0-9]/g, '')}@diamond-tickets`
       imagens.push({ cid, nome: `${t.codigo}.png`, conteudo: t.qrPng, tipo: 'image/png' })
       qr = `<img src="cid:${cid}" alt="QR do ingresso ${escapar(t.codigo)}" width="180" height="180"
-              style="display:block;border:1px solid #DEE2E6;border-radius:8px;background:#fff">`
+              style="display:block;border:1px solid #E3E1EB;border-radius:12px;background:#fff">`
     }
     const onde = [t.setor, t.lote, t.tipo].filter(Boolean).map(escapar).join(' · ')
     return `
     <tr>
-      <td style="padding:12px 0;border-top:1px solid #DEE2E6">
+      <td style="padding:12px 0;border-top:1px solid #E3E1EB">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
             <td width="192" valign="top" style="padding-right:12px">${qr}</td>
-            <td valign="top" style="font-family:Arial,Helvetica,sans-serif;color:#212529">
-              <div style="font-size:13px;color:#6C757D">
+            <td valign="top" style="font-family:Arial,Helvetica,sans-serif;color:#1E1A2E">
+              <div style="font-size:13px;color:#5B5570">
                 ${escapar(t.tipo || 'Ingresso')} ${i + 1} de ${d.ingressos.length}
               </div>
               <div style="font-size:22px;font-weight:bold;letter-spacing:2px;margin:4px 0">
                 ${escapar(t.codigo)}
               </div>
-              ${onde ? `<div style="font-size:13px;color:#495057">${onde}</div>` : ''}
-              ${t.sessao ? `<div style="font-size:13px;color:#495057">${escapar(t.sessao)}</div>` : ''}
-              ${t.titular ? `<div style="font-size:13px;color:#495057">Titular: ${escapar(t.titular)}</div>` : ''}
+              ${onde ? `<div style="font-size:13px;color:#5B5570">${onde}</div>` : ''}
+              ${t.sessao ? `<div style="font-size:13px;color:#5B5570">${escapar(t.sessao)}</div>` : ''}
+              ${t.titular ? `<div style="font-size:13px;color:#5B5570">Titular: ${escapar(t.titular)}</div>` : ''}
             </td>
           </tr>
         </table>
@@ -482,27 +482,27 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapar(assunto)}</title></head>
-<body style="margin:0;padding:0;background:#F1F3F5">
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#F1F3F5">
+<body style="margin:0;padding:0;background:#F4F7FA">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#F4F7FA">
   <tr><td align="center" style="padding:24px 12px">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600"
-           style="max-width:600px;width:100%;background:#FFFFFF;border:1px solid #DEE2E6;border-radius:8px">
-      <tr><td style="padding:20px 24px;background:#0B2E4F;border-radius:8px 8px 0 0;
-                     font-family:Arial,Helvetica,sans-serif;color:#FFFFFF;font-size:18px;font-weight:bold">
-        diamond<span style="font-weight:normal;opacity:.7">.tickets</span>
+           style="max-width:600px;width:100%;background:#FFFFFF;border:1px solid #E3E1EB;border-radius:16px">
+      <tr><td style="padding:28px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;
+                     font-weight:bold;letter-spacing:.04em;text-transform:uppercase;color:#583C8D">
+        Conquista Park
       </td></tr>
-      <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;color:#212529">
+      <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;color:#1E1A2E">
         <div style="font-size:20px;font-weight:bold">${escapar(d.eventoNome)}</div>
-        ${d.eventoInicio ? `<div style="font-size:14px;color:#495057;margin-top:4px">${escapar(quando(d.eventoInicio))}</div>` : ''}
-        ${d.local ? `<div style="font-size:14px;color:#495057">${escapar(d.local)}</div>` : ''}
+        ${d.eventoInicio ? `<div style="font-size:14px;color:#5B5570;margin-top:4px">${escapar(quando(d.eventoInicio))}</div>` : ''}
+        ${d.local ? `<div style="font-size:14px;color:#5B5570">${escapar(d.local)}</div>` : ''}
 
         <div style="font-size:15px;margin-top:16px">
           ${d.compradorNome ? `${escapar(d.compradorNome)}, seu` : 'Seu'} pagamento foi confirmado
           e ${d.ingressos.length === 1 ? 'seu ingresso está' : 'seus ingressos estão'} abaixo.
         </div>
 
-        <div style="font-size:14px;color:#495057;margin-top:12px">
-          Pedido <strong style="color:#212529">${escapar(d.pedido)}</strong>
+        <div style="font-size:14px;color:#5B5570;margin-top:12px">
+          Pedido <strong style="color:#1E1A2E">${escapar(d.pedido)}</strong>
           · ${escapar(reais(d.totalCents))}
         </div>
 
@@ -511,12 +511,12 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
 
         <div style="margin:24px 0 8px">
           <a href="${escapar(d.linkIngressos)}"
-             style="display:inline-block;background:#1F7AE0;color:#FFFFFF;text-decoration:none;
-                    font-weight:bold;font-size:16px;padding:12px 20px;border-radius:8px">
+             style="display:inline-block;background:#583C8D;color:#FFFFFF;text-decoration:none;
+                    font-weight:bold;font-size:16px;padding:14px 28px;border-radius:10px">
             Ver ${escapar(substantivo.toLowerCase())} no celular
           </a>
         </div>
-        <div style="font-size:13px;color:#6C757D">
+        <div style="font-size:13px;color:#5B5570">
           Na portaria, apresente o QR. Se a leitura falhar, informe o código do ingresso —
           ele funciona digitado. Guarde este e-mail: ele é a sua entrada.
         </div>

@@ -123,7 +123,7 @@ useHead({ title: 'Suporte' })
 <template>
   <div>
     <div class="py-5">
-      <h1 class="titulo text-2xl font-bold text-tinta">Suporte</h1>
+      <h1 class="titulo text-2xl font-semibold text-tinta">Suporte</h1>
       <p class="mt-1 text-tinta-suave">
         O que fazer quando algo trava — e a tela que resolve cada caso.
       </p>
@@ -132,7 +132,7 @@ useHead({ title: 'Suporte' })
     <div v-if="foco" class="card flex flex-wrap items-center justify-between gap-3">
       <div>
         <p class="rotulo-kpi">Evento em foco</p>
-        <p class="titulo mt-1 text-lg font-bold text-tinta">{{ foco.nome }}</p>
+        <p class="titulo mt-1 text-lg font-semibold text-tinta">{{ foco.nome }}</p>
         <p class="text-xs text-tinta-fraca">
           <template v-if="foco.inicio">
             {{ new Date(foco.inicio).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }}
@@ -150,7 +150,7 @@ useHead({ title: 'Suporte' })
 
     <div class="mt-4 grid gap-3 lg:grid-cols-2">
       <article v-for="s in SITUACOES" :key="s.titulo" class="card flex flex-col">
-        <h2 class="titulo text-base font-bold text-tinta">{{ s.titulo }}</h2>
+        <h2 class="titulo text-base font-semibold text-tinta">{{ s.titulo }}</h2>
         <p class="mt-2 flex-1 text-sm leading-relaxed text-tinta-suave">{{ s.o_que }}</p>
         <NuxtLink v-if="s.aberta" :to="s.para" class="btn-secundario mt-3 self-start">
           {{ s.acao }}
@@ -163,7 +163,7 @@ useHead({ title: 'Suporte' })
     </div>
 
     <section class="card mt-4">
-      <h2 class="titulo text-base font-bold text-tinta">Onde olhar quando nada explica</h2>
+      <h2 class="titulo text-base font-semibold text-tinta">Onde olhar quando nada explica</h2>
       <ul class="mt-3 grid gap-2 text-sm text-tinta-suave">
         <li>
           <strong class="text-tinta">Borderô</strong> — fecha a conta por lote, canal e forma de

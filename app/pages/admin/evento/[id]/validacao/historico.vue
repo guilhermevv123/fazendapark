@@ -112,7 +112,7 @@ useHead({ title: 'Histórico de leituras' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Histórico de leituras</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Histórico de leituras</h1>
         <p class="mt-1 text-tinta-suave">
           Tudo que passou na porta — inclusive o que foi barrado, e por quê.
         </p>
@@ -192,9 +192,9 @@ useHead({ title: 'Histórico de leituras' })
         <table class="w-full min-w-[720px] border-collapse text-sm">
           <thead>
             <tr class="border-b border-linha-forte text-left">
-              <th class="titulo px-2 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ingresso</th>
-              <th class="titulo px-2 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Passagens</th>
-              <th class="titulo px-2 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Quando / onde / qual aparelho</th>
+              <th class="titulo px-2 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ingresso</th>
+              <th class="titulo px-2 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Passagens</th>
+              <th class="titulo px-2 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Quando / onde / qual aparelho</th>
             </tr>
           </thead>
           <tbody>
@@ -277,11 +277,11 @@ useHead({ title: 'Histórico de leituras' })
       <table class="w-full min-w-[840px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Quando</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Código lido</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Titular</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Portão / operador</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Resultado</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Quando</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Código lido</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Titular</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Portão / operador</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Resultado</th>
           </tr>
         </thead>
         <tbody>

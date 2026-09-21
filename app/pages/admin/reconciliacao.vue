@@ -256,7 +256,7 @@ useHead({ title: 'Reconciliação' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Reconciliação</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Reconciliação</h1>
         <p class="mt-1 max-w-3xl text-tinta-suave">
           O que a plataforma diz que recebeu, ao lado do que o gateway diz que pagou.
           Os valores são o que o <strong>comprador pagou</strong> (bruto), não o líquido
@@ -420,7 +420,7 @@ useHead({ title: 'Reconciliação' })
             <span :class="data.catalogo[tipo].gravidade === 'grave' ? 'selo-erro' : 'selo-alerta'">
               {{ data.catalogo[tipo].gravidade === 'grave' ? 'GRAVE' : 'ATENÇÃO' }}
             </span>
-            <span class="titulo text-sm font-bold text-tinta-rotulo">
+            <span class="titulo text-sm font-semibold text-tinta-rotulo">
               {{ data.catalogo[tipo].rotulo }} · {{ porTipo[tipo].length }}
               <!-- o cabeçalho conta o que está na tabela; quando isso é menos
                    que o total do tipo, os dois números precisam aparecer -->
@@ -431,7 +431,7 @@ useHead({ title: 'Reconciliação' })
           </div>
           <p class="mt-1 text-sm text-tinta-suave">{{ data.catalogo[tipo].oQueE }}</p>
           <div class="mt-2 rounded-card border border-linha bg-fundo-cinza p-3">
-            <p class="titulo text-xs font-bold text-tinta-rotulo">
+            <p class="titulo text-xs font-semibold text-tinta-rotulo">
               O que fazer: {{ data.catalogo[tipo].acao.rotulo }}
             </p>
             <p class="mt-1 text-sm text-tinta-corpo">{{ data.catalogo[tipo].acao.comoFazer }}</p>
@@ -442,25 +442,25 @@ useHead({ title: 'Reconciliação' })
           <table class="w-full min-w-[980px] border-collapse text-sm">
             <thead>
               <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-                <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">
+                <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">
                   Cobrança / pedido
                 </th>
-                <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">
+                <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">
                   Aqui
                 </th>
-                <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">
+                <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">
                   No gateway
                 </th>
-                <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">
+                <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">
                   Nosso
                 </th>
-                <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">
+                <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">
                   Gateway
                 </th>
-                <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">
+                <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">
                   Diferença
                 </th>
-                <th class="titulo px-4 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">
+                <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">
                   Ação
                 </th>
               </tr>
@@ -518,7 +518,7 @@ useHead({ title: 'Reconciliação' })
     <!-- ------------------------------------------------------ não conferidos -->
     <div v-if="data.naoConferidos.length" class="card mt-4 p-0">
       <div class="border-b border-linha px-4 py-3">
-        <p class="titulo text-sm font-bold text-alerta">
+        <p class="titulo text-sm font-semibold text-alerta">
           Não conferidos · {{ data.totais.naoConferidos }}
         </p>
         <p class="mt-1 text-sm text-tinta-suave">

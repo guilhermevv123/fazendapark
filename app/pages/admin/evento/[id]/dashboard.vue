@@ -72,17 +72,17 @@ const rosca = computed(() => {
   const total = f.criados ?? (f.finalizados + f.abandonados + f.abertos)
   if (!total) return null
   const fatias = [
-    { rotulo: 'Finalizados', n: f.finalizados, cor: '#0050C3' },
-    { rotulo: 'Abandonados', n: f.abandonados, cor: '#7FC4F5' },
-    { rotulo: 'Em aberto', n: f.abertos, cor: '#D8DDE5' },
+    { rotulo: 'Finalizados', n: f.finalizados, cor: '#146f83' },
+    { rotulo: 'Abandonados', n: f.abandonados, cor: '#8fd4ea' },
+    { rotulo: 'Em aberto', n: f.abertos, cor: '#c8c5d5' },
     // Os três que não existiam no desenho e faziam o pedido sumir da tela. As
     // cores são os tokens da casa lidos de `tailwind.config.js` — `erro`
-    // (#C1292E), `alerta` (#B26A00) e `tinta.fraca` (#8A97A8) — e não um tom
+    // (#b91c1c), `alerta` (#b45309) e `tinta.fraca` (#716c87) — e não um tom
     // inventado: aqui é `fill` de SVG, então o Tailwind não geraria classe
     // nenhuma e um hex fora da paleta passaria despercebido pra sempre.
-    { rotulo: 'Devolvidos', n: f.devolvidos ?? 0, cor: '#C1292E' },
-    { rotulo: 'Em contestação', n: f.contestados ?? 0, cor: '#B26A00' },
-    { rotulo: 'Outros', n: f.outros ?? 0, cor: '#8A97A8' },
+    { rotulo: 'Devolvidos', n: f.devolvidos ?? 0, cor: '#b91c1c' },
+    { rotulo: 'Em contestação', n: f.contestados ?? 0, cor: '#b45309' },
+    { rotulo: 'Outros', n: f.outros ?? 0, cor: '#716c87' },
   ].filter((x) => x.n > 0)
   const R = 70, r = 46, cx = 90, cy = 90
   let ang = -Math.PI / 2
@@ -153,7 +153,7 @@ useHead({ title: 'Dashboard do evento' })
 <template>
   <div>
     <div class="py-5">
-      <h1 class="titulo text-2xl font-bold text-tinta">Dashboard do evento</h1>
+      <h1 class="titulo text-2xl font-semibold text-tinta">Dashboard do evento</h1>
       <p class="mt-1 text-tinta-suave">Acompanhe vendas, público e performance</p>
     </div>
 
@@ -270,23 +270,23 @@ useHead({ title: 'Dashboard do evento' })
                  role="img" aria-label="Curva acumulada de faturamento por dia">
               <defs>
                 <linearGradient id="sob" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#1C70E9" stop-opacity=".18" />
-                  <stop offset="100%" stop-color="#1C70E9" stop-opacity="0" />
+                  <stop offset="0%" stop-color="#1789a1" stop-opacity=".18" />
+                  <stop offset="100%" stop-color="#1789a1" stop-opacity="0" />
                 </linearGradient>
               </defs>
               <g v-for="(g, i) in linha.grade" :key="i">
                 <line :x1="L.e" :x2="L.w - L.d" :y1="g.y" :y2="g.y"
-                      stroke="#EAE9ED" stroke-dasharray="3 4" />
-                <text :x="L.e - 8" :y="g.y + 4" text-anchor="end" font-size="10" fill="#8A97A8">
+                      stroke="#e2e0ea" stroke-dasharray="3 4" />
+                <text :x="L.e - 8" :y="g.y + 4" text-anchor="end" font-size="10" fill="#716c87">
                   {{ g.rotulo }}
                 </text>
               </g>
               <path :d="linha.area" fill="url(#sob)" />
-              <path :d="linha.d" fill="none" stroke="#1C70E9" stroke-width="2"
+              <path :d="linha.d" fill="none" stroke="#1789a1" stroke-width="2"
                     stroke-linejoin="round" stroke-linecap="round" />
-              <circle :cx="linha.fim.x" :cy="linha.fim.y" r="4" fill="#1C70E9" />
+              <circle :cx="linha.fim.x" :cy="linha.fim.y" r="4" fill="#1789a1" />
               <text v-for="(r, i) in linha.rotulosX" :key="`x${i}`"
-                    :x="r.x" :y="L.h - 10" text-anchor="middle" font-size="10" fill="#8A97A8">
+                    :x="r.x" :y="L.h - 10" text-anchor="middle" font-size="10" fill="#716c87">
                 {{ r.texto }}
               </text>
             </svg>
@@ -304,10 +304,10 @@ useHead({ title: 'Dashboard do evento' })
             <svg viewBox="0 0 180 180" class="h-[180px] w-[180px]"
                  role="img" aria-label="Proporção de pedidos finalizados e abandonados">
               <path v-for="(s, i) in rosca.fatias" :key="i" :d="s.d" :fill="s.cor" />
-              <text x="90" y="86" text-anchor="middle" font-size="22" font-weight="700" fill="#171719">
+              <text x="90" y="86" text-anchor="middle" font-size="22" font-weight="600" fill="#1e1a2e">
                 {{ rosca.fatias[0]?.pct ?? 0 }}%
               </text>
-              <text x="90" y="104" text-anchor="middle" font-size="10" fill="#8A97A8">finalizados</text>
+              <text x="90" y="104" text-anchor="middle" font-size="10" fill="#716c87">finalizados</text>
             </svg>
 
             <ul class="mt-4 w-full space-y-2 text-sm">
@@ -373,12 +373,12 @@ useHead({ title: 'Dashboard do evento' })
           <table class="w-full text-sm">
             <thead class="bg-fundo-cinza text-left text-xs uppercase text-tinta-suave">
               <tr>
-                <th class="px-4 py-2 font-bold">Setor</th>
-                <th class="px-4 py-2 font-bold">Lote</th>
-                <th class="px-4 py-2 text-right font-bold">No período</th>
-                <th class="px-4 py-2 text-right font-bold">Vendidos</th>
-                <th class="px-4 py-2 text-right font-bold">Estoque</th>
-                <th class="px-4 py-2 text-right font-bold">Arrecadado</th>
+                <th class="px-4 py-2 font-semibold">Setor</th>
+                <th class="px-4 py-2 font-semibold">Lote</th>
+                <th class="px-4 py-2 text-right font-semibold">No período</th>
+                <th class="px-4 py-2 text-right font-semibold">Vendidos</th>
+                <th class="px-4 py-2 text-right font-semibold">Estoque</th>
+                <th class="px-4 py-2 text-right font-semibold">Arrecadado</th>
               </tr>
             </thead>
             <tbody>
@@ -409,7 +409,7 @@ useHead({ title: 'Dashboard do evento' })
                 <td class="px-4 py-2" colspan="5">Descontos (cupons)</td>
                 <td class="px-4 py-2 text-right tabular-nums">− {{ reais(data.totais.descontoCents) }}</td>
               </tr>
-              <tr class="border-t border-linha font-bold text-tinta">
+              <tr class="border-t border-linha font-semibold text-tinta">
                 <td class="px-4 py-2.5" colspan="5">Total de vendas</td>
                 <td class="px-4 py-2.5 text-right tabular-nums">{{ reais(data.totais.cobradoCents) }}</td>
               </tr>
@@ -555,10 +555,10 @@ useHead({ title: 'Dashboard do evento' })
             <table class="w-full text-sm">
               <thead class="bg-fundo-cinza text-left text-xs uppercase text-tinta-suave">
                 <tr>
-                  <th class="px-4 py-2 font-bold">Pessoa</th>
-                  <th class="px-4 py-2 text-right font-bold">Ingressos</th>
-                  <th class="px-4 py-2 text-right font-bold">Pedidos</th>
-                  <th class="px-4 py-2 text-right font-bold">Gasto</th>
+                  <th class="px-4 py-2 font-semibold">Pessoa</th>
+                  <th class="px-4 py-2 text-right font-semibold">Ingressos</th>
+                  <th class="px-4 py-2 text-right font-semibold">Pedidos</th>
+                  <th class="px-4 py-2 text-right font-semibold">Gasto</th>
                 </tr>
               </thead>
               <tbody>

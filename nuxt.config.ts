@@ -3,7 +3,15 @@ import { fileURLToPath } from 'node:url'
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-01',
   modules: ['@nuxtjs/tailwindcss'],
-  css: ['~/assets/base.css'],
+  // Geist, a fonte do site do parque, servida por nós e não pelo Google: vem de
+  // /_nuxt/, que o service worker da portaria guarda, então o leitor de entrada
+  // mantém a tipografia inclusive sem rede. A ordem importa — o base.css vem por
+  // último pra ganhar de qualquer regra das fontes.
+  css: [
+    '@fontsource-variable/geist/index.css',
+    '@fontsource-variable/geist-mono/index.css',
+    '~/assets/base.css',
+  ],
   runtimeConfig: {
     databaseUrl: process.env.DATABASE_URL,
     asaasWebhookToken: process.env.ASAAS_WEBHOOK_TOKEN,
@@ -12,12 +20,15 @@ export default defineNuxtConfig({
   app: {
     head: {
       htmlAttrs: { lang: 'pt-BR' },
-      meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
-      link: [
-        { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-        { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
-        { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&family=Roboto:wght@400;500;700&display=swap' },
+      // O título "<tela> · Conquista Park" mora em app/plugins/titulo.ts: função
+      // não sobrevive à serialização do `app.head` daqui (o `titleTemplate` em
+      // forma de função chegava no navegador como se não existisse).
+      meta: [
+        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+        { name: 'theme-color', content: '#146f83' },
+        { name: 'application-name', content: 'Conquista Park' },
       ],
+      link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     },
   },
   nitro: {

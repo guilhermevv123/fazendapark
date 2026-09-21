@@ -227,19 +227,14 @@ useHead(() => ({
 
 <template>
   <div v-if="error" class="mx-auto max-w-2xl px-4 py-24 text-center">
-    <p class="titulo text-2xl font-bold text-tinta">Evento não encontrado</p>
+    <p class="titulo text-2xl font-semibold text-tinta">Evento não encontrado</p>
     <p class="mt-2 text-tinta-suave">Confira o link ou fale com quem te mandou.</p>
   </div>
 
   <div v-else-if="data" class="min-h-screen pb-44 lg:pb-16">
-    <header class="bg-menu text-white">
-      <div class="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
-        <NuxtLink to="/" class="titulo text-lg font-black tracking-tight">
-          diamond<span class="font-normal opacity-70">.tickets</span>
-        </NuxtLink>
-        <span class="ml-auto truncate text-sm text-white/80">{{ data.evento.organizacao }}</span>
-      </div>
-    </header>
+    <CabecalhoPublico>
+      <span class="truncate text-ink-500">{{ data.evento.organizacao }}</span>
+    </CabecalhoPublico>
 
     <main class="mx-auto max-w-5xl px-4">
       <!-- ======================================================= capa ---- -->
@@ -252,7 +247,7 @@ useHead(() => ({
             <p v-if="data.evento.avisoDeVenda" class="mb-3 text-sm text-tinta-suave">
               {{ data.evento.avisoDeVenda }}
             </p>
-            <h1 class="titulo text-3xl font-black leading-tight text-tinta md:text-4xl">
+            <h1 class="titulo text-3xl font-bold leading-tight text-tinta md:text-4xl">
               {{ data.evento.nome }}
             </h1>
 
@@ -285,7 +280,7 @@ useHead(() => ({
           <div class="flex items-center border-t border-linha bg-acao-fraco px-6 py-5 md:border-l md:border-t-0">
             <div class="w-full">
               <p class="text-sm font-medium text-tinta-suave">A partir de</p>
-              <p class="titulo mt-1 text-3xl font-black text-tinta">
+              <p class="titulo mt-1 text-3xl font-bold text-tinta">
                 {{ data.evento.aPartirDeCents != null ? reais(data.evento.aPartirDeCents) : '—' }}
               </p>
               <p class="mt-1 text-xs text-tinta-fraca">taxa de serviço já incluída</p>
@@ -297,13 +292,13 @@ useHead(() => ({
       <!-- =================================================== seleção ----- -->
       <section class="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
         <div class="min-w-0">
-          <h2 class="titulo text-lg font-bold text-tinta">
+          <h2 class="titulo text-lg font-semibold text-tinta">
             Escolha seus {{ data.evento.substantivo.toLowerCase() }}
           </h2>
 
           <div v-for="setor in data.setores" :key="setor.id" class="mt-4">
             <div class="flex flex-wrap items-baseline gap-2">
-              <h3 class="titulo text-base font-bold text-tinta">{{ setor.nome }}</h3>
+              <h3 class="titulo text-base font-semibold text-tinta">{{ setor.nome }}</h3>
               <span v-if="setor.tipo === 'passaporte'" class="selo-neutro">COMBO</span>
             </div>
             <!-- A sessão é o DIA que o ingresso vale. Num parque que abre
@@ -336,7 +331,7 @@ useHead(() => ({
                          qual. `<span>` com display:block dentro de `<p>` é
                          válido; o que não pode é `<div>`/`<p>` aninhado. -->
                     <p class="mt-0.5">
-                      <span class="titulo text-lg font-bold text-tinta">{{ reais(v.totalCents) }}</span>
+                      <span class="titulo text-lg font-semibold text-tinta">{{ reais(v.totalCents) }}</span>
                       <span v-if="v.taxaCents" class="block text-sm text-tinta-fraca sm:ml-2 sm:inline">
                         {{ reais(v.faceCents) }} + {{ reais(v.taxaCents) }} de taxa
                       </span>
@@ -360,17 +355,20 @@ useHead(() => ({
 
                   <div v-if="aVenda(lote)" class="flex shrink-0 items-center gap-1">
                     <button type="button"
-                            class="flex h-9 w-9 items-center justify-center rounded-card border border-linha-forte
-                                   text-lg leading-none text-tinta hover:bg-fundo-cinza disabled:opacity-30"
+                            class="grid size-10 place-items-center rounded-full bg-white text-lg leading-none
+                                   text-ink-700 ring-1 ring-inset ring-ink-300 transition-colors hover:bg-ink-50
+                                   disabled:cursor-not-allowed disabled:opacity-40"
                             :disabled="quantidade(lote, v) <= 0"
                             :aria-label="`Remover um ${v.nome ?? lote.nome}`"
                             @click="ajustar(lote, v, -1)">−</button>
-                    <span class="w-8 text-center font-medium tabular-nums text-tinta">
+                    <span class="titulo w-7 text-center text-lg font-semibold tabular-nums text-ink-900"
+                          aria-live="polite">
                       {{ quantidade(lote, v) }}
                     </span>
                     <button type="button"
-                            class="flex h-9 w-9 items-center justify-center rounded-card bg-acao text-lg
-                                   leading-none text-white hover:bg-acao-escuro disabled:bg-tinta-fraca"
+                            class="grid size-10 place-items-center rounded-full bg-pool-700 text-lg leading-none
+                                   text-white ring-1 ring-inset ring-pool-700 transition-colors hover:bg-pool-800
+                                   disabled:cursor-not-allowed disabled:opacity-40"
                             :disabled="!!impedimentoDaLinha(lote, v)
                                        || quantidade(lote, v) >= tetoDaLinha(lote, v)"
                             :aria-label="`Adicionar um ${v.nome ?? lote.nome}`"
@@ -389,7 +387,7 @@ useHead(() => ({
                 -->
                 <div v-if="pedeMeia(v) && quantidade(lote, v) > 0"
                      class="mt-3 rounded-card border border-linha bg-fundo-cinza p-3">
-                  <p class="text-xs font-bold text-tinta-rotulo">
+                  <p class="text-xs font-semibold text-tinta-rotulo">
                     Meia-entrada: quem tem direito?
                   </p>
                   <p class="mt-0.5 text-xs text-tinta-suave">
@@ -426,7 +424,7 @@ useHead(() => ({
           </div>
 
           <div v-if="data.evento.descricao" class="card mt-6">
-            <h2 class="titulo text-base font-bold text-tinta">Sobre o evento</h2>
+            <h2 class="titulo text-base font-semibold text-tinta">Sobre o evento</h2>
             <p class="mt-2 whitespace-pre-line leading-relaxed text-tinta-corpo">
               {{ data.evento.descricao }}
             </p>
@@ -464,17 +462,17 @@ useHead(() => ({
                 <span>Taxa de serviço</span><span class="tabular-nums">{{ reais(totais.taxa) }}</span>
               </div>
               <div class="mt-2 flex items-baseline justify-between border-t border-linha pt-2">
-                <span class="titulo font-bold text-tinta">Total</span>
-                <span class="titulo text-xl font-black tabular-nums text-tinta">{{ reais(totais.total) }}</span>
+                <span class="titulo font-semibold text-tinta">Total</span>
+                <span class="titulo text-xl font-bold tabular-nums text-tinta">{{ reais(totais.total) }}</span>
               </div>
             </div>
 
             <p v-if="pendencias.length" class="faixa-aviso mt-4">
-              <span class="block font-bold text-tinta">Falta preencher para continuar:</span>
+              <span class="block font-semibold text-tinta">Falta preencher para continuar:</span>
               <span v-for="p in pendencias" :key="p" class="mt-1 block">{{ p }}</span>
             </p>
 
-            <button type="button" class="btn-primario mt-4 w-full py-3"
+            <button type="button" class="btn-cta mt-4 w-full py-3"
                     :disabled="!podePagar"
                     @click="irParaPagamento">
               {{ data.evento.vendasAbertas ? 'Ir para pagamento' : 'Vendas fechadas' }}
@@ -486,7 +484,7 @@ useHead(() => ({
 
     <!-- barra do celular -->
     <div v-if="totais.n"
-         class="fixed inset-x-0 bottom-0 z-20 border-t border-linha bg-white p-4 shadow-[0_-2px_12px_rgba(18,38,63,.08)] lg:hidden">
+         class="fixed inset-x-0 bottom-0 z-20 border-t border-ink-200/70 bg-white/95 p-4 shadow-[0_-8px_24px_-12px_rgb(30_26_46/0.18)] backdrop-blur lg:hidden">
       <div class="mx-auto max-w-5xl">
         <p v-if="pendencias.length" class="faixa-aviso mb-3">{{ pendencias[0] }}</p>
         <div class="flex items-center gap-4">
@@ -494,12 +492,12 @@ useHead(() => ({
             <p class="text-xs text-tinta-fraca">
               {{ totais.n }} {{ totais.n === 1 ? 'ingresso' : 'ingressos' }}
             </p>
-            <p class="titulo text-xl font-black tabular-nums text-tinta">{{ reais(totais.total) }}</p>
+            <p class="titulo text-xl font-bold tabular-nums text-tinta">{{ reais(totais.total) }}</p>
             <p v-if="totais.taxa" class="text-xs text-tinta-fraca">
               já com {{ reais(totais.taxa) }} de taxa
             </p>
           </div>
-          <button type="button" class="btn-primario shrink-0 px-6 py-3"
+          <button type="button" class="btn-cta shrink-0 px-6 py-3"
                   :disabled="!podePagar" @click="irParaPagamento">
             Pagar
           </button>

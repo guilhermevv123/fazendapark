@@ -145,7 +145,7 @@ useHead({ title: 'Filas' })
   <div>
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Filas</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Filas</h1>
         <p class="mt-1 text-tinta-suave">
           O ingresso que o comprador pagou saiu? E o dinheiro que a gente mandou devolver,
           voltou? Esta tela responde antes de o telefone tocar.
@@ -175,7 +175,7 @@ useHead({ title: 'Filas' })
            `ok` é o que um alarme externo lê, e ele é falso quando tem GENTE
            sem receber o que pagou — não quando tem aviso na tela. -->
       <div v-if="!data.ok" class="faixa-erro">
-        <span class="block font-bold">
+        <span class="block font-semibold">
           Tem fila parada neste servidor.
         </span>
         <span v-if="pessoasSemReceber" class="mt-1 block">
@@ -197,7 +197,7 @@ useHead({ title: 'Filas' })
         <section v-for="f in data.filas" :key="f.nome" class="card">
           <div class="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h2 class="titulo text-lg font-bold text-tinta">{{ f.rotulo }}</h2>
+              <h2 class="titulo text-lg font-semibold text-tinta">{{ f.rotulo }}</h2>
               <p class="mt-0.5 text-xs text-tinta-fraca">fila “{{ f.nome }}”</p>
             </div>
             <span :class="f.parado ? 'selo-erro' : 'selo-ok'">
@@ -212,7 +212,7 @@ useHead({ title: 'Filas' })
 
           <!-- o custo em GENTE. Duas tentativas do mesmo comprador são duas
                linhas de fila e uma pessoa só do outro lado do balcão. -->
-          <p v-if="f.custo" class="mt-2 text-sm font-bold text-erro">{{ f.custo }}</p>
+          <p v-if="f.custo" class="mt-2 text-sm font-semibold text-erro">{{ f.custo }}</p>
 
           <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div>
@@ -269,12 +269,12 @@ useHead({ title: 'Filas' })
             </div>
             <div v-if="f.perdidoCents">
               <dt class="rotulo text-erro">Não voltou pro cliente</dt>
-              <dd class="tabular-nums font-bold text-erro">{{ reais(f.perdidoCents) }}</dd>
+              <dd class="tabular-nums font-semibold text-erro">{{ reais(f.perdidoCents) }}</dd>
             </div>
           </dl>
 
           <p v-if="f.ultimoErro" class="mt-3 text-xs text-tinta-suave">
-            <span class="font-bold">Último erro:</span> {{ f.ultimoErro }}
+            <span class="font-semibold">Último erro:</span> {{ f.ultimoErro }}
           </p>
 
           <!-- ================================================ o trabalhador -->
@@ -305,14 +305,14 @@ useHead({ title: 'Filas' })
                 <dt class="rotulo mb-0">Sem carimbar há</dt>
                 <!-- O destaque é do NÚMERO de silêncio, não da célula.
                      Medido na tela com a fila de estorno parada por dinheiro
-                     que não voltou: a célula ganhava `font-bold` e o texto
+                     que não voltou: a célula ganhava `font-semibold` e o texto
                      "não carimba varredura" saía em negrito — cinza, mas
                      gritando, numa linha cujo recado é "aqui não tem nada pra
                      ver". Negrito em quem não prometeu falar é o mesmo alarme
                      falso da 026, só que desenhado. -->
                 <dd class="tabular-nums text-sm"
                     :class="f.parado && f.trabalhador.carimbaVarredura
-                      ? 'font-bold text-erro' : 'text-tinta-corpo'">
+                      ? 'font-semibold text-erro' : 'text-tinta-corpo'">
                   <!-- Fila que só registra o boot não carimba varredura: o
                        "bateu há" dela seria a idade do processo, e desenhar
                        esse número como batimento é acusar de silêncio quem

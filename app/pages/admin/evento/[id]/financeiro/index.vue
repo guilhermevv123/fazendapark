@@ -117,7 +117,7 @@ useHead({ title: 'Transferências' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Transferências</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Transferências</h1>
         <p class="mt-1 text-tinta-suave">
           O dinheiro das vendas saindo para a conta da produção.
         </p>
@@ -241,13 +241,13 @@ useHead({ title: 'Transferências' })
       <table class="w-full min-w-[960px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Beneficiário</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pedido feito por</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Data</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Valor</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Destino</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Status</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Detalhes</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Beneficiário</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pedido feito por</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Data</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Valor</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Destino</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Status</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Detalhes</th>
           </tr>
         </thead>
         <tbody>
@@ -267,7 +267,7 @@ useHead({ title: 'Transferências' })
               </span>
             </td>
             <td class="px-3 py-3 text-right">
-              <span class="titulo font-bold tabular-nums text-tinta">{{ reais(t.valorCents) }}</span>
+              <span class="titulo font-semibold tabular-nums text-tinta">{{ reais(t.valorCents) }}</span>
               <span v-if="t.taxaCents" class="block text-xs tabular-nums text-tinta-fraca">
                 taxa {{ reais(t.taxaCents) }}
               </span>

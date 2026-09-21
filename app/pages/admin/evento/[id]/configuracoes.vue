@@ -246,7 +246,7 @@ async function adiarEvento() {
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Configurações do evento</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Configurações do evento</h1>
         <p class="mt-1 text-tinta-suave">
           O mesmo cadastro da criação. Só o que você mudar é enviado.
         </p>
@@ -274,7 +274,7 @@ async function adiarEvento() {
     <div class="mt-4 grid gap-4 lg:grid-cols-3">
       <div class="lg:col-span-2 grid gap-4">
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Dados básicos</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Dados básicos</h2>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
             <div class="sm:col-span-2">
               <label class="rotulo">Nome do evento</label>
@@ -312,7 +312,7 @@ async function adiarEvento() {
         </section>
 
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Datas e horários</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Datas e horários</h2>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
             <div>
               <label class="rotulo">Começa em</label>
@@ -347,7 +347,7 @@ async function adiarEvento() {
         </section>
 
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Local</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Local</h2>
           <label class="mt-3 flex items-center gap-2 text-sm text-tinta-suave">
             <input v-model="f.online" type="checkbox" class="h-4 w-4 accent-acao">
             Evento online
@@ -393,7 +393,7 @@ async function adiarEvento() {
         </section>
 
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Imagens e categoria</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Imagens e categoria</h2>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
             <div class="sm:col-span-2">
               <label class="rotulo">Banner (URL)</label>
@@ -421,7 +421,7 @@ async function adiarEvento() {
 
       <div class="grid content-start gap-4">
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Taxa de serviço</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Taxa de serviço</h2>
           <div class="mt-3 grid gap-3">
             <div>
               <label class="rotulo">Percentual</label>
@@ -454,7 +454,7 @@ async function adiarEvento() {
         </section>
 
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Venda</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Venda</h2>
           <div class="mt-3 grid gap-3">
             <div>
               <label class="rotulo">Minutos de reserva no carrinho</label>
@@ -480,7 +480,7 @@ async function adiarEvento() {
         </section>
 
         <section class="card">
-          <h2 class="titulo text-base font-bold text-tinta">Suporte ao comprador</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Suporte ao comprador</h2>
           <div class="mt-3 grid gap-3">
             <div>
               <label class="rotulo">Canal</label>
@@ -499,7 +499,7 @@ async function adiarEvento() {
         </section>
 
         <section class="card text-sm">
-          <h2 class="titulo text-base font-bold text-tinta">Ficha</h2>
+          <h2 class="titulo text-base font-semibold text-tinta">Ficha</h2>
           <dl class="mt-3 grid grid-cols-2 gap-y-2 text-tinta-suave">
             <dt>Organização</dt><dd class="text-right text-tinta">{{ data.organizacao }}</dd>
             <dt>Fuso</dt><dd class="text-right text-tinta">{{ data.fuso }}</dd>
@@ -519,7 +519,7 @@ async function adiarEvento() {
          Fica embaixo, separado e com o botão vermelho, porque o que acontece
          aqui não é salvar campo: é invalidar ingresso e devolver dinheiro. -->
     <section id="cancelamento" class="card mt-4">
-      <h2 class="titulo text-base font-bold text-tinta">Cancelar ou adiar o evento</h2>
+      <h2 class="titulo text-base font-semibold text-tinta">Cancelar ou adiar o evento</h2>
       <p class="mt-1 text-sm text-tinta-suave">
         Trocar a "Situação" no cadastro acima é só o rótulo. É aqui que o ingresso
         deixa de abrir a catraca e o dinheiro entra na fila de devolução.

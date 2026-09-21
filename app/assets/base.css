@@ -2,71 +2,129 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light; }
+:root {
+  color-scheme: light;
+  -webkit-tap-highlight-color: transparent;
+}
 
 body {
-  background: theme('colors.fundo.DEFAULT');
-  color: theme('colors.tinta.corpo');
+  background: theme('colors.canvas');
+  color: theme('colors.tinta.DEFAULT');
   font-family: theme('fontFamily.corpo');
   font-size: 15px;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Lato em tudo que é título, KPI e menu — é assim no painel de origem. */
-.titulo { font-family: theme('fontFamily.titulo'); }
+::selection {
+  background: theme('colors.pool.200');
+  color: theme('colors.ink.950');
+}
+
+/* Título, KPI e menu. Mesma Geist do corpo (é assim no sistema do parque, que
+   não tem uma segunda família); o que separa o título do texto é o peso e o
+   fechamento de 1,5% nas letras. */
+.titulo {
+  font-family: theme('fontFamily.titulo');
+  letter-spacing: -0.015em;
+}
 
 @layer components {
-  /* Card: branco, borda fina, raio 8, SEM sombra. A ausência de sombra é
-     escolha do sistema de origem; adicionar uma muda a leitura da tela toda. */
+  /* Cartão do sistema do parque: branco, raio 16, contorno de 1px em ink-200 a
+     70% e uma sombra curta. O contorno é `ring` (sombra), não `border`: não
+     ocupa espaço, então `p-0` e `overflow-hidden` continuam fechando certinho.
+     Os cartões da Zig não tinham sombra — aqui têm, é a leitura do parque. */
   .card {
-    @apply rounded-card border border-linha bg-fundo-card p-4;
+    @apply rounded-2xl bg-white p-5 shadow-card ring-1 ring-ink-200/70;
   }
-  .rotulo-kpi { @apply titulo text-sm font-bold text-tinta; }
-  .numero-kpi { @apply titulo text-2xl font-bold text-tinta tabular-nums; }
+  .rotulo-kpi { @apply titulo text-[13px] font-semibold text-ink-500; }
+  .numero-kpi { @apply titulo text-[28px] font-semibold leading-none tabular-nums text-ink-900; }
 
+  /* Botão: 40px de altura (py-2.5 + linha de 20), raio 12, peso 600. A altura
+     vem do recheio e não de `h-10` DE PROPÓSITO: as telas encolhem ou esticam o
+     botão com `py-1`/`py-3`, e uma altura fixa venceria o recheio em silêncio.
+     `disabled` apaga em vez de trocar de cor e desliga o clique. */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-card px-4 py-2
-           text-base font-bold transition-colors disabled:cursor-not-allowed;
+    @apply inline-flex select-none items-center justify-center gap-2 whitespace-nowrap
+           rounded-xl px-4 py-2.5 text-sm font-semibold leading-5
+           transition-[background-color,box-shadow,color,transform] duration-150
+           active:translate-y-px disabled:pointer-events-none disabled:opacity-[0.55];
   }
-  .btn-primario  { @apply btn bg-acao text-white hover:bg-acao-escuro disabled:bg-tinta-fraca; }
-  .btn-secundario{ @apply btn border border-linha-forte bg-white text-tinta hover:bg-fundo-cinza; }
+  /* Ação principal do PAINEL: azul piscina, com brilho de 1px por dentro. */
+  .btn-primario {
+    @apply btn bg-pool-700 text-white hover:bg-pool-800 active:bg-pool-900;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14), 0 1px 2px rgb(7 48 58 / 0.3);
+  }
+  .btn-secundario {
+    @apply btn bg-white text-ink-800 ring-1 ring-inset ring-ink-200 hover:bg-ink-50 hover:ring-ink-300;
+  }
   /* Ação que destrói: cancelar transferência, fechar caixa, desativar guichê.
      Sólido e vermelho porque precisa parecer diferente do botão de salvar
      ANTES do clique — depois não adianta. */
-  .btn-erro      { @apply btn bg-erro text-white hover:brightness-110 disabled:bg-tinta-fraca; }
+  .btn-erro { @apply btn bg-danger-700 text-white hover:bg-danger-800; }
+  /* Chamada de COMPRA — só nas telas do comprador (vitrine, pagamento). É o
+     amarelo da logo com um degrau de 2px embaixo; no clique o degrau some e o
+     botão "afunda". O painel usa `btn-primario`, o site usa este. */
+  .btn-cta {
+    @apply btn bg-sun-400 text-ink-950 hover:bg-sun-300 active:shadow-none;
+    box-shadow: 0 2px 0 theme('colors.sun.600');
+  }
 
   /* Faixa de erro de formulário. Existe como classe porque escrita à mão em
      cada tela ela vira `border-perigo`/`bg-perigo-fraco` — nomes que o
      Tailwind não conhece, não gera, e a mensagem aparece SEM COR nenhuma.
      Nada quebra, nada aparece no console: só some o vermelho. */
-  .faixa-erro  { @apply rounded-card border border-erro bg-erro-claro p-3 text-sm text-erro; }
-  .faixa-aviso { @apply rounded-card border border-linha bg-fundo-cinza p-3 text-sm text-tinta-corpo; }
-  /* Chip de filtro: o selecionado ganha fundo claro + borda azul forte. */
-  .chip        { @apply btn border border-linha-forte bg-white font-normal text-tinta hover:bg-fundo-cinza; }
-  .chip-ativo  { @apply btn border border-acao-forte bg-acao-claro font-normal text-tinta; }
+  .faixa-erro  { @apply rounded-xl bg-danger-50 px-4 py-3 text-sm leading-6 text-danger-800 ring-1 ring-inset ring-danger-600/20; }
+  .faixa-aviso { @apply rounded-xl bg-pool-50 px-4 py-3 text-sm leading-6 text-pool-900 ring-1 ring-inset ring-pool-200; }
 
-  /* Campo e rótulo com as medidas do painel de origem: borda #CED4DA,
-     raio 8, 41px de altura (8px/12px de recheio), e o rótulo em Lato 12
-     negrito #4F6C7C — não é o mesmo cinza do texto de apoio. */
+  /* Filtro em botão (período, situação): claro por padrão, o selecionado vira
+     tinta escura cheia — o mesmo par do filtro de período do sistema do parque. */
+  .chip {
+    @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg
+           bg-white px-3 py-1.5 text-[13px] font-semibold text-ink-600
+           ring-1 ring-inset ring-ink-200 transition-colors hover:bg-ink-50
+           disabled:pointer-events-none disabled:opacity-[0.55];
+  }
+  .chip-ativo {
+    @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg
+           bg-ink-900 px-3 py-1.5 text-[13px] font-semibold text-white
+           ring-1 ring-inset ring-ink-900 transition-colors
+           disabled:pointer-events-none disabled:opacity-[0.55];
+  }
+
+  /* Campo: 44px de altura (recheio de 10 + linha de 24), raio 12, contorno de
+     1px em `ring` que engrossa pra 2px azul no foco. 16px no celular (escrito
+     por extenso: o `text-base` daqui é 15px) — abaixo disso o iPhone dá zoom
+     na página ao tocar no campo. `aria-invalid` acende o vermelho
+     sozinho. Sem `h-11`: o `py-1` que algumas telas põem em campo de tabela
+     tem que continuar encolhendo. */
   .campo {
-    @apply w-full rounded-card border border-linha-campo bg-white px-3 py-2
-           text-tinta-corpo placeholder:text-tinta-fraca
-           focus:border-acao focus:outline-none focus:ring-2 focus:ring-acao/20;
+    @apply block w-full rounded-xl bg-white px-3.5 py-2.5 text-[16px] leading-6 text-ink-900
+           ring-1 ring-inset ring-ink-200 transition-[box-shadow]
+           placeholder:text-ink-400 hover:ring-ink-300
+           focus:outline-none focus:ring-2 focus:ring-pool-600
+           disabled:cursor-not-allowed disabled:bg-ink-50 disabled:text-ink-500
+           aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-danger-600
+           sm:text-[15px];
   }
   .rotulo {
-    @apply titulo mb-1 block text-xs font-bold text-tinta-rotulo;
+    @apply mb-1 block text-[13px] font-semibold text-ink-800;
   }
 
-  /* Cabeçalho de bloco do módulo de criação: Roboto 20 negrito + apoio 12. */
-  .titulo-bloco { @apply text-xl font-bold text-tinta-corpo; }
-  .apoio-bloco  { @apply mt-1 text-xs text-tinta-corpo/80; }
+  /* Cabeçalho de bloco do módulo de criação: título 20 + apoio 14. */
+  .titulo-bloco { @apply titulo text-xl font-semibold text-ink-900; }
+  .apoio-bloco  { @apply mt-1 text-sm text-ink-500; }
 
-  .selo       { @apply inline-flex items-center rounded px-2 py-0.5 text-xs font-bold; }
-  .selo-ok    { @apply selo bg-ok-claro text-ok; }
-  .selo-alerta{ @apply selo bg-alerta-claro text-alerta; }
-  .selo-erro  { @apply selo bg-erro-claro text-erro; }
-  .selo-neutro{ @apply selo bg-fundo-cinza text-tinta-suave; }
+  /* Selo de situação: pílula com contorno interno, a mesma palavra sempre com a
+     mesma cor em qualquer tela. As quatro são as que as telas usam — nome fora
+     desta lista renderiza sem cor, e `telas.test.ts` acusa. */
+  .selo        { @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset; }
+  .selo-ok     { @apply selo bg-success-50 text-success-800 ring-success-600/20; }
+  .selo-alerta { @apply selo bg-warning-50 text-warning-800 ring-warning-600/25; }
+  .selo-erro   { @apply selo bg-danger-50 text-danger-700 ring-danger-600/20; }
+  .selo-neutro { @apply selo bg-ink-100 text-ink-700 ring-ink-200; }
 }
 
-*:focus-visible { outline: 2px solid theme('colors.acao.DEFAULT'); outline-offset: 2px; }
+*:focus-visible { outline: 2px solid theme('colors.pool.600'); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

@@ -192,7 +192,7 @@ useHead({ title: 'Participantes' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Participantes</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Participantes</h1>
         <p class="mt-1 text-tinta-suave">
           Um por ingresso, não por pedido. É esta lista que a portaria usa.
         </p>
@@ -298,13 +298,13 @@ useHead({ title: 'Participantes' })
       <table class="w-full min-w-[960px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Código</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Portador</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Setor / lote</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Comprador</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Entrou</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Situação</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ações</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Código</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Portador</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Setor / lote</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Comprador</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Entrou</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Situação</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
           </tr>
         </thead>
         <tbody>
@@ -349,7 +349,7 @@ useHead({ title: 'Participantes' })
             </td>
             <td class="px-3 py-3 text-right">
               <button type="button" class="px-2 text-sm disabled:opacity-30"
-                      :class="p.nome ? 'text-tinta-fraca hover:text-acao' : 'font-bold text-acao'"
+                      :class="p.nome ? 'text-tinta-fraca hover:text-acao' : 'font-semibold text-acao'"
                       :disabled="p.status === 'usado' || p.status === 'cancelado'"
                       :title="p.status === 'usado' ? 'Já entrou: o portador não muda mais' : ''"
                       @click="abrir(p)">

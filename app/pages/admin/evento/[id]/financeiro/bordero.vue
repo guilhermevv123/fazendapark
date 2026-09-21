@@ -64,7 +64,7 @@ useHead({ title: 'Borderô' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Borderô</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Borderô</h1>
         <p class="mt-1 text-tinta-suave">
           Fechamento de {{ data.evento.nome }} — o que saiu, por onde, e quanto sobra.
         </p>
@@ -118,7 +118,7 @@ useHead({ title: 'Borderô' })
         </div>
         <div class="flex justify-between">
           <dt class="text-tinta-suave">A receber</dt>
-          <dd class="tabular-nums font-bold text-tinta">{{ reais(data.totais.aReceberCents) }}</dd>
+          <dd class="tabular-nums font-semibold text-tinta">{{ reais(data.totais.aReceberCents) }}</dd>
         </div>
         <div class="flex justify-between">
           <dt class="text-tinta-suave">Liberação</dt>
@@ -170,14 +170,14 @@ useHead({ title: 'Borderô' })
       <table class="mt-3 w-full min-w-[820px] border-collapse text-sm">
         <thead>
           <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Setor</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Lote</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Face unit.</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Estoque</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Vendidos</th>
-            <th v-if="temCortesia" class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Cortesias</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Face</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Taxa</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Setor</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Lote</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Face unit.</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Estoque</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Vendidos</th>
+            <th v-if="temCortesia" class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Cortesias</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Face</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Taxa</th>
           </tr>
         </thead>
         <tbody>
@@ -197,17 +197,17 @@ useHead({ title: 'Borderô' })
         </tbody>
         <tfoot>
           <tr class="border-t-2 border-linha-forte bg-fundo-cinza/60">
-            <td class="px-4 py-3 font-bold text-tinta" colspan="4">Total</td>
-            <td class="px-3 py-3 text-right font-bold tabular-nums text-tinta">
+            <td class="px-4 py-3 font-semibold text-tinta" colspan="4">Total</td>
+            <td class="px-3 py-3 text-right font-semibold tabular-nums text-tinta">
               {{ data.lotes.reduce((s: number, l: any) => s + l.vendidos, 0) }}
             </td>
-            <td v-if="temCortesia" class="px-3 py-3 text-right font-bold tabular-nums text-alerta">
+            <td v-if="temCortesia" class="px-3 py-3 text-right font-semibold tabular-nums text-alerta">
               {{ data.lotes.reduce((s: number, l: any) => s + l.cortesias, 0) }}
             </td>
-            <td class="px-3 py-3 text-right font-bold tabular-nums text-tinta">
+            <td class="px-3 py-3 text-right font-semibold tabular-nums text-tinta">
               {{ reais(data.totais.faceCents) }}
             </td>
-            <td class="px-3 py-3 text-right font-bold tabular-nums text-tinta-suave">
+            <td class="px-3 py-3 text-right font-semibold tabular-nums text-tinta-suave">
               {{ reais(data.totais.taxaCents) }}
             </td>
           </tr>
@@ -222,10 +222,10 @@ useHead({ title: 'Borderô' })
         <table class="mt-3 w-full border-collapse text-sm">
           <thead>
             <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
-              <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Canal</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pedidos</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ingressos</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Face</th>
+              <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Canal</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pedidos</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ingressos</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Face</th>
             </tr>
           </thead>
           <tbody>
@@ -248,9 +248,9 @@ useHead({ title: 'Borderô' })
         <table class="mt-3 w-full border-collapse text-sm">
           <thead>
             <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
-              <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Forma</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pedidos</th>
-              <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Total cobrado</th>
+              <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Forma</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pedidos</th>
+              <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Total cobrado</th>
             </tr>
           </thead>
           <tbody>

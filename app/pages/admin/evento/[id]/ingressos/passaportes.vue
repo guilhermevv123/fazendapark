@@ -81,7 +81,7 @@ useHead({ title: 'Passaportes e grupos' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Passaportes e grupos</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Passaportes e grupos</h1>
         <p class="mt-1 text-tinta-suave">
           Setores que não valem uma pessoa por uma sessão: mesa, camarote e passaporte de vários dias.
         </p>
@@ -112,7 +112,7 @@ useHead({ title: 'Passaportes e grupos' })
 
     <section v-for="s in grupos" :key="s.id" class="card mt-4 p-0">
       <header class="flex flex-wrap items-center gap-3 border-b border-linha px-4 py-3">
-        <h2 class="titulo text-base font-bold uppercase tracking-wide text-acao">{{ s.nome }}</h2>
+        <h2 class="titulo text-base font-semibold uppercase tracking-wide text-acao">{{ s.nome }}</h2>
         <span class="selo-neutro">{{ ROTULO[s.tipo] ?? s.tipo }}</span>
         <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
                 :aria-label="`Configurar ${s.nome}`" @click="abrir(s)">
@@ -149,11 +149,11 @@ useHead({ title: 'Passaportes e grupos' })
       <table v-if="s.lotes.length" class="w-full border-collapse text-sm">
         <thead>
           <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Lote</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Comprador paga</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Por pessoa</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Unidades</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pessoas</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Lote</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Comprador paga</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Por pessoa</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Unidades</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pessoas</th>
           </tr>
         </thead>
         <tbody>
@@ -175,7 +175,7 @@ useHead({ title: 'Passaportes e grupos' })
 
     <div v-if="grupos.length"
          class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 rounded-card bg-acao px-5 py-3 text-white">
-      <p class="titulo text-base font-bold">
+      <p class="titulo text-base font-semibold">
         Pessoas em passaportes e grupos: <span class="tabular-nums">{{ totalPessoas }}</span>
       </p>
       <p class="text-sm opacity-90">

@@ -107,7 +107,7 @@ function copiar(link: string) {
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Ingressos transferidos</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Ingressos transferidos</h1>
         <p class="mt-1 text-tinta-suave">
           Quem passou o ingresso pra quem, e em que pé está cada troca.
         </p>
@@ -121,7 +121,7 @@ function copiar(link: string) {
     </p>
     <p v-else-if="aviso" class="faixa-aviso mt-4">
       {{ aviso }}
-      <button v-if="ultimoLink" type="button" class="ml-2 font-bold text-acao underline"
+      <button v-if="ultimoLink" type="button" class="ml-2 font-semibold text-acao underline"
               @click="copiar(ultimoLink)">copiar link</button>
     </p>
 
@@ -202,12 +202,12 @@ function copiar(link: string) {
         <table class="w-full text-sm">
           <thead class="bg-fundo-cinza text-left text-xs uppercase text-tinta-suave">
             <tr>
-              <th class="px-4 py-2 font-bold">Cód. ingresso</th>
-              <th class="px-4 py-2 font-bold">Enviado por</th>
-              <th class="px-4 py-2 font-bold">Recebido por</th>
-              <th class="px-4 py-2 font-bold">Tipo</th>
-              <th class="px-4 py-2 font-bold">Quando</th>
-              <th class="px-4 py-2 font-bold">Status</th>
+              <th class="px-4 py-2 font-semibold">Cód. ingresso</th>
+              <th class="px-4 py-2 font-semibold">Enviado por</th>
+              <th class="px-4 py-2 font-semibold">Recebido por</th>
+              <th class="px-4 py-2 font-semibold">Tipo</th>
+              <th class="px-4 py-2 font-semibold">Quando</th>
+              <th class="px-4 py-2 font-semibold">Status</th>
               <th class="px-4 py-2" />
             </tr>
           </thead>
@@ -232,7 +232,7 @@ function copiar(link: string) {
                 <span :class="COR[t.status]">{{ t.statusTexto }}</span>
               </td>
               <td class="px-4 py-2.5 text-right">
-                <button type="button" class="text-sm font-bold text-acao hover:underline"
+                <button type="button" class="text-sm font-semibold text-acao hover:underline"
                         @click="aberta = t">Detalhes</button>
               </td>
             </tr>

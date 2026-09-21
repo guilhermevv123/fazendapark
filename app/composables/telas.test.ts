@@ -161,7 +161,7 @@ const ITENS_DE_RAIZ = [
 /**
  * O MENU é a `<ul>` da lateral, não "todo `<a>` da tela".
  *
- * A marca no alto (`diamond.tickets`) aponta pra `/admin` em qualquer papel,
+ * A logo no alto (Conquista Park) aponta pra `/admin` em qualquer papel,
  * fora do `v-if` — medido aqui: a portaria monta o layout e o único endereço
  * de painel no HTML dela é o da logo. Contar esse `<a>` junto faria o caso
  * reprovar por uma coisa que não é o `v-if` do menu, e vermelho que não é o
@@ -263,7 +263,11 @@ function tonsDoProjeto(): Record<string, Set<string>> {
   const bloco = cfg.slice(cfg.indexOf('colors: {') + 9, cfg.indexOf('fontFamily'))
   const fam: Record<string, Set<string>> = {}
   for (const m of bloco.matchAll(/(\w+)\s*:\s*\{([^}]*)\}/g)) {
-    fam[m[1]] = new Set([...m[2].matchAll(/([A-Za-z]+)\s*:\s*'#/g)].map((x) => x[1]))
+    // `[A-Za-z0-9]`: as escalas da marca (`pool`, `ink`, `sun`…) têm tom
+    // NUMÉRICO (`pool-700`). Com só letras, todo `bg-pool-50` seria lido como
+    // tom inexistente e a varredura gritaria em tela que está certa — ou pior,
+    // o piso de tons ficaria vazio e ela deixaria de gritar em tudo.
+    fam[m[1]] = new Set([...m[2].matchAll(/([A-Za-z0-9]+)\s*:\s*'#/g)].map((x) => x[1]))
   }
   return fam
 }

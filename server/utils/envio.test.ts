@@ -1938,7 +1938,7 @@ describe('a tela /admin/filas', () => {
     expect(fonte, 'o rótulo desse número perdeu o vermelho')
       .toMatch(/rotulo-kpi"\s*:class="f\.perdidos \? 'text-erro'/)
     expect(fonte, 'o dinheiro que não voltou pro cliente perdeu o destaque')
-      .toMatch(/font-bold text-erro[\s\S]{0,120}perdidoCents/)
+      .toMatch(/font-semibold text-erro[\s\S]{0,120}perdidoCents/)
     // E é SÓ ele: pintar todo KPI de vermelho é a outra forma de esconder o
     // número que custa cliente — a cor deixa de querer dizer alguma coisa.
     const kpisEmVermelho = [...fonte.matchAll(/class="numero-kpi[^"]*"[^>]*text-erro/g)]
@@ -1954,7 +1954,7 @@ describe('a tela /admin/filas', () => {
     // cujo recado é "aqui não tem nada pra ver". É o alarme falso da 026 de
     // novo, só que desenhado em vez de contado.
     expect(fonte, 'o destaque de silêncio voltou a valer pra fila que não carimba varredura')
-      .toMatch(/f\.parado && f\.trabalhador\.carimbaVarredura\s*\n?\s*\? 'font-bold text-erro'/)
+      .toMatch(/f\.parado && f\.trabalhador\.carimbaVarredura\s*\n?\s*\? 'font-semibold text-erro'/)
     // E a dica do comando de limpeza também: mandar apagar a linha de quem
     // nunca carimba é ensinar a apagar o registro de uma fila saudável.
     expect(fonte).toMatch(/f\.parado && f\.trabalhador\?\.carimbaVarredura"[\s\S]{0,400}DELETE FROM worker_heartbeat_instances/)

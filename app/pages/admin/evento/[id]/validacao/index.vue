@@ -589,7 +589,7 @@ useHead({ title: 'Leitor de entrada' })
   <div>
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Leitor de entrada</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Leitor de entrada</h1>
         <p class="mt-1 text-tinta-suave">
           Leia o QR ou digite o código. O campo já fica no foco — pode apontar o leitor.
         </p>
@@ -605,7 +605,7 @@ useHead({ title: 'Leitor de entrada' })
          operador vê: trabalhar offline sem saber que está offline é como o
          erro vira discussão na porta. -->
     <div class="card mt-4 flex flex-wrap items-center gap-x-6 gap-y-2">
-      <span class="flex items-center gap-2 font-bold"
+      <span class="flex items-center gap-2 font-semibold"
             :class="online ? 'text-ok' : 'text-alerta'">
         <span class="h-2.5 w-2.5 rounded-full" :class="online ? 'bg-ok' : 'bg-alerta'" />
         {{ online ? 'Conectado' : 'Sem rede — validando pela lista do aparelho' }}
@@ -622,7 +622,7 @@ useHead({ title: 'Leitor de entrada' })
         <template v-else> · <span class="text-erro">nunca baixada</span></template>
       </span>
 
-      <span class="text-sm" :class="fila.length ? 'font-bold text-alerta' : 'text-tinta-suave'">
+      <span class="text-sm" :class="fila.length ? 'font-semibold text-alerta' : 'text-tinta-suave'">
         Fila para enviar: {{ fila.length }}
       </span>
 
@@ -692,9 +692,9 @@ useHead({ title: 'Leitor de entrada' })
     <p v-if="ultimoEnvio" class="mt-3 text-sm text-tinta-suave">
       Último envio: {{ ultimoEnvio.aplicadas }} registrada(s),
       {{ ultimoEnvio.repetidas }} repetida(s),
-      <span :class="ultimoEnvio.conflitos ? 'font-bold text-alerta' : ''">
+      <span :class="ultimoEnvio.conflitos ? 'font-semibold text-alerta' : ''">
         {{ ultimoEnvio.conflitos }} em conflito</span>,
-      <span :class="ultimoEnvio.recusadas ? 'font-bold text-erro' : ''">
+      <span :class="ultimoEnvio.recusadas ? 'font-semibold text-erro' : ''">
         {{ ultimoEnvio.recusadas }} recusada(s)</span>.
     </p>
 
@@ -777,7 +777,7 @@ useHead({ title: 'Leitor de entrada' })
            sempre "VÁLIDO": quando o horário não chegou, ele diz isso. Fixar
            "VÁLIDO" aqui faria a tela contradizer a própria mensagem logo
            abaixo. -->
-      <p class="titulo text-4xl font-bold">
+      <p class="titulo text-4xl font-semibold">
         {{ ultima.consulta ? (ultima.ok ? 'VÁLIDO' : 'AINDA NÃO')
            : ultima.ok ? 'PODE ENTRAR' : 'BARRADO' }}
       </p>
@@ -810,18 +810,18 @@ useHead({ title: 'Leitor de entrada' })
       <!-- 1. com motivo: um papel, nomeado. -->
       <div v-if="ultima.ingresso?.meia?.motivo"
            class="mx-auto mt-4 max-w-xl rounded-card bg-white p-4 text-left text-tinta-corpo">
-        <p class="titulo text-2xl font-bold text-tinta">
+        <p class="titulo text-2xl font-semibold text-tinta">
           MEIA-ENTRADA · {{ ultima.ingresso.meia.rotulo }}
         </p>
-        <p class="titulo mt-3 text-base font-bold text-tinta-rotulo">Peça este documento</p>
-        <p class="text-xl font-bold leading-snug text-tinta">
+        <p class="titulo mt-3 text-base font-semibold text-tinta-rotulo">Peça este documento</p>
+        <p class="text-xl font-semibold leading-snug text-tinta">
           {{ ultima.ingresso.meia.documento }}
         </p>
         <template v-if="ultima.ingresso.meia.numero">
-          <p class="titulo mt-3 text-base font-bold text-tinta-rotulo">
+          <p class="titulo mt-3 text-base font-semibold text-tinta-rotulo">
             Número declarado na compra — confira se bate
           </p>
-          <p class="font-mono text-xl font-bold tracking-wide text-tinta">
+          <p class="font-mono text-xl font-semibold tracking-wide text-tinta">
             {{ ultima.ingresso.meia.numero }}
           </p>
         </template>
@@ -836,17 +836,17 @@ useHead({ title: 'Leitor de entrada' })
       <div v-else-if="ultima.ingresso?.meia"
            class="mx-auto mt-4 max-w-2xl rounded-card border-4 border-alerta bg-white
                   p-5 text-left text-tinta-corpo">
-        <p class="titulo text-3xl font-bold leading-tight text-alerta">
+        <p class="titulo text-3xl font-semibold leading-tight text-alerta">
           MEIA-ENTRADA SEM MOTIVO REGISTRADO
         </p>
-        <p class="mt-2 text-xl font-bold leading-snug text-tinta">
+        <p class="mt-2 text-xl font-semibold leading-snug text-tinta">
           Peça o documento de estudante, idoso (60+), PCD, ID Jovem ou professor,
           conforme a regra do evento.
         </p>
-        <p class="titulo mt-4 text-base font-bold text-tinta-rotulo">
+        <p class="titulo mt-4 text-base font-semibold text-tinta-rotulo">
           O que este ingresso pede
         </p>
-        <p class="text-xl font-bold leading-snug text-tinta">
+        <p class="text-xl font-semibold leading-snug text-tinta">
           {{ ultima.ingresso.meia.documento }}
         </p>
         <p class="mt-3 text-base leading-snug text-tinta-corpo">
@@ -879,13 +879,13 @@ useHead({ title: 'Leitor de entrada' })
         </li>
       </ul>
       <NuxtLink :to="`/admin/evento/${id}/validacao/historico`"
-                class="mt-2 inline-block text-sm font-bold text-acao">
+                class="mt-2 inline-block text-sm font-semibold text-acao">
         Ver todos no histórico
       </NuxtLink>
     </div>
 
     <div v-if="historico.length" class="card mt-4 p-0">
-      <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta-rotulo">
+      <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
         Últimas leituras nesta tela
       </p>
       <ul>

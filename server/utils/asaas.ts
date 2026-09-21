@@ -358,7 +358,7 @@ export function corpoDaTransferencia(p: PayoutEmExecucao): CorpoDeTransferencia 
     operationType: 'PIX',
     pixAddressKey: String(p.destination).trim(),
     pixAddressKeyType: tipo,
-    description: `Diamond Tickets — saque ${p.code ?? p.id}`,
+    description: `Conquista Park — saque ${p.code ?? p.id}`,
     externalReference: p.idempotency_key || chaveDeIdempotencia(p.id),
   }
 }

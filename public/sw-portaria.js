@@ -22,9 +22,11 @@
  * a passagem na fila. O service worker não finge resposta de servidor.
  *
  * **Só GET, só mesma origem.** POST não passa por aqui (a fila é
- * responsabilidade da página, que sabe o que fazer com ela). Fonte do Google e
- * qualquer outra origem passam direto: offline elas falham, o navegador usa a
- * fonte de sistema e a tela continua legível.
+ * responsabilidade da página, que sabe o que fazer com ela). Qualquer outra
+ * origem passa direto: offline ela falha e a tela continua legível. A fonte
+ * (Geist) e a logo são NOSSAS — a fonte sai de /_nuxt/, a logo de /brand/ —,
+ * então entram no cache junto com o resto e o leitor abre com a cara do parque
+ * mesmo sem sinal.
  *
  * ## O relógio de 4 segundos
  *
@@ -72,6 +74,7 @@ function meInteressa(requisicao) {
   // A tela da portaria e o que ela precisa pra abrir.
   if (requisicao.mode === 'navigate') return url.pathname.includes('/validacao')
   return url.pathname.startsWith('/_nuxt/')
+    || url.pathname.startsWith('/brand/')
     || url.pathname.endsWith('.css')
     || url.pathname.endsWith('.js')
 }

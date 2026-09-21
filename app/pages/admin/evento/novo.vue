@@ -314,7 +314,7 @@ useHead({ title: 'Criar evento' })
 
     <div v-if="erros.length || erro"
          class="rounded-card border border-erro bg-erro-claro px-4 py-3 text-sm text-erro">
-      <p v-if="erro" class="font-bold">{{ erro }}</p>
+      <p v-if="erro" class="font-semibold">{{ erro }}</p>
       <ul v-if="erros.length" class="list-disc space-y-0.5 pl-5">
         <li v-for="(x, i) in erros" :key="i">{{ x }}</li>
       </ul>
@@ -549,7 +549,7 @@ useHead({ title: 'Criar evento' })
 
         <div v-for="(s, i) in f.setores" :key="i" class="mb-4 rounded-card border border-linha p-4">
           <div class="flex items-center gap-3">
-            <p class="titulo font-bold text-tinta">Setor {{ i + 1 }}</p>
+            <p class="titulo font-semibold text-tinta">Setor {{ i + 1 }}</p>
             <button type="button" class="ml-auto text-sm text-tinta-fraca hover:text-erro"
                     @click="f.setores.splice(i, 1)">Remover setor</button>
           </div>
@@ -697,7 +697,7 @@ useHead({ title: 'Criar evento' })
             <div><dt class="text-xs text-tinta-fraca">Taxa</dt>
               <dd class="tabular-nums text-tinta-suave">{{ reais(taxaDe(l.faceCents)) }}</dd></div>
             <div><dt class="text-xs text-tinta-fraca">Comprador paga</dt>
-              <dd class="titulo font-bold tabular-nums text-tinta">{{ reais(totalDe(l.faceCents)) }}</dd></div>
+              <dd class="titulo font-semibold tabular-nums text-tinta">{{ reais(totalDe(l.faceCents)) }}</dd></div>
             <div><dt class="text-xs text-tinta-fraca">Produção recebe</dt>
               <dd class="tabular-nums text-ok">{{ reais(produtorRecebe(l.faceCents)) }}</dd></div>
           </dl>
@@ -728,7 +728,7 @@ useHead({ title: 'Criar evento' })
                 {{ reais(Math.round(l.faceCents * (1 - t.descontoBps / 10000))) }} +
                 {{ reais(taxaDe(Math.round(l.faceCents * (1 - t.descontoBps / 10000)))) }} =
               </span>
-              <span class="titulo font-bold tabular-nums text-tinta">
+              <span class="titulo font-semibold tabular-nums text-tinta">
                 {{ reais(totalDe(Math.round(l.faceCents * (1 - t.descontoBps / 10000)))) }}
               </span>
             </li>

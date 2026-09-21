@@ -249,7 +249,7 @@ useHead({ title: 'Cortesias' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Cortesias</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Cortesias</h1>
         <p class="mt-1 text-tinta-suave">
           Ingresso de graça, com nome e código. Baixa estoque igual a uma venda — o lugar é o mesmo.
         </p>
@@ -336,14 +336,14 @@ useHead({ title: 'Cortesias' })
       <table class="w-full min-w-[1180px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Código</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Quem recebeu</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Setor / lote</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Motivo / quem pediu</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Autorizada por</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Entrou</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Situação</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ações</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Código</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Quem recebeu</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Setor / lote</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Motivo / quem pediu</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Autorizada por</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Entrou</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Situação</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
           </tr>
         </thead>
         <tbody>
@@ -382,7 +382,7 @@ useHead({ title: 'Cortesias' })
                    "Cancelar" numa linha CANCELADO faz a pessoa clicar de novo
                    achando que a primeira vez não pegou. -->
               <button type="button" class="px-2 text-sm disabled:opacity-40"
-                      :class="confirmando === t.id ? 'font-bold text-erro' : 'text-tinta-fraca hover:text-erro'"
+                      :class="confirmando === t.id ? 'font-semibold text-erro' : 'text-tinta-fraca hover:text-erro'"
                       :disabled="t.status === 'usado' || t.status === 'cancelado'"
                       :title="t.status === 'usado' ? 'Já entrou no evento' : 'Cancelar cortesia'"
                       @click="cancelar(t.id)">

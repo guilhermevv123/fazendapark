@@ -21,7 +21,7 @@ useHead({ title: 'Organizações' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Organizações</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Organizações</h1>
         <p class="mt-1 text-tinta-suave">
           As contas de produtor no seu acesso.
         </p>
@@ -37,7 +37,7 @@ useHead({ title: 'Organizações' })
       <article v-for="o in data" :key="o.id" class="card">
         <div class="flex items-start justify-between gap-3">
           <div>
-            <h2 class="titulo text-lg font-bold text-tinta">{{ o.nome }}</h2>
+            <h2 class="titulo text-lg font-semibold text-tinta">{{ o.nome }}</h2>
             <p class="font-mono text-xs text-tinta-fraca">/{{ o.slug }}</p>
           </div>
           <span :class="o.temAsaas

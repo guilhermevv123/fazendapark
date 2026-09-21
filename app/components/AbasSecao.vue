@@ -65,11 +65,11 @@ const atual = computed(() => {
 </script>
 
 <template>
-  <nav v-if="abas.length > 1" class="-mb-px flex gap-6 overflow-x-auto border-b border-linha">
+  <nav v-if="abas.length > 1" data-parte="abas" class="-mb-px flex gap-6 overflow-x-auto border-b border-linha">
     <NuxtLink v-for="a in abas" :key="a.para" :to="a.para"
               class="whitespace-nowrap border-b-2 px-1 pb-3 pt-2 text-[15px] transition-colors"
               :class="atual === a.para
-                ? 'border-acao font-bold text-acao'
+                ? 'border-acao font-semibold text-acao'
                 : 'border-transparent text-tinta-suave hover:text-tinta'">
       {{ a.aba ?? a.nome }}
     </NuxtLink>

@@ -1,8 +1,14 @@
-# Diamond Tickets
+# Conquista Park — bilheteria
 
 Plataforma de bilheteria própria, feita pra substituir a Zig — que cobra mensalidade
 **mais 5% de cada venda**. Cliente real: Fazenda Park / Conquista Park (parque aquático na
 Bahia). O gateway é o **Asaas**.
+
+O produto se chama **Conquista Park**; é de **um parque só**, sem multi-loja e sem revenda.
+`diamond-tickets` (pasta), `diamond_tickets` (banco) e o `name` do `package.json` são nome
+antigo do repositório: ficam como estão. Nada que o cliente lê (tela, e-mail, ingresso) diz Diamond;
+sobra só identificador técnico (`User-Agent`, cabeçalho `x-diamond-conferencia`, domínio do
+`Message-ID`).
 
 Isto aqui **movimenta dinheiro de verdade e controla a entrada de pessoas num parque**.
 Um número errado aqui não é um bug de tela: é dinheiro saindo da conta ou fila parada
@@ -140,10 +146,33 @@ está de fato chutando senha fica embaçado.
 
 ## Interface
 
-Identidade visual da Zig, por pedido do dono. Use **só as classes que existem** em
-`app/assets/base.css` — `card`, `rotulo`, `rotulo-kpi`, `numero-kpi`, `campo`, `chip`,
-`chip-ativo`, `btn`, `btn-secundario`, `faixa-erro`. Inventar nome de classe é o bug
-invisível de cima.
+A identidade é a do sistema do parque (repositório `sistemapark`), com a logo do Conquista Park —
+aplicada em tudo em 21/09/2026, por ordem do dono. A da Zig (Lato/Roboto, azul `#1C70E9`) saiu.
+
+- **Tokens.** `tailwind.config.js` tem dois níveis de nome. As escalas da marca — `pool` (azul
+  piscina, a ação), `grape` (roxo da logo), `sun` (amarelo), `citrus`, `ink` (neutros), `success`,
+  `warning`, `danger`, `canvas` — são as do sistemapark, hex por hex. Os nomes da casa (`acao`,
+  `tinta`, `linha`, `fundo`, `ok`, `alerta`, `erro`, `menu`) seguem nas telas e apontam pra um tom
+  da escala; o comentário de cada um no config diz qual. Tela nova: nome da casa pro que ele cobre,
+  escala da marca pro resto. Cor em SVG (`fill`, `stroke`) não gera classe: use o hex da escala e
+  escreva de qual tom é.
+- **Tipografia.** Geist e Geist Mono, servidas por nós (`@fontsource-variable`, ligadas em
+  `nuxt.config.ts`), não pelo Google: saem de `/_nuxt/`, que o service worker da portaria guarda, e o
+  leitor de entrada mantém a fonte sem rede. Peso máximo de texto: `font-semibold`. `text-base` = 15px.
+- **Logo.** `<LogoMarca />` (arquivos em `public/brand/`, cópia byte a byte do sistemapark);
+  `clara` é a versão branca pra fundo escuro. Não tem altura padrão: quem usa escreve `h-*`.
+  `<CabecalhoPublico />` é a faixa das telas de quem COMPRA; `<OndasMarca />` é o desenho de fundo.
+- **Classes que existem** em `app/assets/base.css` — use **só** elas, inventar nome é o bug
+  invisível de cima: `card`, `titulo`, `titulo-bloco`, `apoio-bloco`, `rotulo`, `rotulo-kpi`,
+  `numero-kpi`, `campo`, `chip`, `chip-ativo`, `btn`, `btn-primario`, `btn-secundario`, `btn-erro`,
+  `btn-cta`, `faixa-erro`, `faixa-aviso`, `selo`, `selo-ok`, `selo-alerta`, `selo-erro`,
+  `selo-neutro`. `btn-cta` é o amarelo de COMPRAR: só nas telas de quem compra, nunca no painel.
+- **Cantos.** Botão e campo `rounded-xl`, cartão `rounded-2xl`, círculo só em avatar e passo.
+- **Trava de teste.** `app/composables/telas.test.ts` lê o `tailwind.config.js` e o `base.css` pra
+  pegar classe sem definição (cor que não existe, prefixo de casa que ninguém escreveu). O parser
+  espera cada família de cor numa linha `nome: { tom: '#hex', ... }`, sem chave aninhada.
+- **Config velha no dev.** Mexeu no `tailwind.config.js`? Reinicie o servidor de dev por inteiro:
+  o processo antigo segue com a config em memória e responde 500 ("a classe não existe") até você parar.
 
 Filtro de tela mora na **URL**, não em `ref` solto: o operador precisa mandar o link do que
 está vendo.

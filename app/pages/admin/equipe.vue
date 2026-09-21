@@ -84,7 +84,7 @@ useHead({ title: 'Equipe' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Equipe</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Equipe</h1>
         <p class="mt-1 text-tinta-suave">
           Quem entra no painel de {{ data.organizacao?.nome }} e com que poder.
         </p>
@@ -100,7 +100,7 @@ useHead({ title: 'Equipe' })
 
     <div v-if="senhaNaTela"
          class="mt-4 rounded-card border-2 border-acao bg-acao-fraco px-5 py-4 entra-bloco">
-      <p class="titulo text-base font-bold text-tinta">
+      <p class="titulo text-base font-semibold text-tinta">
         Senha de {{ senhaNaTela.nome }} — anote agora
       </p>
       <p class="mt-1 text-sm text-tinta-suave">
@@ -126,11 +126,11 @@ useHead({ title: 'Equipe' })
       <table class="w-full min-w-[820px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Pessoa</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Papel</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Última entrada</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Sessões</th>
-            <th class="titulo px-4 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Ações</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pessoa</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Papel</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Última entrada</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Sessões</th>
+            <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
           </tr>
         </thead>
         <tbody>
@@ -167,7 +167,7 @@ useHead({ title: 'Equipe' })
                 Nova senha
               </button>
               <button type="button" class="px-2 text-sm disabled:opacity-30"
-                      :class="confirmando === p.id ? 'font-bold text-erro' : 'text-tinta-fraca hover:text-erro'"
+                      :class="confirmando === p.id ? 'font-semibold text-erro' : 'text-tinta-fraca hover:text-erro'"
                       :disabled="salvando || p.id === data.eu"
                       @click="p.ativo
                         ? (confirmando === p.id ? mudar(p, { ativo: false }) : confirmando = p.id)

@@ -428,19 +428,13 @@ useHead({ title: 'Pagamento' })
 
 <template>
   <div class="min-h-screen">
-    <header class="bg-menu text-white">
-      <div class="mx-auto flex max-w-2xl items-center gap-3 px-4 py-3">
-        <NuxtLink :to="`/e/${slug}`" class="titulo text-lg font-black tracking-tight">
-          diamond<span class="font-normal opacity-70">.tickets</span>
-        </NuxtLink>
-      </div>
-    </header>
+    <CabecalhoPublico :para="`/e/${slug}`" largura="max-w-2xl" />
 
     <div class="mx-auto max-w-2xl px-4 py-6">
       <!-- ---------------------------------------------- dados do comprador -->
       <section v-if="etapa === 'dados'">
         <NuxtLink :to="`/e/${slug}`" class="text-sm text-acao hover:underline">← Voltar</NuxtLink>
-        <h1 class="titulo mt-3 text-2xl font-bold text-tinta">Finalizar compra</h1>
+        <h1 class="titulo mt-3 text-2xl font-semibold text-tinta">Finalizar compra</h1>
 
         <div v-if="carrinho" class="card mt-4">
           <p class="rotulo-kpi">Resumo</p>
@@ -465,7 +459,7 @@ useHead({ title: 'Pagamento' })
             <span class="text-tinta-corpo">
               {{ carrinho.totais.n }} {{ carrinho.totais.n === 1 ? 'ingresso' : 'ingressos' }}
             </span>
-            <span class="titulo text-2xl font-black tabular-nums text-tinta">
+            <span class="titulo text-2xl font-bold tabular-nums text-tinta">
               {{ reais(carrinho.totais.total) }}
             </span>
           </div>
@@ -519,7 +513,7 @@ useHead({ title: 'Pagamento' })
               <p>
                 {{ cupom.recado }}
                 <template v-if="cupom.descontoCents">
-                  Desconto de <span class="font-bold tabular-nums">{{ reais(cupom.descontoCents) }}</span>.
+                  Desconto de <span class="font-semibold tabular-nums">{{ reais(cupom.descontoCents) }}</span>.
                 </template>
               </p>
               <p v-if="cupom.parcial" class="mt-1 text-tinta-suave">
@@ -560,7 +554,7 @@ useHead({ title: 'Pagamento' })
 
           <p v-if="erro" class="faixa-erro">{{ erro }}</p>
 
-          <button type="submit" :disabled="enviando" class="btn-primario w-full py-3">
+          <button type="submit" :disabled="enviando" class="btn-cta w-full py-3">
             <template v-if="enviando">Gerando cobrança…</template>
             <template v-else-if="forma === 'pix'">Pagar com PIX</template>
             <template v-else>Pagar com cartão</template>
@@ -570,7 +564,7 @@ useHead({ title: 'Pagamento' })
 
       <!-- ------------------------------------------------------- cobrança -->
       <section v-else-if="etapa === 'cobranca'">
-        <h1 class="titulo text-2xl font-bold text-tinta">
+        <h1 class="titulo text-2xl font-semibold text-tinta">
           {{ ehPix ? 'Pague com PIX' : 'Pague com cartão' }}
         </h1>
         <p class="mt-1 text-tinta-suave">
@@ -609,7 +603,7 @@ useHead({ title: 'Pagamento' })
             confirmação chegar.
           </p>
           <a v-if="pedido.pagamento?.linkFatura" :href="pedido.pagamento.linkFatura"
-             target="_blank" rel="noopener" class="btn-primario mt-4 w-full py-3">
+             target="_blank" rel="noopener" class="btn-cta mt-4 w-full py-3">
             Abrir pagamento com cartão
           </a>
           <p v-else class="faixa-aviso mt-3">
@@ -622,7 +616,7 @@ useHead({ title: 'Pagamento' })
         <!-- o relógio da reserva vale pros dois meios de pagamento -->
         <p v-if="restante > 0" class="mt-4 text-center text-sm text-tinta-suave">
           Seus ingressos estão reservados por
-          <span class="font-bold tabular-nums text-acao">{{ relogio }}</span>
+          <span class="font-semibold tabular-nums text-acao">{{ relogio }}</span>
         </p>
         <div v-else class="mt-4 text-center">
           <p class="text-sm font-medium text-erro">Tempo de reserva esgotado</p>
@@ -638,7 +632,7 @@ useHead({ title: 'Pagamento' })
              bloco dentro, e o layout quebra sem avisar. -->
         <div v-if="erro" class="faixa-erro mt-3">
           <p>{{ erro }}</p>
-          <NuxtLink :to="`/e/${slug}`" class="mt-2 block font-bold text-acao hover:underline">
+          <NuxtLink :to="`/e/${slug}`" class="mt-2 block font-semibold text-acao hover:underline">
             Escolher os ingressos de novo →
           </NuxtLink>
         </div>
@@ -646,7 +640,7 @@ useHead({ title: 'Pagamento' })
         <!-- Só existe com o gateway de mentira; em produção nem é renderizado
              porque o checkout nunca devolve `simulado`. -->
         <div v-if="pedido.simulado" class="mt-6 rounded-card border border-dashed border-alerta bg-alerta-claro p-3 text-center">
-          <p class="text-xs font-bold uppercase text-alerta">Ambiente de teste</p>
+          <p class="text-xs font-semibold uppercase text-alerta">Ambiente de teste</p>
           <button type="button" class="btn-secundario mt-2" @click="simularPagamento">
             Simular pagamento recebido
           </button>
@@ -659,8 +653,8 @@ useHead({ title: 'Pagamento' })
           <span class="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-ok text-white">
             <IconeMenu nome="check" :tamanho="26" />
           </span>
-          <p class="text-xs font-bold uppercase tracking-wide text-ok">Pagamento confirmado</p>
-          <h1 class="titulo mt-1 text-2xl font-bold text-tinta">Ingressos emitidos</h1>
+          <p class="text-xs font-semibold uppercase tracking-wide text-ok">Pagamento confirmado</p>
+          <h1 class="titulo mt-1 text-2xl font-semibold text-tinta">Ingressos emitidos</h1>
           <!--
             Diz "se não chegar", nunca "enviamos". Esta tela não sabe se o
             e-mail saiu: ela só viu `/api/pedido/:code` virar `pago`, e essa
@@ -677,7 +671,7 @@ useHead({ title: 'Pagamento' })
             O ingresso está logo abaixo e no link desta página — ele vale sozinho, sem depender
             de e-mail. Se a confirmação não chegar em
             <span class="font-medium break-all">{{ form.email }}</span>, procure por
-            <span class="font-medium">diamond.tickets</span> no spam.
+            <span class="font-medium">Conquista Park</span> no spam.
           </p>
         </div>
 
@@ -702,7 +696,7 @@ useHead({ title: 'Pagamento' })
                  class="h-32 w-32 shrink-0 rounded-card border border-linha bg-white p-1"
                  loading="eager" decoding="async">
             <div class="min-w-0">
-              <p class="titulo text-base font-bold text-tinta">
+              <p class="titulo text-base font-semibold text-tinta">
                 {{ t.tipo ?? 'Ingresso' }} {{ i + 1 }}/{{ ingressos.length }}
               </p>
               <p class="text-sm text-tinta-suave">
@@ -714,7 +708,7 @@ useHead({ title: 'Pagamento' })
           </article>
         </div>
 
-        <NuxtLink :to="`/ingressos/${pedido.pedido}`" class="btn-primario mt-4 w-full py-3">
+        <NuxtLink :to="`/ingressos/${pedido.pedido}`" class="btn-cta mt-4 w-full py-3">
           Ver e guardar meus ingressos
         </NuxtLink>
         <p class="mt-2 text-center text-xs text-tinta-fraca">

@@ -52,52 +52,55 @@ useHead({ title: 'Ingressos' })
 </script>
 
 <template>
-  <div class="mx-auto max-w-3xl px-4 py-12">
-    <p class="rotulo">BILHETERIA</p>
-    <h1 class="titulo mt-1 text-4xl font-extrabold uppercase text-tinta">Eventos</h1>
+  <div>
+    <CabecalhoPublico largura="max-w-3xl" />
+    <div class="mx-auto max-w-3xl px-4 py-12">
+      <p class="rotulo">BILHETERIA</p>
+      <h1 class="titulo mt-1 text-4xl font-bold text-tinta">Eventos</h1>
 
-    <p v-if="pending" class="mt-8 text-tinta-suave">Carregando os eventos…</p>
+      <p v-if="pending" class="mt-8 text-tinta-suave">Carregando os eventos…</p>
 
-    <!-- Não deu pra perguntar ≠ a resposta foi "nenhum". Quem lê isto tem que
-         sair sabendo que o problema é aqui, não que o evento dele acabou. -->
-    <p v-else-if="error" class="faixa-erro mt-8">
-      Não deu pra carregar a lista de eventos agora. Atualize a página em alguns
-      instantes — os eventos continuam lá, quem não respondeu foi a nossa
-      bilheteria.
-    </p>
+      <!-- Não deu pra perguntar ≠ a resposta foi "nenhum". Quem lê isto tem que
+           sair sabendo que o problema é aqui, não que o evento dele acabou. -->
+      <p v-else-if="error" class="faixa-erro mt-8">
+        Não deu pra carregar a lista de eventos agora. Atualize a página em alguns
+        instantes — os eventos continuam lá, quem não respondeu foi a nossa
+        bilheteria.
+      </p>
 
-    <ul v-else class="mt-8 space-y-3">
-      <li v-for="e in data?.eventos ?? []" :key="e.slug">
-        <NuxtLink :to="`/e/${e.slug}`"
-          class="card flex items-center justify-between gap-4 p-5 transition-colors hover:bg-fundo-cinza">
-          <span class="min-w-0">
-            <span class="titulo block truncate text-lg font-bold uppercase text-tinta">{{ e.nome }}</span>
-            <!-- O separador só existe quando há os dois lados. Evento sem
-                 cidade cadastrada renderizava "· 21/09/2026", com o ponto
-                 solto na frente da data. -->
-            <span class="block text-sm text-tinta-suave">
-              {{ [e.cidade, dataCurta(e.inicio)].filter(Boolean).join(' · ') }}
+      <ul v-else class="mt-8 space-y-3">
+        <li v-for="e in data?.eventos ?? []" :key="e.slug">
+          <NuxtLink :to="`/e/${e.slug}`"
+            class="card flex items-center justify-between gap-4 p-5 transition-colors hover:bg-fundo-cinza">
+            <span class="min-w-0">
+              <span class="titulo block truncate text-lg font-semibold text-tinta">{{ e.nome }}</span>
+              <!-- O separador só existe quando há os dois lados. Evento sem
+                   cidade cadastrada renderizava "· 21/09/2026", com o ponto
+                   solto na frente da data. -->
+              <span class="block text-sm text-tinta-suave">
+                {{ [e.cidade, dataCurta(e.inicio)].filter(Boolean).join(' · ') }}
+              </span>
             </span>
-          </span>
-          <span class="shrink-0 text-right">
-            <span :class="selo(e.situacao).classe">{{ selo(e.situacao).texto }}</span>
-            <!-- Preço só quando existe lote comprável. Anunciar o valor de um
-                 lote que não vende é a isca que o comprador descobre na página
-                 seguinte — por isso ele é complemento do selo, nunca a
-                 resposta sozinha. -->
-            <span v-if="e.aPartirDeCents != null" class="mt-1 block text-sm text-tinta-suave">
-              a partir de
-              <strong class="font-bold tabular-nums text-tinta">{{ reais(e.aPartirDeCents) }}</strong>
+            <span class="shrink-0 text-right">
+              <span :class="selo(e.situacao).classe">{{ selo(e.situacao).texto }}</span>
+              <!-- Preço só quando existe lote comprável. Anunciar o valor de um
+                   lote que não vende é a isca que o comprador descobre na página
+                   seguinte — por isso ele é complemento do selo, nunca a
+                   resposta sozinha. -->
+              <span v-if="e.aPartirDeCents != null" class="mt-1 block text-sm text-tinta-suave">
+                a partir de
+                <strong class="font-semibold tabular-nums text-tinta">{{ reais(e.aPartirDeCents) }}</strong>
+              </span>
             </span>
-          </span>
-        </NuxtLink>
-      </li>
-    </ul>
+          </NuxtLink>
+        </li>
+      </ul>
 
-    <!-- `!error` é a trava: sem ele esta frase volta a ser o que a tela diz
-         quando a rota cai, e ela AFIRMA que o catálogo está vazio. -->
-    <p v-if="!pending && !error && !data?.eventos?.length" class="mt-8 text-tinta-suave">
-      Nenhum evento à venda no momento.
-    </p>
+      <!-- `!error` é a trava: sem ele esta frase volta a ser o que a tela diz
+           quando a rota cai, e ela AFIRMA que o catálogo está vazio. -->
+      <p v-if="!pending && !error && !data?.eventos?.length" class="mt-8 text-tinta-suave">
+        Nenhum evento à venda no momento.
+      </p>
+    </div>
   </div>
 </template>

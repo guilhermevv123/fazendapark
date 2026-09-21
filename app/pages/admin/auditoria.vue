@@ -279,7 +279,7 @@ useHead({ title: 'Auditoria' })
   <div>
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Auditoria</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Auditoria</h1>
         <p class="mt-1 text-tinta-suave">
           Quem fez, o que mudou e quando. Cada ato que mexe em dinheiro ou em ingresso.
         </p>
@@ -411,11 +411,11 @@ useHead({ title: 'Auditoria' })
         <table class="w-full min-w-[900px] border-collapse text-sm">
           <thead>
             <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-              <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Quando</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Quem</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">O que</th>
-              <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Mudou</th>
-              <th class="titulo px-4 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Registro</th>
+              <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Quando</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Quem</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">O que</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Mudou</th>
+              <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Registro</th>
             </tr>
           </thead>
           <tbody>
@@ -434,9 +434,9 @@ useHead({ title: 'Auditoria' })
                   <!-- Uma cor só por elemento. Escrito como `class="text-tinta"`
                        fixo mais `:class="... 'text-erro'"` condicional, quem
                        ganha é a ORDEM DO CSS gerado, não a ordem no atributo:
-                       medido no navegador, o vermelho do ato grave saía
-                       #171719 — o `font-medium` aplicava e a cor não, sem erro
-                       no console e sem teste vermelho. -->
+                       medido no navegador, o vermelho do ato grave saía na cor
+                       do texto comum — o `font-medium` aplicava e a cor não,
+                       sem erro no console e sem teste vermelho. -->
                   <span class="block"
                         :class="ACAO_GRAVE.has(l.acao) ? 'font-medium text-erro' : 'text-tinta'">
                     {{ acaoLegivel(l.acao) }}

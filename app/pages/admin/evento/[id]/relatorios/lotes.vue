@@ -90,7 +90,7 @@ useHead({ title: 'Vendas por lote' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Vendas por lote</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Vendas por lote</h1>
         <p class="mt-1 text-tinta-suave">
           Quanto cada lote girou e quanto pesou na receita. Mesmos números do borderô.
         </p>
@@ -118,14 +118,14 @@ useHead({ title: 'Vendas por lote' })
       </div>
       <div class="card">
         <p class="rotulo-kpi">Lote que mais rendeu</p>
-        <p class="titulo mt-1 text-lg font-bold text-tinta">{{ campeao?.setor ?? '—' }}</p>
+        <p class="titulo mt-1 text-lg font-semibold text-tinta">{{ campeao?.setor ?? '—' }}</p>
         <p class="mt-1 text-xs text-tinta-fraca">
           <template v-if="campeao">{{ campeao.lote }} · {{ fmtPct(campeao.pesoPct) }} da receita</template>
         </p>
       </div>
       <div class="card">
         <p class="rotulo-kpi">Menor giro</p>
-        <p class="titulo mt-1 text-lg font-bold text-tinta">{{ parado?.setor ?? '—' }}</p>
+        <p class="titulo mt-1 text-lg font-semibold text-tinta">{{ parado?.setor ?? '—' }}</p>
         <p class="mt-1 text-xs text-tinta-fraca">
           <template v-if="parado">{{ parado.lote }} · {{ fmtPct(parado.giroPct) }} vendido</template>
         </p>
@@ -140,14 +140,14 @@ useHead({ title: 'Vendas por lote' })
       <table class="w-full min-w-[900px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Setor / lote</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Face unit.</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Vendidos</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Cortesias</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Sobra</th>
-            <th class="titulo px-3 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Giro</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Face</th>
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Peso</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Setor / lote</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Face unit.</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Vendidos</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Cortesias</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Sobra</th>
+            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Giro</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Face</th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Peso</th>
           </tr>
         </thead>
         <tbody>
@@ -185,7 +185,7 @@ useHead({ title: 'Vendas por lote' })
           </tr>
         </tbody>
         <tfoot>
-          <tr class="border-t-2 border-linha-forte bg-fundo-cinza/40 font-bold">
+          <tr class="border-t-2 border-linha-forte bg-fundo-cinza/40 font-semibold">
             <td class="titulo px-4 py-3 text-tinta">Total</td>
             <td />
             <td class="px-3 py-3 text-right tabular-nums text-tinta">

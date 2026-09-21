@@ -60,7 +60,7 @@ useHead({ title: 'Financeiro' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Financeiro</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Financeiro</h1>
         <p class="mt-1 text-tinta-suave">
           O caixa somando todos os eventos. O dinheiro de cada um libera
           {{ data.diasDeRetencao }} dias depois de ele terminar.
@@ -129,18 +129,18 @@ useHead({ title: 'Financeiro' })
     </p>
 
     <div v-else class="card mt-4 overflow-x-auto p-0">
-      <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta-rotulo">
+      <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
         Por evento
       </p>
       <table class="w-full min-w-[900px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Evento</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Líquido</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Transferido</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Retido</th>
-            <th class="titulo px-3 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo">Disponível</th>
-            <th class="titulo px-4 py-2 text-right text-xs font-bold uppercase tracking-wide text-tinta-rotulo"></th>
+            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Evento</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Líquido</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Transferido</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Retido</th>
+            <th class="titulo px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Disponível</th>
+            <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo"></th>
           </tr>
         </thead>
         <tbody>
@@ -196,7 +196,7 @@ useHead({ title: 'Financeiro' })
       </div>
 
       <div class="card p-0 lg:col-span-2">
-        <p class="titulo border-b border-linha px-4 py-3 text-sm font-bold text-tinta-rotulo">
+        <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
           Transferências
         </p>
         <p v-if="!data.transferencias.length" class="px-4 py-8 text-center text-sm text-tinta-suave">

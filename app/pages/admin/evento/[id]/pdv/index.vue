@@ -142,7 +142,7 @@ async function abrirCaixa() {
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Pontos de venda</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Pontos de venda</h1>
         <p class="mt-1 text-tinta-suave">
           Os guichês da bilheteria física, e o caixa de cada um.
         </p>
@@ -182,7 +182,7 @@ async function abrirCaixa() {
                :class="p.ativo ? '' : 'opacity-60'">
         <header class="flex items-start justify-between gap-3">
           <div>
-            <h2 class="titulo text-lg font-bold text-tinta">{{ p.nome }}</h2>
+            <h2 class="titulo text-lg font-semibold text-tinta">{{ p.nome }}</h2>
             <p class="text-sm text-tinta-suave">{{ p.local || 'sem local anotado' }}</p>
           </div>
           <span v-if="!p.ativo" class="selo-neutro">Desativado</span>
@@ -199,15 +199,15 @@ async function abrirCaixa() {
         <dl v-if="p.turno" class="mt-4 grid grid-cols-3 gap-3 border-t border-linha pt-3">
           <div>
             <dt class="text-xs text-tinta-fraca">Operador</dt>
-            <dd class="text-sm font-bold text-tinta">{{ p.turno.operador }}</dd>
+            <dd class="text-sm font-semibold text-tinta">{{ p.turno.operador }}</dd>
           </div>
           <div>
             <dt class="text-xs text-tinta-fraca">Abriu</dt>
-            <dd class="text-sm font-bold text-tinta tabular-nums">{{ quando(p.turno.abriuEm) }}</dd>
+            <dd class="text-sm font-semibold text-tinta tabular-nums">{{ quando(p.turno.abriuEm) }}</dd>
           </div>
           <div>
             <dt class="text-xs text-tinta-fraca">Vendeu no turno</dt>
-            <dd class="text-sm font-bold text-tinta tabular-nums">{{ reais(p.turno.totalCents) }}</dd>
+            <dd class="text-sm font-semibold text-tinta tabular-nums">{{ reais(p.turno.totalCents) }}</dd>
           </div>
         </dl>
         <p v-else class="mt-4 border-t border-linha pt-3 text-sm text-tinta-suave">
@@ -259,8 +259,8 @@ async function abrirCaixa() {
     -->
     <div v-if="foraDosCartoes > 0" class="card mt-3">
       <div class="flex flex-wrap items-baseline justify-between gap-2">
-        <span class="font-bold text-tinta-suave">Fora dos cartões acima</span>
-        <span class="tabular-nums font-bold text-tinta">{{ reais(foraDosCartoes) }}</span>
+        <span class="font-semibold text-tinta-suave">Fora dos cartões acima</span>
+        <span class="tabular-nums font-semibold text-tinta">{{ reais(foraDosCartoes) }}</span>
       </div>
 
       <dl class="mt-2 space-y-1 text-xs">
@@ -270,13 +270,13 @@ async function abrirCaixa() {
             {{ data.resumo.pedidosSemPonto }} venda(s) de balcão sem guichê registrado
             (importação, seed ou venda anterior ao cadastro do ponto)
           </dt>
-          <dd class="tabular-nums font-bold text-alerta">{{ reais(data.resumo.semPontoCents) }}</dd>
+          <dd class="tabular-nums font-semibold text-alerta">{{ reais(data.resumo.semPontoCents) }}</dd>
         </div>
         <div v-if="emGuicheForaDoCaixa > 0" class="flex justify-between gap-2">
           <dt class="text-tinta-suave">
             Em guichê, fora do caixa aberto — vendido num turno já fechado ou em outro dia
           </dt>
-          <dd class="tabular-nums font-bold text-tinta-suave">{{ reais(emGuicheForaDoCaixa) }}</dd>
+          <dd class="tabular-nums font-semibold text-tinta-suave">{{ reais(emGuicheForaDoCaixa) }}</dd>
         </div>
       </dl>
 
@@ -346,7 +346,7 @@ async function abrirCaixa() {
           </thead>
           <tbody>
             <tr v-for="t in data.turnos" :key="t.id" class="border-t border-linha">
-              <td class="px-4 py-2 font-bold text-tinta">{{ t.ponto }}</td>
+              <td class="px-4 py-2 font-semibold text-tinta">{{ t.ponto }}</td>
               <td class="px-4 py-2">{{ t.operador }}</td>
               <td class="px-4 py-2 tabular-nums">{{ quando(t.abriuEm) }}</td>
               <td class="px-4 py-2 tabular-nums">
@@ -374,7 +374,7 @@ async function abrirCaixa() {
     <div v-if="abrindo" class="fixed inset-0 z-50 flex items-center justify-center bg-tinta/40 p-4"
          @click.self="abrindo = null">
       <div class="w-full max-w-md rounded-card bg-fundo-card p-5">
-        <h2 class="titulo text-lg font-bold text-tinta">Abrir caixa — {{ abrindo.nome }}</h2>
+        <h2 class="titulo text-lg font-semibold text-tinta">Abrir caixa — {{ abrindo.nome }}</h2>
         <p class="mt-1 text-sm text-tinta-suave">
           Quanto de troco está na gaveta agora, antes de vender qualquer coisa?
           Esse número é o que faz a conferência do fim da noite bater.
@@ -394,7 +394,7 @@ async function abrirCaixa() {
     <div v-if="editando" class="fixed inset-0 z-50 flex items-center justify-center bg-tinta/40 p-4"
          @click.self="editando = null">
       <div class="w-full max-w-md rounded-card bg-fundo-card p-5">
-        <h2 class="titulo text-lg font-bold text-tinta">Editar ponto de venda</h2>
+        <h2 class="titulo text-lg font-semibold text-tinta">Editar ponto de venda</h2>
         <label class="rotulo mt-4">Nome</label>
         <input v-model="editando.nome" class="campo">
         <label class="rotulo mt-3">Onde fica</label>

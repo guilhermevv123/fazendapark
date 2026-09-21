@@ -44,8 +44,8 @@ export async function criarCobrancaSimulada(dados: {
  */
 export async function pixSimulado(valorReais: number, referencia: string) {
   const payload = montarBrCode({
-    chave: 'simulado@diamond.tickets',
-    nome: 'DIAMOND TICKETS SIM',
+    chave: 'simulado@conquistapark.dev',
+    nome: 'CONQUISTA PARK SIM',
     cidade: 'UBATA',
     valor: valorReais,
     txid: referencia.replace(/\W/g, '').slice(0, 25).toUpperCase(),

@@ -148,7 +148,7 @@ async function fechar() {
   <div>
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Conferência de caixa</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Conferência de caixa</h1>
         <p class="mt-1 text-tinta-suave">
           Conte o dinheiro da gaveta, digite o que contou, e o sistema mostra a diferença.
         </p>
@@ -193,7 +193,7 @@ async function fechar() {
         <div class="card">
           <header class="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h2 class="titulo text-lg font-bold text-tinta">{{ data.turno.ponto }}</h2>
+              <h2 class="titulo text-lg font-semibold text-tinta">{{ data.turno.ponto }}</h2>
               <p class="text-sm text-tinta-suave">
                 {{ data.turno.operador }} · abriu {{ quando(data.turno.abriuEm) }}
                 <template v-if="data.turno.fechouEm"> · fechou {{ quando(data.turno.fechouEm) }}</template>
@@ -250,7 +250,7 @@ async function fechar() {
               <tr v-for="f in data.contagem.porForma" :key="f.forma" class="border-t border-linha">
                 <td class="py-2">{{ FORMA_NOME[f.forma] ?? f.forma }}</td>
                 <td class="py-2 text-right text-tinta-suave">{{ f.pedidos }} venda(s)</td>
-                <td class="py-2 text-right font-bold tabular-nums">{{ reais(f.totalCents) }}</td>
+                <td class="py-2 text-right font-semibold tabular-nums">{{ reais(f.totalCents) }}</td>
               </tr>
             </tbody>
           </table>
@@ -269,7 +269,7 @@ async function fechar() {
                 </td>
                 <td class="py-2 text-tinta-suave">{{ m.motivo || '—' }}</td>
                 <td class="py-2 text-xs text-tinta-fraca tabular-nums">{{ quando(m.em) }} · {{ m.por }}</td>
-                <td class="py-2 text-right font-bold tabular-nums">
+                <td class="py-2 text-right font-semibold tabular-nums">
                   {{ m.tipo === 'sangria' ? '−' : '+' }}{{ reais(m.valorCents) }}
                 </td>
               </tr>
@@ -298,16 +298,16 @@ async function fechar() {
               <tbody>
                 <template v-for="v in data.vendas" :key="v.id">
                   <tr class="border-t border-linha">
-                    <td class="px-4 py-2 font-bold tabular-nums">{{ v.codigo }}</td>
+                    <td class="px-4 py-2 font-semibold tabular-nums">{{ v.codigo }}</td>
                     <td class="px-4 py-2">{{ v.comprador }}</td>
                     <td class="px-4 py-2">{{ FORMA_NOME[v.forma] ?? v.forma }}</td>
                     <td class="px-4 py-2 text-right tabular-nums">{{ v.ingressos }}</td>
-                    <td class="px-4 py-2 text-right font-bold tabular-nums">{{ reais(v.totalCents) }}</td>
+                    <td class="px-4 py-2 text-right font-semibold tabular-nums">{{ reais(v.totalCents) }}</td>
                     <td class="px-4 py-2 text-right tabular-nums text-tinta-suave">
                       {{ v.trocoCents ? reais(v.trocoCents) : '—' }}
                     </td>
                     <td v-if="aberto" class="px-4 py-2 text-right">
-                      <button type="button" class="text-sm font-bold text-erro underline"
+                      <button type="button" class="text-sm font-semibold text-erro underline"
                               @click="abrirCancelamento(v.id)">
                         Cancelar
                       </button>
@@ -350,7 +350,7 @@ async function fechar() {
           <table class="mt-3 w-full text-sm">
             <tbody>
               <tr v-for="k in data.contagem.cancelamentos" :key="k.id" class="border-t border-linha">
-                <td class="py-2 font-bold tabular-nums">{{ k.pedido }}</td>
+                <td class="py-2 font-semibold tabular-nums">{{ k.pedido }}</td>
                 <td class="py-2">
                   <span :class="k.saiuDaGaveta ? 'selo-alerta' : 'selo-neutro'">
                     {{ k.saiuDaGaveta ? 'Saiu da gaveta' : 'Estorno' }}
@@ -361,7 +361,7 @@ async function fechar() {
                 <td class="py-2 text-xs text-tinta-fraca tabular-nums">
                   {{ quando(k.em) }} · {{ k.por ?? '—' }}
                 </td>
-                <td class="py-2 text-right font-bold tabular-nums">−{{ reais(k.totalCents) }}</td>
+                <td class="py-2 text-right font-semibold tabular-nums">−{{ reais(k.totalCents) }}</td>
               </tr>
             </tbody>
           </table>
@@ -419,13 +419,13 @@ async function fechar() {
           <dl class="mt-3 space-y-2 text-sm">
             <div class="flex justify-between">
               <dt class="text-tinta-suave">O sistema esperava</dt>
-              <dd class="font-bold tabular-nums">
+              <dd class="font-semibold tabular-nums">
                 {{ reais(resultado?.contagem.esperadoCents ?? data.turno.esperadoNoFechamentoCents) }}
               </dd>
             </div>
             <div class="flex justify-between">
               <dt class="text-tinta-suave">O operador contou</dt>
-              <dd class="font-bold tabular-nums">
+              <dd class="font-semibold tabular-nums">
                 {{ reais(resultado?.contadoCents ?? data.turno.contadoCents) }}
               </dd>
             </div>
@@ -435,11 +435,11 @@ async function fechar() {
                  ? 'bg-ok-claro'
                  : (resultado?.diferencaCents ?? (data.turno.contadoCents - data.turno.esperadoNoFechamentoCents)) > 0
                    ? 'bg-alerta-claro' : 'bg-erro-claro'">
-            <p class="text-xs font-bold uppercase">
+            <p class="text-xs font-semibold uppercase">
               {{ resultado?.situacao ?? (data.turno.contadoCents === data.turno.esperadoNoFechamentoCents
                 ? 'bate' : data.turno.contadoCents > data.turno.esperadoNoFechamentoCents ? 'sobra' : 'falta') }}
             </p>
-            <p class="titulo text-3xl font-bold tabular-nums">
+            <p class="titulo text-3xl font-semibold tabular-nums">
               {{ reais(Math.abs(resultado?.diferencaCents
                 ?? (data.turno.contadoCents - data.turno.esperadoNoFechamentoCents))) }}
             </p>

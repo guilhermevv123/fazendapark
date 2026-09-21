@@ -191,7 +191,7 @@ function imprimir() { window.print() }
   <div>
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Balcão</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Balcão</h1>
         <p v-if="turno?.turno" class="mt-1 text-tinta-suave">
           {{ turno.turno.ponto }} · operador {{ turno.turno.operador }} ·
           vendeu {{ reais(turno.contagem.pedidos ? turno.contagem.dinheiroCents + turno.contagem.eletronicoCents : 0) }}
@@ -210,7 +210,7 @@ function imprimir() { window.print() }
 
     <p v-if="!turnoId" class="card mt-4 text-center text-tinta-suave">
       Nenhum caixa escolhido.
-      <NuxtLink :to="`/admin/evento/${id}/pdv`" class="font-bold text-acao underline">
+      <NuxtLink :to="`/admin/evento/${id}/pdv`" class="font-semibold text-acao underline">
         Abra um caixa
       </NuxtLink>
       para começar.
@@ -233,7 +233,7 @@ function imprimir() { window.print() }
               <button v-if="!l.tipos.length" type="button"
                       class="card text-left transition-colors hover:border-acao hover:bg-acao-fraco"
                       :disabled="l.disponivel <= 0" @click="juntar(l)">
-                <p class="titulo font-bold text-tinta">{{ l.nome }}</p>
+                <p class="titulo font-semibold text-tinta">{{ l.nome }}</p>
                 <p class="numero-kpi mt-1">{{ reais(l.balcaoCents) }}</p>
                 <p class="mt-1 text-xs text-tinta-fraca">{{ l.disponivel }} disponíveis</p>
               </button>
@@ -241,7 +241,7 @@ function imprimir() { window.print() }
               <button v-for="t in l.tipos" :key="t.id" type="button"
                       class="card text-left transition-colors hover:border-acao hover:bg-acao-fraco"
                       :disabled="Math.min(l.disponivel, t.disponivel) <= 0" @click="juntar(l, t)">
-                <p class="titulo font-bold text-tinta">{{ l.nome }}</p>
+                <p class="titulo font-semibold text-tinta">{{ l.nome }}</p>
                 <p class="text-sm text-tinta-suave">{{ t.nome }}</p>
                 <p class="numero-kpi mt-1">{{ reais(t.balcaoCents) }}</p>
                 <p class="mt-1 text-xs text-tinta-fraca">
@@ -254,12 +254,12 @@ function imprimir() { window.print() }
         </div>
 
         <details v-if="cat?.bloqueados.length" class="card">
-          <summary class="cursor-pointer text-sm font-bold text-tinta">
+          <summary class="cursor-pointer text-sm font-semibold text-tinta">
             {{ cat.bloqueados.length }} ingresso(s) não vendem no balcão
           </summary>
           <ul class="mt-3 space-y-1 text-sm text-tinta-suave">
             <li v-for="b in cat.bloqueados" :key="b.id">
-              <span class="font-bold text-tinta">{{ b.setor }} — {{ b.nome }}:</span> {{ b.motivo }}
+              <span class="font-semibold text-tinta">{{ b.setor }} — {{ b.nome }}:</span> {{ b.motivo }}
             </li>
           </ul>
         </details>
@@ -279,18 +279,18 @@ function imprimir() { window.print() }
           <li v-for="i in carrinho" :key="i.chave"
               class="flex items-center gap-2 border-b border-linha pb-2">
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-bold text-tinta">{{ i.nome }}</p>
+              <p class="truncate text-sm font-semibold text-tinta">{{ i.nome }}</p>
               <p class="text-xs text-tinta-fraca">{{ reais(i.precoCents) }} cada</p>
             </div>
             <div class="flex items-center gap-1">
-              <button type="button" class="h-9 w-9 rounded-card border border-linha-forte text-lg font-bold"
+              <button type="button" class="h-9 w-9 rounded-card border border-linha-forte text-lg font-semibold"
                       @click="menos(i)">−</button>
-              <span class="w-8 text-center font-bold tabular-nums">{{ i.quantidade }}</span>
-              <button type="button" class="h-9 w-9 rounded-card border border-linha-forte text-lg font-bold"
+              <span class="w-8 text-center font-semibold tabular-nums">{{ i.quantidade }}</span>
+              <button type="button" class="h-9 w-9 rounded-card border border-linha-forte text-lg font-semibold"
                       :disabled="i.quantidade >= i.teto"
                       @click="i.quantidade++">+</button>
             </div>
-            <span class="w-20 text-right font-bold tabular-nums">
+            <span class="w-20 text-right font-semibold tabular-nums">
               {{ reais(i.precoCents * i.quantidade) }}
             </span>
           </li>
@@ -299,7 +299,7 @@ function imprimir() { window.print() }
         <div v-if="carrinho.length" class="mt-4 border-t border-linha pt-3">
           <div class="flex items-baseline justify-between">
             <span class="rotulo-kpi">Total</span>
-            <span class="titulo text-3xl font-bold text-tinta tabular-nums">{{ reais(totalCents) }}</span>
+            <span class="titulo text-3xl font-semibold text-tinta tabular-nums">{{ reais(totalCents) }}</span>
           </div>
 
           <label class="rotulo mt-4">Como pagou</label>
@@ -323,11 +323,11 @@ function imprimir() { window.print() }
             </div>
             <div class="mt-3 rounded-card p-3"
                  :class="trocoCents < 0 ? 'bg-erro-claro' : 'bg-ok-claro'">
-              <p class="text-xs font-bold uppercase"
+              <p class="text-xs font-semibold uppercase"
                  :class="trocoCents < 0 ? 'text-erro' : 'text-ok'">
                 {{ trocoCents < 0 ? 'Falta receber' : 'Troco' }}
               </p>
-              <p class="titulo text-3xl font-bold tabular-nums"
+              <p class="titulo text-3xl font-semibold tabular-nums"
                  :class="trocoCents < 0 ? 'text-erro' : 'text-ok'">
                 {{ reais(Math.abs(trocoCents)) }}
               </p>
@@ -340,7 +340,7 @@ function imprimir() { window.print() }
           </p>
 
           <details class="mt-4" :open="exigeDocumento">
-            <summary class="cursor-pointer text-sm font-bold text-tinta">
+            <summary class="cursor-pointer text-sm font-semibold text-tinta">
               Dados do cliente
               <span v-if="exigeDocumento" class="selo-alerta ml-1">obrigatório na meia</span>
               <span v-else class="font-normal text-tinta-fraca">(opcional)</span>
@@ -372,40 +372,40 @@ function imprimir() { window.print() }
         <p :class="recibo.cancelada ? 'selo-erro' : 'selo-ok'">
           {{ recibo.cancelada ? 'Venda cancelada' : 'Venda registrada' }}
         </p>
-        <h2 class="titulo mt-2 text-xl font-bold text-tinta">Pedido {{ recibo.pedido }}</h2>
+        <h2 class="titulo mt-2 text-xl font-semibold text-tinta">Pedido {{ recibo.pedido }}</h2>
 
         <p v-if="erro" class="faixa-erro mt-3">{{ erro }}</p>
 
         <div v-if="recibo.cancelada" class="mt-3 rounded-card bg-alerta-claro p-3">
-          <p class="text-xs font-bold uppercase text-alerta">O que fazer agora</p>
+          <p class="text-xs font-semibold uppercase text-alerta">O que fazer agora</p>
           <p class="mt-1 text-sm text-tinta-corpo">{{ recibo.avisoCancelamento }}</p>
         </div>
 
         <dl class="mt-4 space-y-1 text-sm">
           <div class="flex justify-between">
             <dt class="text-tinta-suave">Total</dt>
-            <dd class="font-bold tabular-nums">{{ reais(recibo.totalCents) }}</dd>
+            <dd class="font-semibold tabular-nums">{{ reais(recibo.totalCents) }}</dd>
           </div>
           <div class="flex justify-between">
             <dt class="text-tinta-suave">Forma</dt>
-            <dd class="font-bold">{{ FORMA_NOME[recibo.forma] ?? recibo.forma }}</dd>
+            <dd class="font-semibold">{{ FORMA_NOME[recibo.forma] ?? recibo.forma }}</dd>
           </div>
           <div v-if="recibo.trocoCents !== null" class="flex justify-between">
             <dt class="text-tinta-suave">Recebeu</dt>
-            <dd class="font-bold tabular-nums">{{ reais(recibo.recebidoCents) }}</dd>
+            <dd class="font-semibold tabular-nums">{{ reais(recibo.recebidoCents) }}</dd>
           </div>
         </dl>
 
         <div v-if="recibo.trocoCents && !recibo.cancelada"
              class="mt-3 rounded-card bg-ok-claro p-3 text-center">
-          <p class="text-xs font-bold uppercase text-ok">Troco a devolver</p>
-          <p class="titulo text-4xl font-bold text-ok tabular-nums">{{ reais(recibo.trocoCents) }}</p>
+          <p class="text-xs font-semibold uppercase text-ok">Troco a devolver</p>
+          <p class="titulo text-4xl font-semibold text-ok tabular-nums">{{ reais(recibo.trocoCents) }}</p>
         </div>
 
         <ul class="mt-4 space-y-1 border-t border-linha pt-3 text-sm">
           <li v-for="t in recibo.ingressos" :key="t.id" class="flex justify-between gap-2">
             <span class="truncate text-tinta-suave">{{ t.setor }} — {{ t.lote }}</span>
-            <span class="font-bold tabular-nums" :class="recibo.cancelada ? 'line-through text-tinta-fraca' : ''">
+            <span class="font-semibold tabular-nums" :class="recibo.cancelada ? 'line-through text-tinta-fraca' : ''">
               {{ t.codigo }}
             </span>
           </li>
@@ -422,7 +422,7 @@ function imprimir() { window.print() }
              no rastro quando o gerente perguntar amanhã. -->
         <div v-if="!recibo.cancelada" class="mt-4 border-t border-linha pt-3">
           <button v-if="!cancelandoRecibo" type="button"
-                  class="text-sm font-bold text-erro underline"
+                  class="text-sm font-semibold text-erro underline"
                   @click="cancelandoRecibo = true">
             Cancelar esta venda
           </button>

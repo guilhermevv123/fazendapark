@@ -21,13 +21,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tecla))
 
 <template>
   <div class="fixed inset-0 z-40 flex justify-end">
-    <div class="entra-fundo absolute inset-0 bg-black/40" @click="emit('fechar')" />
+    <div class="entra-fundo absolute inset-0 bg-ink-950/40" @click="emit('fechar')" />
 
-    <aside class="entra-painel relative flex h-full w-full flex-col bg-white shadow-2xl"
+    <aside class="entra-painel relative flex h-full w-full flex-col bg-white shadow-pop"
            :class="largura ?? 'max-w-lg'" role="dialog" aria-modal="true">
-      <header class="flex items-center gap-3 border-b border-linha px-5 py-4">
-        <h2 class="titulo text-lg font-bold text-tinta">{{ titulo }}</h2>
-        <button type="button" class="ml-auto p-1 text-tinta-fraca hover:text-tinta"
+      <header class="flex items-center gap-3 border-b border-ink-100 px-5 py-4">
+        <h2 class="titulo text-lg font-semibold text-ink-900">{{ titulo }}</h2>
+        <button type="button"
+                class="ml-auto grid size-9 place-items-center rounded-xl text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-900"
                 aria-label="Fechar" @click="emit('fechar')">
           <IconeMenu nome="fechar" :tamanho="20" />
         </button>
@@ -37,7 +38,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tecla))
         <slot />
       </div>
 
-      <footer class="flex justify-end gap-2 border-t border-linha px-5 py-4">
+      <footer class="flex justify-end gap-2 border-t border-ink-100 px-5 py-4">
         <slot name="acoes" />
       </footer>
     </aside>

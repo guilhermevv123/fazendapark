@@ -91,7 +91,7 @@ useHead({ title: 'Ordenar setores' })
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-bold text-tinta">Ordenar setores</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Ordenar setores</h1>
         <p class="mt-1 text-tinta-suave">
           A ordem daqui é a ordem da página de venda. O que está em cima é o que mais sai.
         </p>
@@ -124,9 +124,9 @@ useHead({ title: 'Ordenar setores' })
       <li v-for="(s, i) in setores" :key="s.id" class="card p-0">
         <header class="flex flex-wrap items-center gap-3 px-4 py-3">
           <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-acao-fraco
-                       text-xs font-bold tabular-nums text-acao">{{ i + 1 }}</span>
+                       text-xs font-semibold tabular-nums text-acao">{{ i + 1 }}</span>
           <div class="min-w-0">
-            <h2 class="titulo font-bold text-tinta">{{ s.nome }}</h2>
+            <h2 class="titulo font-semibold text-tinta">{{ s.nome }}</h2>
             <p class="text-xs text-tinta-fraca">
               {{ ROTULO_TIPO[s.tipo] }} · {{ s.lotes.length }} lote(s)
             </p>
