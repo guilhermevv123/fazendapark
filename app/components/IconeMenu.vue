@@ -34,6 +34,12 @@ const caminhos: Record<string, string> = {
   cracha: 'M6 3h12a1 1 0 011 1v16a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z M12 12a2.5 2.5 0 100-5 2.5 2.5 0 000 5z M8 18a4 4 0 018 0',
   busca: 'M11 19a8 8 0 100-16 8 8 0 000 16z M21 21l-4.3-4.3',
   mais: 'M12 5v14 M5 12h14',
+  // três pontos verticais: o menu de "mais ações" de uma linha (não confundir
+  // com `mais`, o + de criar). Cada `hNNh.01` é um ponto: o traço de
+  // comprimento zero + ponta arredondada (`stroke-linecap="round"`) desenha um
+  // círculo cheio do diâmetro do traço — o mesmo truque que os ícones de
+  // contorno usam pra ponto sem precisar de `fill`.
+  maisVertical: 'M12 5h.01 M12 12h.01 M12 19h.01',
   fechar: 'M18 6L6 18 M6 6l12 12',
   check: 'M20 6L9 17l-5-5',
   lapis: 'M12 20h9 M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z',

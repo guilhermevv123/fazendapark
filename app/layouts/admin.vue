@@ -13,6 +13,27 @@
  */
 import { ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
 
+/**
+ * O componente de link do item do menu — resolvido AQUI, antes de qualquer
+ * `await` da função.
+ *
+ * `resolveComponent` só enxerga a instância certa dentro de `setup()`/render;
+ * depois de um `await` (este arquivo tem dois, mais abaixo) o Vue não garante
+ * mais esse contexto — o `<script setup>` assíncrono PODE retomar sem ele.
+ * Medido: chamado depois dos dois `await useFetch`, o harness de teste
+ * (`telas.test.ts`, sob `<Suspense>`) perdia a instância e todo item do menu
+ * sumia da tela — sem erro nenhum, calado. Antes de qualquer `await` a
+ * instância é sempre a certa, no teste e na Nuxt de verdade.
+ *
+ * `<component :is="… 'NuxtLink'">` com o NOME em texto direto NÃO funciona no
+ * Nuxt: o Vue procura "NuxtLink" entre os componentes registrados
+ * globalmente, e o Nuxt não registra ele lá — troca a tag `<NuxtLink>` por um
+ * IMPORT no compilador, e um nome dentro de uma string o compilador não vê. O
+ * item saía como `<nuxtlink to="…">`, um elemento inventado sem `href`, que o
+ * navegador desenha e não sabe abrir: o clique só selecionava o texto.
+ */
+const LinkDoMenu = resolveComponent('NuxtLink')
+
 const route = useRoute()
 const eventoId = computed(() => route.params.id as string | undefined)
 const base = computed(() => (eventoId.value ? `/admin/evento/${eventoId.value}` : '/admin'))
@@ -245,7 +266,9 @@ const situacao: Record<string, { texto: string; classe: string }> = {
           </button>
         </div>
 
-        <nav aria-label="Menu do painel" class="-mx-1 mt-7 flex flex-1 flex-col overflow-y-auto px-1">
+        <!-- `select-none`: rótulo de menu não é texto pra copiar; sem isto, um
+             clique duplo arrastado pinta o nome de azul em vez de abrir a tela -->
+        <nav aria-label="Menu do painel" class="-mx-1 mt-7 flex flex-1 select-none flex-col overflow-y-auto px-1">
           <NuxtLink v-if="eventoId" to="/admin"
                     class="mb-3 flex items-center gap-3 rounded-lg px-3 py-2 text-[14px] font-medium text-ink-500 transition-colors hover:bg-ink-100/80 hover:text-ink-900">
             <IconeMenu nome="voltar" :tamanho="18" /> Voltar aos eventos
@@ -263,7 +286,7 @@ const situacao: Record<string, { texto: string; classe: string }> = {
 
           <ul class="grid gap-0.5">
             <li v-for="i in itens" :key="i.para">
-              <component :is="i.filhos ? 'button' : 'NuxtLink'"
+              <component :is="i.filhos ? 'button' : LinkDoMenu"
                          :to="i.filhos ? undefined : i.para"
                          :type="i.filhos ? 'button' : undefined"
                          :aria-current="!i.filhos && route.path === i.para ? 'page' : undefined"

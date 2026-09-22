@@ -1,7 +1,17 @@
 <script setup lang="ts">
+import { ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
+
 definePageMeta({ layout: 'admin' })
 
 const { data: eventos, pending, error: falha } = await useFetch<any[]>('/api/admin/eventos')
+
+// Mesma `key` do layout (`app/layouts/admin.vue`): o Nuxt reaproveita a
+// resposta em vez de bater em `/api/auth/eu` duas vezes por navegação.
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+const papel = computed<Papel | null>(() => {
+  const p = eu.value?.usuario?.papel
+  return ehPapel(p) ? p : null
+})
 
 /*
  * "Nenhum evento aqui ainda" e "você não pode ver esta lista" são coisas
@@ -60,6 +70,35 @@ const selo: Record<string, { t: string; c: string }> = {
   encerrado: { t: 'ENCERRADO', c: 'selo-neutro' },
 }
 
+/** "4,8%" com a vírgula do `reais()`; `null` some a linha (evento sem lote ainda). */
+const pct = (vendidos: number, total: number) =>
+  total ? `${(vendidos / total * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%` : null
+
+/** iniciais pro quadrado do evento sem `thumb_url` — a mesma conta do avatar da conta, em `layouts/admin.vue`. */
+const iniciais = (nome: string) => {
+  const partes = nome.trim().split(/\s+/)
+  return ((partes[0]?.[0] ?? '') + (partes.length > 1 ? partes.at(-1)![0] : '')).toUpperCase()
+}
+
+/** o menu de três pontos da linha: uma aberta por vez. */
+const abertoId = ref<string | null>(null)
+
+const NOMES_DO_ATALHO = ['Dashboard', 'Relatórios', 'Validação e acessos', 'Configurações']
+/**
+ * Atalhos do menu de três pontos — as mesmas quatro telas que a lateral do
+ * evento abre primeiro (`menuDoEvento`), filtradas pelo MESMO
+ * `podeAbrirPagina` que filtra a lateral. Nunca uma segunda lista: sem o
+ * filtro, o atalho de quem é da operação apontava pro dashboard (área
+ * `dinheiro`, que operação não tem) e o clique voltava 403 — porta fechada
+ * desenhada na parede, o mesmo defeito que o comentário da lateral evita.
+ */
+function atalhos(id: string) {
+  if (!papel.value) return []
+  return menuDoEvento(id)
+    .filter((g) => NOMES_DO_ATALHO.includes(g.nome))
+    .filter((g) => podeAbrirPagina(papel.value!, g.para))
+}
+
 useHead({ title: 'Eventos' })
 </script>
 
@@ -72,9 +111,18 @@ useHead({ title: 'Eventos' })
           {{ semAcesso ? 'O seu acesso é o leitor de entrada' : 'Todos os eventos das suas organizações' }}
         </p>
       </div>
-      <NuxtLink v-if="!semAcesso" to="/admin/evento/novo" class="btn-primario">
-        <IconeMenu nome="mais" :tamanho="18" /> Criar evento
-      </NuxtLink>
+      <div v-if="!semAcesso" class="flex flex-wrap items-center gap-2">
+        <!-- financeiro alcança relatório, operação não — a mesma régua do menu -->
+        <NuxtLink v-if="papel && podeAbrirPagina(papel, '/admin/relatorios')" to="/admin/relatorios" class="btn-secundario">
+          <IconeMenu nome="relatorio" :tamanho="18" /> Relatórios
+        </NuxtLink>
+        <!-- e o inverso: operação cria evento, financeiro não. Antes desta
+             linha o botão aparecia pros dois — clique de financeiro em
+             "Criar evento" voltava 403 sem aviso nenhum. -->
+        <NuxtLink v-if="papel && podeAbrirPagina(papel, '/admin/evento/novo')" to="/admin/evento/novo" class="btn-primario">
+          <IconeMenu nome="mais" :tamanho="18" /> Criar evento
+        </NuxtLink>
+      </div>
     </div>
 
     <div v-if="!semAcesso" class="mb-5 flex flex-wrap items-center gap-2">
@@ -129,53 +177,66 @@ useHead({ title: 'Eventos' })
       Nenhum evento aqui ainda.
     </p>
 
-    <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      <NuxtLink v-for="e in lista" :key="e.id" :to="`/admin/evento/${e.id}/dashboard`"
-                class="card flex flex-col transition-shadow hover:border-acao/40 hover:shadow-sm">
-        <div class="flex items-start justify-between gap-3">
+    <ul v-else class="grid gap-3">
+      <li v-for="e in lista" :key="e.id"
+          class="card flex flex-col gap-4 transition-shadow hover:shadow-lateral sm:flex-row sm:items-center">
+        <!-- zona 1: o que abre o painel. NuxtLink SÓ até aqui — o resto da
+             linha tem o botão de três pontos, e `<a>` dentro de `<a>` é HTML
+             inválido: o navegador fecha o de fora sozinho (a árvore que a
+             página manda difere da que o Vue montou) e o clique fica errático. -->
+        <NuxtLink :to="`/admin/evento/${e.id}/dashboard`"
+                  class="flex min-w-0 flex-1 items-center gap-3.5 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-pool-600">
+          <span v-if="!e.thumb"
+                class="titulo grid size-14 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-pool-600 to-grape-700 text-[15px] font-bold text-white">
+            {{ iniciais(e.nome) }}
+          </span>
+          <img v-else :src="e.thumb" alt="" class="size-14 shrink-0 rounded-xl object-cover ring-1 ring-ink-200/70">
           <div class="min-w-0">
-            <h2 class="titulo truncate text-base font-semibold text-tinta">{{ e.nome }}</h2>
-            <p class="mt-0.5 truncate text-sm text-tinta-suave">{{ e.organizacao }}</p>
+            <h2 class="titulo truncate text-[15px] font-semibold text-tinta">{{ e.nome }}</h2>
+            <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[13px] text-tinta-suave">
+              <span class="inline-flex shrink-0 items-center gap-1.5">
+                <IconeMenu nome="calendario" :tamanho="14" />{{ dia(e.inicio) }}
+              </span>
+              <span v-if="e.local" class="inline-flex min-w-0 items-center gap-1.5">
+                <IconeMenu nome="mapa" :tamanho="14" />
+                <span class="truncate">{{ e.local }}<template v-if="e.cidade"> · {{ e.cidade }}/{{ e.estado }}</template></span>
+              </span>
+            </div>
+          </div>
+        </NuxtLink>
+
+        <!-- zona 2: números, selo e ações — fora do link de propósito -->
+        <div class="flex shrink-0 items-center gap-5 border-t border-linha pt-3 sm:border-0 sm:pt-0">
+          <div v-if="e.estoque.total" class="text-right leading-tight">
+            <p class="text-xs text-tinta-fraca">Ingressos vendidos</p>
+            <p class="titulo text-[15px] font-semibold tabular-nums text-tinta">
+              {{ e.estoque.vendidos }}<span class="text-tinta-fraca">/{{ e.estoque.total }}</span>
+            </p>
+            <p class="text-xs tabular-nums text-tinta-fraca">{{ pct(e.estoque.vendidos, e.estoque.total) }}</p>
           </div>
           <span :class="selo[e.status]?.c ?? 'selo-neutro'">{{ selo[e.status]?.t ?? e.status }}</span>
-        </div>
 
-        <dl class="mt-3 space-y-1 text-sm text-tinta-suave">
-          <div class="flex items-center gap-2">
-            <IconeMenu nome="calendario" :tamanho="16" />
-            <dd>{{ dia(e.inicio) }}</dd>
-          </div>
-          <div v-if="e.local" class="flex items-center gap-2">
-            <IconeMenu nome="mapa" :tamanho="16" />
-            <dd class="truncate">{{ e.local }}<template v-if="e.cidade"> · {{ e.cidade }}/{{ e.estado }}</template></dd>
-          </div>
-        </dl>
-
-        <div class="mt-4 grid grid-cols-3 gap-2 border-t border-linha pt-3 text-center">
-          <div>
-            <p class="titulo text-base font-semibold tabular-nums text-tinta">{{ reais(e.cobradoCents) }}</p>
-            <p class="text-xs text-tinta-fraca">vendido</p>
-          </div>
-          <div>
-            <p class="titulo text-base font-semibold tabular-nums text-tinta">{{ e.ingressos }}</p>
-            <p class="text-xs text-tinta-fraca">ingressos</p>
-          </div>
-          <div>
-            <p class="titulo text-base font-semibold tabular-nums text-tinta">{{ e.pedidos }}</p>
-            <p class="text-xs text-tinta-fraca">pedidos</p>
+          <div class="relative">
+            <button type="button"
+                    class="grid size-9 shrink-0 place-items-center rounded-xl text-tinta-fraca transition-colors hover:bg-fundo-cinza hover:text-tinta"
+                    aria-haspopup="menu" :aria-expanded="abertoId === e.id" aria-label="Mais ações deste evento"
+                    @click="abertoId = abertoId === e.id ? null : e.id"
+                    @keydown.esc="abertoId = null">
+              <IconeMenu nome="maisVertical" :tamanho="20" />
+            </button>
+            <!-- véu invisível pra fechar no clique fora, igual ao menu da conta em layouts/admin.vue -->
+            <div v-if="abertoId === e.id" class="fixed inset-0 z-40" aria-hidden="true" @click="abertoId = null" />
+            <div v-if="abertoId === e.id" role="menu"
+                 class="absolute right-0 top-full z-50 mt-1 min-w-52 animate-rise-in rounded-xl bg-white p-1.5 shadow-pop ring-1 ring-ink-200">
+              <NuxtLink v-for="a in atalhos(e.id)" :key="a.para" :to="a.para" role="menuitem"
+                        class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13.5px] font-medium text-tinta-suave transition-colors hover:bg-fundo-cinza hover:text-tinta"
+                        @click="abertoId = null">
+                <IconeMenu :nome="a.icone" :tamanho="16" /> {{ a.nome }}
+              </NuxtLink>
+            </div>
           </div>
         </div>
-
-        <div v-if="e.estoque.total" class="mt-3">
-          <div class="h-1.5 w-full rounded-full bg-fundo-cinza">
-            <div class="h-1.5 rounded-full bg-acao"
-                 :style="{ width: `${Math.min((e.estoque.vendidos / e.estoque.total) * 100, 100)}%` }" />
-          </div>
-          <p class="mt-1 text-xs text-tinta-fraca">
-            {{ e.estoque.vendidos }} de {{ e.estoque.total }} do estoque vendido
-          </p>
-        </div>
-      </NuxtLink>
-    </div>
+      </li>
+    </ul>
   </div>
 </template>

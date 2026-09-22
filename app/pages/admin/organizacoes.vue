@@ -5,15 +5,38 @@
  *
  * Hoje é sempre uma: a rota recorta pela organização da sessão, de propósito
  * (ver o comentário em server/api/admin/organizacoes.get.ts — ela já devolveu
- * a lista inteira do banco pra qualquer login). A tela é lista mesmo assim
- * porque o dia em que uma pessoa operar duas produtoras, é esta a porta.
+ * a lista inteira do banco pra qualquer login). A tela é TABELA mesmo assim
+ * — busca, filtro e Ações inclusos — porque o dia em que uma pessoa operar
+ * duas produtoras, é esta a porta; uma tabela de uma linha só continua certa,
+ * uma lista de cartões-resumo de uma linha só não escala pra dez.
  */
 definePageMeta({ layout: 'admin' })
 
-const { data, pending, error: falha, refresh } = await useFetch<any>('/api/admin/organizacoes')
+const { data, pending, error: falha, refresh } = await useFetch<any[]>('/api/admin/organizacoes')
 
 const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
   { style: 'currency', currency: 'BRL' })
+
+/**
+ * A situação de cobrança, numa função só: decide a cor do selo E a chave do
+ * filtro, pra elas nunca dizerem coisas diferentes uma da outra.
+ */
+function situacao(o: any): { chave: 'sem' | 'testes' | 'recebendo'; t: string; c: string } {
+  if (!o.temAsaas) return { chave: 'sem', t: 'SEM COBRANÇA', c: 'selo-erro' }
+  return o.ambienteAsaas === 'production'
+    ? { chave: 'recebendo', t: 'RECEBENDO', c: 'selo-ok' }
+    : { chave: 'testes', t: 'EM TESTES', c: 'selo-alerta' }
+}
+
+const busca = ref('')
+const filtro = ref<'todos' | 'sem' | 'testes' | 'recebendo'>('todos')
+const temFiltro = computed(() => !!busca.value.trim() || filtro.value !== 'todos')
+
+const lista = computed(() => (data.value ?? []).filter((o: any) => {
+  if (filtro.value !== 'todos' && situacao(o).chave !== filtro.value) return false
+  const t = busca.value.trim().toLowerCase()
+  return !t || `${o.nome} ${o.slug} ${o.documento ?? ''}`.toLowerCase().includes(t)
+}))
 
 useHead({ title: 'Organização' })
 </script>
@@ -34,56 +57,79 @@ useHead({ title: 'Organização' })
       Nenhuma organização no seu acesso.
     </p>
 
-    <div v-else class="grid gap-3 lg:grid-cols-2">
-      <article v-for="o in data" :key="o.id" class="card">
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <h2 class="titulo text-lg font-semibold text-tinta">{{ o.nome }}</h2>
-            <p class="font-mono text-xs text-tinta-fraca">/{{ o.slug }}</p>
-          </div>
-          <span :class="o.temAsaas
-                  ? (o.ambienteAsaas === 'production' ? 'selo-ok' : 'selo-alerta')
-                  : 'selo-erro'">
-            {{ o.temAsaas
-               ? (o.ambienteAsaas === 'production' ? 'RECEBENDO' : 'EM TESTES')
-               : 'SEM COBRANÇA' }}
+    <template v-else>
+      <div class="mb-4 flex flex-wrap items-center gap-2">
+        <div class="relative">
+          <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-tinta-fraca">
+            <IconeMenu nome="busca" :tamanho="18" />
           </span>
+          <input v-model="busca" class="campo w-72 pl-10" placeholder="Buscar por nome, slug ou documento…"
+                 aria-label="Buscar organização">
         </div>
+        <button v-for="f in (['todos', 'recebendo', 'testes', 'sem'] as const)" :key="f"
+                type="button" :class="filtro === f ? 'chip-ativo' : 'chip'" @click="filtro = f">
+          {{ f === 'todos' ? 'Todos'
+             : f === 'recebendo' ? 'Recebendo'
+             : f === 'testes' ? 'Em testes' : 'Sem cobrança' }}
+        </button>
+      </div>
 
-        <dl class="mt-4 grid grid-cols-2 gap-y-2 text-sm text-tinta-suave">
-          <dt>Documento</dt>
-          <dd class="text-right text-tinta">{{ o.documento || '—' }}</dd>
-          <dt>Eventos</dt>
-          <dd class="text-right text-tinta">
-            {{ o.eventos }}
-            <span v-if="o.eventosAtivos" class="text-xs text-ok">
-              ({{ o.eventosAtivos }} ativo{{ o.eventosAtivos > 1 ? 's' : '' }})
-            </span>
-          </dd>
-          <dt>Pessoas com acesso</dt>
-          <dd class="text-right text-tinta">{{ o.pessoas }}</dd>
-          <dt>Faturado</dt>
-          <dd class="text-right font-medium tabular-nums text-tinta">{{ brl(o.faturadoCents) }}</dd>
-          <dt>Desde</dt>
-          <dd class="text-right text-tinta">
-            {{ new Date(o.criadoEm).toLocaleDateString('pt-BR') }}
-          </dd>
-        </dl>
+      <p v-if="!lista.length" class="card py-12 text-center text-tinta-suave">
+        Nenhuma organização com esses filtros.
+      </p>
 
-        <p v-if="!o.temAsaas"
-           class="mt-3 rounded-card border border-alerta bg-alerta-claro px-3 py-2 text-sm text-alerta">
-          Sem chave do Asaas configurada — nenhuma cobrança sai daqui.
-        </p>
-
-        <div class="mt-4 flex flex-wrap gap-2">
-          <NuxtLink to="/admin" class="btn-secundario min-w-[7rem] flex-1 justify-center">Eventos</NuxtLink>
-          <NuxtLink to="/admin/clientes" class="btn-secundario min-w-[7rem] flex-1 justify-center">Clientes</NuxtLink>
-          <NuxtLink to="/admin/relatorios" class="btn-secundario min-w-[7rem] flex-1 justify-center">Relatórios</NuxtLink>
-          <NuxtLink to="/admin/financeiro" class="btn-secundario min-w-[7rem] flex-1 justify-center">Financeiro</NuxtLink>
-          <NuxtLink to="/admin/equipe" class="btn-secundario min-w-[7rem] flex-1 justify-center">Equipe</NuxtLink>
+      <div v-else class="card p-0">
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[52rem] text-sm">
+            <thead>
+              <tr class="border-b border-linha text-left text-xs text-tinta-fraca">
+                <th class="px-4 py-3 font-semibold">Organização</th>
+                <th class="px-3 py-3 font-semibold">Documento</th>
+                <th class="px-3 py-3 text-right font-semibold">Eventos</th>
+                <th class="px-3 py-3 text-right font-semibold">Faturado</th>
+                <th class="px-3 py-3 font-semibold">Situação</th>
+                <th class="px-4 py-3 text-right font-semibold">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="o in lista" :key="o.id" class="border-b border-linha align-top last:border-0 hover:bg-fundo-cinza">
+                <td class="px-4 py-3">
+                  <p class="font-medium text-tinta">{{ o.nome }}</p>
+                  <p class="font-mono text-xs text-tinta-fraca">/{{ o.slug }}</p>
+                  <p v-if="!o.temAsaas" class="mt-1 text-xs font-medium text-alerta">
+                    Sem chave do Asaas — nenhuma cobrança sai daqui.
+                  </p>
+                </td>
+                <td class="px-3 py-3 text-tinta-suave">{{ o.documento || '—' }}</td>
+                <td class="px-3 py-3 text-right tabular-nums">
+                  <p class="text-tinta">{{ o.eventos }}</p>
+                  <p v-if="o.eventosAtivos" class="text-xs text-ok">
+                    {{ o.eventosAtivos }} ativo{{ o.eventosAtivos > 1 ? 's' : '' }}
+                  </p>
+                </td>
+                <td class="px-3 py-3 text-right tabular-nums">
+                  <p class="font-medium text-tinta">{{ brl(o.faturadoCents) }}</p>
+                  <!-- o que o comprador pagou (linha de cima) e o que sobra pro
+                       produtor depois de taxa e devolução (esta) são números
+                       diferentes de propósito — ver o comentário da rota. -->
+                  <p class="text-xs text-tinta-fraca">líquido {{ brl(o.liquidoCents) }}</p>
+                </td>
+                <td class="px-3 py-3">
+                  <span :class="situacao(o).c">{{ situacao(o).t }}</span>
+                </td>
+                <td class="px-4 py-3 text-right">
+                  <NuxtLink to="/admin/configuracoes"
+                            class="inline-grid size-8 place-items-center rounded-lg text-tinta-fraca transition-colors hover:bg-fundo-cinza hover:text-tinta"
+                            aria-label="Editar organização">
+                    <IconeMenu nome="lapis" :tamanho="16" />
+                  </NuxtLink>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-      </article>
-    </div>
+      </div>
+    </template>
   </div>
 
   <p v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</p>

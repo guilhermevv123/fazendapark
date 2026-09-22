@@ -29,9 +29,10 @@
  * entram **as de verdade**, importadas do fonte: uma cópia aqui dentro
  * transformaria o teste num espelho dele mesmo.
  *
- * Só `useFetch`/`$fetch`/`useRoute` são dublês — é a fronteira com o
- * servidor, e é justamente o que o teste precisa segurar pra perguntar "com
- * ESTES dados, o que a tela mostra?".
+ * Só `useFetch`/`$fetch`/`useRoute`/`resolveComponent` são dublês — a
+ * fronteira com o servidor (os três primeiros) e a fronteira com o que a
+ * Nuxt registra por fora do compilador (o último) —, e é justamente o que o
+ * teste precisa segurar pra perguntar "com ESTES dados, o que a tela mostra?".
  */
 import {
   computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, onUnmounted,
@@ -115,6 +116,52 @@ const roteador = {
 export const navegacoes: any[] = []
 function registrarNavegacao(x: any) { navegacoes.push(x) }
 
+// --------------------------------------------------- dublês de componente
+/** Componente burro que só mostra o conteúdo — pro stub não comer o `<slot>`. */
+const soOConteudo = (tag: string) =>
+  defineComponent({ inheritAttrs: false, setup: (_p, { slots }) => () => h(tag, slots.default?.()) })
+
+/**
+ * `<NuxtLink>` que vira `<a href>` de verdade.
+ *
+ * Um stub vazio apagaria o `href`, e é justamente o endereço que o teste de
+ * papel precisa ler pra dizer "a portaria enxergou o link do financeiro".
+ */
+const NuxtLinkDuble = defineComponent({
+  props: { to: { type: [String, Object], default: '' } },
+  setup: (p, { slots }) => () =>
+    h('a', { href: typeof p.to === 'string' ? p.to : JSON.stringify(p.to) }, slots.default?.()),
+})
+
+const STUBS: Record<string, any> = {
+  NuxtLink: NuxtLinkDuble,
+  RouterLink: NuxtLinkDuble,
+  NuxtPage: soOConteudo('div'),
+  NuxtLayout: soOConteudo('div'),
+  ClientOnly: soOConteudo('div'),
+  IconeMenu: defineComponent({ props: { nome: String, tamanho: Number }, setup: () => () => h('i') }),
+  LogoMarca: defineComponent({ props: { clara: Boolean }, setup: () => () => h('i') }),
+}
+
+/**
+ * `resolveComponent(nome)` — dublê, não o `resolveComponent` de verdade do Vue.
+ *
+ * Tentado primeiro com o de verdade (importado de `'vue'`) e MEDIDO quebrado:
+ * só de EXISTIR uma chamada dele em algum `<script setup>` deste harness, TODA
+ * resolução de componente por nome do MESMO arquivo passava a devolver um
+ * objeto incompleto (`{ name: 'NuxtLink' }`, sem `render`) — inclusive a tag
+ * estática `<NuxtLink>` da logo, que a chamada nem tocava. É incompatibilidade
+ * do `@vitejs/plugin-vue` puro (fora da Nuxt) com o jeito que o
+ * `@vue/test-utils` registra os stubs — não é bug do produto: o clique real,
+ * no Chrome contra o `nuxt dev`, abre a tela certa (ver o comentário de
+ * `layouts/admin.vue`). Este dublê lê do MESMO `STUBS` que o `mount()` usa
+ * mais abaixo — nome que a tela pede e o `mount()` não empresta some daqui e
+ * de lá do mesmo jeito.
+ */
+function resolveComponentDuble(nome: string) {
+  return STUBS[nome] ?? nome
+}
+
 // ------------------------------------------------- instalação dos globais
 /**
  * O que o Nuxt injeta sem `import` — e por que ele entra DUAS vezes.
@@ -135,6 +182,11 @@ const GLOBAIS: Record<string, any> = (() => {
     ref, computed, reactive, watch, watchEffect, nextTick, shallowRef, readonly,
     toRef, toRefs, unref, provide, inject, onMounted, onUnmounted, onBeforeUnmount,
     h, defineComponent,
+    // `resolveComponent('NuxtLink')` — o jeito CERTO de trocar de componente por
+    // nome dentro de `<component :is>` (a string crua `'NuxtLink'` não resolve
+    // no Nuxt de verdade: ver o comentário em `layouts/admin.vue`). O dublê,
+    // não o de verdade — ver o comentário dele, logo acima.
+    resolveComponent: resolveComponentDuble,
 
     // composables do Nuxt — a fronteira com o servidor, que o teste segura
     useFetch: useFetchDuble,
@@ -173,32 +225,6 @@ if (TEM_DOM) {
 }
 
 // ------------------------------------------------------------- montagem
-/** Componente burro que só mostra o conteúdo — pro stub não comer o `<slot>`. */
-const soOConteudo = (tag: string) =>
-  defineComponent({ inheritAttrs: false, setup: (_p, { slots }) => () => h(tag, slots.default?.()) })
-
-/**
- * `<NuxtLink>` que vira `<a href>` de verdade.
- *
- * Um stub vazio apagaria o `href`, e é justamente o endereço que o teste de
- * papel precisa ler pra dizer "a portaria enxergou o link do financeiro".
- */
-const NuxtLinkDuble = defineComponent({
-  props: { to: { type: [String, Object], default: '' } },
-  setup: (p, { slots }) => () =>
-    h('a', { href: typeof p.to === 'string' ? p.to : JSON.stringify(p.to) }, slots.default?.()),
-})
-
-const STUBS: Record<string, any> = {
-  NuxtLink: NuxtLinkDuble,
-  RouterLink: NuxtLinkDuble,
-  NuxtPage: soOConteudo('div'),
-  NuxtLayout: soOConteudo('div'),
-  ClientOnly: soOConteudo('div'),
-  IconeMenu: defineComponent({ props: { nome: String, tamanho: Number }, setup: () => () => h('i') }),
-  LogoMarca: defineComponent({ props: { clara: Boolean }, setup: () => () => h('i') }),
-}
-
 export interface OpcoesDaTela {
   /** `{ params, query, path }` da rota que a tela acha que está aberta */
   rota?: { params?: Record<string, any>; query?: Record<string, any>; path?: string }
