@@ -57,6 +57,50 @@ const iniciais = computed(() => {
 const contaAberta = ref(false)
 /** A gaveta da lateral — só existe no celular; no computador a lateral é fixa. */
 const gavetaAberta = ref(false)
+
+/**
+ * A lateral do DESKTOP expande no hover e recolhe ao tirar o mouse — mesma
+ * lógica do Diamond CRM (`Sidebar.vue`, componente `isCollapsed`): abrir é
+ * na hora, fechar espera um respiro de 200ms, porque o mouse só raspando a
+ * borda ao sair não pode abrir/fechar em rajada (era a fonte do "hover
+ * travado" que o Diamond documenta).
+ *
+ * Só desktop — `railAberta` nunca é lido por nenhuma classe abaixo de `lg:`,
+ * então no celular (que não tem hover; um toque dispara `mouseleave`
+ * SINTÉTICO em alguns navegadores) esta variável pode até mudar de valor,
+ * mas não desenha nada: a gaveta continua sendo só `gavetaAberta`.
+ *
+ * A largura anima SÓ na própria lateral, que é `fixed` (fora do fluxo): o
+ * respiro do conteúdo (`lg:ml-24`, no miolo) é FIXO no tamanho do trilho
+ * recolhido e nunca acompanha o hover. Animar a margem do conteúdo junto
+ * refaria o layout da página inteira a cada frame só pra abrir um menu — o
+ * mesmo travo de performance que o comentário do Diamond mede e evita.
+ * Expandida, a lateral fica por CIMA do conteúdo (`z-50` + sombra), nunca
+ * empurra nada.
+ */
+const railAberta = ref(false)
+let temporizadorRecolherRail: ReturnType<typeof setTimeout> | null = null
+function abrirRail() {
+  if (temporizadorRecolherRail) { clearTimeout(temporizadorRecolherRail); temporizadorRecolherRail = null }
+  railAberta.value = true
+}
+function recolherRail() {
+  if (temporizadorRecolherRail) clearTimeout(temporizadorRecolherRail)
+  temporizadorRecolherRail = setTimeout(() => { railAberta.value = false }, 200)
+}
+
+/** Linha do menu com o rail recolhido: ícone centralizado, sem respiro extra. */
+const classeLinhaRail = computed(() => !railAberta.value && 'lg:justify-center lg:gap-0 lg:px-0')
+/**
+ * O rótulo (texto) some visualmente com a largura zerada — não com `v-show`/
+ * `display:none` — porque o link continua tendo NOME pra quem usa leitor de
+ * tela mesmo com o rail fechado: `display:none` tiraria o texto da árvore de
+ * acessibilidade junto com o desenho.
+ */
+const classeRotuloRail = computed(() => [
+  'transition-[max-width,opacity] duration-200',
+  railAberta.value ? 'lg:max-w-none lg:opacity-100' : 'lg:max-w-0 lg:opacity-0',
+])
 // Navegar fecha as duas: a gaveta aberta em cima da tela nova era o defeito
 // clássico de menu lateral em celular.
 watch(() => route.path, () => {
@@ -241,7 +285,7 @@ const situacao: Record<string, { texto: string; classe: string }> = {
 </script>
 
 <template>
-  <div class="min-h-screen lg:grid lg:grid-cols-[288px_minmax(0,1fr)]">
+  <div class="min-h-screen">
     <!-- véu da gaveta: só no celular, só com a gaveta aberta -->
     <div v-if="gavetaAberta"
          class="fixed inset-0 z-40 animate-fade-in bg-ink-950/40 lg:hidden"
@@ -250,16 +294,30 @@ const situacao: Record<string, { texto: string; classe: string }> = {
 
     <!-- ============================================================ lateral -->
     <aside id="menu-lateral"
-           class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] transition-[transform,visibility] duration-200
-                  lg:sticky lg:inset-y-auto lg:left-auto lg:top-0 lg:z-auto lg:h-screen lg:w-auto lg:py-4 lg:pl-4 lg:transition-none"
-           :class="gavetaAberta ? 'visible translate-x-0' : 'invisible -translate-x-full lg:visible lg:translate-x-0'">
-      <div class="flex h-full flex-col bg-white px-3 py-5 shadow-pop lg:rounded-2xl lg:shadow-lateral lg:ring-1 lg:ring-ink-200/60">
-        <div class="flex items-center justify-between px-3">
-          <NuxtLink to="/admin" class="w-fit">
-            <LogoMarca class="h-8" />
+           class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] rail-suave
+                  transition-[transform,visibility] duration-200
+                  lg:inset-y-auto lg:left-4 lg:top-4 lg:h-[calc(100vh-2rem)]
+                  lg:transition-[width,transform] lg:duration-[320ms] lg:will-change-[width]"
+           :class="[
+             gavetaAberta ? 'visible translate-x-0' : 'invisible -translate-x-full lg:visible lg:translate-x-0',
+             railAberta ? 'lg:w-72' : 'lg:w-20',
+           ]"
+           @mouseenter="abrirRail"
+           @mouseleave="recolherRail">
+      <div class="flex h-full flex-col overflow-hidden bg-white px-3 py-5 shadow-pop lg:rounded-2xl lg:shadow-lateral lg:ring-1 lg:ring-ink-200/60">
+        <div class="flex items-center justify-between px-3" :class="!railAberta && 'lg:justify-center lg:px-0'">
+          <NuxtLink to="/admin" class="flex w-fit shrink-0 items-center">
+            <LogoMarca class="h-8" :class="!railAberta && 'lg:hidden'" />
+            <!-- rail recolhido: a marca inteira (302×122) não cabe em 80px —
+                 vira um monograma, no mesmo desenho do avatar de evento sem
+                 foto (app/pages/admin/index.vue), pra ficar uma família só. -->
+            <span v-if="!railAberta"
+                  class="titulo hidden size-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-pool-600 to-grape-700 text-[12px] font-bold text-white lg:flex">
+              CP
+            </span>
           </NuxtLink>
           <button type="button"
-                  class="grid size-10 place-items-center rounded-xl text-ink-500 transition-colors hover:bg-ink-100 lg:hidden"
+                  class="grid size-10 shrink-0 place-items-center rounded-xl text-ink-500 transition-colors hover:bg-ink-100 lg:hidden"
                   aria-label="Fechar menu"
                   @click="gavetaAberta = false">
             <IconeMenu nome="fechar" />
@@ -270,8 +328,10 @@ const situacao: Record<string, { texto: string; classe: string }> = {
              clique duplo arrastado pinta o nome de azul em vez de abrir a tela -->
         <nav aria-label="Menu do painel" class="-mx-1 mt-7 flex flex-1 select-none flex-col overflow-y-auto px-1">
           <NuxtLink v-if="eventoId" to="/admin"
-                    class="mb-3 flex items-center gap-3 rounded-lg px-3 py-2 text-[14px] font-medium text-ink-500 transition-colors hover:bg-ink-100/80 hover:text-ink-900">
-            <IconeMenu nome="voltar" :tamanho="18" /> Voltar aos eventos
+                    class="mb-3 flex items-center gap-3 rounded-lg px-3 py-2 text-[14px] font-medium text-ink-500 transition-colors hover:bg-ink-100/80 hover:text-ink-900"
+                    :class="classeLinhaRail">
+            <IconeMenu nome="voltar" :tamanho="18" class="shrink-0" />
+            <span class="truncate" :class="classeRotuloRail">Voltar aos eventos</span>
           </NuxtLink>
 
           <!--
@@ -292,23 +352,30 @@ const situacao: Record<string, { texto: string; classe: string }> = {
                          :aria-current="!i.filhos && route.path === i.para ? 'page' : undefined"
                          :aria-expanded="i.filhos ? abertos.includes(i.nome) : undefined"
                          class="group relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[14px] transition-colors"
-                         :class="ativo(i.para)
-                           ? 'bg-pool-50 font-semibold text-pool-800'
-                           : 'font-medium text-ink-600 hover:bg-ink-100/80 hover:text-ink-900'"
+                         :class="[
+                           ativo(i.para)
+                             ? 'bg-pool-50 font-semibold text-pool-800'
+                             : 'font-medium text-ink-600 hover:bg-ink-100/80 hover:text-ink-900',
+                           classeLinhaRail,
+                         ]"
                          @click="i.filhos && alternar(i)">
                 <span v-if="ativo(i.para)" aria-hidden="true"
                       class="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full bg-pool-600" />
-                <IconeMenu :nome="i.icone" :tamanho="18"
+                <IconeMenu :nome="i.icone" :tamanho="18" class="shrink-0"
                            :class="ativo(i.para) ? 'text-pool-700' : 'text-ink-400 group-hover:text-ink-600'" />
-                <span class="flex-1 truncate">{{ i.nome }}</span>
+                <span class="flex-1 truncate" :class="classeRotuloRail">{{ i.nome }}</span>
                 <IconeMenu v-if="i.filhos" nome="seta" :tamanho="16"
-                           class="text-ink-400 transition-transform"
-                           :class="abertos.includes(i.nome) && 'rotate-90'" />
+                           class="shrink-0 text-ink-400 transition-transform"
+                           :class="[abertos.includes(i.nome) && 'rotate-90', !railAberta && 'lg:hidden']" />
               </component>
 
-              <!-- telas do grupo: uma régua fina à esquerda, a ativa em azul -->
+              <!-- telas do grupo: uma régua fina à esquerda, a ativa em azul.
+                   `lg:hidden` no rail recolhido: o estado (`abertos`) continua
+                   valendo — reexpande sozinho ao passar o mouse de novo — só
+                   não cabe desenhado em 80px. -->
               <ul v-if="i.filhos && abertos.includes(i.nome)"
-                  class="ml-[21px] mt-0.5 grid gap-0.5 border-l border-ink-200 pl-2.5">
+                  class="ml-[21px] mt-0.5 grid gap-0.5 border-l border-ink-200 pl-2.5"
+                  :class="!railAberta && 'lg:hidden'">
                 <li v-for="f in i.filhos" :key="f.para">
                   <NuxtLink :to="f.para"
                             :aria-current="route.path === f.para ? 'page' : undefined"
@@ -326,8 +393,12 @@ const situacao: Record<string, { texto: string; classe: string }> = {
       </div>
     </aside>
 
-    <!-- ========================================================== conteúdo -->
-    <div class="flex min-w-0 flex-col">
+    <!-- ========================================================== conteúdo
+         `lg:ml-24` = left-4 (16px) + w-20 (80px) do rail RECOLHIDO — e não
+         muda com o hover. A lateral expandida flutua por CIMA (fixed, z-50),
+         nunca empurra: animar esta margem junto com a largura da lateral
+         refaria o layout da página inteira a cada frame do hover. -->
+    <div class="flex min-w-0 flex-col lg:ml-24">
       <div class="sticky top-0 z-30 px-3 pt-3 sm:px-4 lg:static lg:px-10 lg:pt-6">
         <header data-parte="topo" class="flex h-16 items-center gap-3 rounded-2xl bg-white/90 px-3 shadow-lateral ring-1 ring-ink-200/60 backdrop-blur
                        sm:px-4 lg:h-auto lg:min-h-[40px] lg:rounded-none lg:bg-transparent lg:px-0 lg:shadow-none lg:ring-0 lg:backdrop-blur-none">
@@ -428,3 +499,17 @@ const situacao: Record<string, { texto: string; classe: string }> = {
     </div>
   </div>
 </template>
+
+<style scoped>
+/*
+ * Curva "expo-out" pra abrir/fechar o rail — a mesma do Diamond CRM
+ * (`Sidebar.vue`, classe `.sidebar-fluid` lá): mais suave que o `ease-out`
+ * padrão do Tailwind pra animar LARGURA, que é uma propriedade cara (força
+ * reflow a cada frame, não roda no compositor como `transform`/`opacity`).
+ * Não tira o custo do reflow — só disfarça o "travadinho" com uma
+ * desaceleração mais pronunciada no final. Ref.: https://easings.net/#easeOutExpo
+ */
+.rail-suave {
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+</style>
