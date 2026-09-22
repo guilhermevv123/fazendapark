@@ -16,6 +16,7 @@
  * inteiro uma vez.
  */
 import sharp from 'sharp'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { q1, tx } from '../../../../utils/db'
 import {
   apagarImagem, BucketNaoConfigurado, caminhoPublico, chaveDeImagemDeEvento, chaveDoCaminho, subirImagem,
@@ -90,12 +91,17 @@ export default defineEventHandler(async (event) => {
   const url = caminhoPublico(chave)
 
   const coluna = CAMPO_PARA_COLUNA[campo]
+  const valorAntigo = campo === 'banner' ? atual.banner_url : atual.thumb_url
   await tx(async (c) => {
     await c.query(`UPDATE events SET ${coluna} = $1, updated_at = now() WHERE id = $2`, [url, eventoId])
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'evento',$2,'editado',$3::jsonb)`,
-      [atual.org_id, eventoId, JSON.stringify({ [campo]: url })])
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event),
+      entidade: 'evento',
+      entidadeId: eventoId!,
+      acao: 'editado',
+      antes: { [campo]: valorAntigo },
+      depois: { [campo]: url },
+    }, c)
   })
 
   // a imagem de antes só é apagada DEPOIS do banco confirmar a nova — trocar

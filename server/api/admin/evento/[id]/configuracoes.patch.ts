@@ -17,6 +17,7 @@
  *   violação de constraint e a tela mostra "erro interno".
  */
 import { z } from 'zod'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { q1, tx } from '../../../../utils/db'
 
 /**
@@ -146,10 +147,13 @@ export default defineEventHandler(async (event) => {
       const { rows } = await c.query(
         `UPDATE events SET ${set.join(', ')}, updated_at = now()
           WHERE id = $1 RETURNING id, slug, status`, par)
-      await c.query(
-        `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-         VALUES ($1,'evento',$2,'editado',$3::jsonb)`,
-        [atual.org_id, id, JSON.stringify(campos)])
+      await registrarAuditoria({
+        autor: autorDaRequisicao(event),
+        entidade: 'evento',
+        entidadeId: id!,
+        acao: 'editado',
+        depois: campos,
+      }, c)
       return { ok: true, evento: rows[0] }
     } catch (e: any) {
       // 23505 = unique_violation. O slug é o único campo aqui com índice
