@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "nuxt dev --port 3100",
+    "dev:teste": "node scripts/dev-teste.mjs",
     "build": "nuxt build",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "db:push": "node scripts/db-push.mjs",
     "test": "vitest run",
-    "seed": "node scripts/seed.mjs"
+    "seed": "node scripts/seed.mjs",
+    "seed:teste": "SEED_TESTE=1 node scripts/seed.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1137.0",

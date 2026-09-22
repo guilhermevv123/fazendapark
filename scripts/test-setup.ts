@@ -1,9 +1,15 @@
 /**
  * test-setup.ts — o que toda corrida da suíte precisa antes do primeiro caso.
  *
- * Três coisas, e as duas últimas são trava, não conveniência:
+ * Quatro coisas, e as três últimas são trava, não conveniência:
  *
- *  1. **o `.env`**, pra quem fala com o banco;
+ *  1. **o `.env`, depois o `.env.test` por cima** — pra quem fala com o banco
+ *     falar com o banco de TESTE, nunca com o que o painel real usa. O real
+ *     (`diamond_tickets`) já teve 939 pedido falso empilhado por rodada de
+ *     suíte antes desta separação existir — `.env.test` aponta pro banco
+ *     `diamond_tickets_test`, que só a suíte toca (ver `dev:teste` no
+ *     `package.json`, que sobe o servidor DESTE banco na porta que
+ *     `BASE_DE_TESTE` usa por padrão);
  *
  *  2. **a sonda do servidor de dev e o pulo honesto.** A convenção antiga era
  *     `if (!noAr) return void console.warn('(pulado)')` dentro do `it()`. O
@@ -23,15 +29,21 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach } from 'vitest'
 
 // ---------------------------------------------------------------- 1. .env
-try {
-  for (const linha of readFileSync(new URL('../.env', import.meta.url), 'utf8').split('\n')) {
-    const m = linha.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2]
-  }
-} catch { /* sem .env: o teste que precisar vai falhar dizendo o porquê */ }
+function carregar(arquivo: string, sobrescrever: boolean) {
+  try {
+    for (const linha of readFileSync(new URL(`../${arquivo}`, import.meta.url), 'utf8').split('\n')) {
+      const m = linha.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
+      if (m && (sobrescrever || !process.env[m[1]])) process.env[m[1]] = m[2]
+    }
+  } catch { /* arquivo ausente: o teste que precisar vai falhar dizendo o porquê */ }
+}
+carregar('.env', false)
+// por cima, sobrescrevendo — é o que manda a suíte pro banco de teste em vez
+// do banco que o painel real usa (ver o item 1 lá em cima).
+carregar('.env.test', true)
 
 // ------------------------------------------------- 2. sonda do servidor
-export const BASE_DE_TESTE = process.env.BASE_TESTE ?? 'http://localhost:3100'
+export const BASE_DE_TESTE = process.env.BASE_TESTE ?? 'http://localhost:3101'
 
 /**
  * A PACIÊNCIA — e por que 2500 ms era um defeito, não um número.
