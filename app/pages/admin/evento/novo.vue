@@ -4,6 +4,13 @@
  * painel de origem: Dados básicos → Descrição → Setores, lotes e tipos →
  * Preços e quantidades → Datas e horários.
  *
+ * Conferido de verdade em 21/09/2026, passo a passo, no painel da Zig do
+ * próprio parque (sem publicar nada): o passo 1 leva TAMBÉM "Onde vai
+ * acontecer" e "Contato de suporte" (obrigatório), e o passo 2 é só a
+ * descrição. Antes isto morava aqui com os dois blocos no passo 2, por
+ * dedução de arquivo de tradução — e a equipe, que já conhece o painel de
+ * lá, procurava o endereço no passo errado.
+ *
  * Tudo fica em memória até o último passo, e o evento inteiro (com setor,
  * lote e tipo) é gravado numa transação só. Criar o rascunho já no passo 1
  * encheria o banco de evento pela metade de quem fechou a aba no meio.
@@ -44,6 +51,11 @@ const f = reactive({
   suporteValor: '',
 
   setores: [] as Setor[],
+
+  /** "Nomenclatura do bilhete": como o site e os e-mails chamam o que se compra */
+  substantivo: 'Ingressos',
+  /** o painel de origem publica no clique final; aqui é escolha, e o padrão é o seguro */
+  publicarAoCriar: false,
 
   taxaBps: 1000,
   modoTaxaOnline: 'repassar' as 'repassar' | 'absorver',
@@ -172,8 +184,6 @@ function validar(p: number): string[] {
     if (!f.orgId) e.push('Escolha a organização vinculada.')
     if (f.nome.trim().length < 3) e.push('O nome do evento precisa de pelo menos 3 letras.')
     if (!f.slug) e.push('O caminho da página de vendas não pode ficar vazio.')
-  }
-  if (p === 2) {
     if (f.online && !/^https?:\/\//.test(f.linkTransmissao)) {
       e.push('Evento online precisa do link de transmissão.')
     }
@@ -258,6 +268,7 @@ async function publicar() {
       encerraVendasEm: f.encerramento === 'data' ? iso(f.encerraData, f.encerraHora || '23:59') : null,
       encerraVendasMinutosApos: f.encerramento === 'minutos' ? f.encerraMinutos : (f.encerramento === 'inicio' ? 0 : null),
       faixaEtaria: f.faixaEtaria,
+      substantivo: f.substantivo.trim() || 'Ingressos',
       categoria: f.categoria || undefined,
       subcategorias: f.subcategorias,
       online: f.online,
@@ -295,6 +306,18 @@ async function publicar() {
       })),
     }
     const r: any = await $fetch('/api/admin/evento', { method: 'POST', body: corpo })
+    if (f.publicarAoCriar) {
+      // O evento JÁ existe (rascunho). Se publicar falhar, ficar aqui deixaria a
+      // pessoa apertar "Criar" de novo e ganhar um evento repetido — então ela
+      // vai pra Configurações do evento, onde o status se muda à mão.
+      try {
+        await $fetch(`/api/admin/evento/${r.id}/configuracoes`, {
+          method: 'PATCH', body: { status: 'ativo' } })
+      } catch {
+        await navigateTo(`/admin/evento/${r.id}/configuracoes`)
+        return
+      }
+    }
     await navigateTo(`/admin/evento/${r.id}/ingressos`)
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível criar o evento.'
@@ -309,7 +332,7 @@ useHead({ title: 'Criar evento' })
 <template>
   <NuxtLayout name="criacao" :passos="PASSOS" :passo="passo"
               :pode-voltar="passo > 1" :salvando="salvando"
-              :rotulo-avancar="passo === PASSOS.length ? 'Criar evento' : 'Prosseguir'"
+              :rotulo-avancar="passo === PASSOS.length ? (f.publicarAoCriar ? 'Criar e publicar' : 'Criar evento') : 'Prosseguir'"
               @voltar="voltar" @avancar="avancar" @sair="sair">
 
     <div v-if="erros.length || erro"
@@ -433,21 +456,6 @@ useHead({ title: 'Criar evento' })
           Formatos aceitos: JPG, PNG e WebP. Tamanho máximo: até 700KB.
         </p>
       </section>
-    </template>
-
-    <!-- ========================================= 2. DESCRIÇÃO ========== -->
-    <template v-if="passo === 2">
-      <section class="card">
-        <h2 class="titulo-bloco">Detalhes do evento (Opcional)</h2>
-        <p class="apoio-bloco">
-          Detalhe sobre o que se trata o evento e dê o máximo de informação útil para o seu
-          participante. Esse campo também afeta posicionamento nos buscadores.
-        </p>
-        <hr class="my-4 border-linha">
-        <textarea v-model="f.descricao" rows="8" class="campo"
-                  placeholder="O que vai acontecer, quem toca, o que está incluso, o que levar…"></textarea>
-        <p class="mt-1 text-xs text-tinta-fraca">{{ f.descricao.length }} caracteres</p>
-      </section>
 
       <section class="card">
         <h2 class="titulo-bloco">Onde vai acontecer o seu evento</h2>
@@ -530,6 +538,21 @@ useHead({ title: 'Criar evento' })
                    :placeholder="f.suporteTipo === 'email' ? 'suporte@empresa.com.br' : '(00) 00000-0000'">
           </div>
         </div>
+      </section>
+    </template>
+
+    <!-- ========================================= 2. DESCRIÇÃO ========== -->
+    <template v-if="passo === 2">
+      <section class="card">
+        <h2 class="titulo-bloco">Descrição do evento (Opcional)</h2>
+        <p class="apoio-bloco">
+          Detalhe sobre o que se trata o evento e dê o máximo de informação útil para o seu
+          participante. Esse campo afeta o posicionamento do evento nos buscadores.
+        </p>
+        <hr class="my-4 border-linha">
+        <textarea v-model="f.descricao" rows="8" class="campo"
+                  placeholder="O que vai acontecer, quem toca, o que está incluso, o que levar…"></textarea>
+        <p class="mt-1 text-xs text-tinta-fraca">{{ f.descricao.length }} caracteres</p>
       </section>
     </template>
 
@@ -618,6 +641,20 @@ useHead({ title: 'Criar evento' })
 
     <!-- ==================================== 4. PREÇOS E QUANTIDADES ==== -->
     <template v-if="passo === 4">
+      <section class="card">
+        <h2 class="titulo-bloco">Nomenclatura do bilhete</h2>
+        <p class="apoio-bloco">Como o site e os e-mails chamam o que a pessoa compra.</p>
+        <hr class="my-4 border-linha">
+        <div class="max-w-sm">
+          <label for="substantivo" class="rotulo">Nome</label>
+          <input id="substantivo" v-model="f.substantivo" maxlength="40" class="campo" placeholder="Ingressos">
+        </div>
+        <p class="mt-2 text-xs text-tinta-fraca">
+          Ex.: Ingressos, Bilhetes, Passaportes. Aparece na página de vendas como
+          “Escolha seus {{ (f.substantivo.trim() || 'Ingressos').toLowerCase() }}”.
+        </p>
+      </section>
+
       <section class="card">
         <h2 class="titulo-bloco">Política de taxas</h2>
         <p class="apoio-bloco">
@@ -890,9 +927,19 @@ useHead({ title: 'Criar evento' })
           <div class="flex justify-between"><dt class="text-tinta-suave">Visibilidade</dt>
             <dd class="text-tinta">{{ f.privado ? 'Privado (só com link)' : 'Público' }}</dd></div>
         </dl>
-        <p class="mt-4 text-sm text-tinta-suave">
-          O evento nasce como <strong>rascunho</strong>. Publicar é um passo separado — assim
-          a página de vendas só abre quando você conferir tudo.
+        <label class="mt-4 flex items-start gap-2.5 text-sm text-tinta">
+          <input v-model="f.publicarAoCriar" type="checkbox" class="mt-1 h-4 w-4 accent-pool-600">
+          <span>Publicar assim que criar</span>
+        </label>
+        <p class="mt-2 text-sm text-tinta-suave">
+          <template v-if="f.publicarAoCriar">
+            O evento fica <strong>publicado</strong> na hora: a página de vendas abre e ele
+            entra na lista do site.
+          </template>
+          <template v-else>
+            O evento nasce como <strong>rascunho</strong>. Publicar é um passo separado — assim
+            a página de vendas só abre quando você conferir tudo.
+          </template>
         </p>
       </section>
     </template>

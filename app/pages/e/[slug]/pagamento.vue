@@ -3,7 +3,8 @@
  * Checkout: identificação + pagamento.
  *
  * Fica numa página só de propósito. Cada passo extra de wizard derruba
- * conversão, e aqui só há dois blocos: quem é você, e como paga.
+ * conversão, e aqui só há três blocos: quem é você, onde mora (o cadastro que o
+ * parque guarda pra falar com quem compra) e como paga.
  *
  * Três coisas que esta tela NÃO faz, e o porquê:
  *
@@ -21,6 +22,7 @@ import {
   type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
 import { MOTIVOS } from '~~/server/utils/meia-entrada'
+import { UFS } from '~~/server/utils/cadastro'
 
 const route = useRoute()
 const slug = route.params.slug as string
@@ -87,6 +89,25 @@ const restante = ref(0)
 const avisoDePreco = ref('')
 
 const form = reactive({ nome: '', email: '', documento: '', telefone: '', cupom: '' })
+
+/**
+ * O cadastro do cliente: o que o parque guarda pra falar com quem compra.
+ *
+ * FICA FORA de `form` DE PROPÓSITO. O `form` inteiro é gravado em sessionStorage
+ * (`{ ...form }` em `pagar`) pra o F5 não perder a cobrança, e a senha nunca pode
+ * ir parar lá — sessionStorage é legível por qualquer script da página.
+ */
+const cadastro = reactive({
+  nascimento: '', instagram: '',
+  cep: '', rua: '', numero: '', bairro: '', cidade: '', estado: '',
+  senha: '', aceitaNovidades: false,
+})
+const verSenha = ref(false)
+const buscandoCep = ref(false)
+const avisoDeCep = ref('')
+/** O `id` do campo que o servidor (ou esta tela) apontou — ganha contorno e foco. */
+const campoComErro = ref('')
+const marca = (campo: string) => (campoComErro.value === campo ? 'ring-2 ring-danger-600' : '')
 const forma = ref<'pix' | 'credito'>('pix')
 const parcelas = ref(1)
 
@@ -161,6 +182,51 @@ function mascaraTel(v: string) {
   if (d.length <= 10) return d.replace(/(\d{2})(\d)/, '($1) $2').replace(/(\d{4})(\d)/, '$1-$2')
   return d.replace(/(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d)/, '$1-$2')
 }
+function mascaraData(v: string) {
+  const d = v.replace(/\D/g, '').slice(0, 8)
+  return d.replace(/(\d{2})(\d)/, '$1/$2').replace(/(\d{2}\/\d{2})(\d)/, '$1/$2')
+}
+function mascaraCep(v: string) {
+  return v.replace(/\D/g, '').slice(0, 8).replace(/(\d{5})(\d)/, '$1-$2')
+}
+
+/** `25/12/1990` → `1990-12-25`; o que não tiver esse formato vira null (o servidor confere se a data existe). */
+function nascimentoEmIso(texto: string): string | null {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(texto.trim())
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : null
+}
+
+/** Marca o campo, diz o que houve e leva o foco até ele (que rola a tela junto). */
+function recusar(campo: string, recado: string) {
+  campoComErro.value = campo
+  erro.value = recado
+  document.getElementById(campo)?.focus()
+}
+
+/**
+ * Digitou o CEP inteiro: pergunta ao ViaCEP e preenche cidade, estado, rua e
+ * bairro. CEP é conveniência — serviço fora do ar ou CEP que não existe NÃO
+ * trava a compra, a pessoa digita o resto (mesmo desenho do formulário de
+ * criação de evento no painel).
+ */
+async function buscarCep() {
+  const cep = cadastro.cep.replace(/\D/g, '')
+  avisoDeCep.value = ''
+  if (cep.length !== 8) return
+  buscandoCep.value = true
+  try {
+    const r: any = await $fetch(`https://viacep.com.br/ws/${cep}/json/`)
+    // digitou outro CEP enquanto a resposta vinha: essa resposta é velha
+    if (cadastro.cep.replace(/\D/g, '') !== cep) return
+    if (r.erro) { avisoDeCep.value = 'Não achamos esse CEP. Preencha a cidade e o estado.'; return }
+    cadastro.cidade = r.localidade || cadastro.cidade
+    cadastro.estado = r.uf || cadastro.estado
+    cadastro.rua = r.logradouro || cadastro.rua
+    cadastro.bairro = r.bairro || cadastro.bairro
+  } catch {
+    avisoDeCep.value = 'Não deu pra buscar o CEP agora. Preencha o endereço abaixo.'
+  } finally { buscandoCep.value = false }
+}
 
 /**
  * Manda o pedido.
@@ -228,6 +294,11 @@ function revisarCupomComCpf() {
 async function pagar(semDeclaracao = false) {
   if (!carrinho.value) return
   erro.value = ''
+  campoComErro.value = ''
+  const nascimento = nascimentoEmIso(cadastro.nascimento)
+  if (!nascimento) {
+    return void recusar('nascimento', 'Confira a data de nascimento: dia, mês e ano (ex.: 25/12/1990).')
+  }
   enviando.value = true
   try {
     const r = await $fetch<any>('/api/checkout', {
@@ -240,6 +311,19 @@ async function pagar(semDeclaracao = false) {
           email: form.email.trim(),
           documento: form.documento.replace(/\D/g, ''),
           telefone: form.telefone.replace(/\D/g, '') || undefined,
+          nascimento,
+          instagram: cadastro.instagram.trim() || undefined,
+          endereco: {
+            cep: cadastro.cep.replace(/\D/g, '') || undefined,
+            rua: cadastro.rua.trim() || undefined,
+            numero: cadastro.numero.trim() || undefined,
+            bairro: cadastro.bairro.trim() || undefined,
+            cidade: cadastro.cidade.trim(),
+            estado: cadastro.estado,
+          },
+          senha: cadastro.senha,
+          // só manda quando marcou: desmarcado é "não disse nada", não "revogou"
+          aceitaNovidades: cadastro.aceitaNovidades ? true : undefined,
         },
         cupom: form.cupom.trim() || undefined,
         forma: forma.value,
@@ -247,6 +331,7 @@ async function pagar(semDeclaracao = false) {
       },
     })
     pedido.value = r
+    cadastro.senha = ''
     conferirOPrecoCobrado(r)
     sessionStorage.removeItem(CHAVE_CARRINHO)
 
@@ -281,6 +366,8 @@ async function pagar(semDeclaracao = false) {
       enviando.value = false
       return await pagar(true)
     }
+    // Erro de cadastro fica no campo que o servidor apontou.
+    if (tipo === 'cadastro') return void recusar(corpo.data.campo, recado)
     // Erro de cupom fica COLADO no campo do cupom, com o botão de seguir sem
     // ele. Numa faixa geral, o comprador relê o formulário inteiro procurando
     // o que errou.
@@ -494,6 +581,99 @@ useHead({ title: 'Pagamento' })
                      @input="form.telefone = mascaraTel(($event.target as HTMLInputElement).value)">
             </div>
           </div>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label for="nascimento" class="rotulo">Data de nascimento</label>
+              <!-- `autocomplete="off"` de propósito: o navegador preenche a data no formato
+                   DELE, e a máscara daqui (dd/mm/aaaa) embaralharia o que chegasse pronto. -->
+              <input id="nascimento" :value="cadastro.nascimento" required inputmode="numeric"
+                     maxlength="10" placeholder="dd/mm/aaaa" autocomplete="off"
+                     class="campo tabular-nums" :class="marca('nascimento')"
+                     @input="cadastro.nascimento = mascaraData(($event.target as HTMLInputElement).value)">
+            </div>
+            <div>
+              <label for="instagram" class="rotulo">
+                Instagram <span class="font-normal text-tinta-fraca">(opcional)</span>
+              </label>
+              <input id="instagram" v-model="cadastro.instagram" placeholder="@seunome"
+                     autocomplete="off" autocapitalize="none" class="campo" :class="marca('instagram')">
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------- onde mora -->
+          <div class="border-t border-linha pt-4">
+            <p class="titulo text-base font-semibold text-tinta">Onde você mora</p>
+            <p class="mt-0.5 text-xs text-tinta-fraca">
+              Ajuda o parque a saber de onde vem o público. Digite o CEP e o resto vem sozinho.
+            </p>
+          </div>
+          <div class="grid grid-cols-[1fr_5.5rem] gap-4 sm:grid-cols-[9rem_1fr_6rem]">
+            <div class="col-span-2 sm:col-span-1">
+              <label for="cep" class="rotulo">CEP</label>
+              <input id="cep" :value="cadastro.cep" inputmode="numeric" maxlength="9" placeholder="00000-000"
+                     autocomplete="postal-code" class="campo tabular-nums" :class="marca('cep')"
+                     @input="cadastro.cep = mascaraCep(($event.target as HTMLInputElement).value); buscarCep()">
+            </div>
+            <div>
+              <label for="cidade" class="rotulo">Cidade</label>
+              <input id="cidade" v-model="cadastro.cidade" required autocomplete="address-level2"
+                     class="campo" :class="marca('cidade')">
+            </div>
+            <div>
+              <label for="estado" class="rotulo">Estado</label>
+              <select id="estado" v-model="cadastro.estado" required autocomplete="address-level1"
+                      class="campo" :class="marca('estado')">
+                <option value="" disabled>UF</option>
+                <option v-for="uf in UFS" :key="uf" :value="uf">{{ uf }}</option>
+              </select>
+            </div>
+          </div>
+          <p v-if="buscandoCep" class="-mt-2 text-xs text-tinta-suave">Buscando o endereço…</p>
+          <p v-else-if="avisoDeCep" class="-mt-2 text-xs text-tinta-suave">{{ avisoDeCep }}</p>
+          <div class="grid grid-cols-[1fr_5.5rem] gap-4 sm:grid-cols-[1fr_7rem]">
+            <div>
+              <label for="rua" class="rotulo">
+                Rua <span class="font-normal text-tinta-fraca">(opcional)</span>
+              </label>
+              <input id="rua" v-model="cadastro.rua" autocomplete="address-line1" class="campo">
+            </div>
+            <div>
+              <label for="numero" class="rotulo">Número</label>
+              <input id="numero" v-model="cadastro.numero" autocomplete="off" class="campo">
+            </div>
+          </div>
+          <div>
+            <label for="bairro" class="rotulo">
+              Bairro <span class="font-normal text-tinta-fraca">(opcional)</span>
+            </label>
+            <input id="bairro" v-model="cadastro.bairro" autocomplete="off" class="campo">
+          </div>
+
+          <!-- --------------------------------------------------- a conta -->
+          <div class="border-t border-linha pt-4">
+            <p class="titulo text-base font-semibold text-tinta">Sua conta</p>
+          </div>
+          <div>
+            <label for="senha" class="rotulo">Crie uma senha</label>
+            <div class="relative">
+              <input id="senha" v-model="cadastro.senha" :type="verSenha ? 'text' : 'password'" required
+                     minlength="8" maxlength="72" autocomplete="new-password"
+                     class="campo pr-24" :class="marca('senha')">
+              <button type="button"
+                      class="absolute inset-y-0 right-3.5 text-sm font-semibold text-acao hover:underline"
+                      @click="verSenha = !verSenha">
+                {{ verSenha ? 'Ocultar' : 'Mostrar' }}
+              </button>
+            </div>
+            <p class="mt-1 text-xs text-tinta-fraca">
+              Pelo menos 8 caracteres. Guardamos só uma versão codificada dela.
+            </p>
+          </div>
+          <label class="flex items-start gap-2.5 text-sm text-tinta-corpo">
+            <input v-model="cadastro.aceitaNovidades" type="checkbox" class="mt-1 h-4 w-4 accent-pool-600">
+            <span>Quero receber novidades e ofertas do parque por WhatsApp, e-mail e Instagram.</span>
+          </label>
+
           <div>
             <label for="cupom" class="rotulo">Cupom (opcional)</label>
             <!-- `@blur` e não `@input`: conferir a cada tecla mandaria uma

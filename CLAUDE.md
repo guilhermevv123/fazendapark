@@ -144,6 +144,35 @@ está de fato chutando senha fica embaçado.
 
 ---
 
+## Cadastro do cliente e a base de clientes
+
+O formulário do site (`pagamento.vue`) cria o cadastro que alimenta follow-up e remarketing. Cinco
+regras que não se quebram sem pensar:
+
+- **`server/utils/cadastro.ts` é a única porta de validação** (nascimento, Instagram, endereço,
+  senha). O checkout aceita tudo como opcional — a PÁGINA é quem exige. As faixas de idade moram
+  numa lista só (`FAIXAS_ETARIAS`), e o SQL dos relatórios é gerado dela.
+- **A senha nunca sai do `cadastro` reactive da página.** O `form` inteiro vai pro `sessionStorage`;
+  a senha jamais. Ela é gravada como bcrypt e **não existe login de cliente ainda**: no dia em que
+  existir, o e-mail tem que ser confirmado por link ANTES de a senha valer (o formulário não prova
+  que o e-mail é de quem digitou — por isso o upsert nunca troca uma senha já gravada).
+- **`marketing_opt_in` é consentimento (LGPD).** Só muda quando a pessoa se manifesta; a página manda
+  `true` ou omite, nunca `false` por silêncio. O carimbo só anda quando o valor muda.
+- **`clientes` é área só do master** (a base inteira, com CPF): a lista mostra CPF mascarado, a ficha
+  mostra inteiro, a exportação NÃO leva CPF nem rua e **grava na Auditoria** quem exportou e com
+  que filtro. Os filtros da lista e da exportação vêm de `server/utils/clientes-filtro.ts`.
+- **O relatório da organização (`/admin/relatorios`) é a MESMA conta do relatório do evento**
+  (`PEDIDO_VIVO`, `SQL_LIQUIDO`), somada — filtrado por um evento ele é idêntico ao dele. Venda de
+  balcão sem cliente conta no dinheiro; nunca entra um `JOIN customers` no caminho do dinheiro.
+
+`audit_log` é append-only por gatilho: teste que precisa apagar linha dele faz
+`SET LOCAL auditoria.expurgo = 'liberado'` na mesma transação (ver `expurgar()` em
+`server/api/admin/clientes.test.ts`). E fixture com e-mail de login FIXO precisa limpar os restos de
+uma rodada que caiu no `beforeAll`: o mesmo e-mail em duas organizações faz o login recusar, e a
+suíte inteira devolve 401 longe da causa.
+
+---
+
 ## Interface
 
 A identidade é a do sistema do parque (repositório `sistemapark`), com a logo do Conquista Park —

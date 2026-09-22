@@ -23,8 +23,10 @@
  * de lote isso trava a fila inteira.
  */
 import type { PoolClient } from 'pg'
+import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { q, q1, tx } from '../utils/db'
+import { CadastroInvalido, prepararCadastro } from '../utils/cadastro'
 import {
   EstoqueInsuficiente, liberar, LoteIndisponivel, prazoDeReserva, reservar,
 } from '../utils/estoque'
@@ -88,6 +90,27 @@ const Entrada = z.object({
     email: z.string().email(),
     documento: z.string().min(11).max(18),
     telefone: z.string().min(10).max(20).optional(),
+    /**
+     * O cadastro completo do formulário do site. TUDO opcional AQUI de
+     * propósito: a rota também serve quem chega sem ele (integração antiga,
+     * teste, o balcão de outro jeito) e recusar por falta de Instagram seria
+     * derrubar venda. Quem EXIGE é a página. O que chega passa por
+     * `prepararCadastro`, que é a única porta de validação desses campos.
+     */
+    nascimento: z.string().max(10).optional(),
+    instagram: z.string().max(120).optional(),
+    endereco: z.object({
+      cep: z.string().max(12).optional(),
+      rua: z.string().max(120).optional(),
+      numero: z.string().max(20).optional(),
+      bairro: z.string().max(80).optional(),
+      cidade: z.string().max(80).optional(),
+      estado: z.string().max(2).optional(),
+      complemento: z.string().max(80).optional(),
+    }).optional(),
+    senha: z.string().max(200).optional(),
+    /** `true`/`false` só quando a pessoa marcou/desmarcou; ausente NÃO mexe no consentimento. */
+    aceitaNovidades: z.boolean().optional(),
   }),
   cupom: z.string().max(40).optional(),
   promoter: z.string().max(40).optional(),
@@ -106,6 +129,22 @@ export default defineEventHandler(async (event) => {
   if (!cpfValido(documento)) {
     throw createError({ statusCode: 400, statusMessage: 'CPF inválido' })
   }
+
+  // O cadastro é conferido ANTES de qualquer trava, e o hash da senha é feito
+  // AQUI FORA: o bcrypt custa dezenas de milissegundos de CPU, e dentro da
+  // transação isso seria tempo com o lote travado — numa virada de lote, a fila.
+  let cadastro: ReturnType<typeof prepararCadastro>
+  try {
+    cadastro = prepararCadastro(dados.comprador, {
+      email: dados.comprador.email, documento })
+  } catch (e) {
+    if (e instanceof CadastroInvalido) {
+      throw createError({ statusCode: 400, statusMessage: e.message,
+        data: { tipo: 'cadastro', campo: e.campo } })
+    }
+    throw e
+  }
+  const senhaHash = cadastro.senha ? await bcrypt.hash(cadastro.senha, 10) : null
 
   // ------------------------------------------------------------- 1. evento
   const ev = await q1<any>(
@@ -260,16 +299,56 @@ export default defineEventHandler(async (event) => {
     //
     // O `ON CONFLICT` é quem trava a linha, então a decisão é atômica: não
     // existe janela entre ler o dono e gravar.
+    //
+    // O CADASTRO (migração 027) entra nesta mesma linha, com quatro regras que
+    // valem mais que as colunas:
+    //   · o que a pessoa não mandou NÃO apaga o que já tinha (COALESCE) — quem
+    //     compra de novo só com nome e CPF não zera o endereço do cadastro;
+    //   · o endereço é UM bloco: chegou cidade nova, vem rua, número e CEP
+    //     juntos. Mesclar campo a campo dava "Rua A" de uma cidade com "Salvador"
+    //     de outra;
+    //   · a SENHA já gravada nunca é trocada por quem chegou depois. Este
+    //     formulário não prova que o e-mail é de quem digitou (ver 027), então
+    //     deixar a última compra reescrever a senha seria entregar a conta;
+    //   · o consentimento de novidades só muda quando a pessoa se manifestou, e
+    //     o carimbo só anda quando o valor MUDA — é a prova de quando disse sim.
+    const end = cadastro.endereco
     const cliente = await c.query(
-      `INSERT INTO customers (org_id, name, email, document, phone)
-       VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO customers (org_id, name, email, document, phone,
+                              birth_date, instagram,
+                              zip_code, street, address_number, neighborhood, city, state,
+                              address_complement,
+                              password_hash, registered_at,
+                              marketing_opt_in, marketing_opt_in_at)
+       VALUES ($1,$2,$3,$4,$5, $6,$7, $8,$9,$10,$11,$12,$13, $14,
+               $15, CASE WHEN $15::text IS NULL THEN NULL ELSE now() END,
+               COALESCE($16::boolean, false), CASE WHEN $16::boolean IS NULL THEN NULL ELSE now() END)
        ON CONFLICT (org_id, email) DO UPDATE
          SET name = EXCLUDED.name,
              document = COALESCE(customers.document, EXCLUDED.document),
-             phone = COALESCE(EXCLUDED.phone, customers.phone)
+             phone = COALESCE(EXCLUDED.phone, customers.phone),
+             birth_date = COALESCE(EXCLUDED.birth_date, customers.birth_date),
+             instagram = COALESCE(EXCLUDED.instagram, customers.instagram),
+             zip_code = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.zip_code ELSE customers.zip_code END,
+             street = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.street ELSE customers.street END,
+             address_number = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.address_number ELSE customers.address_number END,
+             neighborhood = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.neighborhood ELSE customers.neighborhood END,
+             address_complement = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.address_complement ELSE customers.address_complement END,
+             state = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.state ELSE customers.state END,
+             city = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.city ELSE customers.city END,
+             password_hash = COALESCE(customers.password_hash, EXCLUDED.password_hash),
+             registered_at = COALESCE(customers.registered_at, EXCLUDED.registered_at),
+             marketing_opt_in = COALESCE($16::boolean, customers.marketing_opt_in),
+             marketing_opt_in_at = CASE
+               WHEN $16::boolean IS NOT NULL AND $16::boolean IS DISTINCT FROM customers.marketing_opt_in
+                 THEN now() ELSE customers.marketing_opt_in_at END
        RETURNING id, asaas_customer_id, document`,
       [ev.org_id, dados.comprador.nome, dados.comprador.email.toLowerCase(),
-       documento, dados.comprador.telefone ?? null])
+       documento, dados.comprador.telefone ?? null,
+       cadastro.nascimento, cadastro.instagram,
+       end?.cep ?? null, end?.rua ?? null, end?.numero ?? null, end?.bairro ?? null,
+       end?.cidade ?? null, end?.estado ?? null, end?.complemento ?? null,
+       senhaHash, cadastro.aceitaNovidades])
 
     if (cliente.rows[0].document !== documento) {
       throw createError({ statusCode: 409,

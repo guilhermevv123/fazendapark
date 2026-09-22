@@ -64,17 +64,24 @@ type Item = GrupoDoEvento
 const itensDoPainel = computed<Item[]>(() => eventoId.value
   ? menuDoEvento(eventoId.value)
   : [
+      // O menu de ANTES de entrar num evento: a organização inteira. As telas de
+      // cada evento moram em `menuDoEvento`. A ordem é a que o dono pediu:
+      // eventos, a organização, os clientes, os relatórios — e o resto depois.
       { nome: 'Eventos', icone: 'calendario', para: '/admin' },
-      { nome: 'Organizações', icone: 'pessoas', para: '/admin/organizacoes' },
-      { nome: 'Equipe', icone: 'pessoas', para: '/admin/equipe' },
+      // singular: a conta é uma só. A rota segue `/admin/organizacoes` (a tela é
+      // lista por construção; ver o comentário dela).
+      { nome: 'Organização', icone: 'organizacao', para: '/admin/organizacoes' },
+      { nome: 'Clientes', icone: 'pessoas', para: '/admin/clientes' },
+      { nome: 'Relatórios', icone: 'relatorio', para: '/admin/relatorios' },
       { nome: 'Financeiro', icone: 'financeiro', para: '/admin/financeiro' },
+      { nome: 'Equipe', icone: 'cracha', para: '/admin/equipe' },
+      { nome: 'Configurações', icone: 'config', para: '/admin/configuracoes' },
       // As duas telas de conferência do dinheiro existiam sem NENHUM caminho
       // até elas: nenhuma página linkava, o menu não listava, e a única
       // maneira de abrir era digitar o endereço. Tela que ninguém acha não
       // protege ninguém — é o mesmo motivo por que a auditoria foi feita.
-      { nome: 'Auditoria', icone: 'busca', para: '/admin/auditoria' },
       { nome: 'Reconciliação', icone: 'carteira', para: '/admin/reconciliacao' },
-      { nome: 'Configurações', icone: 'config', para: '/admin/configuracoes' },
+      { nome: 'Auditoria', icone: 'busca', para: '/admin/auditoria' },
       { nome: 'Suporte', icone: 'suporte', para: '/admin/suporte' },
     ])
 
@@ -149,7 +156,12 @@ const semNenhumaTela = computed(() => !!papel.value && itens.value.length === 0)
  */
 const podeAbrir = (para: string) => !!papel.value && podeAbrirPagina(papel.value, para)
 
-const ativo = (para: string) => route.path === para || route.path.startsWith(para + '/')
+// `/admin` é a lista de eventos E o prefixo de toda tela do painel: casando por
+// prefixo, "Eventos" ficava aceso em Clientes, Relatórios, Equipe… — dois itens
+// marcados ao mesmo tempo, e a barra deixava de dizer onde a pessoa está.
+const ativo = (para: string) => para === '/admin'
+  ? route.path === para
+  : route.path === para || route.path.startsWith(para + '/')
 
 /**
  * Grupo aberto. Abre sozinho quando a rota atual está dentro dele — senão,
@@ -176,6 +188,13 @@ function alternar(i: Item) {
  * que o papel não abre: vira texto simples, igual ao último degrau, que nunca
  * foi link. Some o clique que termina em 403, fica a orientação.
  */
+/** o segmento da URL não tem acento; o nome que a pessoa lê na trilha tem */
+const NOME_DA_TELA: Record<string, string> = {
+  relatorios: 'Relatórios', organizacoes: 'Organização', configuracoes: 'Configurações',
+  reconciliacao: 'Reconciliação', sessoes: 'Sessões', transferencias: 'Transferências',
+  validacao: 'Validação', historico: 'Histórico', promocionais: 'Promocionais',
+}
+
 const trilha = computed(() => {
   const degrau = (texto: string, para: string) =>
     ({ texto, para: podeAbrir(para) ? para : undefined })
@@ -187,7 +206,7 @@ const trilha = computed(() => {
   const ultima = route.path.split('/').filter(Boolean).pop()
   // 'admin' e o próprio id não são página: viram ruído na trilha.
   if (ultima && ultima !== 'admin' && ultima !== eventoId.value) {
-    t.push({ texto: ultima.replace(/-/g, ' ').toUpperCase() })
+    t.push({ texto: (NOME_DA_TELA[ultima] ?? ultima.replace(/-/g, ' ')).toUpperCase() })
   }
   return t
 })

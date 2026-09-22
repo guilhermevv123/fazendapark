@@ -344,7 +344,7 @@ function avisoDaFonte(
   if (erro) {
     return `Não consegui falar com o Asaas: ${erro}. `
       + 'Nada abaixo foi conferido contra o extrato — corrija a credencial em '
-      + 'Organizações e confira de novo.'
+      + 'Configurações e confira de novo.'
   }
   if (fonte === 'indisponivel') {
     return 'Esta organização não tem credencial do Asaas e o gateway simulado está '

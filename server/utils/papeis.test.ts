@@ -529,6 +529,81 @@ describe('o menu não oferece porta fechada', () => {
   })
 })
 
+/* ------------------------------------ o menu da ORGANIZAÇÃO (fora do evento) */
+
+/**
+ * O menu de ANTES de entrar num evento — Eventos, Organização, Clientes,
+ * Relatórios, Financeiro… — mora em `layouts/admin.vue` como literais
+ * `para: '/admin/...'`. Duas coisas precisam ser verdade pra ele, e nenhuma
+ * fica de pé sozinha:
+ *
+ *   1. todo item dele tem área classificada. Item que ninguém classificou some
+ *      do menu de todo mundo menos o master, e a tela "sumiu" sem erro;
+ *   2. as duas telas novas seguem a régua que foi decidida de propósito:
+ *      **Clientes é só do master** (é a base inteira, com CPF e telefone) e
+ *      **Relatórios é do dinheiro** (master e financeiro), a mesma tranca do
+ *      relatório de dentro do evento.
+ *
+ * A página tem que combinar com a rota que ela consulta: a tela abrir e a rota
+ * responder 403 (ou o contrário) é o item morto que este arquivo existe pra evitar.
+ */
+describe('o menu da organização', () => {
+  const layout = readFileSync(
+    fileURLToPath(new URL('../../app/layouts/admin.vue', import.meta.url)), 'utf8')
+  const itens = [...layout.matchAll(/para: '(\/admin[^']*)'/g)].map((m) => m[1])
+
+  it('o layout lista o menu de raiz (senão o teste abaixo varre o vazio)', () => {
+    expect(itens).toEqual(expect.arrayContaining([
+      '/admin', '/admin/organizacoes', '/admin/clientes', '/admin/relatorios',
+      '/admin/financeiro', '/admin/equipe', '/admin/configuracoes',
+    ]))
+  })
+
+  it('todo item do menu de raiz tem área classificada', () => {
+    const semArea = itens.filter((p) => areaDaPagina(p) === null)
+    expect(semArea, 'item(ns) de menu que ninguém classificou em areaDaPagina').toEqual([])
+  })
+
+  it('Clientes é só do master — em todas as portas', () => {
+    expect(areaDaPagina('/admin/clientes')).toBe('clientes')
+    for (const rota of ['/api/admin/clientes', '/api/admin/clientes/exportar',
+      '/api/admin/clientes/00000000-0000-4000-8000-000000000000']) {
+      expect(areaDaRota(rota), rota).toBe('clientes')
+    }
+    expect(podeAbrirPagina('master', '/admin/clientes')).toBe(true)
+    for (const papel of ['financeiro', 'operacao', 'portaria'] as const) {
+      expect(podeAbrirPagina(papel, '/admin/clientes'), papel).toBe(false)
+      expect(papelPode(papel, 'clientes'), papel).toBe(false)
+      expect(decidirAcesso(papel, '/api/admin/clientes').liberado, papel).toBe(false)
+      expect(decidirAcesso(papel, '/api/admin/clientes/exportar').liberado, papel).toBe(false)
+    }
+    // e a recusa diz o quê, em português de balcão
+    expect(decidirAcesso('financeiro', '/api/admin/clientes').motivo).toContain('base de clientes')
+  })
+
+  it('Relatórios é do dinheiro: master e financeiro abrem, operação e portaria não', () => {
+    expect(areaDaPagina('/admin/relatorios')).toBe('dinheiro')
+    expect(areaDaRota('/api/admin/relatorios')).toBe('dinheiro')
+    expect(podeAbrirPagina('master', '/admin/relatorios')).toBe(true)
+    expect(podeAbrirPagina('financeiro', '/admin/relatorios')).toBe(true)
+    expect(podeAbrirPagina('operacao', '/admin/relatorios')).toBe(false)
+    expect(podeAbrirPagina('portaria', '/admin/relatorios')).toBe(false)
+    expect(decidirAcesso('operacao', '/api/admin/relatorios').liberado).toBe(false)
+  })
+
+  it('a página combina com a rota que ela consulta', () => {
+    for (const p of ['/admin/clientes', '/admin/relatorios']) {
+      expect(areaDaPagina(p), p).toBe(areaDaRota(p.replace('/admin/', '/api/admin/')))
+    }
+  })
+
+  it('a portaria não recebe nenhuma tela nova de raiz', () => {
+    for (const p of ['/admin/clientes', '/admin/relatorios']) {
+      expect(podeAbrirPagina('portaria', p), p).toBe(false)
+    }
+  })
+})
+
 /* ------------------------------------ a grade da PÁGINA não nasce aberta */
 
 /**

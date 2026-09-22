@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * Organizações — as contas de produtor que esta sessão enxerga.
+ * Organização — a conta de produtor desta sessão (no menu o nome é singular:
+ * o parque é uma organização só, com vários eventos).
  *
  * Hoje é sempre uma: a rota recorta pela organização da sessão, de propósito
  * (ver o comentário em server/api/admin/organizacoes.get.ts — ela já devolveu
@@ -14,16 +15,16 @@ const { data, pending, error: falha, refresh } = await useFetch<any>('/api/admin
 const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
   { style: 'currency', currency: 'BRL' })
 
-useHead({ title: 'Organizações' })
+useHead({ title: 'Organização' })
 </script>
 
 <template>
   <div v-if="data">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
-        <h1 class="titulo text-2xl font-semibold text-tinta">Organizações</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">Organização</h1>
         <p class="mt-1 text-tinta-suave">
-          As contas de produtor no seu acesso.
+          A conta do parque: eventos, clientes e dinheiro num lugar só.
         </p>
       </div>
       <NuxtLink to="/admin/configuracoes" class="btn-secundario">Configurações</NuxtLink>
@@ -74,10 +75,12 @@ useHead({ title: 'Organizações' })
           Sem chave do Asaas configurada — nenhuma cobrança sai daqui.
         </p>
 
-        <div class="mt-4 flex gap-2">
-          <NuxtLink to="/admin" class="btn-secundario flex-1 justify-center">Eventos</NuxtLink>
-          <NuxtLink to="/admin/equipe" class="btn-secundario flex-1 justify-center">Equipe</NuxtLink>
-          <NuxtLink to="/admin/financeiro" class="btn-secundario flex-1 justify-center">Financeiro</NuxtLink>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <NuxtLink to="/admin" class="btn-secundario min-w-[7rem] flex-1 justify-center">Eventos</NuxtLink>
+          <NuxtLink to="/admin/clientes" class="btn-secundario min-w-[7rem] flex-1 justify-center">Clientes</NuxtLink>
+          <NuxtLink to="/admin/relatorios" class="btn-secundario min-w-[7rem] flex-1 justify-center">Relatórios</NuxtLink>
+          <NuxtLink to="/admin/financeiro" class="btn-secundario min-w-[7rem] flex-1 justify-center">Financeiro</NuxtLink>
+          <NuxtLink to="/admin/equipe" class="btn-secundario min-w-[7rem] flex-1 justify-center">Equipe</NuxtLink>
         </div>
       </article>
     </div>

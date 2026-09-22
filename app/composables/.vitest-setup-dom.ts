@@ -86,10 +86,21 @@ function useFetchDuble(url: any, _opcoes?: any) {
   }
 }
 
-async function fetchDuble(url: any, _opcoes?: any) {
+/**
+ * Toda chamada de `$fetch` que a tela fez, com o que ela MANDOU. Sem isto o
+ * teste só sabe o que a tela recebeu — e o defeito que importa num formulário
+ * é o campo que a tela deixou de mandar, ou mandou com o nome errado.
+ */
+export const chamadas: { url: string; opcoes: any }[] = []
+
+async function fetchDuble(url: any, opcoes?: any) {
   const alvo = paraTexto(url)
+  chamadas.push({ url: alvo, opcoes })
   const achou = acharResposta(alvo)
   if (achou === undefined) throw new Error(`teste não registrou resposta para ${alvo}`)
+  // resposta que é um Error vira RECUSA, como o `$fetch` de verdade (o corpo do
+  // servidor vem em `.data`)
+  if (achou instanceof Error) throw achou
   return achou
 }
 
@@ -212,6 +223,7 @@ export async function montarTela(componente: any, opcoes: OpcoesDaTela = {}) {
 
   respostas = opcoes.respostas ?? {}
   navegacoes.length = 0
+  chamadas.length = 0
   Object.assign(rota, {
     path: opcoes.rota?.path ?? '/',
     fullPath: opcoes.rota?.path ?? '/',
@@ -258,4 +270,5 @@ export async function montarTela(componente: any, opcoes: OpcoesDaTela = {}) {
 export function limparTela() {
   respostas = {}
   navegacoes.length = 0
+  chamadas.length = 0
 }

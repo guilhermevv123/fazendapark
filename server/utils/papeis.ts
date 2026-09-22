@@ -62,10 +62,11 @@ export type Area =
   | 'portaria_historico' // a lista de quem já entrou, dentro do evento
   | 'equipe'      // quem tem acesso ao painel
   | 'organizacao' // cadastro e credencial de cobrança
+  | 'clientes'    // a base de clientes: CPF, telefone, endereço, idade, Instagram
 
 export const AREAS: Area[] = [
   'dinheiro', 'evento', 'evento_ver', 'venda', 'pdv', 'portaria', 'portaria_historico',
-  'equipe', 'organizacao',
+  'equipe', 'organizacao', 'clientes',
 ]
 
 export const PAPEIS: Papel[] = ['master', 'financeiro', 'operacao', 'portaria']
@@ -77,6 +78,13 @@ export const PAPEIS: Papel[] = ['master', 'financeiro', 'operacao', 'portaria']
  * que está na frente dela — e não tem `dinheiro`, que é saldo e saque. São
  * perguntas diferentes: "qual foi a compra desta pessoa" não é "quanto tem
  * pra transferir".
+ *
+ * `clientes` é SÓ do master, e de propósito: é a lista de TODO mundo que já
+ * comprou, com CPF, telefone, endereço e Instagram — o ativo do parque pra
+ * falar com o público depois. `venda` deixa o financeiro e a operação verem o
+ * pedido de quem está na frente deles; esta área é a base inteira, e quem
+ * mais deve abri-la (um papel de marketing, por exemplo) entra aqui de
+ * propósito, no diff, em vez de herdar por acidente.
  *
  * `portaria` tem UMA área e ela é o leitor: `POST /api/checkin`. O histórico
  * de leituras é `portaria_historico`, e fica de fora — não por capricho, mas
@@ -230,6 +238,12 @@ const AREA_DA_RAIZ: [string, Area][] = [
   ['/api/admin/auditoria', 'dinheiro'],
   // O extrato do Asaas ao lado do nosso caixa: conferência de dinheiro.
   ['/api/admin/reconciliacao', 'dinheiro'],
+  // Relatório da ORGANIZAÇÃO (todos os eventos juntos): faturamento, líquido,
+  // forma de pagamento. É a mesma pergunta que `evento/<id>/relatorios` já
+  // tranca em `dinheiro`, só que somada — e tem que ter a mesma tranca.
+  ['/api/admin/relatorios', 'dinheiro'],
+  // A base de clientes (lista, ficha, exportação): ver a nota em `PODE`.
+  ['/api/admin/clientes', 'clientes'],
   ['/api/admin/eventos', 'evento_ver'],
   ['/api/admin/pedido', 'venda'],
   ['/api/admin/evento', 'evento'], // criar evento; o `/evento/<id>/...` é tratado acima
@@ -330,6 +344,8 @@ const AREA_DA_PAGINA_RAIZ: [string, Area | 'livre'][] = [
   ['/admin/financeiro', 'dinheiro'],
   ['/admin/auditoria', 'dinheiro'],
   ['/admin/reconciliacao', 'dinheiro'],
+  ['/admin/relatorios', 'dinheiro'], // a mesma tranca da rota que a alimenta
+  ['/admin/clientes', 'clientes'],
   // Suporte é "o que fazer quando algo dá errado no dia do evento", e ele é
   // uma parede de ATALHOS: Vendas, Histórico de leituras, Participantes,
   // Cortesias, Financeiro, Equipe, Configurações. Pra quem só abre o leitor
@@ -408,7 +424,7 @@ export const ROTULO: Record<Papel, string> = {
 }
 
 export const RESUMO: Record<Papel, string> = {
-  master: 'Tudo, inclusive equipe e credenciais de cobrança.',
+  master: 'Tudo, inclusive equipe, base de clientes e credenciais de cobrança.',
   financeiro: 'Dinheiro: saldo, transferência, borderô, extrato e relatórios.',
   operacao: 'Evento, ingressos, bilheteria e portaria. Não vê o caixa nem pede transferência.',
   portaria: 'Só o leitor de entrada.',
@@ -456,6 +472,7 @@ const NOME_DA_AREA: Record<Area, string> = {
   portaria_historico: 'a lista de quem já entrou no evento',
   equipe: 'a equipe',
   organizacao: 'o cadastro e as credenciais de cobrança',
+  clientes: 'a base de clientes (cadastro, telefone e CPF)',
 }
 
 export type Decisao = { liberado: boolean; area: Area | null; motivo: string }

@@ -28,6 +28,10 @@ const caminhos: Record<string, string> = {
   pedido: 'M6 2h9l5 5v13a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z M15 2v5h5 M9 13h6 M9 17h4',
   media: 'M4 6h16 M4 12h16 M4 18h10',
   pessoas: 'M16 20v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2 M9 10a4 4 0 100-8 4 4 0 000 8 M22 20v-2a4 4 0 00-3-3.9',
+  // prédio: a organização (a conta do parque), pra não repetir o desenho de "pessoas"
+  organizacao: 'M4 21V5a1 1 0 011-1h9a1 1 0 011 1v16 M15 9h4a1 1 0 011 1v11 M3 21h18 M8 8h2 M8 12h2 M8 16h2',
+  // crachá: a equipe (quem trabalha no painel), separada dos clientes
+  cracha: 'M6 3h12a1 1 0 011 1v16a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z M12 12a2.5 2.5 0 100-5 2.5 2.5 0 000 5z M8 18a4 4 0 018 0',
   busca: 'M11 19a8 8 0 100-16 8 8 0 000 16z M21 21l-4.3-4.3',
   mais: 'M12 5v14 M5 12h14',
   fechar: 'M18 6L6 18 M6 6l12 12',

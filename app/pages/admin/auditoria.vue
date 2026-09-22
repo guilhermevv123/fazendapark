@@ -118,7 +118,7 @@ const ENTIDADE_LEGIVEL: Record<string, string> = {
   order: 'Pedido', pedido: 'Pedido', ingresso: 'Ingresso', ticket: 'Ingresso',
   lote: 'Lote', tipo: 'Tipo de ingresso', setor: 'Setor', sector: 'Setor',
   evento: 'Evento', event: 'Evento', payout: 'Transferência', turno: 'Turno de caixa',
-  organizacao: 'Organização', usuario: 'Pessoa da equipe',
+  organizacao: 'Organização', usuario: 'Pessoa da equipe', clientes: 'Base de clientes',
 }
 const entidadeLegivel = (e: string) => ENTIDADE_LEGIVEL[e] ?? e
 
@@ -133,6 +133,7 @@ const ACAO_LEGIVEL: Record<string, string> = {
   transferencia_cancelada: 'transferência de ingresso cancelada',
   transferencia_permissao: 'permissão de transferência',
   mapa_gerado: 'mapa de assentos gerado',
+  exportado: 'lista exportada',
 }
 const acaoLegivel = (a: string) => ACAO_LEGIVEL[a] ?? a.replace(/_/g, ' ')
 
