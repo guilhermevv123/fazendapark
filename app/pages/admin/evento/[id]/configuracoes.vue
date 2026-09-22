@@ -97,6 +97,47 @@ function desfazer() {
   erro.value = ''
 }
 
+/**
+ * Upload de banner/miniatura — rota PRÓPRIA (`POST .../imagem`), separada do
+ * `salvar()` de cima: ela grava no banco na hora (não fica esperando o botão
+ * "Salvar alterações"), porque a imagem já está no bucket assim que a pessoa
+ * escolhe o arquivo — não tem "desfazer" um upload como desfaz um campo de
+ * texto ainda não salvo.
+ */
+const enviandoImagem = reactive<Record<'banner' | 'thumb', boolean>>({ banner: false, thumb: false })
+const inputBanner = ref<HTMLInputElement | null>(null)
+const inputThumb = ref<HTMLInputElement | null>(null)
+
+/** limpa o `<input type="file">` depois de ler — sem isto, escolher o MESMO
+ *  arquivo de novo (pra tentar de novo depois de corrigir algo) não disparava
+ *  `change` nenhum, e o botão parecia travado. */
+function aoEscolherArquivo(campo: 'banner' | 'thumb', ev: Event) {
+  const input = ev.target as HTMLInputElement
+  enviarImagem(campo, input.files)
+  input.value = ''
+}
+
+async function enviarImagem(campo: 'banner' | 'thumb', arquivos: FileList | null) {
+  const arquivo = arquivos?.[0]
+  if (!arquivo) return
+  erro.value = ''
+  enviandoImagem[campo] = true
+  try {
+    const corpo = new FormData()
+    corpo.append('campo', campo)
+    corpo.append('arquivo', arquivo)
+    await $fetch(`/api/admin/evento/${id}/imagem`, { method: 'POST', body: corpo })
+    // o upload já gravou no banco — recarrega pra `f` e `original` andarem
+    // juntos (senão "Salvar alterações" achava que o campo tinha mudado e
+    // reenviava o mesmo valor de novo).
+    await refresh()
+  } catch (e: any) {
+    erro.value = e?.data?.statusMessage || 'Não foi possível enviar a imagem.'
+  } finally {
+    enviandoImagem[campo] = false
+  }
+}
+
 const STATUS = [
   { v: 'rascunho', r: 'Rascunho — só quem tem login vê' },
   { v: 'ativo', r: 'Ativo — vendendo' },
@@ -396,12 +437,30 @@ async function adiarEvento() {
           <h2 class="titulo text-base font-semibold text-tinta">Imagens e categoria</h2>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
             <div class="sm:col-span-2">
-              <label class="rotulo">Banner (URL)</label>
-              <input v-model="f.banner" class="campo" placeholder="https://…">
+              <label class="rotulo">Banner</label>
+              <div class="flex gap-2">
+                <input v-model="f.banner" class="campo" placeholder="https://… ou envie um arquivo">
+                <button type="button" class="btn-secundario shrink-0" :disabled="enviandoImagem.banner"
+                        @click="inputBanner?.click()">
+                  {{ enviandoImagem.banner ? 'Enviando…' : 'Enviar' }}
+                </button>
+                <input ref="inputBanner" type="file" accept="image/*" class="hidden"
+                       @change="aoEscolherArquivo('banner', $event)">
+              </div>
+              <p class="mt-1 text-xs text-tinta-fraca">A faixa larga do topo da página pública. JPG, PNG ou WEBP, até 8MB.</p>
             </div>
             <div class="sm:col-span-2">
-              <label class="rotulo">Miniatura (URL)</label>
-              <input v-model="f.thumb" class="campo" placeholder="https://…">
+              <label class="rotulo">Miniatura</label>
+              <div class="flex gap-2">
+                <input v-model="f.thumb" class="campo" placeholder="https://… ou envie um arquivo">
+                <button type="button" class="btn-secundario shrink-0" :disabled="enviandoImagem.thumb"
+                        @click="inputThumb?.click()">
+                  {{ enviandoImagem.thumb ? 'Enviando…' : 'Enviar' }}
+                </button>
+                <input ref="inputThumb" type="file" accept="image/*" class="hidden"
+                       @change="aoEscolherArquivo('thumb', $event)">
+              </div>
+              <p class="mt-1 text-xs text-tinta-fraca">O quadrado do card na lista de eventos (`/admin`).</p>
             </div>
             <div>
               <label class="rotulo">Categoria</label>
@@ -412,8 +471,10 @@ async function adiarEvento() {
               <input v-model="f.tags" class="campo" placeholder="separadas por vírgula">
             </div>
           </div>
-          <div v-if="f.banner" class="mt-3">
-            <img :src="f.banner" alt="Prévia do banner"
+          <div v-if="f.banner || f.thumb" class="mt-3 grid gap-3 sm:grid-cols-2">
+            <img v-if="f.banner" :src="f.banner" alt="Prévia do banner"
+                 class="max-h-44 w-full rounded-card border border-linha object-cover">
+            <img v-if="f.thumb" :src="f.thumb" alt="Prévia da miniatura"
                  class="max-h-44 w-full rounded-card border border-linha object-cover">
           </div>
         </section>

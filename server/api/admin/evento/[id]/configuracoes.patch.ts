@@ -19,6 +19,20 @@
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
 
+/**
+ * URL externa (`https://…`, quem cola um link de fora) OU caminho relativo
+ * do nosso proxy de imagem (`/api/midia/…`, o que o upload devolve).
+ *
+ * `.url()` sozinho travaria o próprio upload: `server/utils/storage-r2.ts`
+ * NUNCA devolve URL absoluta de propósito — gravar `https://…` no banco
+ * prende a imagem no domínio de HOJE (a mesma lição já paga no Diamond CRM,
+ * `feedback_url-ambiente-persistido`: um deploy que mude de endereço deixa
+ * pra trás todo banner salvo com o domínio velho).
+ */
+const UrlOuCaminhoDeImagem = z.string().max(600)
+  .refine((v) => /^https?:\/\//.test(v) || v.startsWith('/'),
+    'Use uma URL (https://…) ou envie um arquivo.')
+
 const Entrada = z.object({
   nome: z.string().min(2).max(160).optional(),
   slug: z.string().min(3).max(80).regex(/^[a-z0-9-]+$/,
@@ -42,8 +56,8 @@ const Entrada = z.object({
   cidade: z.string().max(120).nullish(),
   uf: z.string().max(2).nullish(),
   complemento: z.string().max(160).nullish(),
-  banner: z.string().url().max(600).nullish().or(z.literal('')),
-  thumb: z.string().url().max(600).nullish().or(z.literal('')),
+  banner: UrlOuCaminhoDeImagem.nullish().or(z.literal('')),
+  thumb: UrlOuCaminhoDeImagem.nullish().or(z.literal('')),
   categoria: z.string().max(60).nullish(),
   tags: z.array(z.string().max(40)).max(20).optional(),
   suporteTipo: z.enum(['telefone', 'whatsapp', 'email']).nullish(),

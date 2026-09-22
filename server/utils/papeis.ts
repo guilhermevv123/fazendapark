@@ -158,6 +158,10 @@ const AREA_DA_TELA: Record<string, Area> = {
   publico: 'evento_ver',
 
   configuracoes: 'evento',
+  // upload de banner/miniatura — mesma área de `configuracoes`: é o mesmo
+  // cadastro de identidade do evento, só que a rota é outra por causa do
+  // multipart (não dá pra misturar arquivo com o resto do PATCH em JSON).
+  imagem: 'evento',
   ingressos: 'evento',
   // as datas/horários do evento: a tela mora em `ingressos/sessoes`
   sessoes: 'evento',
