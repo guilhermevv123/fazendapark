@@ -15,6 +15,7 @@
  *    no número grande.
  */
 import { q, q1 } from '../../../../utils/db'
+import { PEDIDO_VIVO } from '../../../../utils/liquido'
 
 const POR_PAGINA = 50
 
@@ -69,13 +70,17 @@ export default defineEventHandler(async (event) => {
       LIMIT ${POR_PAGINA} OFFSET ${(p - 1) * POR_PAGINA}`, par)
 
   // Mesmos filtros, sem paginação: o rodapé fala do que está filtrado.
+  //
+  // "Recebido" é o pedido VIVO (`PEDIDO_VIVO`), não só o 'pago': com
+  // `status = 'pago'`, um estorno parcial de R$ 20 tirava o pedido de R$ 850
+  // inteiro do card — e o card de estornado, do lado, já mostra os R$ 20.
   const somas = await q1<any>(
     `SELECT count(*)::int AS pedidos,
-            COALESCE(SUM(o.total_cents) FILTER (WHERE o.status = 'pago'),0)::bigint AS pago,
+            COALESCE(SUM(o.total_cents) FILTER (WHERE ${PEDIDO_VIVO('o.')}),0)::bigint AS pago,
             COALESCE(SUM(o.total_cents) FILTER (WHERE o.status = 'aguardando_pagamento'),0)::bigint AS pendente,
             COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
             COALESCE(SUM((SELECT SUM(quantity) FROM order_items WHERE order_id = o.id))
-                       FILTER (WHERE o.status = 'pago'),0)::int AS ingressos_pagos
+                       FILTER (WHERE ${PEDIDO_VIVO('o.')}),0)::int AS ingressos_pagos
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
       WHERE ${onde}`, par)
 

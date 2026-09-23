@@ -82,7 +82,8 @@ export default defineEventHandler(async (event) => {
   if (!pedido.pos_shift_id) {
     throw createError({
       statusCode: 422,
-      statusMessage: 'Esta venda não saiu de um guichê. Cancelamento de venda pela internet sai pelo financeiro.',
+      statusMessage: 'Esta venda não saiu de um guichê. Venda pela internet é cancelada pelo financeiro, '
+        + 'na ficha do pedido em Vendas ("Cancelar pedido").',
     })
   }
 
@@ -92,13 +93,15 @@ export default defineEventHandler(async (event) => {
     // Cancelar num turno fechado é mudar uma conferência já assinada: o
     // `closing_expected_cents` foi congelado com esta venda dentro, e tirar o
     // dinheiro da gaveta agora deixa o fechamento de ontem mentindo pros dois
-    // lados. Quando o caixa já fechou, quem desfaz é o financeiro, com
-    // estorno — não o guichê.
+    // lados. Quando o caixa já fechou, quem desfaz é o financeiro, pela ficha
+    // do pedido em Vendas (`cancelar.post.ts`, escopo 'pedido_administrativo'),
+    // que registra a devolução FORA do turno — não o guichê.
     const turno = await c.query(SQL_TRAVA_TURNO_ABERTO, [pedido.pos_shift_id])
     if (turno.rowCount !== 1) {
       throw createError({
         statusCode: 409,
-        statusMessage: `O caixa desta venda (${pedido.ponto ?? 'guichê'}) já foi fechado. Peça o estorno ao financeiro.`,
+        statusMessage: `O caixa desta venda (${pedido.ponto ?? 'guichê'}) já foi fechado. `
+          + 'Quem cancela agora é o financeiro, na ficha do pedido em Vendas ("Cancelar pedido").',
       })
     }
 

@@ -23,6 +23,42 @@ defineProps<{
   pedido: string
   ingressos: { id: string; codigo: string; lote: string; setor: string; tipo?: string | null }[]
 }>()
+
+/**
+ * Imprime as fichas (uma por ingresso, com o QR) e NADA mais da tela.
+ *
+ * Mora aqui, e não em cada tela, porque agora são três lugares que imprimem a
+ * mesma ficha: o recibo do balcão, a reimpressão pela lista do caixa e a
+ * reimpressão pela ficha do pedido em Vendas. Três cópias da mesma regra de
+ * impressão divergem na primeira bobina diferente.
+ *
+ * Duas coisas aqui só existem por causa da térmica:
+ *   • o `@page` de 80mm entra num <style> só ANTES do print e sai no
+ *     `afterprint`, pra o borderô e o resto do sistema seguirem em A4;
+ *   • os QRs precisam ter carregado: o print congela a página no instante da
+ *     chamada, e imagem que ainda baixa sai como um quadrado vazio.
+ */
+async function imprimir() {
+  await nextTick()
+  const imgs = Array.from(document.querySelectorAll<HTMLImageElement>('.fichas-impressao img'))
+  await Promise.all(imgs.map((i) => i.complete
+    ? null
+    : new Promise((ok) => { i.onload = i.onerror = () => ok(null) })))
+  const estilo = document.createElement('style')
+  estilo.textContent = '@page { size: 80mm auto; margin: 0 }'
+  document.head.appendChild(estilo)
+  document.documentElement.classList.add('imprimindo-fichas')
+  const fim = () => {
+    estilo.remove()
+    document.documentElement.classList.remove('imprimindo-fichas')
+    window.removeEventListener('afterprint', fim)
+  }
+  window.addEventListener('afterprint', fim)
+  setTimeout(fim, 60_000) // Safari nem sempre dispara o afterprint
+  window.print()
+}
+
+defineExpose({ imprimir })
 </script>
 
 <template>

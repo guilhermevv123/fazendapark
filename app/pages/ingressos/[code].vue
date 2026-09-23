@@ -29,6 +29,19 @@ const estado: Record<string, { t: string; c: string }> = {
   valido: { t: 'VÁLIDO', c: 'selo-ok' },
   usado: { t: 'JÁ UTILIZADO', c: 'selo-neutro' },
   cancelado: { t: 'CANCELADO', c: 'selo-erro' },
+  transferido: { t: 'TRANSFERIDO', c: 'selo-neutro' },
+}
+
+/**
+ * O que aparece no lugar do QR quando a API manda `qr: null`. A API só manda
+ * QR de ingresso que ENTRA por este pedido: o cancelado não entra, e o
+ * transferido é de outra pessoa agora (mostrar o QR dele aqui deixava o
+ * remetente e o destinatário entrarem os dois).
+ */
+const SEM_QR: Record<string, string> = {
+  cancelado: 'Ingresso cancelado',
+  transferido: 'Ingresso transferido para outra pessoa',
+  usado: 'Ingresso já utilizado',
 }
 
 /* ---------------------------------------------- quem é o dono da ficha --- */
@@ -152,7 +165,18 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
 
         <!-- pedido ainda não pago -->
         <div v-if="data.status !== 'pago'" class="card mt-4">
-          <p class="text-tinta-corpo">
+          <!-- PIX pago depois do prazo e sem lugar: "ainda não foi pago" seria
+               mentira pra quem pagou (ver `pagoSemIngresso` na API). -->
+          <div v-if="data.pagoSemIngresso">
+            <p class="font-semibold text-tinta">Recebemos o seu pagamento.</p>
+            <p class="mt-1 text-tinta-corpo">
+              Ele chegou depois do prazo da reserva e, nesse meio-tempo, os ingressos dessa opção
+              foram vendidos. Você não precisa pagar de novo: a bilheteria vai resolver com você —
+              outro ingresso ou a devolução do valor. Guarde o pedido
+              <strong class="text-tinta">{{ data.pedido }}</strong>.
+            </p>
+          </div>
+          <p v-else class="text-tinta-corpo">
             Este pedido ainda não foi pago, então os ingressos não foram emitidos.
           </p>
 
@@ -224,10 +248,14 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                  10 PNGs, e os de baixo esperam a rolagem sem prejudicar
                  ninguém. `lazy` no primeiro já rendeu `complete: false` com a
                  rota devolvendo 200 na medição do navegador. -->
-            <img :src="`/api/ingresso/${t.id}/qr.png?pedido=${data.pedido}`"
+            <img v-if="t.qr" :src="`/api/ingresso/${t.id}/qr.png?pedido=${data.pedido}`"
                  :alt="`QR do ingresso ${t.codigo}`"
                  class="mx-auto h-40 w-40 shrink-0 rounded-card border border-linha bg-white p-1 sm:mx-0"
                  :loading="i === 0 ? 'eager' : 'lazy'" decoding="async">
+            <p v-else
+               class="mx-auto flex h-40 w-40 shrink-0 items-center justify-center rounded-card border border-dashed border-linha p-3 text-center text-sm font-medium text-tinta-suave sm:mx-0">
+              {{ SEM_QR[t.status] ?? 'Ingresso sem QR' }}
+            </p>
 
             <div class="min-w-0 flex-1">
               <div class="flex items-start justify-between gap-3">
@@ -254,7 +282,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               </div>
 
               <dl class="mt-3 border-t border-linha pt-3 text-sm">
-                <div class="flex justify-between gap-3">
+                <div v-if="t.codigo" class="flex justify-between gap-3">
                   <dt class="text-tinta-fraca">Código</dt>
                   <dd class="font-mono font-medium tracking-wider text-tinta">{{ t.codigo }}</dd>
                 </div>

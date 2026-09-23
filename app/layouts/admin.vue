@@ -108,6 +108,57 @@ watch(() => route.path, () => {
   contaAberta.value = false
 })
 
+/**
+ * Trocar a própria senha. A validação daqui é só pra responder rápido; quem
+ * decide é `POST /api/auth/senha` (mínimo, diferente da atual, confere a atual).
+ * O erro aparece DENTRO do painel e o botão trava enquanto envia — clique
+ * duplo mandaria o segundo pedido com a senha "atual" que já deixou de ser.
+ */
+const trocaSenha = reactive({
+  aberto: false, atual: '', nova: '', confirma: '',
+  erro: '', enviando: false, feito: false, encerradas: 0,
+})
+function abrirTrocaDeSenha() {
+  Object.assign(trocaSenha, {
+    aberto: true, atual: '', nova: '', confirma: '', erro: '', enviando: false, feito: false, encerradas: 0,
+  })
+  contaAberta.value = false
+}
+function fecharTrocaDeSenha() {
+  if (trocaSenha.enviando) return
+  // as senhas não ficam em memória depois de fechar
+  Object.assign(trocaSenha, { aberto: false, atual: '', nova: '', confirma: '', erro: '' })
+}
+async function enviarTrocaDeSenha() {
+  if (trocaSenha.enviando) return
+  trocaSenha.erro = ''
+  if (trocaSenha.nova.length < 8) {
+    trocaSenha.erro = 'A nova senha precisa ter pelo menos 8 caracteres.'
+    return
+  }
+  if (trocaSenha.nova !== trocaSenha.confirma) {
+    trocaSenha.erro = 'A confirmação não é igual à nova senha.'
+    return
+  }
+  if (trocaSenha.nova === trocaSenha.atual) {
+    trocaSenha.erro = 'A nova senha precisa ser diferente da atual.'
+    return
+  }
+  trocaSenha.enviando = true
+  try {
+    const r = await $fetch<{ sessoesEncerradas: number }>('/api/auth/senha', {
+      method: 'POST', body: { atual: trocaSenha.atual, nova: trocaSenha.nova },
+    })
+    Object.assign(trocaSenha, {
+      feito: true, encerradas: r?.sessoesEncerradas ?? 0, atual: '', nova: '', confirma: '',
+    })
+  } catch (e: any) {
+    trocaSenha.erro = e?.data?.statusMessage || 'Não foi possível trocar a senha. Tente de novo.'
+  } finally {
+    trocaSenha.enviando = false
+  }
+}
+
 async function sair() {
   await $fetch('/api/auth/sair', { method: 'POST' })
   // Recarrega de verdade em vez de navegar: `navigateTo` manteria em memória
@@ -130,24 +181,30 @@ const itensDoPainel = computed<Item[]>(() => eventoId.value
   ? menuDoEvento(eventoId.value)
   : [
       // O menu de ANTES de entrar num evento: a organização inteira. As telas de
-      // cada evento moram em `menuDoEvento`. A ordem é a que o dono pediu:
-      // eventos, a organização, os clientes, os relatórios — e o resto depois.
+      // cada evento moram em `menuDoEvento`. Pedido do dono (22/09): só QUATRO
+      // assuntos de primeiro nível — o resto mora dentro de um deles, no MESMO
+      // padrão de grupo com `filhos` que `menuDoEvento` já usa (ver ali).
       { nome: 'Eventos', icone: 'calendario', para: '/admin' },
-      // singular: a conta é uma só. A rota segue `/admin/organizacoes` (a tela é
-      // lista por construção; ver o comentário dela).
-      { nome: 'Organização', icone: 'organizacao', para: '/admin/organizacoes' },
       { nome: 'Clientes', icone: 'pessoas', para: '/admin/clientes' },
-      { nome: 'Relatórios', icone: 'relatorio', para: '/admin/relatorios' },
-      { nome: 'Financeiro', icone: 'financeiro', para: '/admin/financeiro' },
-      { nome: 'Equipe', icone: 'cracha', para: '/admin/equipe' },
-      { nome: 'Configurações', icone: 'config', para: '/admin/configuracoes' },
-      // As duas telas de conferência do dinheiro existiam sem NENHUM caminho
-      // até elas: nenhuma página linkava, o menu não listava, e a única
-      // maneira de abrir era digitar o endereço. Tela que ninguém acha não
-      // protege ninguém — é o mesmo motivo por que a auditoria foi feita.
-      { nome: 'Reconciliação', icone: 'carteira', para: '/admin/reconciliacao' },
-      { nome: 'Auditoria', icone: 'busca', para: '/admin/auditoria' },
-      { nome: 'Suporte', icone: 'suporte', para: '/admin/suporte' },
+
+      { nome: 'Relatórios', icone: 'relatorio', para: '/admin/relatorios', filhos: [
+        { nome: 'Visão geral', para: '/admin/relatorios' },
+        { nome: 'Financeiro', para: '/admin/financeiro' },
+      ] },
+
+      // Organização e Equipe entram aqui — a chave do Asaas (quando existir)
+      // é da PLATAFORMA inteira, não de cada organização; deixou de fazer
+      // sentido ser um assunto próprio no menu.
+      { nome: 'Configurações', icone: 'config', para: '/admin/configuracoes', filhos: [
+        { nome: 'Geral e cobrança', para: '/admin/configuracoes' },
+        { nome: 'Organização', para: '/admin/organizacoes' },
+        { nome: 'Equipe', para: '/admin/equipe' },
+      ] },
+
+      // Reconciliação, Auditoria e Suporte SOMEM do menu (pedido do dono,
+      // 22/09) — mas a rota e a trava de `papeis.ts` continuam de pé. "Tirar
+      // do menu" não é "apagar a tela": quem sabe o endereço, ou um link de
+      // fora, ainda entra — só não sobra mais como assunto na lateral.
     ])
 
 /**
@@ -351,18 +408,16 @@ const situacao: Record<string, { texto: string; classe: string }> = {
                          :type="i.filhos ? 'button' : undefined"
                          :aria-current="!i.filhos && route.path === i.para ? 'page' : undefined"
                          :aria-expanded="i.filhos ? abertos.includes(i.nome) : undefined"
-                         class="group relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[14px] transition-colors"
+                         class="group relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] transition-colors"
                          :class="[
                            ativo(i.para)
-                             ? 'bg-pool-50 font-semibold text-pool-800'
-                             : 'font-medium text-ink-600 hover:bg-ink-100/80 hover:text-ink-900',
+                             ? (i.filhos ? 'bg-pool-50 font-semibold text-pool-800' : 'bg-pool-700 font-semibold text-white shadow-sm')
+                             : 'font-medium text-ink-700 hover:bg-ink-100/80 hover:text-ink-900',
                            classeLinhaRail,
                          ]"
                          @click="i.filhos && alternar(i)">
-                <span v-if="ativo(i.para)" aria-hidden="true"
-                      class="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full bg-pool-600" />
-                <IconeMenu :nome="i.icone" :tamanho="18" class="shrink-0"
-                           :class="ativo(i.para) ? 'text-pool-700' : 'text-ink-400 group-hover:text-ink-600'" />
+                <IconeMenu :nome="i.icone" :tamanho="22" class="shrink-0"
+                           :class="ativo(i.para) ? (i.filhos ? 'text-pool-700' : 'text-white') : 'text-pool-600 group-hover:text-pool-700'" />
                 <span class="flex-1 truncate" :class="classeRotuloRail">{{ i.nome }}</span>
                 <IconeMenu v-if="i.filhos" nome="seta" :tamanho="16"
                            class="shrink-0 text-ink-400 transition-transform"
@@ -379,10 +434,10 @@ const situacao: Record<string, { texto: string; classe: string }> = {
                 <li v-for="f in i.filhos" :key="f.para">
                   <NuxtLink :to="f.para"
                             :aria-current="route.path === f.para ? 'page' : undefined"
-                            class="flex items-center rounded-lg px-3 py-1.5 text-[13.5px] transition-colors"
+                            class="flex items-center rounded-lg px-3 py-2 text-[14.5px] transition-colors"
                             :class="route.path === f.para
-                              ? 'bg-pool-50 font-semibold text-pool-800'
-                              : 'font-medium text-ink-500 hover:bg-ink-100/80 hover:text-ink-900'">
+                              ? 'bg-pool-700 font-semibold text-white'
+                              : 'font-medium text-ink-600 hover:bg-ink-100/80 hover:text-ink-900'">
                     {{ f.nome }}
                   </NuxtLink>
                 </li>
@@ -400,10 +455,14 @@ const situacao: Record<string, { texto: string; classe: string }> = {
          refaria o layout da página inteira a cada frame do hover. -->
     <div class="flex min-w-0 flex-col lg:ml-24">
       <div class="sticky top-0 z-30 px-3 pt-3 sm:px-4 lg:static lg:px-10 lg:pt-6">
-        <header data-parte="topo" class="flex h-16 items-center gap-3 rounded-2xl bg-white/90 px-3 shadow-lateral ring-1 ring-ink-200/60 backdrop-blur
-                       sm:px-4 lg:h-auto lg:min-h-[40px] lg:rounded-none lg:bg-transparent lg:px-0 lg:shadow-none lg:ring-0 lg:backdrop-blur-none">
+        <!-- No celular o topo é a faixa de cor da marca (piscina → uva): é a
+             primeira coisa que aparece e era um retângulo branco sobre fundo
+             cinza — "muito vazio, pouca cor" (dono, 22/09). Do `lg` pra cima
+             volta a ser transparente, a lateral já carrega a marca. -->
+        <header data-parte="topo" class="flex h-16 items-center gap-2 rounded-2xl bg-gradient-to-r from-pool-700 to-grape-700 px-2 text-white shadow-lateral
+                       sm:gap-3 sm:px-4 lg:h-auto lg:min-h-[40px] lg:rounded-none lg:bg-none lg:px-0 lg:text-ink-900 lg:shadow-none">
           <button type="button"
-                  class="grid size-10 shrink-0 place-items-center rounded-xl text-ink-700 transition-colors hover:bg-ink-100 lg:hidden"
+                  class="grid size-11 shrink-0 place-items-center rounded-xl text-white transition-colors hover:bg-white/15 lg:hidden"
                   aria-label="Abrir menu"
                   aria-controls="menu-lateral"
                   :aria-expanded="gavetaAberta"
@@ -411,33 +470,35 @@ const situacao: Record<string, { texto: string; classe: string }> = {
             <IconeMenu nome="media" />
           </button>
 
-          <nav aria-label="Onde você está" class="flex min-w-0 items-center gap-2 text-[12px] font-semibold tracking-[0.06em]">
+          <!-- No celular só a ÚLTIMA parte da trilha, em 15px: as três juntas
+               (EVENTOS / NOME DO EVENTO / TELA) espremiam o nome do evento
+               em 24px de largura — virava "C…". A lateral diz em que evento
+               se está; o topo diz a tela. -->
+          <nav aria-label="Onde você está" class="flex min-w-0 flex-1 items-center gap-2 text-[15px] font-semibold tracking-[0.02em] sm:flex-none sm:text-[12px] sm:tracking-[0.06em]">
             <template v-for="(t, i) in trilha" :key="i">
-              <span v-if="i" class="text-ink-300" aria-hidden="true">/</span>
+              <span v-if="i" class="hidden text-white/50 sm:inline lg:text-ink-300" aria-hidden="true">/</span>
               <NuxtLink v-if="t.para" :to="t.para"
-                        class="truncate transition-colors hover:text-pool-700"
-                        :class="i === trilha.length - 1 ? 'text-ink-900' : 'text-ink-500'">
+                        class="truncate transition-colors hover:text-pool-100 lg:hover:text-pool-700"
+                        :class="i === trilha.length - 1 ? 'text-white lg:text-ink-900' : 'hidden text-white/75 sm:inline lg:text-ink-500'">
                 {{ t.texto }}
               </NuxtLink>
               <span v-else class="truncate"
-                    :class="i === trilha.length - 1 ? 'text-ink-900' : 'text-ink-500'">{{ t.texto }}</span>
+                    :class="i === trilha.length - 1 ? 'text-white lg:text-ink-900' : 'hidden text-white/75 sm:inline lg:text-ink-500'">{{ t.texto }}</span>
             </template>
           </nav>
-          <span v-if="evento?.status" class="shrink-0"
+          <span v-if="evento?.status" class="hidden shrink-0 sm:inline-flex"
                 :class="situacao[evento.status]?.classe ?? 'selo-neutro'">
             {{ situacao[evento.status]?.texto ?? evento.status.toUpperCase() }}
           </span>
 
           <div class="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
-            <button type="button"
-                    class="grid size-10 place-items-center rounded-xl text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-900"
-                    aria-label="Notificações">
-              <IconeMenu nome="sino" />
-            </button>
+            <!-- O sino de notificações saiu (22/09): era um botão sem ação
+                 nenhuma, e botão que não faz nada ensina a não clicar. Volta
+                 quando existir notificação de verdade pra mostrar. -->
             <!-- mesmo catálogo da lateral: o atalho só existe pra quem abre a
                  tela de suporte (ver `podeAbrir`, acima) -->
             <NuxtLink v-if="podeAbrir('/admin/suporte')" to="/admin/suporte"
-                      class="grid size-10 place-items-center rounded-xl text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-900"
+                      class="grid size-11 place-items-center rounded-xl text-white/90 transition-colors hover:bg-white/15 lg:size-10 lg:text-ink-500 lg:hover:bg-ink-100 lg:hover:text-ink-900"
                       aria-label="Suporte">
               <IconeMenu nome="chat" />
             </NuxtLink>
@@ -445,22 +506,22 @@ const situacao: Record<string, { texto: string; classe: string }> = {
 
             <div class="relative" @keydown.esc="contaAberta = false">
               <button type="button"
-                      class="flex items-center gap-2.5 rounded-xl py-1.5 pl-1.5 pr-2 transition-colors hover:bg-ink-100"
-                      :class="contaAberta && 'bg-ink-100'"
+                      class="flex items-center gap-2.5 rounded-xl py-1.5 pl-1.5 pr-2 transition-colors hover:bg-white/15 lg:hover:bg-ink-100"
+                      :class="contaAberta && 'bg-white/15 lg:bg-ink-100'"
                       aria-haspopup="menu"
                       :aria-expanded="contaAberta"
                       aria-label="Menu da sua conta"
                       @click="contaAberta = !contaAberta">
-                <span class="grid size-9 place-items-center rounded-full bg-grape-600 text-[13px] font-semibold text-white">
+                <span class="grid size-9 place-items-center rounded-full bg-grape-600 text-[13px] font-semibold text-white ring-2 ring-white/70 lg:ring-0">
                   {{ iniciais }}
                 </span>
                 <span class="hidden min-w-0 text-left sm:block">
-                  <span class="block max-w-44 truncate text-sm font-semibold text-ink-900">{{ eu?.usuario?.nome ?? 'Entrar' }}</span>
-                  <span v-if="eu?.usuario" class="block max-w-44 truncate text-xs text-ink-500">
+                  <span class="block max-w-44 truncate text-sm font-semibold text-white lg:text-ink-900">{{ eu?.usuario?.nome ?? 'Entrar' }}</span>
+                  <span v-if="eu?.usuario" class="block max-w-44 truncate text-xs text-white/75 lg:text-ink-500">
                     {{ eu.usuario.papelRotulo ?? eu.usuario.papel }}
                   </span>
                 </span>
-                <IconeMenu nome="baixo" :tamanho="16" class="hidden text-ink-400 sm:block" />
+                <IconeMenu nome="baixo" :tamanho="16" class="hidden text-white/75 sm:block lg:text-ink-400" />
               </button>
 
               <!-- clicar fora fecha: um véu invisível atrás do painel -->
@@ -476,6 +537,12 @@ const situacao: Record<string, { texto: string; classe: string }> = {
                     <p class="mt-1 text-xs text-ink-600">acesso: {{ eu.usuario.papelRotulo ?? eu.usuario.papel }}</p>
                   </div>
                   <hr class="my-1 border-ink-100">
+                  <button type="button" role="menuitem"
+                          class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900"
+                          @click="abrirTrocaDeSenha">
+                    <IconeMenu nome="lapis" :tamanho="16" class="text-ink-500" />
+                    Trocar senha
+                  </button>
                   <button type="button" role="menuitem"
                           class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900"
                           @click="sair">
@@ -496,6 +563,59 @@ const situacao: Record<string, { texto: string; classe: string }> = {
       <main id="conteudo" data-parte="miolo" class="mx-auto w-full max-w-[1280px] flex-1 px-4 pb-12 pt-6 sm:px-6 lg:px-10">
         <slot />
       </main>
+    </div>
+
+    <!-- Trocar a PRÓPRIA senha. Fora do topo (que é `sticky` com z-30) e num
+         invólucro z-[60], pra ficar por cima da lateral flutuante (z-50). -->
+    <div v-if="trocaSenha.aberto" class="relative z-[60]">
+      <ModalLateral titulo="Trocar senha" @fechar="fecharTrocaDeSenha">
+        <div v-if="trocaSenha.feito" class="grid gap-3">
+          <p class="rounded-card border border-ok bg-ok-claro px-3 py-2 text-sm text-ok" role="status">
+            Senha trocada.
+            <template v-if="trocaSenha.encerradas">
+              {{ trocaSenha.encerradas === 1 ? 'A outra sessão aberta foi encerrada'
+                : `As outras ${trocaSenha.encerradas} sessões abertas foram encerradas` }};
+            </template>
+            este aparelho continua conectado.
+          </p>
+        </div>
+        <form v-else id="form-troca-senha" class="grid gap-3" @submit.prevent="enviarTrocaDeSenha">
+          <!-- o erro mora DENTRO do painel: fora dele, fica atrás do fundo escuro -->
+          <p v-if="trocaSenha.erro" class="faixa-erro" role="alert">{{ trocaSenha.erro }}</p>
+          <div>
+            <label for="senha-atual" class="rotulo">Senha atual</label>
+            <input id="senha-atual" v-model="trocaSenha.atual" type="password"
+                   autocomplete="current-password" class="campo" required>
+          </div>
+          <div>
+            <label for="senha-nova" class="rotulo">Nova senha</label>
+            <input id="senha-nova" v-model="trocaSenha.nova" type="password"
+                   autocomplete="new-password" class="campo" required minlength="8">
+            <p class="mt-1 text-xs text-ink-500">Pelo menos 8 caracteres, diferente da atual.</p>
+          </div>
+          <div>
+            <label for="senha-confirma" class="rotulo">Repita a nova senha</label>
+            <input id="senha-confirma" v-model="trocaSenha.confirma" type="password"
+                   autocomplete="new-password" class="campo" required>
+          </div>
+          <p class="text-xs text-ink-500">
+            Os outros aparelhos em que você está conectado saem na hora; este continua.
+          </p>
+        </form>
+        <template #acoes>
+          <template v-if="trocaSenha.feito">
+            <button type="button" class="btn-primario" @click="fecharTrocaDeSenha">Fechar</button>
+          </template>
+          <template v-else>
+            <button type="button" class="btn-secundario" :disabled="trocaSenha.enviando"
+                    @click="fecharTrocaDeSenha">Cancelar</button>
+            <button type="submit" form="form-troca-senha" class="btn-primario"
+                    :disabled="trocaSenha.enviando">
+              {{ trocaSenha.enviando ? 'Trocando…' : 'Trocar senha' }}
+            </button>
+          </template>
+        </template>
+      </ModalLateral>
     </div>
   </div>
 </template>

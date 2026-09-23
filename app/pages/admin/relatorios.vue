@@ -73,6 +73,14 @@ const ROTULO_CANAL: Record<string, string> = {
 const ROTULO_SITUACAO: Record<string, string> = {
   ativo: 'Publicado', rascunho: 'Rascunho', pausado: 'Pausado', encerrado: 'Encerrado',
 }
+// mesmo dicionário de `clientes.vue` e do relatório do evento — status de
+// pedido é um vocabulário só, não um por tela
+const ROTULO_STATUS: Record<string, string> = {
+  pago: 'Pago', aguardando_pagamento: 'Aguardando pagamento', em_analise: 'Em análise',
+  expirado: 'Expirou sem pagar', cancelado: 'Cancelado', falhou: 'Pagamento falhou',
+  estornado: 'Estornado', estornado_parcial: 'Estornado em parte',
+  chargeback: 'Chargeback', disputa: 'Em disputa',
+}
 
 const pico = (lista: any[], campo: string) =>
   (lista ?? []).reduce((m: number, x: any) => Math.max(m, x[campo]), 0)
@@ -81,6 +89,7 @@ const largura = (v: number, max: number) => `${max ? Math.max((v / max) * 100, v
 const picoDia = computed(() => pico(data.value?.porDia, 'cobradoCents'))
 const picoForma = computed(() => pico(data.value?.porForma, 'cobradoCents'))
 const picoCanal = computed(() => pico(data.value?.porCanal, 'cobradoCents'))
+const picoCobranca = computed(() => pico(data.value?.cobranca?.porStatus, 'pedidos'))
 const picoCidade = computed(() => pico(data.value?.clientes?.porCidade, 'clientes'))
 const picoFaixa = computed(() => pico(data.value?.clientes?.porFaixa, 'clientes'))
 const pct = (parte: number, todo: number) => (todo > 0 ? Math.round((parte / todo) * 100) : 0)
@@ -293,7 +302,34 @@ useHead({ title: 'Relatórios' })
             </table>
           </div>
         </div>
+      </template>
 
+      <!-- fora do v-else: tem que aparecer mesmo sem venda paga (todo mundo com PIX pendente) -->
+      <div v-if="data.cobranca?.porStatus?.length" class="card mt-4">
+        <p class="rotulo-kpi">Cobrança</p>
+        <table class="mt-3 w-full text-sm">
+          <tbody>
+            <tr v-for="s in data.cobranca.porStatus" :key="s.status"
+                class="border-b border-linha last:border-0">
+              <td class="py-2 text-tinta">{{ ROTULO_STATUS[s.status] ?? s.status }}</td>
+              <td class="py-2 text-right tabular-nums text-tinta-suave">{{ s.pedidos }}</td>
+              <td class="w-24 py-2 pl-3">
+                <div class="h-1.5 rounded-full bg-fundo-cinza">
+                  <div class="h-1.5 rounded-full"
+                       :class="s.status === 'pago' ? 'bg-ok' : s.status === 'aguardando_pagamento' ? 'bg-alerta' : 'bg-linha-forte'"
+                       :style="{ width: largura(s.pedidos, picoCobranca) }" />
+                </div>
+              </td>
+              <td class="w-12 py-2 text-right text-xs tabular-nums text-tinta-fraca">
+                {{ pct(s.pedidos, data.cobranca.criados) }}%
+              </td>
+              <td class="py-2 pl-3 text-right tabular-nums text-tinta">{{ reais(s.cobradoCents) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <template v-if="data.resumo.pedidos">
         <!-- quem compra -->
         <div class="card mt-4">
           <div class="flex flex-wrap items-baseline justify-between gap-2">

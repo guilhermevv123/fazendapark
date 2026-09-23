@@ -87,6 +87,8 @@ const copiado = ref(false)
 const restante = ref(0)
 /** Preencheu quando o servidor cobrou um total diferente do que a tela prometeu. */
 const avisoDePreco = ref('')
+/** O pagamento entrou depois do prazo e o lugar já tinha sido vendido. */
+const pagoSemIngresso = ref(false)
 
 const form = reactive({ nome: '', email: '', documento: '', telefone: '', cupom: '' })
 
@@ -115,6 +117,10 @@ const parcelas = ref(1)
  * Quantas parcelas cabem. O piso de R$ 5,00 por parcela é do Asaas: oferecer
  * 12× num pedido de R$ 33,00 é oferecer uma opção que o gateway recusa depois
  * de o comprador já ter escolhido.
+ *
+ * A porta (`server/api/checkout.post.ts`, `maxParcelas`) aplica a MESMA conta
+ * e limita o que passar dela — o teste `checkout-parcelas.test.ts` compara o
+ * piso daqui com o de lá.
  */
 const PARCELA_MINIMA_CENTS = 500
 const maxParcelas = computed(() => {
@@ -470,13 +476,36 @@ function aplicarEstado(r: any) {
     sessionStorage.removeItem(CHAVE_PEDIDO)
     lembrarPago(r)
     pararRelogios()
-  } else if (['expirado', 'cancelado', 'falhou'].includes(r.status)) {
-    erro.value = 'Esta reserva expirou e os ingressos voltaram para a venda. '
-      + 'Escolha de novo — leva dois cliques.'
+  } else if (r.pagoSemIngresso) {
+    // O dinheiro ENTROU e o lugar não voltou (PIX pago depois do prazo, com o
+    // lote já vendido pra outra pessoa). "Expirou" aqui seria mentir pra quem
+    // pagou — e mandaria a pessoa comprar de novo, pagando duas vezes.
+    erro.value = ''
+    pagoSemIngresso.value = true
     sessionStorage.removeItem(CHAVE_PEDIDO)
     pararRelogios()
+  } else if (['expirado', 'cancelado', 'falhou'].includes(r.status)) {
+    // O vigia NÃO para no 'expirado'. O PIX da tela pode ter sido pago no
+    // último minuto e a confirmação chegar agora: o servidor refaz a reserva
+    // e o pedido vira 'pago' — e esta tela precisa virar junto, em vez de
+    // ficar dizendo "expirou" pra quem pagou. Cancelado e falhou são finais.
+    erro.value = r.status === 'expirado'
+      ? 'O tempo da reserva acabou. Se você já pagou, espere nesta tela: a confirmação '
+        + 'ainda pode chegar e os ingressos aparecem aqui. Se não pagou, escolha de novo — '
+        + 'leva dois cliques.'
+      : 'Esta reserva não está mais valendo e os ingressos voltaram para a venda. '
+        + 'Escolha de novo — leva dois cliques.'
+    sessionStorage.removeItem(CHAVE_PEDIDO)
+    if (r.status !== 'expirado') return void pararRelogios()
+    clearInterval(timerContagem)
+    // Uma hora de espera basta: a varredura cancela a cobrança no gateway
+    // logo depois de a reserva cair, então pagamento mais tardio que isso é
+    // caso de bilheteria, não de tela aberta consultando a cada 4 s.
+    expiradoDesde ||= Date.now()
+    if (Date.now() - expiradoDesde > 60 * 60_000) pararRelogios()
   }
 }
+let expiradoDesde = 0
 
 function pararRelogios() { clearInterval(timerVigia); clearInterval(timerContagem) }
 onUnmounted(pararRelogios)
@@ -502,10 +531,27 @@ async function copiarPix() {
   } catch { /* sem permissão de área de transferência: o texto está na tela */ }
 }
 
-/** Só aparece com o gateway simulado (nunca em produção). */
+/**
+ * Só aparece com o gateway simulado (nunca em produção).
+ *
+ * Trava de duplo clique e erro na tela: sem as duas, o segundo clique mandava
+ * outro "pagamento" e uma falha (409, servidor fora) virava promessa rejeitada
+ * sem ninguém ver — o botão parecia não fazer nada.
+ */
+const simulando = ref(false)
 async function simularPagamento() {
-  await $fetch('/api/dev/pagar', { method: 'POST', body: { pedido: pedido.value.pedidoId } })
-  await conferirAgora(pedido.value.pedidoId)
+  if (simulando.value) return
+  simulando.value = true
+  try {
+    await $fetch('/api/dev/pagar', { method: 'POST', body: { pedido: pedido.value.pedidoId } })
+    await conferirAgora(pedido.value.pedidoId)
+  } catch (e: any) {
+    console.error('[pagamento] simulação de pagamento falhou', e?.data ?? e)
+    erro.value = e?.data?.statusMessage || e?.statusMessage
+      || 'Não deu pra simular o pagamento agora. Tente de novo.'
+  } finally {
+    simulando.value = false
+  }
 }
 
 const ehPix = computed(() => (pedido.value?.pagamento?.forma ?? 'pix') === 'pix')
@@ -810,7 +856,16 @@ useHead({ title: 'Pagamento' })
         </p>
         <!-- `div`, não `p`: o navegador fecha um `<p>` sozinho quando aparece
              bloco dentro, e o layout quebra sem avisar. -->
-        <div v-if="erro" class="faixa-erro mt-3">
+        <div v-if="pagoSemIngresso" class="faixa-aviso mt-3">
+          <p class="font-semibold text-tinta">Recebemos o seu pagamento.</p>
+          <p class="mt-1">
+            Ele chegou depois do prazo da reserva e, nesse meio-tempo, os ingressos dessa opção
+            foram vendidos. Você não precisa pagar de novo: a bilheteria vai resolver com você —
+            outro ingresso ou a devolução do valor. Guarde o pedido
+            <strong class="text-tinta">{{ pedido.pedido }}</strong>.
+          </p>
+        </div>
+        <div v-else-if="erro" class="faixa-erro mt-3">
           <p>{{ erro }}</p>
           <NuxtLink :to="`/e/${slug}`" class="mt-2 block font-semibold text-acao hover:underline">
             Escolher os ingressos de novo →
@@ -821,8 +876,9 @@ useHead({ title: 'Pagamento' })
              porque o checkout nunca devolve `simulado`. -->
         <div v-if="pedido.simulado" class="mt-6 rounded-card border border-dashed border-alerta bg-alerta-claro p-3 text-center">
           <p class="text-xs font-semibold uppercase text-alerta">Ambiente de teste</p>
-          <button type="button" class="btn-secundario mt-2" @click="simularPagamento">
-            Simular pagamento recebido
+          <button type="button" class="btn-secundario mt-2" :disabled="simulando"
+                  @click="simularPagamento">
+            {{ simulando ? 'Simulando…' : 'Simular pagamento recebido' }}
           </button>
         </div>
       </section>
@@ -871,10 +927,15 @@ useHead({ title: 'Pagamento' })
               no console. São poucos QRs por pedido; adiar o único pixel que
               importa não economiza nada.
             -->
-            <img :src="`/api/ingresso/${t.id}/qr.png?pedido=${pedido.pedido}`"
+            <img v-if="t.qr" :src="`/api/ingresso/${t.id}/qr.png?pedido=${pedido.pedido}`"
                  :alt="`QR do ingresso ${t.codigo}`"
                  class="h-32 w-32 shrink-0 rounded-card border border-linha bg-white p-1"
                  loading="eager" decoding="async">
+            <!-- sem QR = ingresso que não entra mais por este pedido (a API manda `qr: null`) -->
+            <p v-else class="flex h-32 w-32 shrink-0 items-center justify-center rounded-card border border-linha p-2 text-center text-xs text-tinta-suave">
+              {{ t.status === 'transferido' ? 'Ingresso transferido'
+                 : t.status === 'usado' ? 'Ingresso já utilizado' : 'Ingresso cancelado' }}
+            </p>
             <div class="min-w-0">
               <p class="titulo text-base font-semibold text-tinta">
                 {{ t.tipo ?? 'Ingresso' }} {{ i + 1 }}/{{ ingressos.length }}

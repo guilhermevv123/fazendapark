@@ -26,7 +26,11 @@ export default defineEventHandler(async (event) => {
   }
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Escolha o ponto de venda e diga o fundo de troco (pode ser zero).',
+      data: p.error.flatten(),
+    })
   }
 
   // id do ponto vem no corpo: a cerca é aqui.

@@ -1,3 +1,34 @@
+<script lang="ts">
+/** quanto tempo o mesmo QR precisa SUMIR do quadro pra valer de novo */
+export const JANELA_DE_REPETICAO_MS = 2500
+
+/**
+ * A decisão do "é o mesmo QR de antes?" — pura, pra teste
+ * (`app/composables/leitor-entrada.test.ts`).
+ *
+ * Com a leitura em andamento (`pausada`), a câmera continua olhando e RENOVA
+ * o `visto` do código que está no quadro, mas não dispara nada. Antes o laço
+ * simplesmente pulava o quadro enquanto pausado: com 4G lento a resposta
+ * levava mais que 2,5 s, o `visto` envelhecia com o QR parado na frente da
+ * lente, e no instante em que a pausa acabava o mesmo QR saía de novo — um
+ * "já utilizado" piscando por cima do "pode entrar" da mesma pessoa.
+ */
+export function decidirLeitura(
+  ultimo: { texto: string; visto: number }, texto: string, agora: number, pausada: boolean,
+): { emitir: boolean; ultimo: { texto: string; visto: number } } {
+  if (!texto) return { emitir: false, ultimo }
+  const mesmo = texto === ultimo.texto
+  if (pausada) {
+    // Só renova o que já está sendo lido. Código NOVO durante a pausa não
+    // entra na memória: senão, ao despausar, ele contaria como repetido e a
+    // segunda pessoa da fila não seria lida.
+    return { emitir: false, ultimo: mesmo ? { texto, visto: agora } : ultimo }
+  }
+  const repetido = mesmo && agora - ultimo.visto < JANELA_DE_REPETICAO_MS
+  return { emitir: !repetido, ultimo: { texto, visto: agora } }
+}
+</script>
+
 <script setup lang="ts">
 /**
  * A câmera do celular como leitor de QR — o modo "aparelho na mão" da portaria.
@@ -126,7 +157,9 @@ async function varrer() {
   while (!encerrada) {
     await new Promise((r) => setTimeout(r, 140))
     const el = video.value
-    if (encerrada || !el || props.pausada || document.hidden || el.readyState < 2 || !el.videoWidth) continue
+    // Pausada NÃO pula o quadro: ela ainda precisa renovar o "visto" do QR
+    // que está na frente da lente (ver `decidirLeitura`).
+    if (encerrada || !el || document.hidden || el.readyState < 2 || !el.videoWidth) continue
 
     let texto = ''
     try {
@@ -144,10 +177,9 @@ async function varrer() {
     } catch { /* quadro ruim: o próximo resolve */ }
     if (!texto) continue
 
-    const agora = Date.now()
-    const repetido = texto === ultimo.texto && agora - ultimo.visto < 2500
-    ultimo = { texto, visto: agora }
-    if (!repetido) emit('ler', texto)
+    const decisao = decidirLeitura(ultimo, texto, Date.now(), Boolean(props.pausada))
+    ultimo = decisao.ultimo
+    if (decisao.emitir) emit('ler', texto)
   }
 }
 

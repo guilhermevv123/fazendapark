@@ -116,14 +116,24 @@ const atalhoAtivo = computed<Atalho | null>(() => {
 })
 
 /**
- * Líquido do produtor no recorte inteiro.
- *
- * Somado a partir do `porCanal`, que já sabe quem pagou a taxa em cada canal.
- * Recalcular aqui com um modo só seria o jeito mais fácil de a tela inventar
- * um número que o borderô não confirma.
+ * Líquido do produtor no recorte inteiro — vem PRONTO do servidor
+ * (`SQL_LIQUIDO`, a mesma conta do borderô). A tela somava o `porCanal` por
+ * conta própria; dava o mesmo número, mas era a segunda conta do dinheiro que
+ * `utils/liquido.ts` existe pra não ter.
  */
-const liquido = computed(() =>
-  (data.value?.porCanal ?? []).reduce((s: number, c: any) => s + c.liquidoCents, 0))
+const liquido = computed(() => data.value?.totais?.liquidoCents ?? 0)
+
+/**
+ * O rodapé soma só o que os totais somam. As linhas de estorno total e de
+ * contestação ficam visíveis (são a história), mas entram numa linha
+ * própria do rodapé — senão o "Total" de baixo volta a discordar do
+ * "Cobrado do comprador" de cima, que é o defeito que isto conserta.
+ */
+const linhasNoTotal = computed(() =>
+  (data.value?.linhas ?? []).filter((l: any) => !l.foraDoTotal))
+const linhasForaDoTotal = computed(() =>
+  (data.value?.linhas ?? []).filter((l: any) => l.foraDoTotal))
+const somaDe = (ls: any[], campo: string) => ls.reduce((s: number, l: any) => s + l[campo], 0)
 
 function exportar() {
   baixarCsv(
@@ -248,11 +258,32 @@ useHead({ title: 'Extrato' })
         <div class="card">
           <p class="rotulo-kpi">Líquido do produtor</p>
           <p class="numero-kpi mt-1">{{ brl(liquido) }}</p>
-          <p v-if="data.totais.estornadoCents" class="mt-1 text-xs text-erro">
-            já sem {{ brl(data.totais.estornadoCents) }} estornados
+          <p v-if="data.totais.estornadoNoLiquidoCents" class="mt-1 text-xs text-erro">
+            já sem {{ brl(data.totais.estornadoNoLiquidoCents) }} de estornos parciais
           </p>
           <p v-else class="mt-1 text-xs text-tinta-fraca">nenhum estorno no período</p>
         </div>
+      </div>
+
+      <!-- Fora dos totais, mas nunca fora da tela: estorno total (o dinheiro
+           voltou inteiro pro comprador) e contestação (chargeback/disputa, o
+           dinheiro está preso no banco). As outras telas também não somam
+           esses pedidos; aqui eles aparecem com nome e valor. -->
+      <div v-if="data.foraDoTotal?.pedidos" class="card mt-3 border-alerta/50"
+           data-parte="fora-do-total">
+        <p class="rotulo-kpi text-alerta">Fora dos totais acima</p>
+        <p class="mt-1 text-sm text-tinta-corpo">
+          {{ data.foraDoTotal.pedidos }}
+          {{ data.foraDoTotal.pedidos === 1 ? 'pedido' : 'pedidos' }} com
+          {{ brl(data.foraDoTotal.cobradoCents) }} cobrados que não contam como venda:
+          <template v-for="(f, i) in data.foraDoTotal.porStatus" :key="f.status">
+            <template v-if="i">; </template>
+            <strong>{{ STATUS_LEGIVEL[f.status] ?? f.status }}</strong>
+            {{ f.pedidos }} ({{ brl(f.cobradoCents) }}<template v-if="f.estornadoCents">,
+              {{ brl(f.estornadoCents) }} devolvidos</template>)
+          </template>.
+          Eles continuam na lista abaixo, marcados.
+        </p>
       </div>
 
       <!-- cortes -->
@@ -397,6 +428,7 @@ useHead({ title: 'Extrato' })
                 <p class="text-xs" :class="COR_DO_STATUS[l.status] ?? 'text-tinta-fraca'">
                   {{ STATUS_LEGIVEL[l.status] ?? l.status }}
                   <template v-if="l.estornadoCents"> · {{ brl(l.estornadoCents) }}</template>
+                  <template v-if="l.foraDoTotal"> · fora dos totais</template>
                 </p>
               </td>
               <td class="px-3 py-3 whitespace-nowrap text-tinta-suave">{{ horario(l.pagoEm) }}</td>
@@ -437,16 +469,34 @@ useHead({ title: 'Extrato' })
                 Total<template v-if="data.truncado"> das linhas visíveis</template>
               </td>
               <td class="px-3 py-3 text-right tabular-nums text-tinta">
-                {{ data.linhas.reduce((s: number, l: any) => s + l.ingressos, 0) }}
+                {{ somaDe(linhasNoTotal, 'ingressos') }}
               </td>
               <td class="px-3 py-3 text-right tabular-nums text-tinta">
-                {{ brl(data.linhas.reduce((s: number, l: any) => s + l.faceCents, 0)) }}
+                {{ brl(somaDe(linhasNoTotal, 'faceCents')) }}
               </td>
               <td class="px-3 py-3 text-right tabular-nums text-tinta">
-                {{ brl(data.linhas.reduce((s: number, l: any) => s + l.taxaPlataformaCents, 0)) }}
+                {{ brl(somaDe(linhasNoTotal, 'taxaPlataformaCents')) }}
               </td>
               <td class="px-4 py-3 text-right tabular-nums text-tinta">
-                {{ brl(data.linhas.reduce((s: number, l: any) => s + l.totalCents, 0)) }}
+                {{ brl(somaDe(linhasNoTotal, 'totalCents')) }}
+              </td>
+            </tr>
+            <tr v-if="linhasForaDoTotal.length" class="text-sm text-tinta-suave">
+              <td class="px-4 py-2" colspan="5">
+                Fora do total: {{ linhasForaDoTotal.length }} estornado(s) por inteiro ou em
+                contestação
+              </td>
+              <td class="px-3 py-2 text-right tabular-nums">
+                {{ somaDe(linhasForaDoTotal, 'ingressos') }}
+              </td>
+              <td class="px-3 py-2 text-right tabular-nums">
+                {{ brl(somaDe(linhasForaDoTotal, 'faceCents')) }}
+              </td>
+              <td class="px-3 py-2 text-right tabular-nums">
+                {{ brl(somaDe(linhasForaDoTotal, 'taxaPlataformaCents')) }}
+              </td>
+              <td class="px-4 py-2 text-right tabular-nums">
+                {{ brl(somaDe(linhasForaDoTotal, 'totalCents')) }}
               </td>
             </tr>
           </tfoot>

@@ -1,3 +1,165 @@
+<script lang="ts">
+/**
+ * As decisões desta tela que NÃO dependem de estado — exportadas pra teste
+ * (`app/composables/leitor-entrada.test.ts`). Moram aqui, e não num arquivo
+ * à parte, porque só esta tela as usa; o que importa é que o teste rode
+ * exatamente estas linhas, não uma cópia.
+ */
+
+/** o que a portaria pede quando o ingresso é meia — ver o comentário no setup */
+export type Meia = { motivo: string | null; rotulo: string; documento: string; numero: string | null }
+
+/** o retrato do público — um objeto, uma consulta (ver `publico` no setup) */
+export type Publico = {
+  pessoas: number; entradas: number; ingressos: number
+  offline: number; aptos: number; faltam: number; comparecimentoPct: number
+}
+
+export type Resposta = {
+  ok: boolean; resultado: string; mensagem: string; consulta?: boolean
+  titular?: string | null; entrouEm?: string | null
+  portao?: string | null; operadorEntrada?: string | null
+  local?: boolean; pessoas?: number
+  /** só nas respostas do SERVIDOR: a decisão local não sabe contar o parque */
+  publico?: Publico
+  ingresso?: {
+    titular: string | null; setor: string; lote: string; tipo: string | null
+    meia?: Meia | null
+  }
+  /** `nao_lido` por sessão vencida: a tela oferece o link de entrar de novo */
+  entrarDeNovo?: boolean
+}
+
+/** o mesmo mínimo do servidor (`qr: z.string().min(4)` em `/api/checkin`) */
+export const MINIMO_DO_CODIGO = 4
+
+/**
+ * Lista baixada há mais que isto é "antiga": ao voltar a rede, desce de novo.
+ *
+ * Ingresso vendido no balcão DEPOIS da descida não está no aparelho, e no
+ * próximo apagão ele cai em "não está na lista". Baixar só quando a lista
+ * estava vazia (era a regra) deixava o tablet com a lista da abertura do
+ * portão a noite inteira.
+ */
+export const LISTA_VELHA_MS = 15 * 60_000
+
+/** de quanto em quanto tempo o leitor offline tenta o servidor sozinho */
+export const RETENTAR_MS = 20_000
+
+/**
+ * Status que, vindos na resposta, querem dizer "o servidor não está lá" — é
+ * o proxy na frente dele respondendo. Tratados como falha de rede: a porta
+ * segue pela lista do aparelho em vez de parar.
+ */
+const SEM_SERVIDOR = new Set([502, 503, 504])
+
+export function statusDaFalha(e: any): number | null {
+  const s = Number(e?.statusCode ?? e?.response?.status ?? e?.status ?? 0)
+  return s > 0 ? s : null
+}
+
+/** `true` = a falha foi de REDE (ou do proxy sem servidor atrás): decide pela lista */
+export function falhaDeRede(e: any): boolean {
+  const s = statusDaFalha(e)
+  return s === null || SEM_SERVIDOR.has(s)
+}
+
+/**
+ * A falha do SERVIDOR vira "NÃO LIDO — tente de novo", nunca "BARRADO".
+ *
+ * Toda decisão sobre o INGRESSO volta com 200 (`/api/checkin` responde
+ * `ok: false` com o motivo). Um erro HTTP, então, nunca é veredito: é sessão
+ * vencida, permissão, dado malformado ou o servidor caindo. Pintar isso de
+ * vermelho com "BARRADO" em cima fazia o porteiro mandar embora quem tinha
+ * ingresso — medido com a sessão expirada: toda leitura virava "BARRADO /
+ * Faça login para continuar".
+ */
+export function respostaDeFalha(e: any): Resposta {
+  const s = statusDaFalha(e)
+  const doServidor = e?.data?.statusMessage || e?.statusMessage || ''
+  if (s === 401) {
+    return { ok: false, resultado: 'nao_lido', entrarDeNovo: true,
+             mensagem: 'Sua sessão expirou — entre de novo para continuar lendo.' }
+  }
+  if (s === 403) {
+    return { ok: false, resultado: 'nao_lido',
+             mensagem: doServidor || 'Este login não pode validar entradas. Chame o supervisor.' }
+  }
+  if (s !== null && s >= 500) {
+    return { ok: false, resultado: 'nao_lido',
+             mensagem: 'O sistema falhou ao conferir este ingresso. Leia de novo; '
+               + 'se repetir, chame o supervisor.' }
+  }
+  return { ok: false, resultado: 'nao_lido',
+           mensagem: doServidor
+             ? `${doServidor} — leia de novo.`
+             : 'Não deu pra conferir este código. Leia de novo.' }
+}
+
+/** a lista do aparelho é antiga o bastante pra descer de novo? */
+export function listaVelha(listaEm: string | null, agora = Date.now()): boolean {
+  if (!listaEm) return true
+  const t = new Date(listaEm).getTime()
+  return Number.isNaN(t) || agora - t > LISTA_VELHA_MS
+}
+
+/** "21:47" — a hora em que a lista desceu, do jeito que o porteiro fala */
+export function horaDaLista(listaEm: string | null): string {
+  if (!listaEm) return '—'
+  const d = new Date(listaEm)
+  return Number.isNaN(d.getTime())
+    ? '—'
+    : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+}
+
+/**
+ * Offline, código que não está na lista baixada NÃO é "inválido": pode ser
+ * ingresso vendido depois da descida, ou de outro evento digitado à mão. O
+ * aparelho não tem como saber — quem decide é o supervisor. Âmbar, não
+ * vermelho.
+ */
+export function respostaForaDaLista(listaEm: string | null): Resposta {
+  return { local: true, ok: false, resultado: 'fora_da_lista',
+           mensagem: `Não está na lista deste aparelho (baixada às ${horaDaLista(listaEm)}) `
+             + '— chame o supervisor.' }
+}
+
+/** o título grande do veredito — o MESMO no cartão e em cima da câmera */
+export function tituloDoVeredito(r: Resposta): string {
+  if (r.resultado === 'nao_lido') return 'NÃO LIDO — TENTE DE NOVO'
+  if (r.resultado === 'fora_da_lista') return 'CHAME O SUPERVISOR'
+  if (r.consulta) {
+    if (r.ok) return 'VÁLIDO'
+    return r.resultado === 'fora_da_sessao' ? 'AINDA NÃO' : 'BARRADO'
+  }
+  return r.ok ? 'PODE ENTRAR' : 'BARRADO'
+}
+
+/**
+ * A cor de cada resultado. `nao_lido` é NEUTRA de propósito: não é sim nem
+ * não, é "não sei" — e vermelho na porta quer dizer "mande embora".
+ */
+export const CLASSE: Record<string, string> = {
+  ok: 'bg-ok text-white',
+  ja_usado: 'bg-alerta text-white',
+  invalido: 'bg-erro text-white',
+  cancelado: 'bg-erro text-white',
+  fora_da_sessao: 'bg-alerta text-white',
+  evento_errado: 'bg-erro text-white',
+  fora_da_lista: 'bg-alerta text-white',
+  nao_lido: 'bg-tinta-suave text-white',
+}
+
+/** a bolinha do histórico da tela, com a mesma régua de cor */
+export function corDoPonto(r: Resposta): string {
+  if (r.ok) return 'bg-ok'
+  if (r.resultado === 'nao_lido') return 'bg-tinta-suave'
+  if (r.resultado === 'fora_da_lista' || r.resultado === 'ja_usado'
+      || r.resultado === 'fora_da_sessao') return 'bg-alerta'
+  return 'bg-erro'
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Leitor de entrada — a tela que roda com gente na fila.
@@ -52,35 +214,13 @@ const campo = ref<HTMLInputElement | null>(null)
  */
 const modoCamera = ref(false)
 
-/**
- * O que a portaria pede quando o ingresso é meia (migração 015).
- *
- * `motivo` é `string | null` e o `null` é o caso NORMAL, não a exceção: medido
- * no banco desta instalação em 21/09, 23 dos 23 ingressos de meia do evento
- * estão sem motivo declarado. O tipo dizia `string` e mentia — quem lesse o
- * tipo escreveria a tela pro caso raro. É essa distinção que abre os dois
- * blocos diferentes lá embaixo.
+/*
+ * `Meia`, `Publico` e `Resposta` moram no <script> de cima, junto das
+ * decisões puras. Sobre a meia (migração 015): `motivo` é `string | null` e o
+ * `null` é o caso NORMAL — medido em 21/09, 23 dos 23 ingressos de meia do
+ * evento estão sem motivo declarado. É essa distinção que abre os dois blocos
+ * diferentes lá embaixo.
  */
-type Meia = { motivo: string | null; rotulo: string; documento: string; numero: string | null }
-
-/** o retrato do público — um objeto, uma consulta (ver `publico` abaixo) */
-type Publico = {
-  pessoas: number; entradas: number; ingressos: number
-  offline: number; aptos: number; faltam: number; comparecimentoPct: number
-}
-
-type Resposta = {
-  ok: boolean; resultado: string; mensagem: string; consulta?: boolean
-  titular?: string | null; entrouEm?: string | null
-  portao?: string | null; operadorEntrada?: string | null
-  local?: boolean; pessoas?: number
-  /** só nas respostas do SERVIDOR: a decisão local não sabe contar o parque */
-  publico?: Publico
-  ingresso?: {
-    titular: string | null; setor: string; lote: string; tipo: string | null
-    meia?: Meia | null
-  }
-}
 const ultima = ref<Resposta | null>(null)
 const historico = ref<(Resposta & { codigo: string; quando: Date })[]>([])
 
@@ -270,12 +410,50 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('online', aoVoltarRede)
+  clearInterval(timerDeReconexao)
 })
 
+/** lista vazia OU antiga desce de novo junto com a volta da rede */
+const precisaBaixarLista = () => lista.value.length === 0 || listaVelha(listaEm.value)
+
 function aoVoltarRede() {
-  online.value = true
-  sincronizar({ comLista: lista.value.length === 0 })
+  // Não marca `online` aqui: o navegador dizer que tem rede não é o servidor
+  // responder. Quem liga o online é a sincronização que der certo.
+  void sincronizar({ comLista: precisaBaixarLista() })
 }
+
+/* ------------------------------------------------ volta sozinho pro online */
+/**
+ * Uma falha de rede deixava o leitor offline até alguém recarregar a página:
+ * `online` virava `false` e nada o trazia de volta — o evento `online` do
+ * navegador não dispara quando quem caiu foi o SERVIDOR (ou o 4G voltou sem
+ * o aparelho ter percebido que tinha saído). A porta passava a noite
+ * decidindo pela lista com a rede de pé.
+ *
+ * Agora, enquanto estiver offline, o leitor tenta o servidor a cada
+ * `RETENTAR_MS` e também a cada leitura (sem segurar a fila, ver `ler`). A
+ * tentativa é a própria sincronização: sobe a fila, traz o retrato do
+ * público, e baixa a lista de novo se ela for antiga.
+ */
+let timerDeReconexao: ReturnType<typeof setInterval> | undefined
+const ultimaTentativa = ref<Date | null>(null)
+
+async function tentarReconectar() {
+  if (online.value || sincronizando.value) return
+  // o navegador SABE que está sem rede: nem tenta, o evento `online` avisa
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+  ultimaTentativa.value = new Date()
+  await sincronizar({ comLista: precisaBaixarLista() })
+}
+
+watch(online, (v) => {
+  if (v) {
+    clearInterval(timerDeReconexao)
+    timerDeReconexao = undefined
+  } else if (!timerDeReconexao) {
+    timerDeReconexao = setInterval(() => { void tentarReconectar() }, RETENTAR_MS)
+  }
+})
 
 watch(gate, (v) => {
   try { localStorage.setItem(`dt_gate_${id}`, v) } catch { /* aba anônima */ }
@@ -320,16 +498,24 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   const { codigo: cod, eventoDoQr } = codigoDoQr(bruto)
   const base = { local: true, ok: false }
 
-  if (!lista.value.length) {
-    return { ...base, resultado: 'invalido',
-             mensagem: 'Sem rede e sem lista baixada neste aparelho. Chame o supervisor.' }
-  }
+  // O QR diz de qual evento ele é, e isso não depende de lista nenhuma: vem
+  // ANTES da checagem de lista vazia. Offline, o QR de outro evento dizia
+  // "inválido" (ou "sem lista"), e o servidor, com rede, diz "outro evento".
   if (eventoDoQr && eventoDoQr !== id) {
     return { ...base, resultado: 'evento_errado', mensagem: 'Ingresso é de outro evento' }
   }
+  // Sem lista o aparelho não sabe nada — isso é "não deu pra conferir", não
+  // "barrado": o ingresso pode ser perfeitamente bom.
+  if (!lista.value.length) {
+    return { ...base, resultado: 'nao_lido',
+             mensagem: 'Sem rede e sem lista baixada neste aparelho — não dá pra conferir. '
+               + 'Chame o supervisor.' }
+  }
 
   const t = mapa.value.get(cod)
-  if (!t) return { ...base, resultado: 'invalido', mensagem: 'Ingresso inválido' }
+  // Fora da lista baixada não é prova de fraude: pode ser venda de depois da
+  // descida, ou código de outro evento digitado à mão. Âmbar e supervisor.
+  if (!t) return respostaForaDaLista(listaEm.value)
   if (t.status === 'cancelado') {
     return { ...base, resultado: 'cancelado', mensagem: 'Ingresso cancelado' }
   }
@@ -385,9 +571,22 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
            pessoas: t.pessoas, ingresso: dados }
 }
 
+/** aviso debaixo do campo — código curto demais nem sai do aparelho */
+const avisoCodigo = ref('')
+watch(codigo, () => { avisoCodigo.value = '' })
+
 async function ler() {
   const c = codigo.value.trim()
   if (!c || lendo.value) return
+  // O servidor recusa menos de 4 caracteres com 400 ("Dados inválidos"), que
+  // chegava na porta como veredito. É erro de digitação: avisa aqui, mantém o
+  // que foi digitado pra corrigir, e não gasta rede nem vira leitura.
+  if (c.length < MINIMO_DO_CODIGO) {
+    avisoCodigo.value = `Código curto demais (${c.length} ${c.length === 1 ? 'caractere' : 'caracteres'}). `
+      + 'Confira o ingresso e digite o código inteiro.'
+    nextTick(() => campo.value?.focus())
+    return
+  }
   lendo.value = true
   /**
    * UM id por passagem FÍSICA, criado antes de saber se vai ter rede.
@@ -409,6 +608,11 @@ async function ler() {
   try {
     if (!online.value) {
       ultima.value = validarLocal(c, idPassagem)
+      // "Tentar de novo na próxima leitura" SEM segurar a fila: a decisão
+      // desta pessoa já saiu pela lista, e a volta ao servidor corre por
+      // fora. Se a rede voltou, a próxima leitura já vai online — e esta
+      // passagem sobe junto, na fila.
+      void tentarReconectar()
     } else {
       try {
         ultima.value = await $fetch<Resposta>('/api/checkin', {
@@ -427,12 +631,12 @@ async function ler() {
         // cada leitura recusada bate no banco no pior momento possível.
         if (ultima.value?.ok && !ultima.value.consulta) refresh()
       } catch (e: any) {
-        // 400/403/404 são resposta do servidor: ele está no ar e disse não.
-        // Repetir a decisão localmente aqui seria contrariar quem sabe mais.
-        // Só a FALHA DE REDE (sem status) vira validação local.
-        if (e?.statusCode || e?.response?.status) {
-          ultima.value = { ok: false, resultado: 'invalido',
-                           mensagem: e?.data?.statusMessage || e?.statusMessage || 'Falha ao ler' }
+        // Só a FALHA DE REDE (sem status, ou o proxy dizendo que não há
+        // servidor atrás) vira validação local. O resto é o servidor no ar
+        // respondendo erro — e erro não é veredito sobre o ingresso: vira
+        // "NÃO LIDO", em cor neutra, com o motivo (ver `respostaDeFalha`).
+        if (!falhaDeRede(e)) {
+          ultima.value = respostaDeFalha(e)
         } else {
           online.value = false
           // MESMO id da tentativa online: o servidor pode ter gravado antes de
@@ -507,7 +711,7 @@ const vereditoCamera = computed(() => {
   if (!r) return null
   return {
     chave: leituraN.value,
-    titulo: r.consulta ? (r.ok ? 'VÁLIDO' : 'AINDA NÃO') : r.ok ? 'PODE ENTRAR' : 'BARRADO',
+    titulo: tituloDoVeredito(r),
     detalhe: [r.ingresso?.titular ?? r.titular, r.mensagem].filter(Boolean).join(' · '),
     classe: CLASSE[r.resultado] ?? 'bg-erro text-white',
   }
@@ -624,8 +828,16 @@ async function sincronizar({ comLista = false } = {}) {
     }
     refresh()
   } catch (e: any) {
-    if (!e?.statusCode && !e?.response?.status) online.value = false
-    else avisoLocal.value = e?.data?.statusMessage || 'Não foi possível sincronizar agora.'
+    if (falhaDeRede(e)) online.value = false
+    else {
+      // O servidor respondeu — a rede está de pé, mesmo que ele tenha dito
+      // não. Continuar "offline" aqui era o leitor preso no modo sem rede
+      // até alguém recarregar a página.
+      online.value = true
+      avisoLocal.value = statusDaFalha(e) === 401
+        ? 'Sua sessão expirou — entre de novo para sincronizar e continuar lendo.'
+        : e?.data?.statusMessage || 'Não foi possível sincronizar agora.'
+    }
   } finally {
     sincronizando.value = false
     baixando.value = false
@@ -634,14 +846,7 @@ async function sincronizar({ comLista = false } = {}) {
 
 /* ------------------------------------------------------------------- visual */
 
-const CLASSE: Record<string, string> = {
-  ok: 'bg-ok text-white',
-  ja_usado: 'bg-alerta text-white',
-  invalido: 'bg-erro text-white',
-  cancelado: 'bg-erro text-white',
-  fora_da_sessao: 'bg-alerta text-white',
-  evento_errado: 'bg-erro text-white',
-}
+// `CLASSE` (a cor de cada resultado) mora no <script> de cima, junto do título.
 
 const prontoParaApagao = computed(() =>
   lista.value.length > 0 && swPronto.value === 'sim')
@@ -679,6 +884,15 @@ useHead({ title: 'Leitor de entrada' })
             :class="online ? 'text-ok' : 'text-alerta'">
         <span class="h-2.5 w-2.5 rounded-full" :class="online ? 'bg-ok' : 'bg-alerta'" />
         {{ online ? 'Conectado' : 'Sem rede — validando pela lista do aparelho' }}
+      </span>
+      <span v-if="!online" class="text-sm text-tinta-suave" data-parte="reconexao">
+        tentando o servidor a cada {{ RETENTAR_MS / 1000 }} s
+        <template v-if="ultimaTentativa">(última às {{ ultimaTentativa.toLocaleTimeString('pt-BR') }})</template>
+        ·
+        <button type="button" class="font-semibold text-acao underline" :disabled="sincronizando"
+                @click="tentarReconectar()">
+          tentar agora
+        </button>
       </span>
 
       <span class="text-sm text-tinta-suave">
@@ -874,6 +1088,10 @@ useHead({ title: 'Leitor de entrada' })
           {{ lendo ? 'Lendo…' : 'Ler' }}
         </button>
       </form>
+      <p v-if="avisoCodigo" class="mt-2 text-sm font-semibold text-alerta" role="alert"
+         data-parte="aviso-codigo">
+        {{ avisoCodigo }}
+      </p>
       <label class="mt-3 flex items-center gap-2 text-sm text-tinta-suave">
         <input v-model="apenasConsultar" type="checkbox" class="h-4 w-4 accent-acao">
         Só conferir (não marca entrada)
@@ -888,11 +1106,20 @@ useHead({ title: 'Leitor de entrada' })
            sempre "VÁLIDO": quando o horário não chegou, ele diz isso. Fixar
            "VÁLIDO" aqui faria a tela contradizer a própria mensagem logo
            abaixo. -->
-      <p class="titulo text-4xl font-semibold">
-        {{ ultima.consulta ? (ultima.ok ? 'VÁLIDO' : 'AINDA NÃO')
-           : ultima.ok ? 'PODE ENTRAR' : 'BARRADO' }}
+      <!-- O título sai de `tituloDoVeredito`, o mesmo da câmera. "Só
+           conferir" de um ingresso já usado agora diz BARRADO (a consulta
+           passou a responder por todos os ramos sem gravar leitura); "AINDA
+           NÃO" fica só pro horário que não chegou. -->
+      <p class="titulo text-4xl font-semibold" data-parte="veredito">
+        {{ tituloDoVeredito(ultima) }}
       </p>
       <p class="mt-2 text-lg opacity-95">{{ ultima.mensagem }}</p>
+      <p v-if="ultima.entrarDeNovo" class="mt-3">
+        <a :href="`/entrar?de=${encodeURIComponent(`/admin/evento/${id}/validacao`)}`"
+           class="inline-block rounded-xl bg-white px-4 py-2 font-semibold text-tinta">
+          Entrar de novo
+        </a>
+      </p>
       <p v-if="ultima.ingresso" class="mt-3 text-lg">
         <strong>{{ ultima.ingresso.titular || 'sem nome' }}</strong>
         · {{ ultima.ingresso.setor }} · {{ ultima.ingresso.lote }}
@@ -1003,7 +1230,7 @@ useHead({ title: 'Leitor de entrada' })
         <li v-for="(h, i) in historico" :key="i"
             class="flex items-center gap-3 border-b border-linha px-4 py-2 text-sm last:border-0">
           <span class="w-2.5 h-2.5 shrink-0 rounded-full"
-                :class="h.ok ? 'bg-ok' : 'bg-erro'" />
+                :class="corDoPonto(h)" />
           <span class="font-mono text-xs text-tinta-suave">{{ h.codigo }}</span>
           <span class="flex-1 text-tinta">{{ h.mensagem }}</span>
           <span v-if="h.local" class="selo-alerta">sem rede</span>

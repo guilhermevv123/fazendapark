@@ -115,6 +115,76 @@ export const SQL_TRAVA_INGRESSOS_DA_VENDA = `
    WHERE order_id = $1
    FOR UPDATE`
 
+/**
+ * Quando termina o DIA de cada lote — a última sessão em que ele vale.
+ *
+ * O dia do lote é o de `lot_sessions` quando ele tem (passaporte, lote de
+ * vários dias), e o do setor quando não tem (modelo antigo). Com vários dias,
+ * vale o ÚLTIMO: enquanto sobrar um dia pela frente o lote ainda tem uso.
+ * `NULL` = lote sem dia nenhum, que continua vendendo como sempre vendeu.
+ *
+ * Mora aqui porque o catálogo do balcão e a venda precisam da MESMA régua:
+ * catálogo que mostra um lote que a venda recusa é botão que só dá erro.
+ */
+export const SQL_FIM_DO_DIA_DO_LOTE = `
+  SELECT l.id AS lot_id,
+         COALESCE(
+           (SELECT max(es.ends_at) FROM lot_sessions ls
+              JOIN event_sessions es ON es.id = ls.session_id
+             WHERE ls.lot_id = l.id),
+           (SELECT es.ends_at FROM sectors s
+              JOIN event_sessions es ON es.id = s.session_id
+             WHERE s.id = l.sector_id)
+         ) AS fim_do_dia
+    FROM lots l
+   WHERE l.id = ANY($1::uuid[])`
+
+/**
+ * Anulação de movimento da gaveta — um registro NOVO, de sinal contrário.
+ *
+ * Sangria digitada errada (R$ 500 em vez de R$ 50) não pode ser apagada: o
+ * rastro de quem mexeu na gaveta é justamente o que a conferência de caixa
+ * existe pra guardar. Então a correção é outro movimento, do tipo oposto e do
+ * mesmo valor, que carrega na frente do motivo a marca de QUAL movimento ele
+ * anula. A soma dos dois dá zero e o esperado volta a bater.
+ *
+ * A marca vive no `reason` porque `pos_cash_movements` não tem coluna de
+ * vínculo (e criar uma pede migração). O formato é fixo e só este arquivo o
+ * escreve e o lê.
+ */
+const PREFIXO_ANULACAO = '[anula '
+
+export function motivoDeAnulacao(movimentoId: string, motivo: string): string {
+  return `${PREFIXO_ANULACAO}${movimentoId}] ${motivo.trim()}`
+}
+
+/** O id do movimento que esta linha anula, ou `null` se ela é um movimento comum. */
+export function anulaQual(reason: string | null | undefined): string | null {
+  if (!reason?.startsWith(PREFIXO_ANULACAO)) return null
+  const fim = reason.indexOf(']')
+  return fim > 0 ? reason.slice(PREFIXO_ANULACAO.length, fim) : null
+}
+
+/** O motivo sem a marca técnica — o que a tela mostra. */
+export function motivoLegivel(reason: string | null | undefined): string | null {
+  if (!anulaQual(reason)) return reason ?? null
+  return reason!.slice(reason!.indexOf(']') + 1).trim() || null
+}
+
+/**
+ * Quais pedidos entram na conta do turno, e com quanto — `$2` é o
+ * `closed_at` do turno (NULL enquanto está aberto).
+ *
+ * Aberto: pedido vivo, pelo que sobrou depois das devoluções (a regra de
+ * sempre). Fechado: MAIS o pedido cancelado depois do fechamento, pelo total
+ * cheio — a devolução dele saiu por fora do caixa e não pode reescrever uma
+ * conferência que já foi assinada.
+ */
+const CANCELADO_DEPOIS = `($2::timestamptz IS NOT NULL AND o.canceled_at > $2::timestamptz)`
+export const SQL_CONTA_NO_TURNO = `(${PEDIDO_VIVO('o.')} OR ${CANCELADO_DEPOIS})`
+export const SQL_NA_GAVETA_DO_TURNO =
+  `(o.total_cents - CASE WHEN ${CANCELADO_DEPOIS} THEN 0 ELSE o.refunded_cents END)`
+
 export interface ContagemDoTurno {
   /** fundo de troco com que o turno abriu */
   aberturaCents: number
@@ -156,8 +226,14 @@ export interface ContagemDoTurno {
  */
 export async function contarTurno(c: PoolClient, shiftId: string): Promise<ContagemDoTurno> {
   const { rows: t } = await c.query(
-    `SELECT opening_float_cents FROM pos_shifts WHERE id = $1`, [shiftId])
+    `SELECT opening_float_cents, closed_at FROM pos_shifts WHERE id = $1`, [shiftId])
   const aberturaCents = Number(t[0]?.opening_float_cents ?? 0)
+  // Caixa fechado é conferência ASSINADA. Venda cancelada depois do
+  // fechamento (pelo financeiro, ver `cancelar.post.ts`) devolveu o dinheiro
+  // FORA desta gaveta — então aqui ela continua contando como estava na hora
+  // do fechamento. Sem isto o extrato de ontem passava a dizer "vendeu menos"
+  // ao lado do esperado congelado, e a diferença de caixa mentia sozinha.
+  const fechouEm: Date | null = t[0]?.closed_at ?? null
 
   // `PEDIDO_VIVO` no lugar de `status = 'pago'`, e `- refunded_cents` no lugar
   // do total cheio. São a mesma decisão vista de dois lados: o que está na
@@ -167,10 +243,10 @@ export async function contarTurno(c: PoolClient, shiftId: string): Promise<Conta
   const { rows: formas } = await c.query(
     `SELECT o.payment_method AS forma,
             count(*)::int AS pedidos,
-            COALESCE(SUM(o.total_cents - o.refunded_cents), 0)::bigint AS total
+            COALESCE(SUM(${SQL_NA_GAVETA_DO_TURNO}), 0)::bigint AS total
        FROM orders o
-      WHERE o.pos_shift_id = $1 AND ${PEDIDO_VIVO('o.')}
-      GROUP BY o.payment_method`, [shiftId])
+      WHERE o.pos_shift_id = $1 AND ${SQL_CONTA_NO_TURNO}
+      GROUP BY o.payment_method`, [shiftId, fechouEm])
 
   let dinheiroCents = 0
   let eletronicoCents = 0
@@ -192,7 +268,10 @@ export async function contarTurno(c: PoolClient, shiftId: string): Promise<Conta
   const { rows: ing } = await c.query(
     `SELECT count(*)::int AS n FROM tickets t
        JOIN orders o ON o.id = t.order_id
-      WHERE o.pos_shift_id = $1 AND t.status <> 'cancelado'`, [shiftId])
+      WHERE o.pos_shift_id = $1
+        AND (t.status <> 'cancelado'
+             OR ($2::timestamptz IS NOT NULL AND t.canceled_at > $2::timestamptz))`,
+    [shiftId, fechouEm])
 
   // O rastro dos cancelamentos deste turno. Serve pra TELA, não pra conta:
   // ver logo abaixo por que somar isto no esperado seria contar duas vezes.

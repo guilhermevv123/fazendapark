@@ -146,7 +146,8 @@ useHead({ title: 'Passaportes e grupos' })
         </div>
       </div>
 
-      <table v-if="s.lotes.length" class="w-full border-collapse text-sm">
+      <div v-if="s.lotes.length" class="overflow-x-auto">
+        <table class="w-full border-collapse text-sm">
         <thead>
           <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
             <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Lote</th>
@@ -170,6 +171,7 @@ useHead({ title: 'Passaportes e grupos' })
           </tr>
         </tbody>
       </table>
+      </div>
       <p v-else class="px-4 py-4 text-sm text-tinta-fraca">Nenhum lote neste setor.</p>
     </section>
 

@@ -23,7 +23,7 @@ import { anunciarPulo, seForaDoArPula, sondarServidor, type Sonda } from '../../
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
 const SLUG = 'zz-checkout-cadastro'
 
-let orgId: string, eventId: string, lotId: string
+let orgId: string, eventId: string, lotId: string, tipoId: string
 let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
 let contador = 0
 
@@ -46,7 +46,7 @@ async function comprar(base: { email: string; documento: string }, extra: Record
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       eventSlug: SLUG,
-      itens: [{ lotId, quantidade: 1 }],
+      itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }],
       comprador: { nome: 'Maria de Teste', telefone: '73998260963', ...base, ...extra },
       forma: 'pix',
     }),
@@ -86,8 +86,8 @@ beforeAll(async () => {
   lotId = (await q1<any>(
     `INSERT INTO lots (sector_id, name, price_cents, quantity, max_per_order, channels)
      VALUES ($1, 'Lote Único', 10000, 500, 50, '{online}') RETURNING id`, [setor]))!.id
-  await q1(`INSERT INTO ticket_types (lot_id, name, quantity, discount_bps)
-            VALUES ($1, 'Inteira', 500, 0) RETURNING id`, [lotId])
+  tipoId = (await q1<any>(`INSERT INTO ticket_types (lot_id, name, quantity, discount_bps)
+            VALUES ($1, 'Inteira', 500, 0) RETURNING id`, [lotId]))!.id
   sonda = await sondarServidor(`/api/e/${SLUG}`)
   anunciarPulo('server/api/checkout-cadastro.test.ts', sonda)
 })

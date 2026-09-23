@@ -203,6 +203,16 @@ useHead({ title: 'Transferências' })
       </div>
     </div>
 
+    <!-- A mesma frase do borderô e do financeiro da organização: o saldo das
+         três telas é o de `saldoParaSaque`, e o recebido direto fica fora
+         dele, nomeado, porque já está com o produtor. -->
+    <p v-if="data.resumo.recebidoDiretoCents" class="mt-3 text-sm text-tinta-suave"
+       data-parte="recebido-direto">
+      <strong class="text-tinta">{{ reais(data.resumo.recebidoDiretoCents) }}</strong>
+      recebidos direto (dinheiro no balcão ou pix na sua chave) já estão com você e não
+      entram no saldo a transferir.
+    </p>
+
     <!-- ========================================================= filtros -->
     <div class="card mt-4 flex flex-wrap items-end gap-3">
       <div class="min-w-[220px] flex-1">

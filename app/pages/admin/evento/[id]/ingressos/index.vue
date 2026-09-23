@@ -22,6 +22,7 @@ definePageMeta({ layout: 'admin' })
 // antes de configurar. O módulo é regra pura: não importa `pg` em valor, não
 // toca banco, não tem efeito colateral nenhum ao ser carregado.
 import { COTA_LEGAL_BPS, cotaDeMeias, MOTIVOS } from '~~/server/utils/meia-entrada'
+import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
 
 const route = useRoute()
 const id = route.params.id as string
@@ -119,6 +120,7 @@ const setorForm = reactive({
   capacidade: null as number | null, descricao: '',
 })
 function abrirSetor(s?: any) {
+  erro.value = ''
   Object.assign(setorForm, {
     aberto: true,
     id: s?.id ?? '',
@@ -146,11 +148,33 @@ async function salvarSetor() {
 }
 
 /* --------------------------------------------------------------- lotes ---- */
+/**
+ * `gratuito` e `canais` são as duas escolhas que o formulário antigo não
+ * pedia, e as duas custavam caro:
+ *  - face R$ 0,00 (o valor com que o campo nasce) virava ingresso de graça no
+ *    site, sem aviso. Agora zero só passa marcando "Ingresso gratuito";
+ *  - sem canal, o lote nascia só `online` (padrão do banco) e o balcão dizia
+ *    "não está liberado para venda na bilheteria". Agora nasce nos dois.
+ */
 const loteForm = reactive({
   aberto: false, id: '', setorId: '', nome: '', faceCents: 0,
   quantidade: 100, minPorCompra: 1, maxPorCompra: 10,
   abreEm: '', expiraEm: '', visivel: true,
+  gratuito: false, canais: ['online', 'bilheteria'] as string[],
 })
+const erroLote = ref('')
+/** abaixo disto o campo de valor pede conferência (R$ 5,00) */
+const CONFERIR_ABAIXO_CENTS = 500
+
+function alternarCanal(canal: 'online' | 'bilheteria') {
+  const i = loteForm.canais.indexOf(canal)
+  if (i >= 0) loteForm.canais.splice(i, 1)
+  else loteForm.canais.push(canal)
+}
+function marcarGratuito(v: boolean) {
+  loteForm.gratuito = v
+  if (v) loteForm.faceCents = 0
+}
 /** ISO com fuso → 'YYYY-MM-DDTHH:mm' que o input datetime-local entende. */
 const paraCampo = (iso: string | null) => paraCampoDataHora(iso)
 /** E a volta: hora local digitada → o instante que o banco guarda. */
@@ -168,24 +192,74 @@ function abrirLote(setorId: string, l?: any) {
     abreEm: paraCampo(l?.abreEm ?? null),
     expiraEm: paraCampo(l?.expiraEm ?? null),
     visivel: l?.visivel ?? true,
+    // lote que já existe com R$ 0,00 foi gravado gratuito: reabrir não pode
+    // obrigar a marcar de novo pra salvar outra coisa
+    gratuito: l ? Number(l.faceCents) === 0 : false,
+    canais: l?.canais?.length ? [...l.canais] : ['online', 'bilheteria'],
   })
+  erroLote.value = ''
+  erro.value = ''
 }
 async function salvarLote() {
+  erroLote.value = ''
+  if (loteForm.faceCents === 0 && !loteForm.gratuito) {
+    erroLote.value = 'O valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito".'
+    return
+  }
+  if (!loteForm.canais.length) {
+    erroLote.value = 'Marque onde este lote vende: Site, Bilheteria ou os dois.'
+    return
+  }
   const campos = {
     nome: loteForm.nome || 'Lote único',
     faceCents: loteForm.faceCents,
+    gratuito: loteForm.faceCents === 0 && loteForm.gratuito,
     quantidade: loteForm.quantidade,
     minPorCompra: loteForm.minPorCompra,
     maxPorCompra: loteForm.maxPorCompra,
     abreEm: deCampo(loteForm.abreEm),
     expiraEm: deCampo(loteForm.expiraEm),
     visivel: loteForm.visivel,
+    // 'cortesia' (se o lote tiver) é preservado: a tela só liga e desliga os dois de venda
+    canais: loteForm.canais,
   }
   const ok = loteForm.id
     ? await chamar('PATCH', { o: 'lote', id: loteForm.id, campos })
     : await chamar('POST', { o: 'lote', setorId: loteForm.setorId, ...campos })
   if (ok) loteForm.aberto = false
+  // o erro do servidor aparece DENTRO da janela: o aviso do topo da página
+  // fica atrás dela, e o botão parecia não fazer nada
+  else erroLote.value = erro.value
 }
+
+/** "só site" / "só bilheteria" na tabela — o caso que surpreende no balcão. */
+function rotuloCanais(canais: string[] | undefined) {
+  const c = canais ?? []
+  const site = c.includes('online'), balcao = c.includes('bilheteria')
+  if (site && balcao) return ''
+  if (site) return 'só no site'
+  if (balcao) return 'só na bilheteria'
+  return 'fora do site e da bilheteria'
+}
+
+/*
+ * O endereço pedido no assistente já existia e o evento nasceu com outro
+ * ("-2"). O assistente manda os dois pela URL, e a tela avisa UMA vez: o link
+ * que a pessoa ia divulgar é o que está aqui, não o que ela digitou.
+ */
+const enderecoRenomeado = computed(() => {
+  const novo = route.query.endereco, pedido = route.query.pedido
+  return typeof novo === 'string' && typeof pedido === 'string' && novo !== pedido
+    ? { novo, pedido } : null
+})
+
+// Quem é da operação não abre o dashboard (área de dinheiro): o botão do
+// rodapé some pra não levar a um 403. Mesma régua do menu (`podeAbrirPagina`).
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+const podeDashboard = computed(() => {
+  const p = eu.value?.usuario?.papel
+  return ehPapel(p) && podeAbrirPagina(p, `/admin/evento/${id}/dashboard`)
+})
 
 /** Prévia do que o comprador paga, dentro do formulário de lote. */
 const previaLote = computed(() => {
@@ -271,12 +345,23 @@ const tipoForm = reactive({
   aberto: false, id: '', loteId: '', nome: '', quantidade: 50,
   descontoBps: 0, exigeDocumento: false, maxPorCliente: null as number | null,
 })
+/** Quanto do lote ainda não foi distribuído entre os tipos. */
+function sobraDoLote(loteId: string) {
+  for (const s of data.value?.setores ?? []) {
+    const l = s.lotes.find((x: any) => x.id === loteId)
+    if (l) return Math.max(0, Number(l.quantidade) - l.tipos.reduce((a: number, t: any) => a + Number(t.quantidade), 0))
+  }
+  return 0
+}
 function abrirTipo(loteId: string, t?: any) {
+  erro.value = ''
   Object.assign(tipoForm, {
     aberto: true, loteId,
     id: t?.id ?? '',
     nome: t?.nome ?? '',
-    quantidade: t?.quantidade ?? 50,
+    // tipo novo nasce com o que SOBRA do lote — um número fixo (50) estourava
+    // o lote de 30 já no primeiro "Criar tipo"
+    quantidade: t?.quantidade ?? sobraDoLote(loteId),
     descontoBps: t?.descontoBps ?? 0,
     exigeDocumento: t?.exigeDocumento ?? false,
     maxPorCliente: t?.maxPorCliente ?? null,
@@ -372,6 +457,13 @@ useHead({ title: 'Ingressos' })
       </p>
     </div>
 
+    <p v-if="enderecoRenomeado" class="faixa-aviso mt-4">
+      O endereço <strong>/e/{{ enderecoRenomeado.pedido }}</strong> já estava em uso, então a página
+      deste evento ficou em <strong>/e/{{ enderecoRenomeado.novo }}</strong>. É esse que vale divulgar —
+      dá pra trocar em <NuxtLink :to="`/admin/evento/${id}/configuracoes`" class="underline">Configurações</NuxtLink>
+      enquanto não houver venda.
+    </p>
+
     <p v-if="erro" class="mt-4 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
       {{ erro }}
     </p>
@@ -442,6 +534,7 @@ useHead({ title: 'Ingressos' })
 
                 <td class="px-3 py-3">
                   <p class="font-medium text-tinta">{{ lote.nome }}</p>
+                  <p v-if="rotuloCanais(lote.canais)" class="text-xs text-alerta">{{ rotuloCanais(lote.canais) }}</p>
                   <p v-if="lote.abreEm || lote.expiraEm" class="text-xs text-tinta-fraca">
                     <template v-if="lote.abreEm">abre {{ dataHora(lote.abreEm) }}</template>
                     <template v-if="lote.abreEm && lote.expiraEm"> · </template>
@@ -642,7 +735,7 @@ useHead({ title: 'Ingressos' })
       <p class="text-sm opacity-90">
         Disponível: <span class="tabular-nums">{{ totais.disponivel }}</span>
       </p>
-      <NuxtLink :to="`/admin/evento/${id}/dashboard`"
+      <NuxtLink v-if="podeDashboard" :to="`/admin/evento/${id}/dashboard`"
                 class="ml-auto rounded-card border border-white/60 px-3 py-1.5 text-sm font-semibold hover:bg-white/10">
         Ir para o dashboard
       </NuxtLink>
@@ -685,6 +778,10 @@ useHead({ title: 'Ingressos' })
                     placeholder="O que está incluso neste setor" />
         </div>
       </div>
+      <!-- o erro do servidor aparece DENTRO da janela (o do topo fica atrás dela) -->
+      <p v-if="erro" class="mt-3 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro" role="alert">
+        {{ erro }}
+      </p>
       <template #acoes>
         <button type="button" class="btn-secundario" @click="setorForm.aberto = false">Cancelar</button>
         <button type="button" class="btn-primario" :disabled="salvando" @click="salvarSetor">
@@ -703,7 +800,13 @@ useHead({ title: 'Ingressos' })
         </div>
         <div>
           <label class="rotulo">Valor de face</label>
-          <CampoMoeda v-model="loteForm.faceCents" />
+          <CampoMoeda v-model="loteForm.faceCents" :disabled="loteForm.gratuito"
+                      :conferir-abaixo="CONFERIR_ABAIXO_CENTS" />
+          <label class="mt-1.5 flex items-center gap-2 text-sm text-tinta-corpo">
+            <input type="checkbox" :checked="loteForm.gratuito"
+                   @change="marcarGratuito(($event.target as HTMLInputElement).checked)">
+            Ingresso gratuito
+          </label>
         </div>
         <div>
           <label class="rotulo">Quantidade</label>
@@ -725,6 +828,19 @@ useHead({ title: 'Ingressos' })
           <label class="rotulo">Fecha em (opcional)</label>
           <input v-model="loteForm.expiraEm" type="datetime-local" class="campo">
         </div>
+        <div class="sm:col-span-2">
+          <p class="rotulo">Onde vende</p>
+          <div class="flex flex-wrap gap-4 text-sm text-tinta-corpo">
+            <label class="flex items-center gap-2">
+              <input type="checkbox" :checked="loteForm.canais.includes('online')"
+                     @change="alternarCanal('online')"> Site
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" :checked="loteForm.canais.includes('bilheteria')"
+                     @change="alternarCanal('bilheteria')"> Bilheteria (balcão)
+            </label>
+          </div>
+        </div>
         <label class="flex items-center gap-2 text-sm text-tinta-corpo sm:col-span-2">
           <input v-model="loteForm.visivel" type="checkbox"> Visível na página de venda
         </label>
@@ -733,6 +849,17 @@ useHead({ title: 'Ingressos' })
         O comprador vai pagar
         <strong class="text-tinta">{{ reais(previaLote.total) }}</strong>
         ({{ reais(previaLote.face) }} + {{ reais(previaLote.taxa) }} de taxa)
+      </p>
+      <p v-else-if="loteForm.gratuito" class="faixa-aviso mt-3">
+        <strong>Gratuito:</strong> sai por R$ 0,00 — o comprador não paga nada e o
+        ingresso continua saindo do estoque.
+      </p>
+      <p v-else class="mt-3 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
+        O valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito".
+      </p>
+      <p v-if="erroLote" class="mt-3 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro"
+         role="alert">
+        {{ erroLote }}
       </p>
       <template #acoes>
         <button type="button" class="btn-secundario" @click="loteForm.aberto = false">Cancelar</button>
@@ -807,6 +934,10 @@ useHead({ title: 'Ingressos' })
           tirando ingresso do estoque.
         </p>
       </div>
+
+      <p v-if="erro" class="mt-3 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro" role="alert">
+        {{ erro }}
+      </p>
 
       <template #acoes>
         <button type="button" class="btn-secundario" @click="tipoForm.aberto = false">Cancelar</button>

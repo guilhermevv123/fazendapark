@@ -65,6 +65,19 @@ const mudou = computed(() => {
   return false
 })
 
+/**
+ * Campo numérico apagado: o `v-model.number` devolve `""` (não `null`), e o
+ * servidor recusava o `""` com "Dados inválidos" — ninguém conseguia voltar um
+ * "Máximo por cliente" pra "sem limite". Vazio vira `null` ("sem valor"); nos
+ * dois campos que não aceitam ficar sem valor, a tela diz qual preencher.
+ */
+const NUMERICOS = ['vendaAteMinutos', 'classificacao', 'minutosDeReserva', 'maxPorCliente', 'taxaBps']
+const NUMERICOS_OBRIGATORIOS: Record<string, string> = {
+  classificacao: 'Preencha a "Classificação etária" (0 = livre).',
+  minutosDeReserva: 'Preencha os "Minutos de reserva no carrinho" (de 5 a 120).',
+  taxaBps: 'Preencha o percentual da "Taxa de serviço" (0 se não cobrar).',
+}
+
 async function salvar() {
   erro.value = ''
   aviso.value = ''
@@ -75,6 +88,9 @@ async function salvar() {
     if (CAMPOS_DATA.includes(k)) corpo[k] = deCampo(f[k])
     else if (k === 'tags') {
       corpo.tags = String(f.tags || '').split(',').map((t: string) => t.trim()).filter(Boolean)
+    } else if (NUMERICOS.includes(k) && (f[k] === '' || f[k] == null)) {
+      if (NUMERICOS_OBRIGATORIOS[k]) { erro.value = NUMERICOS_OBRIGATORIOS[k]; return }
+      corpo[k] = null
     } else corpo[k] = f[k]
   }
   if (!Object.keys(corpo).length) return
@@ -105,21 +121,8 @@ function desfazer() {
  * texto ainda não salvo.
  */
 const enviandoImagem = reactive<Record<'banner' | 'thumb', boolean>>({ banner: false, thumb: false })
-const inputBanner = ref<HTMLInputElement | null>(null)
-const inputThumb = ref<HTMLInputElement | null>(null)
 
-/** limpa o `<input type="file">` depois de ler — sem isto, escolher o MESMO
- *  arquivo de novo (pra tentar de novo depois de corrigir algo) não disparava
- *  `change` nenhum, e o botão parecia travado. */
-function aoEscolherArquivo(campo: 'banner' | 'thumb', ev: Event) {
-  const input = ev.target as HTMLInputElement
-  enviarImagem(campo, input.files)
-  input.value = ''
-}
-
-async function enviarImagem(campo: 'banner' | 'thumb', arquivos: FileList | null) {
-  const arquivo = arquivos?.[0]
-  if (!arquivo) return
+async function enviarImagem(campo: 'banner' | 'thumb', arquivo: File) {
   erro.value = ''
   enviandoImagem[campo] = true
   try {
@@ -138,14 +141,49 @@ async function enviarImagem(campo: 'banner' | 'thumb', arquivos: FileList | null
   }
 }
 
+/** Remover também grava na hora (par do envio): tira do evento e apaga do bucket. */
+async function removerImagem(campo: 'banner' | 'thumb') {
+  erro.value = ''
+  enviandoImagem[campo] = true
+  try {
+    await $fetch(`/api/admin/evento/${id}/imagem`, { method: 'DELETE', query: { campo } })
+    await refresh()
+  } catch (e: any) {
+    erro.value = e?.data?.statusMessage || 'Não foi possível remover a imagem.'
+  } finally {
+    enviandoImagem[campo] = false
+  }
+}
+
+/*
+ * "Adiado" e "Cancelado" não se escolhem aqui: como rótulo, fechavam a vitrine
+ * e deixavam ingresso válido e pedido pago — a catraca seguia abrindo. Eles
+ * saem SÓ dos botões do bloco "Cancelar ou adiar o evento" (e o servidor
+ * recusa o resto). Quando o evento JÁ está num dos dois, a opção aparece
+ * travada, só pra o campo mostrar a verdade.
+ */
 const STATUS = [
   { v: 'rascunho', r: 'Rascunho — só quem tem login vê' },
   { v: 'ativo', r: 'Ativo — vendendo' },
   { v: 'oculto', r: 'Oculto — vende por link direto, não aparece na lista' },
-  { v: 'adiado', r: 'Adiado' },
   { v: 'encerrado', r: 'Encerrado' },
-  { v: 'cancelado', r: 'Cancelado' },
 ]
+const STATUS_DOS_BOTOES: Record<string, string> = {
+  adiado: 'Adiado — pelo bloco "Adiar para outra data"',
+  cancelado: 'Cancelado — não volta a vender',
+}
+
+/**
+ * O que a tela pode AFIRMAR sobre o cancelamento. "Os ingressos foram
+ * invalidados e a devolução está em andamento" só é verdade quando o
+ * cancelamento passou pela rota que faz isso (`cancelar.post.ts`, que grava
+ * `event_cancellations`). Um status 'cancelado' posto à mão, do tempo em que o
+ * select deixava, não invalidou nada — e a tela não pode dizer que sim.
+ *
+ * `data.cancelamento` é o ato gravado, quando o GET o devolve. Sem ele, a
+ * frase fica no que dá pra garantir e manda pro botão que resolve.
+ */
+const cancelamentoReal = computed(() => data.value?.cancelamento ?? null)
 
 useHead({ title: 'Configurações do evento' })
 
@@ -217,8 +255,11 @@ const janelaDoComprador = computed(() => {
   if (data.value?.status === 'cancelado') {
     return {
       ok: false,
-      texto: 'Evento cancelado: a devolução é de todo mundo e já está na fila — '
-        + 'o comprador não precisa pedir nada.',
+      texto: cancelamentoReal.value
+        ? 'Evento cancelado: a devolução é de todo mundo e já está na fila — '
+          + 'o comprador não precisa pedir nada.'
+        : 'Evento cancelado: desistência individual não se aplica. A devolução é pelo '
+          + 'botão "Cancelar evento e devolver", logo abaixo.',
     }
   }
   if (dias == null) return { ok: false, texto: '' }
@@ -336,9 +377,16 @@ async function adiarEvento() {
             </div>
             <div>
               <label class="rotulo">Situação</label>
-              <select v-model="f.status" class="campo">
+              <select v-model="f.status" class="campo" :disabled="data.status === 'cancelado'">
+                <option v-if="STATUS_DOS_BOTOES[data.status]" :value="data.status" disabled>
+                  {{ STATUS_DOS_BOTOES[data.status] }}
+                </option>
                 <option v-for="s in STATUS" :key="s.v" :value="s.v">{{ s.r }}</option>
               </select>
+              <p class="mt-1 text-xs text-tinta-fraca">
+                Cancelar e adiar ficam no fim desta tela — lá o ingresso é invalidado
+                ou o comprador é avisado.
+              </p>
             </div>
             <div>
               <label class="rotulo">Como chamar o ingresso</label>
@@ -355,13 +403,19 @@ async function adiarEvento() {
         <section class="card">
           <h2 class="titulo text-base font-semibold text-tinta">Datas e horários</h2>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
+            <!-- Com venda feita a data não muda por aqui: quem comprou não
+                 ficaria sabendo. O servidor recusa do mesmo jeito (409). -->
+            <p v-if="data.jaVendeu" class="text-xs text-alerta sm:col-span-2">
+              Com ingressos vendidos, mude a data por <a href="#cancelamento" class="underline">Adiar evento</a>
+              — os compradores são avisados.
+            </p>
             <div>
               <label class="rotulo">Começa em</label>
-              <input v-model="f.comecaEm" type="datetime-local" class="campo">
+              <input v-model="f.comecaEm" type="datetime-local" class="campo" :disabled="data.jaVendeu">
             </div>
             <div>
               <label class="rotulo">Termina em</label>
-              <input v-model="f.terminaEm" type="datetime-local" class="campo">
+              <input v-model="f.terminaEm" type="datetime-local" class="campo" :disabled="data.jaVendeu">
             </div>
             <div>
               <label class="rotulo">Venda encerra em (data fixa)</label>
@@ -435,33 +489,23 @@ async function adiarEvento() {
 
         <section class="card">
           <h2 class="titulo text-base font-semibold text-tinta">Imagens e categoria</h2>
-          <div class="mt-3 grid gap-3 sm:grid-cols-2">
-            <div class="sm:col-span-2">
-              <label class="rotulo">Banner</label>
-              <div class="flex gap-2">
-                <input v-model="f.banner" class="campo" placeholder="https://… ou envie um arquivo">
-                <button type="button" class="btn-secundario shrink-0" :disabled="enviandoImagem.banner"
-                        @click="inputBanner?.click()">
-                  {{ enviandoImagem.banner ? 'Enviando…' : 'Enviar' }}
-                </button>
-                <input ref="inputBanner" type="file" accept="image/*" class="hidden"
-                       @change="aoEscolherArquivo('banner', $event)">
-              </div>
-              <p class="mt-1 text-xs text-tinta-fraca">A faixa larga do topo da página pública. JPG, PNG ou WEBP, até 8MB.</p>
+          <!-- clique ou arraste, com a prévia no formato em que aparece pro
+               público. Enviar e remover gravam na hora (não esperam "Salvar"). -->
+          <div class="mt-3 grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+            <div>
+              <EnvioDeImagem rotulo="Capa" medida="1600 × 900, horizontal" proporcao="16 / 9"
+                             :url="f.banner || null" :enviando="enviandoImagem.banner"
+                             @escolher="enviarImagem('banner', $event)" @remover="removerImagem('banner')" />
+              <p class="mt-1.5 text-xs text-tinta-fraca">A faixa do topo da página de vendas.</p>
             </div>
-            <div class="sm:col-span-2">
-              <label class="rotulo">Miniatura</label>
-              <div class="flex gap-2">
-                <input v-model="f.thumb" class="campo" placeholder="https://… ou envie um arquivo">
-                <button type="button" class="btn-secundario shrink-0" :disabled="enviandoImagem.thumb"
-                        @click="inputThumb?.click()">
-                  {{ enviandoImagem.thumb ? 'Enviando…' : 'Enviar' }}
-                </button>
-                <input ref="inputThumb" type="file" accept="image/*" class="hidden"
-                       @change="aoEscolherArquivo('thumb', $event)">
-              </div>
-              <p class="mt-1 text-xs text-tinta-fraca">O quadrado do card na lista de eventos (`/admin`).</p>
+            <div class="max-w-[260px]">
+              <EnvioDeImagem rotulo="Miniatura" medida="500 × 500, quadrada" proporcao="1 / 1"
+                             :url="f.thumb || null" :enviando="enviandoImagem.thumb"
+                             @escolher="enviarImagem('thumb', $event)" @remover="removerImagem('thumb')" />
+              <p class="mt-1.5 text-xs text-tinta-fraca">O quadrado do evento na lista do painel.</p>
             </div>
+          </div>
+          <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <div>
               <label class="rotulo">Categoria</label>
               <input v-model="f.categoria" class="campo" placeholder="Festa, Show, Esporte…">
@@ -470,12 +514,6 @@ async function adiarEvento() {
               <label class="rotulo">Tags</label>
               <input v-model="f.tags" class="campo" placeholder="separadas por vírgula">
             </div>
-          </div>
-          <div v-if="f.banner || f.thumb" class="mt-3 grid gap-3 sm:grid-cols-2">
-            <img v-if="f.banner" :src="f.banner" alt="Prévia do banner"
-                 class="max-h-44 w-full rounded-card border border-linha object-cover">
-            <img v-if="f.thumb" :src="f.thumb" alt="Prévia da miniatura"
-                 class="max-h-44 w-full rounded-card border border-linha object-cover">
           </div>
         </section>
       </div>
@@ -586,9 +624,14 @@ async function adiarEvento() {
         deixa de abrir a catraca e o dinheiro entra na fila de devolução.
       </p>
 
-      <p v-if="data.status === 'cancelado'" class="faixa-erro mt-3">
+      <p v-if="data.status === 'cancelado' && cancelamentoReal" class="faixa-erro mt-3">
         Este evento está <strong>cancelado</strong>. Os ingressos foram invalidados e a
         devolução está em andamento. Disparar de novo só alcança pagamento que caiu depois.
+      </p>
+      <p v-else-if="data.status === 'cancelado'" class="faixa-erro mt-3">
+        Este evento está marcado como <strong>cancelado</strong>. Para garantir que nenhum
+        ingresso continue abrindo a catraca e que toda compra entre na fila de devolução,
+        use <strong>Cancelar evento e devolver</strong> abaixo — repetir não devolve em dobro.
       </p>
       <p v-else-if="data.status === 'adiado'" class="faixa-aviso mt-3">
         Este evento está <strong>adiado</strong> para

@@ -9,8 +9,9 @@
  * contagem — ver o alvo antes de contar transforma a conferência em cópia.
  */
 import { q, q1, tx } from '../../../../../utils/db'
-import { contarTurno } from '../../../../../utils/caixa'
-import { PEDIDO_VIVO } from '../../../../../utils/liquido'
+import {
+  SQL_CONTA_NO_TURNO, SQL_NA_GAVETA_DO_TURNO, anulaQual, contarTurno, motivoLegivel,
+} from '../../../../../utils/caixa'
 
 export default defineEventHandler(async (event) => {
   const eventId = getRouterParam(event, 'id')!
@@ -63,15 +64,20 @@ export default defineEventHandler(async (event) => {
    * `status` vai junto pra a tela poder dizer POR QUE aquela linha vale menos
    * do que foi vendido, em vez de mostrar dois números sem explicação.
    */
+  //
+  // Com o caixa FECHADO entram também as vendas canceladas depois do
+  // fechamento, pelo valor cheio — a mesma régua de `contarTurno` (ver
+  // `SQL_CONTA_NO_TURNO`). A soma da coluna continua sendo o total de cima.
   const vendas = await q<any>(
     `SELECT o.id, o.code, o.status, o.total_cents, o.refunded_cents,
+            ${SQL_NA_GAVETA_DO_TURNO} AS na_gaveta,
             o.payment_method, o.paid_at,
             o.cash_received_cents, o.change_cents,
             COALESCE(c.name, '—') AS comprador,
             (SELECT count(*)::int FROM tickets t WHERE t.order_id = o.id) AS ingressos
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
-      WHERE o.pos_shift_id = $1 AND ${PEDIDO_VIVO('o.')}
-      ORDER BY o.paid_at DESC LIMIT 100`, [turnoId])
+      WHERE o.pos_shift_id = $1 AND ${SQL_CONTA_NO_TURNO}
+      ORDER BY o.paid_at DESC LIMIT 100`, [turnoId, turno.closed_at])
 
   return {
     turno: {
@@ -90,9 +96,13 @@ export default defineEventHandler(async (event) => {
       observacao: turno.note,
     },
     contagem,
+    // `anula` = este lançamento desfaz aquele; `anuladoPor` = aquele foi
+    // desfeito por este. A tela risca o par e esconde o botão de anular.
     movimentos: movimentos.map((m) => ({
       id: m.id, tipo: m.kind, valorCents: Number(m.amount_cents),
-      motivo: m.reason, em: m.at, por: m.por,
+      motivo: motivoLegivel(m.reason), em: m.at, por: m.por,
+      anula: anulaQual(m.reason),
+      anuladoPor: movimentos.find((x) => anulaQual(x.reason) === m.id)?.id ?? null,
     })),
     vendas: vendas.map((v) => ({
       id: v.id, codigo: v.code, situacao: v.status, totalCents: Number(v.total_cents),
@@ -100,7 +110,7 @@ export default defineEventHandler(async (event) => {
       estornadoCents: Number(v.refunded_cents),
       // a parcela com que esta linha entra na contagem do turno — a soma desta
       // coluna é o total impresso no alto da tela
-      naGavetaCents: Number(v.total_cents) - Number(v.refunded_cents),
+      naGavetaCents: Number(v.na_gaveta),
       forma: v.payment_method, em: v.paid_at, comprador: v.comprador, ingressos: v.ingressos,
       recebidoCents: v.cash_received_cents === null ? null : Number(v.cash_received_cents),
       trocoCents: v.change_cents === null ? null : Number(v.change_cents),

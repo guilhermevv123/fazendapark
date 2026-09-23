@@ -19,7 +19,8 @@
  *    relógio pra desencontrar do primeiro.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import type { H3Event } from 'h3'
+import { isIP } from 'node:net'
+import { getRequestHeader, type H3Event } from 'h3'
 import { q, q1, tx } from './db'
 import { ehPapel, papelDoRoleLegado, type Papel } from './papeis'
 
@@ -46,6 +47,8 @@ const RENOVA_APOS_MIN = 60 // só mexe no banco se a última visita foi há mais
  *   sem erro nenhum aparecer.
  */
 export type Sessao = {
+  /** `sessions.id` desta sessão — é o que a troca de senha preserva ao derrubar as outras */
+  sessaoId: string
   usuarioId: string
   orgId: string
   nome: string
@@ -182,6 +185,7 @@ export async function lerSessao(event: H3Event): Promise<Sessao | null> {
   }
 
   return {
+    sessaoId: linha.id,
     usuarioId: linha.uid, orgId: linha.org_id, nome: linha.name,
     email: linha.email,
     // Linha antiga que a migração 012 não alcançou (banco de cópia, restore
@@ -307,24 +311,55 @@ export async function encerrarTodas(usuarioId: string): Promise<number> {
 
 /* ------------------------------------------------------------------ freio */
 
+/** Janela do freio e os três tetos. Ver `travadoPorTentativas`. */
+export const FREIO = {
+  /** o mesmo e-mail, errando do MESMO endereço */
+  porEmailEIp: 8,
+  /** o mesmo e-mail, somando TODOS os endereços — só ataque distribuído chega aqui */
+  porEmail: 50,
+  /** o mesmo endereço, somando todos os e-mails */
+  porIp: 30,
+} as const
+
 /**
- * Força bruta: conta as falhas recentes por e-mail E por IP.
+ * Força bruta: conta as falhas recentes (15 min) em três baldes.
  *
- * Por e-mail sozinho, um atacante testa a mesma senha em mil contas sem nunca
- * bater o limite de nenhuma. Por IP sozinho, uma empresa inteira atrás de um
- * NAT se tranca junto. Os dois, com números diferentes, cobrem os dois casos.
+ * O balde principal é **e-mail + IP**. Até 22/09 era o e-mail sozinho, com 8
+ * falhas — e aí qualquer um, de qualquer lugar, trancava o DONO pra fora do
+ * painel digitando oito senhas erradas no e-mail dele, e a senha certa passava
+ * a receber 429 também. Freio que o atacante usa como arma é pior que freio
+ * nenhum. Com o par, quem erra tranca só o próprio aparelho.
+ *
+ * Os outros dois cobrem o que o par sozinho deixaria passar:
+ * - **por e-mail, teto alto (50)** — o mesmo alvo atacado de muitos IPs
+ *   (botnet). Ainda dá pra trancar o dono assim, mas custa 50 endereços em 15
+ *   minutos, não um script de oito linhas;
+ * - **por IP (30)** — um endereço testando a mesma senha em mil contas.
  */
 export async function travadoPorTentativas(email: string, ip: string | null) {
+  // `IS NOT DISTINCT FROM`: sem IP conhecido, o balde é o dos "sem IP" — e
+  // não o e-mail inteiro, que era o defeito.
+  const porPar = await q1<any>(
+    `SELECT count(*)::int AS n FROM login_attempts
+      WHERE email = $1 AND ip IS NOT DISTINCT FROM $2
+        AND ok = false AND at > now() - interval '15 minutes'`, [email, ip])
+  if (Number(porPar.n) >= FREIO.porEmailEIp) {
+    return 'Muitas tentativas erradas para este e-mail a partir deste aparelho. '
+      + 'Tente de novo em 15 minutos.'
+  }
+
   const porEmail = await q1<any>(
     `SELECT count(*)::int AS n FROM login_attempts
       WHERE email = $1 AND ok = false AND at > now() - interval '15 minutes'`, [email])
-  if (Number(porEmail.n) >= 8) return 'Muitas tentativas para este e-mail. Tente de novo em 15 minutos.'
+  if (Number(porEmail.n) >= FREIO.porEmail) {
+    return 'Muitas tentativas erradas para este e-mail. Tente de novo em 15 minutos.'
+  }
 
   if (ip) {
     const porIp = await q1<any>(
       `SELECT count(*)::int AS n FROM login_attempts
         WHERE ip = $1 AND ok = false AND at > now() - interval '15 minutes'`, [ip])
-    if (Number(porIp.n) >= 30) return 'Muitas tentativas deste endereço. Tente de novo em 15 minutos.'
+    if (Number(porIp.n) >= FREIO.porIp) return 'Muitas tentativas deste endereço. Tente de novo em 15 minutos.'
   }
   return null
 }
@@ -334,13 +369,30 @@ export async function registrarTentativa(email: string, ip: string | null, ok: b
     [email, ip, ok])
 }
 
-export function ipDaRequisicao(event: H3Event) {
-  // Atrás do Cloudflare o IP real vem no CF-Connecting-IP. Sem proxy, o
-  // socket. Confiar em X-Forwarded-For sem proxy na frente é deixar o próprio
-  // cliente escolher o IP que o freio vai contar.
-  return getRequestHeader(event, 'cf-connecting-ip')
-    ?? event.node.req.socket.remoteAddress
-    ?? null
+/**
+ * O IP de quem fez a requisição — o que o freio conta e a auditoria carimba.
+ *
+ * Cabeçalho de IP é texto que o CLIENTE escreve. Confiar em `cf-connecting-ip`
+ * sempre (como era) deixava qualquer um mandar um IP novo a cada tentativa e
+ * nunca encher balde nenhum. Então só se lê cabeçalho quando o dono DECLARA que
+ * existe um proxy na frente que sobrescreve o valor: `CONFIAR_PROXY=1`.
+ *
+ * Com proxy declarado: `cf-connecting-ip` (Cloudflare) e, sem ele, o ÚLTIMO
+ * item do `x-forwarded-for` — o que o nosso proxy acrescentou; os da esquerda
+ * vieram do cliente. Valor que não é IP cai no socket.
+ */
+export function ipDaRequisicao(event: H3Event): string | null {
+  const socket = event.node?.req?.socket?.remoteAddress ?? null
+  if (process.env.CONFIAR_PROXY !== '1') return socket
+
+  const cf = getRequestHeader(event, 'cf-connecting-ip')?.trim()
+  if (cf && isIP(cf)) return cf
+
+  const xff = getRequestHeader(event, 'x-forwarded-for')
+  const ultimo = xff?.split(',').map((s) => s.trim()).filter(Boolean).pop()
+  if (ultimo && isIP(ultimo)) return ultimo
+
+  return socket
 }
 
 /* ------------------------------------------------------------------ papéis */

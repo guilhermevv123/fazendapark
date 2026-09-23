@@ -16,13 +16,14 @@
  *   - o preço NUNCA vem do navegador, igual ao checkout. O balcão manda quais
  *     lotes e quantos; todo valor é relido do banco.
  */
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { q, q1, tx } from '../../../../../utils/db'
 import { EstoqueInsuficiente, LoteIndisponivel, reservar } from '../../../../../utils/estoque'
-import { faceComDesconto, somarPedido, type ModoTaxa } from '../../../../../utils/dinheiro'
+import { faceDoTipo, somarPedido, type ModoTaxa } from '../../../../../utils/dinheiro'
 import { gerarCodigo } from '../../../../../utils/ingresso'
 import { emitirNaTransacao } from '../../../../../utils/emissao'
-import { SQL_TRAVA_TURNO_ABERTO } from '../../../../../utils/caixa'
+import { SQL_FIM_DO_DIA_DO_LOTE, SQL_TRAVA_TURNO_ABERTO } from '../../../../../utils/caixa'
 import { cpfValido } from '../../../../../utils/documento'
 
 const Entrada = z.object({
@@ -44,7 +45,41 @@ const Entrada = z.object({
   }).nullish(),
   cupom: z.string().max(40).nullish(),
   observacao: z.string().max(200).nullish(),
+  /**
+   * Chave da venda, gerada pelo navegador UMA vez por venda. É o que impede o
+   * "Vender" repetido pela rede (resposta que se perdeu, toque duplo, Wi-Fi
+   * do guichê caindo) de virar duas vendas com o mesmo dinheiro na gaveta.
+   * Opcional só pra não quebrar quem ainda não manda.
+   */
+  chave: z.string().uuid().nullish(),
 })
+
+/**
+ * O código do pedido, derivado da chave da venda.
+ *
+ * `orders.code` é UNIQUE: com o código saindo da chave, a segunda tentativa
+ * da MESMA venda esbarra no índice do banco e não grava de novo — sem coluna
+ * nova e sem pré-checagem que duas requisições leem juntas. O turno entra no
+ * hash pra a mesma chave em outro caixa não colidir. Mesmo formato do
+ * `gerarCodigo` (PDV-XXXX-XXXX), pra o código continuar legível no guichê.
+ */
+const ALFABETO_CODIGO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+export function codigoDaVenda(turnoId: string, chave: string): string {
+  const h = createHash('sha256').update(`pdv:${turnoId}:${chave}`).digest()
+  let s = ''
+  for (let i = 0; i < 8; i++) s += ALFABETO_CODIGO[h[i] % ALFABETO_CODIGO.length]
+  return `PDV-${s.slice(0, 4)}-${s.slice(4)}`
+}
+
+/** O recado de esgotado pra quem está no guichê — não o texto de log da exceção. */
+function recadoDeEsgotado(e: EstoqueInsuficiente): string {
+  if (e.disponivel <= 0) {
+    return `Acabou "${e.nome}". Tire do carrinho e ofereça outra opção ao cliente.`
+  }
+  const resta = e.disponivel === 1 ? 'Resta só 1' : `Restam só ${e.disponivel}`
+  return `${resta} de "${e.nome}" e a venda pedia ${e.pedido}. `
+    + `Diminua para ${e.disponivel} ou ofereça outra opção.`
+}
 
 export default defineEventHandler(async (event) => {
   const eventId = getRouterParam(event, 'id')!
@@ -54,13 +89,20 @@ export default defineEventHandler(async (event) => {
   }
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    const campos = p.error.flatten().fieldErrors
+    throw createError({
+      statusCode: 400,
+      statusMessage: campos.comprador ? 'Confira os dados do cliente: nome com pelo menos 3 letras e e-mail válido.'
+        : campos.itens ? 'Monte a venda com pelo menos um ingresso (no máximo 50 de cada).'
+          : 'Não entendi a venda. Confira o carrinho e a forma de pagamento e tente de novo.',
+      data: p.error.flatten(),
+    })
   }
   const d = p.data
 
   // --------------------------------------------------------------- evento
   const ev = await q1<any>(
-    `SELECT id, org_id, name, slug, status, fee_bps, fee_mode_pos, sales_end_at
+    `SELECT id, org_id, name, slug, status, fee_bps, fee_mode_pos, sales_end_at, timezone
        FROM events WHERE id = $1`, [eventId])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
   if (ev.status !== 'ativo') {
@@ -82,6 +124,19 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // ---------------------------------------- a mesma venda chegando de novo
+  // A resposta da primeira tentativa se perdeu e o navegador mandou outra
+  // vez: devolve o recibo do que JÁ foi vendido, em vez de vender de novo.
+  // Esta leitura é só o atalho do caso comum; quem garante é o UNIQUE de
+  // `orders.code`, lá embaixo, pra quando as duas chegam juntas.
+  const codigo = d.chave ? codigoDaVenda(d.turnoId, d.chave) : gerarCodigo('PDV')
+  if (d.chave) {
+    const ja = await q1<any>(
+      `SELECT id FROM orders WHERE code = $1 AND event_id = $2 AND pos_shift_id = $3`,
+      [codigo, eventId, d.turnoId])
+    if (ja) return { ...(await reciboDoPedido(ja.id, turno.ponto)), repetida: true }
+  }
+
   // ------------------------------------------- preços, relidos do banco --
   const lotIds = [...new Set(d.itens.map((i) => i.lotId))]
   const lotes = await q<any>(
@@ -94,6 +149,23 @@ export default defineEventHandler(async (event) => {
     if (!l) throw createError({ statusCode: 404, statusMessage: 'Lote não encontrado' })
     if (l.event_id !== ev.id) {
       throw createError({ statusCode: 400, statusMessage: 'Lote não pertence a este evento' })
+    }
+  }
+
+  // Ingresso de dia que já passou não se vende. O estoque não sabe de data
+  // (é contagem), então quem recusa é o dia do lote — a mesma régua que tira
+  // o lote do catálogo do balcão. Vender ontem hoje é cobrar por uma entrada
+  // que a portaria vai recusar com o cliente já dentro da fila.
+  const dias = await q<any>(SQL_FIM_DO_DIA_DO_LOTE, [lotIds])
+  for (const dia of dias) {
+    if (dia.fim_do_dia && new Date(dia.fim_do_dia).getTime() <= Date.now()) {
+      const nome = porLote.get(dia.lot_id)?.name ?? 'Este ingresso'
+      throw createError({
+        statusCode: 409,
+        statusMessage: `"${nome}" era para ${quandoFoi(dia.fim_do_dia, ev.timezone)}, que já terminou. `
+          + 'Tire do carrinho e venda um ingresso de hoje.',
+        data: { tipo: 'dia_passou' },
+      })
     }
   }
 
@@ -123,10 +195,17 @@ export default defineEventHandler(async (event) => {
           statusMessage: `${t.name} exige o documento do beneficiário. Peça o documento antes de vender.`,
         })
       }
-      face = faceComDesconto(face, Number(t.discount_bps))
+      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), ev.fee_mode_pos as ModoTaxa)
     }
     return { quantidade: it.quantidade, faceUnitCents: face }
   })
+
+  // O documento do beneficiário vai na LINHA da meia (`half_document`), que é
+  // de onde a emissão o carimba em cada ingresso — é o número que a portaria
+  // confere. Antes ele só ia pro cadastro do cliente, e só quando havia
+  // e-mail: sem e-mail, o CPF digitado no guichê se perdia inteiro.
+  const docDaLinha = d.itens.map((it) =>
+    it.ticketTypeId && porTipo.get(it.ticketTypeId)?.requires_document ? documento : null)
 
   if (documento && !cpfValido(documento)) {
     throw createError({ statusCode: 400, statusMessage: 'CPF inválido' })
@@ -167,8 +246,6 @@ export default defineEventHandler(async (event) => {
     trocoCents = recebidoCents - total.totalCents
   }
 
-  const codigo = gerarCodigo('PDV')
-
   // ------------------------ tudo num commit só: venda + estoque + ingresso
   const resultado = await tx(async (c) => {
     // A trava do caixa é a primeira coisa: pega o lock da linha do turno e só
@@ -196,12 +273,18 @@ export default defineEventHandler(async (event) => {
         `INSERT INTO customers (org_id, name, email, document, phone)
          VALUES ($1,$2,$3,$4,$5)
          ON CONFLICT (org_id, email) DO UPDATE
-           SET name = COALESCE(EXCLUDED.name, customers.name),
-               document = COALESCE(EXCLUDED.document, customers.document),
+           SET name = COALESCE($6::text, customers.name),
+               document = COALESCE(customers.document, EXCLUDED.document),
                phone = COALESCE(EXCLUDED.phone, customers.phone)
          RETURNING id`,
-        [ev.org_id, d.comprador.nome ?? 'Cliente do balcão',
-         d.comprador.email.toLowerCase(), documento, d.comprador.telefone ?? null])
+        // Nome vazio NÃO apaga o nome do cadastro (era 'Cliente do balcão'
+        // por cima do nome de verdade). O CPF de quem já tem cadastro também
+        // não é trocado — mesma regra do checkout: o documento da linha do
+        // cliente responde pelos pedidos antigos dele. O CPF digitado aqui vai
+        // pro INGRESSO (abaixo), que é o papel desta venda.
+        [ev.org_id, d.comprador.nome?.trim() || 'Cliente do balcão',
+         d.comprador.email.toLowerCase(), documento, d.comprador.telefone ?? null,
+         d.comprador.nome?.trim() || null])
       customerId = cli.rows[0].id
     }
 
@@ -224,10 +307,11 @@ export default defineEventHandler(async (event) => {
       const l = total.linhas[i]
       await c.query(
         `INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity,
-                                  unit_face_cents, unit_fee_cents, unit_total_cents)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                                  unit_face_cents, unit_fee_cents, unit_total_cents,
+                                  half_document)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [ord.rows[0].id, it.lotId, it.ticketTypeId ?? null, it.quantidade,
-         l.faceCents, l.feeCents, l.totalCents])
+         l.faceCents, l.feeCents, l.totalCents, docDaLinha[i]])
     }
 
     if (cupom) await c.query(`UPDATE promo_codes SET uses = uses + 1 WHERE id = $1`, [cupom.id])
@@ -245,49 +329,108 @@ export default defineEventHandler(async (event) => {
       })
     }
 
+    // O titular do ingresso é quem o operador digitou, com ou sem e-mail.
+    // A emissão só sabe nomear pelo CADASTRO do cliente — e balcão sem e-mail
+    // não tem cadastro, então o nome digitado sumia. Mesma regra da emissão:
+    // o 1º ingresso de cada linha leva o nome; os demais ficam pra nomear.
+    const nomeDigitado = d.comprador?.nome?.trim() || null
+    if (nomeDigitado || documento) {
+      await c.query(
+        `UPDATE tickets t
+            SET holder_name = COALESCE($2, t.holder_name),
+                holder_document = COALESCE($3, t.holder_document)
+          WHERE t.id IN (SELECT DISTINCT ON (order_item_id) id FROM tickets
+                          WHERE order_id = $1
+                          ORDER BY order_item_id, issued_at, code)`,
+        [ord.rows[0].id, nomeDigitado, documento])
+    }
+
     await c.query(
       `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
        VALUES ($1,'order',$2,'venda_balcao',$3::jsonb)`,
       [ev.org_id, ord.rows[0].id, JSON.stringify({
         ponto: turno.ponto, forma: d.forma, totalCents: total.totalCents,
         trocoCents, por: sessao.nome, observacao: d.observacao ?? null,
+        chave: d.chave ?? null,
       })])
 
-    const { rows: emitidos } = await c.query(
-      `SELECT t.id, t.code, l.name AS lote, s.name AS setor, tt.name AS tipo
-         FROM tickets t
-         JOIN lots l ON l.id = t.lot_id
-         JOIN sectors s ON s.id = t.sector_id
-         LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
-        WHERE t.order_id = $1
-        ORDER BY s.sort_order, l.name`, [ord.rows[0].id])
-
-    return { orderId: ord.rows[0].id, code: ord.rows[0].code, ingressos: emitidos }
-  }).catch((e) => {
+    return { orderId: ord.rows[0].id as string }
+  }).catch(async (e) => {
     if (e instanceof EstoqueInsuficiente) {
-      throw createError({ statusCode: 409, statusMessage: e.message,
+      throw createError({ statusCode: 409, statusMessage: recadoDeEsgotado(e),
         data: { tipo: 'estoque', disponivel: e.disponivel } })
     }
     if (e instanceof LoteIndisponivel) {
       throw createError({ statusCode: 409, statusMessage: e.message, data: { tipo: 'lote' } })
     }
+    // Trava de DIA, que mora no banco (gatilho `sessao_confere_vaga`,
+    // db/016): dia lotado, lote de outro dia. A mensagem do RAISE já foi
+    // escrita pra quem está no guichê; sem esta tradução ela virava
+    // "Server Error" com a fila na frente. `routine = exec_stmt_raise` separa
+    // o RAISE nosso de um CHECK qualquer (mesmo 23514), que é bug e merece 500
+    // — a mesma assinatura que o checkout usa.
+    if (e?.code === '23514' && e?.routine === 'exec_stmt_raise') {
+      throw createError({ statusCode: 409, statusMessage: e.message, data: { tipo: 'sessao' } })
+    }
+    // A MESMA venda gravada por outra tentativa que chegou junto: o UNIQUE do
+    // código segurou a segunda. Devolve o recibo da que ficou.
+    if (d.chave && e?.code === '23505' && String(e?.constraint ?? '').includes('code')) {
+      const ja = await q1<any>(
+        `SELECT id FROM orders WHERE code = $1 AND event_id = $2 AND pos_shift_id = $3`,
+        [codigo, eventId, d.turnoId])
+      if (ja) return { orderId: ja.id as string, repetida: true }
+    }
     throw e
   })
 
   return {
+    ...(await reciboDoPedido(resultado.orderId, turno.ponto)),
+    ...((resultado as any).repetida ? { repetida: true } : {}),
+  }
+})
+
+/**
+ * O recibo, relido do banco. Serve à venda nova e à tentativa repetida: as
+ * duas respostas saem do MESMO lugar, então o operador vê o mesmo papel nos
+ * dois casos — e é o que foi gravado, não o que o navegador pediu.
+ */
+async function reciboDoPedido(orderId: string, ponto: string) {
+  const o = await q1<any>(
+    `SELECT id, code, status, payment_method, total_cents, face_cents, fee_cents,
+            discount_cents, cash_received_cents, change_cents
+       FROM orders WHERE id = $1`, [orderId])
+  const emitidos = await q<any>(
+    `SELECT t.id, t.code, l.name AS lote, s.name AS setor, tt.name AS tipo
+       FROM tickets t
+       JOIN lots l ON l.id = t.lot_id
+       JOIN sectors s ON s.id = t.sector_id
+       LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
+      WHERE t.order_id = $1 AND t.status <> 'cancelado'
+      ORDER BY s.sort_order, l.name, t.code`, [orderId])
+  const num = (v: any) => (v === null || v === undefined ? null : Number(v))
+  return {
     ok: true,
-    pedido: resultado.code,
-    pedidoId: resultado.orderId,
-    ponto: turno.ponto,
-    forma: d.forma,
-    totalCents: total.totalCents,
-    faceCents: total.faceCents,
-    taxaCents: total.feeCents,
-    descontoCents: total.discountCents,
-    recebidoCents,
-    trocoCents,
-    ingressos: resultado.ingressos.map((t: any) => ({
+    pedido: o.code as string,
+    pedidoId: o.id as string,
+    situacao: o.status as string,
+    ponto,
+    forma: o.payment_method as string,
+    totalCents: Number(o.total_cents),
+    faceCents: Number(o.face_cents),
+    taxaCents: Number(o.fee_cents),
+    descontoCents: Number(o.discount_cents),
+    recebidoCents: num(o.cash_received_cents),
+    trocoCents: num(o.change_cents),
+    ingressos: emitidos.map((t: any) => ({
       id: t.id, codigo: t.code, lote: t.lote, setor: t.setor, tipo: t.tipo,
     })),
   }
-})
+}
+
+/** "05/12 18:00", no fuso do evento — o dia que o operador reconhece. */
+function quandoFoi(d: Date | string, fuso?: string | null): string {
+  return new Date(d).toLocaleString('pt-BR', {
+    timeZone: fuso || 'America/Bahia', day: '2-digit', month: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
+}

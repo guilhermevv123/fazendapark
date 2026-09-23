@@ -20,10 +20,38 @@ const route = useRoute()
 const id = route.params.id as string
 const turnoId = computed(() => String(route.query.turno ?? ''))
 
-const { data: cat } = await useFetch<any>(() => `/api/admin/evento/${id}/pdv/catalogo`)
-const { data: turno, refresh: recarregarTurno } = await useFetch<any>(
+const { data: cat, error: falhaCatalogo, refresh: recarregarCatalogo } = await useFetch<any>(
+  () => `/api/admin/evento/${id}/pdv/catalogo`)
+const { data: turno, error: falhaTurno, refresh: recarregarTurno } = await useFetch<any>(
   () => `/api/admin/evento/${id}/pdv/turno?turno=${turnoId.value}`,
   { immediate: !!turnoId.value, watch: [turnoId] })
+
+/**
+ * Caixa que não abre (404 de link velho, 403 de papel sem acesso ao balcão)
+ * deixava a tela VAZIA: nem o aviso de caixa fechado, nem o catálogo — o
+ * operador sem saber se era a internet ou o sistema. Agora diz qual dos dois.
+ */
+const recadoDoTurno = computed(() => {
+  const e: any = falhaTurno.value
+  if (!e) return ''
+  const s = e.statusCode ?? e.status
+  if (s === 404) return 'Este caixa não existe mais neste evento. Volte aos pontos de venda e abra um caixa.'
+  if (s === 403) return 'Seu acesso não inclui o balcão. Peça ao responsável pela conta.'
+  return e.data?.message ?? e.data?.statusMessage ?? 'Não foi possível carregar o caixa. Confira a internet.'
+})
+
+/**
+ * A chave DESTA venda, pro servidor reconhecer a mesma venda chegando duas
+ * vezes (resposta perdida no Wi-Fi do guichê, toque duplo). Nasce com o
+ * carrinho e só é trocada quando a venda sai ou o carrinho é limpo — trocar a
+ * cada clique em "Vender" desligaria exatamente a proteção.
+ */
+const novaChave = () => (globalThis.crypto?.randomUUID?.()
+  ?? 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)))
+const chaveDaVenda = ref(novaChave())
+
+/** a ficha impressa (componente que sabe imprimir a térmica) */
+const fichas = ref<any>(null)
 
 const FORMA_NOME: Record<string, string> = {
   dinheiro: 'Dinheiro', debito: 'Débito', credito: 'Crédito', pix: 'Pix',
@@ -80,7 +108,7 @@ async function cancelarVenda() {
     recibo.value = { ...recibo.value, cancelada: true, avisoCancelamento: r.aviso }
     cancelandoRecibo.value = false
     motivoCancelamento.value = ''
-    await recarregarTurno()
+    await Promise.all([recarregarTurno(), recarregarCatalogo()])
   } catch (e: any) {
     erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar a venda.'
   } finally { enviandoCancelamento.value = false }
@@ -147,6 +175,7 @@ function limpar() {
   recebidoCents.value = 0
   comprador.nome = ''; comprador.email = ''; comprador.documento = ''
   erro.value = ''
+  chaveDaVenda.value = novaChave()
 }
 
 /** notas que o operador recebe de verdade — evita digitar com fila na frente */
@@ -174,45 +203,22 @@ async function vender() {
               documento: doc || null,
             }
           : null,
+        chave: chaveDaVenda.value,
       },
     })
     recibo.value = r
     limpar()
-    await recarregarTurno()
+    // O catálogo também: o "disponíveis" de cada botão é o que impede o
+    // operador de montar um carrinho que o servidor vai recusar.
+    await Promise.all([recarregarTurno(), recarregarCatalogo()])
   } catch (e: any) {
     erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra registrar a venda.'
   } finally { vendendo.value = false }
 }
 
-/**
- * Imprime as fichas (uma por ingresso, com o QR) e NADA mais da tela.
- *
- * Antes isto era só `window.print()`: sem regra de impressão nenhuma, saía a
- * página do PDV inteira com o recibo por cima — e sem o QR, que é o único
- * motivo de a ficha existir. Duas coisas aqui só existem por causa da térmica:
- *
- *   • o `@page` de 80mm entra num <style> só ANTES do print e sai no
- *     `afterprint`, pra o borderô e o resto do sistema seguirem em A4;
- *   • os QRs precisam ter carregado: o print congela a página no instante da
- *     chamada, e imagem que ainda baixa sai como um quadrado vazio.
- */
-async function imprimir() {
-  const imgs = Array.from(document.querySelectorAll<HTMLImageElement>('.fichas-impressao img'))
-  await Promise.all(imgs.map((i) => i.complete
-    ? null
-    : new Promise((ok) => { i.onload = i.onerror = () => ok(null) })))
-  const estilo = document.createElement('style')
-  estilo.textContent = '@page { size: 80mm auto; margin: 0 }'
-  document.head.appendChild(estilo)
-  document.documentElement.classList.add('imprimindo-fichas')
-  const fim = () => {
-    estilo.remove()
-    document.documentElement.classList.remove('imprimindo-fichas')
-    window.removeEventListener('afterprint', fim)
-  }
-  window.addEventListener('afterprint', fim)
-  setTimeout(fim, 60_000) // Safari nem sempre dispara o afterprint
-  window.print()
+/** A impressão mora no componente das fichas (ver `FichasImpressas.vue`). */
+function imprimir() {
+  fichas.value?.imprimir()
 }
 </script>
 
@@ -245,6 +251,14 @@ async function imprimir() {
       para começar.
     </p>
 
+    <div v-else-if="falhaTurno" class="card mt-4">
+      <p class="faixa-erro">{{ recadoDoTurno }}</p>
+      <div class="mt-3 flex gap-2">
+        <button type="button" class="btn-secundario" @click="recarregarTurno()">Tentar de novo</button>
+        <NuxtLink :to="`/admin/evento/${id}/pdv`" class="btn-secundario">Pontos de venda</NuxtLink>
+      </div>
+    </div>
+
     <p v-else-if="turno && turno.turno.status !== 'aberto'" class="faixa-erro mt-4">
       Este caixa já foi fechado em {{ dataHora(turno.turno.fechouEm) }}.
       Abra um novo caixa para vender.
@@ -253,6 +267,15 @@ async function imprimir() {
     <div v-else-if="turno" class="mt-4 grid gap-4 lg:grid-cols-[1fr_380px]">
       <!-- catálogo -->
       <section>
+        <div v-if="falhaCatalogo && !cat" class="card mb-4">
+          <p class="faixa-erro">
+            Não foi possível carregar os ingressos à venda.
+            {{ (falhaCatalogo as any)?.data?.message ?? '' }}
+          </p>
+          <button type="button" class="btn-secundario mt-3" @click="recarregarCatalogo()">
+            Tentar de novo
+          </button>
+        </div>
         <div v-for="setor in [...new Set(cat?.lotes.map((l: any) => l.setor))]" :key="setor as string"
              class="mb-4">
           <h2 class="rotulo-kpi mb-2">{{ setor }}</h2>
@@ -395,17 +418,23 @@ async function imprimir() {
     </div>
 
     <!-- as fichas: só existem na impressão (ver FichasImpressas.vue) -->
-    <FichasImpressas v-if="recibo && !recibo.cancelada" :evento="cat?.evento?.nome ?? ''"
+    <FichasImpressas v-if="recibo && !recibo.cancelada" ref="fichas" :evento="cat?.evento?.nome ?? ''"
                      :pedido="recibo.pedido" :ingressos="recibo.ingressos" />
 
-    <!-- recibo -->
-    <div v-if="recibo" class="fixed inset-0 z-50 flex items-center justify-center bg-tinta/40 p-4"
-         @click.self="fecharRecibo">
+    <!-- recibo. NÃO fecha clicando fora: um toque perdido na borda levava a
+         ficha embora antes de imprimir, e o único jeito de voltar a ela é a
+         reimpressão pela Conferência de caixa. Sai só por "Próximo cliente". -->
+    <div v-if="recibo" class="fixed inset-0 z-50 flex items-center justify-center bg-tinta/40 p-4">
       <div class="max-h-full w-full max-w-md overflow-auto rounded-card bg-fundo-card p-5">
         <p :class="recibo.cancelada ? 'selo-erro' : 'selo-ok'">
           {{ recibo.cancelada ? 'Venda cancelada' : 'Venda registrada' }}
         </p>
         <h2 class="titulo mt-2 text-xl font-semibold text-tinta">Pedido {{ recibo.pedido }}</h2>
+
+        <p v-if="recibo.repetida" class="faixa-aviso mt-3">
+          Esta venda já tinha sido registrada — a conexão caiu antes da resposta chegar.
+          Nada foi cobrado duas vezes: este é o recibo da venda que valeu.
+        </p>
 
         <p v-if="erro" class="faixa-erro mt-3">{{ erro }}</p>
 
@@ -449,6 +478,9 @@ async function imprimir() {
                   @click="imprimir">Imprimir</button>
           <button type="button" class="btn-primario flex-1" @click="fecharRecibo">Próximo cliente</button>
         </div>
+        <p v-if="!recibo.cancelada" class="mt-2 text-xs text-tinta-fraca">
+          Perdeu a ficha? Ela pode ser reimpressa pela Conferência de caixa, na lista de vendas.
+        </p>
 
         <!-- desfazer: fica embaixo e discreto, mas na mesma tela em que o
              erro é percebido. O motivo é obrigatório porque é ele que sobra

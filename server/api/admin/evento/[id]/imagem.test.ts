@@ -271,3 +271,57 @@ describe('com R2_BUCKET de verdade — sobe, grava e troca', () => {
     expect((await fetch(`${BASE}${urlNova}`)).status).toBe(200)
   })
 })
+
+/**
+ * DELETE — o par do envio: remover também grava na hora. Roda sem bucket: a
+ * imagem de partida é um caminho fora de `/api/midia/`, então o handler não
+ * tem chave pra apagar no R2 e o teste mede só banco, auditoria e portão.
+ */
+describe('remover capa ou miniatura (DELETE, grava na hora)', () => {
+  async function remover(eventoId: string, papel: Papel | null, campo: string) {
+    const r = await fetch(`${BASE}/api/admin/evento/${eventoId}/imagem?campo=${campo}`, {
+      method: 'DELETE',
+      headers: papel ? { cookie: cookies[papel] ?? '', origin: BASE } : { origin: BASE },
+    })
+    const corpo: any = await r.json().catch(() => ({}))
+    return { status: r.status, mensagem: corpo.statusMessage ?? corpo.message ?? '' }
+  }
+
+  it('master remove: a coluna vira NULL e a auditoria registra antes → depois', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    await q(`UPDATE events SET banner_url = '/photos/zz-capa-teste.webp' WHERE id = $1`, [EV])
+    const r = await remover(EV, 'master', 'banner')
+    expect(r.status).toBe(200)
+    const ev = await q1<any>('SELECT banner_url FROM events WHERE id = $1', [EV])
+    expect(ev.banner_url).toBeNull()
+    const linha = await q1<any>(
+      `SELECT before, after, actor_email FROM audit_log
+        WHERE org_id = $1 AND before ? 'banner' AND after->>'banner' IS NULL
+        ORDER BY id DESC LIMIT 1`, [ORG])
+    expect(linha).toMatchObject({ actor_email: EMAILS.master })
+    expect(linha.before).toEqual({ banner: '/photos/zz-capa-teste.webp' })
+  })
+
+  it('remover o que já está vazio é 200 e não escreve auditoria', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    await q(`UPDATE events SET thumb_url = NULL WHERE id = $1`, [EV])
+    const antes = await q1<any>(`SELECT count(*)::int AS n FROM audit_log WHERE org_id = $1`, [ORG])
+    expect((await remover(EV, 'master', 'thumb')).status).toBe(200)
+    const depois = await q1<any>(`SELECT count(*)::int AS n FROM audit_log WHERE org_id = $1`, [ORG])
+    expect(depois.n).toBe(antes.n)
+  })
+
+  it('campo inválido 400; sem login 401; financeiro e portaria 403; outra organização 404', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    await q(`UPDATE events SET thumb_url = '/photos/zz-mini.webp' WHERE id = $1`, [EV])
+    expect((await remover(EV, 'master', 'logo')).status).toBe(400)
+    expect((await remover(EV, null, 'thumb')).status).toBe(401)
+    for (const papel of ['financeiro', 'portaria'] as Papel[]) {
+      expect((await remover(EV, papel, 'thumb')).status, papel).toBe(403)
+    }
+    expect((await remover(EV_FORA, 'master', 'thumb')).status).toBe(404)
+    // nenhuma das recusas mexeu na imagem
+    const ev = await q1<any>('SELECT thumb_url FROM events WHERE id = $1', [EV])
+    expect(ev.thumb_url).toBe('/photos/zz-mini.webp')
+  })
+})

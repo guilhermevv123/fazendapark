@@ -824,9 +824,28 @@ describe('adiar o evento', () => {
     const ev = await q1<any>(
       `SELECT status, starts_at, postponed_from, choice_deadline FROM events WHERE id = $1`,
       [EVENTO])
-    expect(ev.status).toBe('adiado')
+    // Remarcar não fecha a loja: o evento segue 'ativo' e vendendo na data
+    // nova. O adiamento mora nos campos de data antiga/prazo e na linha de
+    // `event_cancellations` — não no status.
+    expect(ev.status, 'remarcar tirou o evento de venda').toBe('ativo')
     expect(new Date(ev.postponed_from).getTime(),
       'perdeu a data que a pessoa comprou').toBe(new Date(antes.evento).getTime())
+
+    const ato = await q1<any>(
+      `SELECT id, previous_status, previous_starts_at, new_starts_at, choice_deadline
+         FROM event_cancellations
+        WHERE event_id = $1 AND kind = 'adiado'
+        ORDER BY at DESC LIMIT 1`, [EVENTO])
+    expect(ato, 'adiou sem deixar registro do adiamento — o status não conta mais a história')
+      .toBeTruthy()
+    if (r.corpo?.adiamentoId) expect(ato.id).toBe(r.corpo.adiamentoId)
+    expect(ato.previous_status).toBe('ativo')
+    expect(new Date(ato.previous_starts_at).getTime(),
+      'o registro do adiamento perdeu a data antiga').toBe(new Date(antes.evento).getTime())
+    expect(new Date(ato.new_starts_at).getTime(),
+      'o registro do adiamento não tem a data nova').toBe(new Date(ev.starts_at).getTime())
+    expect(new Date(ato.choice_deadline).getTime(),
+      'o prazo do registro não é o prazo do evento').toBe(new Date(ev.choice_deadline).getTime())
 
     // Ingresso continua VÁLIDO: adiar não é cancelar e vender de novo.
     const t = await q1<any>(

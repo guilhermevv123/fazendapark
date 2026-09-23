@@ -14,6 +14,16 @@
  * único lugar onde isso aparece é aqui.
  */
 import { q, q1 } from '../../../../utils/db'
+import { retratoDoPublico, SQL_PUBLICO } from '../../../../utils/catraca'
+
+/**
+ * Valor do filtro de portão pra "leitura sem portão".
+ *
+ * A lista de portões mostra as leituras sem portão como "—", e a tela
+ * mandava `gate=''` quando alguém escolhia essa opção — que é o mesmo que
+ * "Todos". O filtro precisa de um valor que não seja nome de portão possível.
+ */
+export const SEM_PORTAO = '__sem_portao__'
 
 const PAGINA = 60
 
@@ -38,7 +48,8 @@ export default defineEventHandler(async (event) => {
   const onde = ['ck.event_id = $1']
   const par: any[] = [id]
   if (resultado) { par.push(resultado); onde.push(`ck.resultado = $${par.length}`) }
-  if (gate) { par.push(gate); onde.push(`ck.gate = $${par.length}`) }
+  if (gate === SEM_PORTAO) onde.push(`NULLIF(btrim(ck.gate), '') IS NULL`)
+  else if (gate) { par.push(gate); onde.push(`ck.gate = $${par.length}`) }
   if (busca?.trim()) {
     par.push(`%${busca.trim()}%`)
     onde.push(`(ck.code_lido ILIKE $${par.length} OR t.holder_name ILIKE $${par.length})`)
@@ -75,35 +86,43 @@ export default defineEventHandler(async (event) => {
          FROM checkins WHERE event_id = $1 AND resultado = 'ok'
         GROUP BY 1 ORDER BY 1`, [id]),
 
+    // `semPortao` marca a linha das leituras sem portão (nulo ou em branco,
+    // que pro operador são a mesma coisa) pra tela poder filtrar por ela.
     q<any>(
-      `SELECT COALESCE(gate, '—') AS gate, count(*)::int AS n,
+      `SELECT COALESCE(NULLIF(btrim(gate), ''), '—') AS gate,
+              (NULLIF(btrim(gate), '') IS NULL) AS sem_portao,
+              count(*)::int AS n,
               count(*) FILTER (WHERE resultado = 'ok')::int AS ok
          FROM checkins WHERE event_id = $1
-        GROUP BY 1 ORDER BY 2 DESC`, [id]),
+        GROUP BY 1, 2 ORDER BY 3 DESC`, [id]),
 
-    // O denominador do comparecimento é o ingresso VÁLIDO ou já usado — o
-    // cancelado nunca ia entrar, e deixá-lo no total faria o percentual
-    // parecer pior do que foi.
-    q1<any>(
-      `SELECT count(*)::int AS total,
-              count(*) FILTER (WHERE status = 'usado')::int AS usados
-         FROM tickets WHERE event_id = $1 AND status <> 'cancelado'`, [id]),
+    // Quem entrou sai do LIVRO de entradas (`SQL_PUBLICO`), a mesma régua do
+    // leitor, do painel e do borderô. Era `tickets.status = 'usado'`, que é
+    // a trava do QR: volta atrás em cancelamento e não existe pra entrada
+    // retroativa — e esta tela dizia um comparecimento com o leitor, ao lado,
+    // dizendo outro.
+    q1<any>(SQL_PUBLICO, [id]),
   ])
 
-  const total = Number(emitidos.total)
+  const publico = retratoDoPublico(emitidos)
   return {
     evento: { id: ev.id, nome: ev.name, comeca: ev.starts_at, termina: ev.ends_at },
     resumo: {
       leituras: contagem.total,
       aceitas: contagem.ok,
       recusadas: contagem.recusadas,
-      entraram: emitidos.usados,
-      aptos: total,
-      faltam: Math.max(total - emitidos.usados, 0),
-      comparecimentoPct: total > 0 ? Math.round((emitidos.usados / total) * 100) : 0,
+      entraram: publico.ingressos,
+      pessoas: publico.pessoas,
+      aptos: publico.aptos,
+      faltam: publico.faltam,
+      comparecimentoPct: publico.comparecimentoPct,
     },
     porHora: porHora.map((h) => ({ hora: h.hora, n: h.n })),
-    portoes: portoes.map((g) => ({ gate: g.gate, leituras: g.n, aceitas: g.ok })),
+    portoes: portoes.map((g) => ({
+      gate: g.gate, leituras: g.n, aceitas: g.ok,
+      // o valor que a tela manda no filtro pra ESTA linha
+      filtro: g.sem_portao ? SEM_PORTAO : g.gate,
+    })),
     pagina: p,
     paginas: Math.max(1, Math.ceil(contagem.total / PAGINA)),
     leituras: linhas.map((r) => ({

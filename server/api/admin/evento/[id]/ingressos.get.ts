@@ -6,7 +6,7 @@
  * sabe o que já vendeu deixa o produtor apagar um lote com ingresso na rua.
  */
 import { q, q1 } from '../../../../utils/db'
-import { precificar, faceComDesconto, type ModoTaxa } from '../../../../utils/dinheiro'
+import { precificar, faceDoTipo, type ModoTaxa } from '../../../../utils/dinheiro'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -78,7 +78,7 @@ export default defineEventHandler(async (event) => {
           // Vendido > 0 é o que trava exclusão e redução de estoque.
           podeApagar: Number(l.sold) === 0 && Number(l.reserved) === 0,
           tipos: tipos.filter((t) => t.lot_id === l.id).map((t) => {
-            const face = faceComDesconto(Number(l.price_cents), Number(t.discount_bps))
+            const face = faceDoTipo(Number(l.price_cents), Number(t.discount_bps), bps, modo)
             const pp = precificar(face, bps, modo)
             return {
               id: t.id, nome: t.name, quantidade: t.quantity, vendidos: t.sold,

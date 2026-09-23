@@ -19,6 +19,7 @@
  * O `org_id` do dono do recurso vem do BANCO; o da sessão vem do cookie
  * assinado. Nenhum dos dois vem do payload, que é o que o cliente controla.
  */
+import { caminhoDaRota } from '../utils/caminho'
 import { q1 } from '../utils/db'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -42,7 +43,7 @@ const CERCAS: { prefixo: string; sql: (porCodigo: boolean) => string; rotulo: st
 ]
 
 export default defineEventHandler(async (event) => {
-  const caminho = getRequestURL(event).pathname
+  const caminho = caminhoDaRota(event)
   const cerca = CERCAS.find((c) => caminho.startsWith(c.prefixo))
   if (!cerca) return
 

@@ -29,7 +29,7 @@
 import { q, q1 } from '../../utils/db'
 import { disponivel } from '../../utils/estoque'
 import { emData } from '../../utils/cupom'
-import { faceComDesconto, precificar, type ModoTaxa } from '../../utils/dinheiro'
+import { faceDoTipo, precificar, type ModoTaxa } from '../../utils/dinheiro'
 import { cotaDeMeias } from '../../utils/meia-entrada'
 
 /** Abaixo disto a vitrine avisa "últimas unidades" — faixa, nunca o número. */
@@ -462,7 +462,7 @@ export function menorTotalCents(args: {
     const faces = tiposDoLote.length
       ? tiposDoLote
           .filter((t) => (t.restam != null ? Number(t.restam) : Number(t.quantity) - Number(t.sold)) > 0)
-          .map((t) => faceComDesconto(Number(l.price_cents), Number(t.discount_bps)))
+          .map((t) => faceDoTipo(Number(l.price_cents), Number(t.discount_bps), args.feeBps, args.modo))
       : [Number(l.price_cents)]
     for (const face of faces) {
       const total = precificar(face, args.feeBps, args.modo).totalCents
@@ -675,7 +675,7 @@ export default defineEventHandler(async (event) => {
         const tiposDoLote = tipos.filter((t) => t.lot_id === l.lote_id)
         const variacoes = (tiposDoLote.length ? tiposDoLote : [null]).map((t: any) => {
           const face = t
-            ? faceComDesconto(Number(l.price_cents), Number(t.discount_bps))
+            ? faceDoTipo(Number(l.price_cents), Number(t.discount_bps), bps, modo)
             : Number(l.price_cents)
           const p = precificar(face, bps, modo)
           // Estoque do tipo é um segundo teto: a meia acaba antes do lote, e

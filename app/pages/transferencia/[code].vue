@@ -41,8 +41,24 @@ const quando = (v: string | null) => v
   ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'long', timeStyle: 'short' })
   : ''
 
+/**
+ * O QR de quem recebeu. Aparece AQUI, na página da transferência, e não no
+ * pedido de quem mandou: o destinatário não tem pedido, e o pedido do outro
+ * mostraria a compra inteira dele. O token deste link é a credencial — o mesmo
+ * modelo do código do pedido pra quem compra. A API só libera o id depois do
+ * aceite e enquanto esta transferência estiver em vigor.
+ */
+const qrSrc = computed(() => data.value?.ingresso?.qrDisponivel && data.value.ingresso.id
+  ? `/api/ingresso/${data.value.ingresso.id}/qr.png?transferencia=${encodeURIComponent(code)}`
+  : null)
+
+const SITUACAO: Record<string, string> = {
+  usado: 'Este ingresso já foi usado na entrada.',
+  cancelado: 'Este ingresso foi cancelado e não vale mais na entrada.',
+}
+
 const RECADO: Record<string, string> = {
-  concluido: 'Esta transferência já foi aceita. O ingresso está no seu nome.',
+  concluido: 'Esta transferência já foi aceita. O ingresso está no seu nome — o QR está logo abaixo.',
   cancelado: 'Quem enviou cancelou esta transferência. O ingresso voltou pra pessoa anterior.',
   expirado: 'O prazo pra aceitar venceu. Peça pra quem enviou mandar de novo — leva um minuto.',
 }
@@ -71,20 +87,37 @@ const RECADO: Record<string, string> = {
           <p class="mt-2 text-tinta-suave">
             Ele já está no seu nome para {{ data.evento.nome }}.
           </p>
+          <img v-if="qrSrc" :src="qrSrc" :alt="`QR do ingresso ${pronto.ingresso}`"
+               class="mx-auto mt-4 h-52 w-52 rounded-card border border-linha bg-white p-1"
+               loading="eager" decoding="async">
           <p class="mt-4 rounded-sm border border-linha bg-fundo-cinza px-3 py-2 font-mono text-sm">
             {{ pronto.ingresso }}
           </p>
           <p class="mt-3 text-xs text-tinta-fraca">
-            Guarde este código. Na entrada, ele vale com um documento seu.
+            Guarde este link: é nele que o QR do seu ingresso fica. Na entrada, apresente o QR
+            (ou informe o código, se a leitura falhar) com um documento seu. O código antigo, de
+            quem enviou, deixou de valer.
           </p>
         </div>
 
         <!-- nada a fazer -->
         <div v-else-if="!data.podeAceitar" class="card mt-6 text-center">
           <h1 class="titulo text-xl font-semibold text-tinta">{{ data.statusTexto }}</h1>
-          <p class="mt-2 text-tinta-suave">{{ RECADO[data.status] }}</p>
+          <p class="mt-2 text-tinta-suave">
+            {{ data.ingresso.situacao && SITUACAO[data.ingresso.situacao]
+                 ? SITUACAO[data.ingresso.situacao]
+                 : data.status === 'concluido' && !data.ingresso.codigo
+                   ? 'Esta transferência foi aceita, mas o ingresso já passou para outra pessoa.'
+                   : RECADO[data.status] }}
+          </p>
+          <img v-if="qrSrc" :src="qrSrc" :alt="`QR do ingresso ${data.ingresso.codigo}`"
+               class="mx-auto mt-4 h-52 w-52 rounded-card border border-linha bg-white p-1"
+               loading="eager" decoding="async">
           <p v-if="data.ingresso.codigo" class="mt-4 font-mono text-sm text-tinta-corpo">
             {{ data.ingresso.codigo }}
+          </p>
+          <p v-if="qrSrc" class="mt-3 text-xs text-tinta-fraca">
+            Na entrada, apresente o QR — ou informe o código, se a leitura falhar — com um documento seu.
           </p>
         </div>
 

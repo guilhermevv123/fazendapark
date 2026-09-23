@@ -28,6 +28,8 @@
  */
 import { q, q1 } from '../../../utils/db'
 import { eCortesia } from '../../../utils/emissao'
+import { avaliarArrependimento } from '../../../utils/cancelamento'
+import { ehPapel, papelPode } from '../../../utils/papeis'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')!
@@ -35,10 +37,14 @@ export default defineEventHandler(async (event) => {
   const uuid = /^[0-9a-f-]{36}$/i.test(id)
   const pedido = await q1<any>(
     `SELECT o.*, c.name AS cliente, c.email, c.document, c.phone,
-            e.name AS evento_nome, e.id AS evento_id
+            e.name AS evento_nome, e.id AS evento_id, e.starts_at AS evento_comeca,
+            e.status AS evento_status,
+            t.status AS turno_status, pt.name AS ponto
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
        JOIN events e ON e.id = o.event_id
+       LEFT JOIN pos_shifts t ON t.id = o.pos_shift_id
+       LEFT JOIN pos_terminals pt ON pt.id = t.terminal_id
       WHERE ${uuid ? 'o.id = $1' : 'upper(o.code) = upper($1)'}`, [id])
   if (!pedido) throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado' })
 
@@ -71,7 +77,65 @@ export default defineEventHandler(async (event) => {
     `SELECT id, event_name, created_at, processed_at, error, payload
        FROM payment_events WHERE order_id = $1 ORDER BY created_at`, [pedido.id])
 
+  // ------------------------------------------ o que dá pra fazer com ele
+  //
+  // A ficha diz ANTES do clique se o pedido pode ser cancelado e por qual
+  // caminho — a rota recusa com a mesma frase, mas descobrir depois do clique
+  // é o operador tentando três vezes com o cliente no telefone.
+  const papel = (event.context as any).papel
+  const podeDinheiro = ehPapel(papel) && papelPode(papel, 'dinheiro')
+  const vivo = pedido.status === 'pago' || pedido.status === 'estornado_parcial'
+  const entraram = ingressos.filter((t) => t.checked_in_at || t.status === 'usado').length
+  const validos = ingressos.filter((t) => t.status === 'valido').length
+  const caixaAberto = !!pedido.pos_shift_id && pedido.turno_status === 'aberto'
+  const aDevolverCents = Number(pedido.total_cents) - Number(pedido.refunded_cents)
+
+  // Tentativa anterior cujo estorno não saiu: ingressos já mortos, pedido
+  // ainda 'pago'. O botão vira "tentar a devolução de novo".
+  const tentativa = vivo && validos === 0 && ingressos.length > 0
+    ? await q1<any>(
+        `SELECT 1 FROM audit_log WHERE entity = 'order' AND entity_id = $1
+            AND action = 'pedido_cancelado_admin' LIMIT 1`, [pedido.id])
+    : null
+
+  let impedimento: string | null = null
+  if (!vivo) {
+    impedimento = pedido.status === 'cancelado' || pedido.status === 'estornado'
+      ? 'Este pedido já foi cancelado.'
+      : 'Só pedido pago pode ser cancelado.'
+  } else if (pedido.evento_status === 'cancelado') {
+    impedimento = 'O evento foi cancelado: a devolução deste pedido sai pela fila do evento.'
+  } else if (entraram > 0) {
+    impedimento = `${entraram} ingresso(s) já entraram no parque — o acerto é com o gerente.`
+  } else if (caixaAberto) {
+    impedimento = `O caixa desta venda (${pedido.ponto ?? 'guichê'}) ainda está aberto: `
+      + 'cancele pela Conferência de caixa desse ponto.'
+  } else if (!podeDinheiro) {
+    impedimento = 'Cancelar pedido é do financeiro ou do dono da conta.'
+  }
+
+  const arrependimento = avaliarArrependimento({
+    canal: pedido.channel, status: pedido.status,
+    compradoEm: pedido.paid_at ?? pedido.created_at,
+    eventoComecaEm: pedido.evento_comeca, aDevolverCents,
+  })
+
   return {
+    acoes: {
+      /** quem pode tocar no botão de cancelar agora; senão, `impedimento` diz por quê */
+      cancelar: !impedimento,
+      impedimento,
+      /** a desistência do comprador (CDC art. 49) vale para este pedido? */
+      arrependimento: arrependimento.disponivel,
+      arrependimentoMotivo: arrependimento.motivo,
+      /** houve cancelamento cuja devolução pelo banco não saiu */
+      devolucaoPendente: !!tentativa,
+      aDevolverCents: Math.max(aDevolverCents, 0),
+      passouPelaPlataforma: !!pedido.asaas_payment_id,
+      /** fichas do balcão e reenvio por e-mail só fazem sentido com ingresso valendo */
+      reimprimir: vivo && validos > 0,
+      reenviar: vivo && validos > 0,
+    },
     pedido: {
       id: pedido.id, codigo: pedido.code, situacao: pedido.status, canal: pedido.channel,
       forma: pedido.payment_method, parcelas: pedido.installments,
@@ -83,6 +147,8 @@ export default defineEventHandler(async (event) => {
       expiraEm: pedido.expires_at,
       idNoGateway: pedido.asaas_payment_id,
       eventoId: pedido.evento_id, eventoNome: pedido.evento_nome,
+      ponto: pedido.ponto ?? null,
+      caixaAberto,
     },
     cliente: {
       nome: pedido.cliente, email: pedido.email,

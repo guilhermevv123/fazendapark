@@ -9,6 +9,8 @@
  * `nome` é como a lateral chama; `aba` é o rótulo curto da barra de cima,
  * onde o espaço é horizontal e o contexto já está dado pelo grupo.
  */
+import { podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
+
 export interface TelaDoEvento {
   nome: string
   /** rótulo curto pra barra de abas; cai no `nome` quando não tem */
@@ -67,7 +69,32 @@ export function menuDoEvento(eventoId: string): GrupoDoEvento[] {
     ] },
 
     { nome: 'Configurações', icone: 'config', para: `${b}/configuracoes` },
-    { nome: 'Mapa de Assentos', icone: 'mapa', para: `${b}/assentos` },
+    // "Mapa de Assentos" saiu do menu (22/09): o checkout, a vitrine, o
+    // balcão e a emissão ignoram `seats` — o produtor desenhava o mapa e o
+    // comprador nunca escolhia lugar, então o menu prometia uma coisa que a
+    // venda não faz. A página continua em `${b}/assentos` pelo endereço; ela
+    // volta pro menu quando o checkout passar a escolher lugar.
     { nome: 'Suporte', icone: 'suporte', para: '/admin/suporte' },
   ]
+}
+
+/**
+ * A PRIMEIRA tela do menu do evento que este papel abre — aonde leva o clique
+ * no evento na lista (`pages/admin/index.vue`). Mesma régua da lateral
+ * (`podeAbrirPagina`), percorrendo o menu na ordem em que ele aparece.
+ *
+ * Antes o clique ia sempre pro `/dashboard`, que é área de dinheiro: quem é
+ * da operação caía numa tela em branco (403). Sem papel conhecido ainda, fica
+ * no dashboard, que é a primeira tela de quem abre tudo.
+ */
+export function primeiraTelaDoEvento(eventoId: string, papel: Papel | null): string {
+  const grupos = menuDoEvento(eventoId)
+  if (papel) {
+    for (const g of grupos) {
+      const telas = g.filhos?.length ? g.filhos.map((f) => f.para) : [g.para]
+      const aberta = telas.find((para) => podeAbrirPagina(papel, para))
+      if (aberta) return aberta
+    }
+  }
+  return grupos[0]!.para
 }

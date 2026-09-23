@@ -12,6 +12,8 @@
 definePageMeta({ layout: 'admin' })
 
 const { data, pending, error: falha, refresh } = await useFetch<any>('/api/admin/financeiro')
+// o MESMO `auth-eu` do layout: uma ida ao servidor pras duas telas
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
 
 // dinheiro e data vêm de `app/composables/formato.ts` — a conta de centavo e
 // o corte do dia moram num lugar só.
@@ -35,11 +37,13 @@ const comMovimento = computed(() =>
 
 function exportar() {
   const cab = ['Evento', 'Situação', 'Termina', 'Pedidos', 'Face', 'Taxa', 'Estornado',
-               'Líquido', 'Transferido', 'Em curso', 'Retido', 'Disponível']
+               'Líquido', 'Na plataforma', 'Recebido direto', 'Transferido', 'Em curso',
+               'Retido', 'Disponível']
   const l = comMovimento.value.map((e: any) => [
     e.nome, e.status, dataCurta(e.termina, ''),
     String(e.pedidos), brl(e.faceCents), brl(e.taxaCents), brl(e.estornadoCents),
-    brl(e.liquidoCents), brl(e.transferidoCents), brl(e.emCursoCents),
+    brl(e.liquidoCents), brl(e.naPlataformaCents), brl(e.recebidoDiretoCents),
+    brl(e.transferidoCents), brl(e.emCursoCents),
     brl(e.retidoCents), brl(e.disponivelCents),
   ])
   const csv = [cab, ...l]
@@ -51,6 +55,66 @@ function exportar() {
   a.download = 'financeiro-organizacao.csv'
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/* ---------------------------------------------------- enviar os saques */
+/**
+ * O pedido de saque (no financeiro do evento) só GRAVA a linha como
+ * 'solicitada', de propósito — quem tira o dinheiro da plataforma é
+ * `POST /api/admin/payout/executar`. Nenhuma tela chamava essa rota, e o
+ * pedido ficava "solicitada" pra sempre com o produtor esperando o pix.
+ *
+ * Quem pode: master e financeiro — a mesma régua de `utils/papeis.ts`
+ * (`/api/admin/payout` é área `dinheiro`). Esconder o botão é conforto; quem
+ * tranca é o servidor.
+ */
+const podeEnviar = computed(() =>
+  ['master', 'financeiro'].includes(String(eu.value?.usuario?.papel ?? '')))
+
+/** o que a fila tem pra andar — 'processando' entra porque a rota também confere quem está em voo */
+const pendentes = computed(() => (data.value?.transferencias ?? [])
+  .filter((t: any) => t.status === 'solicitada' || t.status === 'processando'))
+
+const enviando = ref(false)
+const recadoEnvio = ref<{ tipo: 'ok' | 'aviso' | 'erro'; texto: string } | null>(null)
+
+async function enviarSaques() {
+  // trava de duplo clique ANTES do confirm: o segundo clique não abre outra pergunta
+  if (enviando.value) return
+  const n = pendentes.value.length
+  const soma = pendentes.value.reduce((a: number, t: any) => a + t.valorCents, 0)
+  const pergunta = `Enviar ${n} ${n === 1 ? 'saque pendente' : 'saques pendentes'} (${brl(soma)}) agora?\n\n`
+    + 'O dinheiro sai da plataforma para a conta de cada beneficiário. '
+    + 'Isso não pode ser desfeito por aqui.'
+  if (!confirm(pergunta)) return
+
+  enviando.value = true
+  recadoEnvio.value = null
+  try {
+    const r = await $fetch<any>('/api/admin/payout/executar', { method: 'POST', body: {} })
+    // A frase é a da rota (`mensagemDoOperador`): ela já diz o que saiu, o que
+    // voltou pra fila e o que precisa de mão humana. A tela não reescreve.
+    const simulado = r?.simulado
+      ? ' (pagamento simulado nesta máquina — nenhuma transferência de verdade saiu)'
+      : ''
+    const algoDeuErrado = Number(r?.falhados ?? 0) + Number(r?.semDesfecho ?? 0)
+      + Number(r?.devolvidos ?? 0) > 0
+    recadoEnvio.value = {
+      tipo: algoDeuErrado ? 'aviso' : 'ok',
+      texto: `${r?.mensagem ?? 'Fila de saques executada.'}${simulado}`,
+    }
+  } catch (e: any) {
+    // 503 = Asaas não configurado: a rota manda o recado pronto, com o que fazer
+    recadoEnvio.value = {
+      tipo: 'erro',
+      texto: e?.data?.statusMessage || e?.statusMessage
+        || 'Não foi possível enviar os saques agora. Confira a conexão e tente de novo.',
+    }
+  } finally {
+    enviando.value = false
+    // recarrega mesmo no erro: parte da fila pode ter andado antes da falha
+    await refresh()
+  }
 }
 
 useHead({ title: 'Financeiro' })
@@ -66,10 +130,26 @@ useHead({ title: 'Financeiro' })
           {{ data.diasDeRetencao }} dias depois de ele terminar.
         </p>
       </div>
-      <button type="button" class="btn-secundario" @click="exportar">
-        <IconeMenu nome="exportar" :tamanho="18" /> Exportar
-      </button>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" class="btn-secundario" @click="exportar">
+          <IconeMenu nome="exportar" :tamanho="18" /> Exportar
+        </button>
+        <button v-if="podeEnviar" type="button" class="btn-primario" data-acao="enviar-saques"
+                :disabled="enviando || !pendentes.length"
+                :title="pendentes.length ? '' : 'Nenhum saque esperando envio'"
+                @click="enviarSaques">
+          {{ enviando ? 'Enviando…' : `Enviar saques pendentes (${pendentes.length})` }}
+        </button>
+      </div>
     </div>
+
+    <p v-if="recadoEnvio" role="status" data-parte="recado-envio" class="mb-4"
+       :class="recadoEnvio.tipo === 'erro' ? 'faixa-erro'
+         : recadoEnvio.tipo === 'aviso'
+           ? 'rounded-xl bg-alerta-claro px-4 py-3 text-sm leading-6 text-alerta ring-1 ring-inset ring-alerta/30'
+           : 'rounded-xl bg-ok-claro px-4 py-3 text-sm leading-6 text-ok ring-1 ring-inset ring-ok/30'">
+      {{ recadoEnvio.texto }}
+    </p>
 
     <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <div class="card">
@@ -81,7 +161,18 @@ useHead({ title: 'Financeiro' })
           nao — que e pior que os dois errados, porque ninguem confere um
           numero que a legenda explica.
         -->
-        <p class="mt-1 text-xs text-tinta-fraca">
+        <!-- div, não p: o navegador fecha um <p> sozinho ao ver bloco dentro -->
+        <div v-if="data.totais.recebidoDiretoCents" class="mt-2 space-y-0.5 text-xs">
+          <p class="flex justify-between text-tinta-fraca">
+            <span>na plataforma</span>
+            <span class="tabular-nums text-tinta">{{ brl(data.totais.naPlataformaCents) }}</span>
+          </p>
+          <p class="flex justify-between text-tinta-fraca">
+            <span>recebido direto por você</span>
+            <span class="tabular-nums text-tinta">{{ brl(data.totais.recebidoDiretoCents) }}</span>
+          </p>
+        </div>
+        <p v-else class="mt-1 text-xs text-tinta-fraca">
           o que sobra das vendas pagas depois da taxa de serviço e dos estornos
         </p>
       </div>
@@ -104,9 +195,22 @@ useHead({ title: 'Financeiro' })
         <p class="numero-kpi mt-1" :class="data.totais.disponivelCents ? 'text-ok' : ''">
           {{ brl(data.totais.disponivelCents) }}
         </p>
-        <p class="mt-1 text-xs text-tinta-fraca">já descontado o que está solicitado</p>
+        <p class="mt-1 text-xs text-tinta-fraca">
+          só o que passou pela plataforma, já descontado o que está solicitado
+        </p>
       </div>
     </div>
+
+    <!-- O recebido direto NÃO é saldo: é dinheiro que já está com o produtor
+         (espécie na gaveta, pix na chave dele). Nomeado aqui, com a mesma
+         frase do financeiro do evento e do borderô, pra ninguém somar o
+         líquido e achar que a plataforma deve a diferença. -->
+    <p v-if="data.totais.recebidoDiretoCents" class="mt-3 text-sm text-tinta-suave"
+       data-parte="recebido-direto">
+      <strong class="text-tinta">{{ brl(data.totais.recebidoDiretoCents) }}</strong>
+      recebidos direto (dinheiro no balcão ou pix na sua chave) já estão com você e não
+      entram no saldo a transferir.
+    </p>
 
     <div v-if="data.porMes.length" class="card mt-4">
       <p class="rotulo-kpi">Entrada por mês</p>
@@ -157,6 +261,9 @@ useHead({ title: 'Financeiro' })
             </td>
             <td class="px-3 py-3 text-right font-medium tabular-nums text-tinta">
               {{ brl(e.liquidoCents) }}
+              <span v-if="e.recebidoDiretoCents" class="block text-xs font-normal text-tinta-fraca">
+                {{ brl(e.recebidoDiretoCents) }} direto com você
+              </span>
             </td>
             <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">
               {{ brl(e.transferidoCents) }}

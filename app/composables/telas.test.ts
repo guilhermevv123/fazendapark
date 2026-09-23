@@ -153,9 +153,16 @@ describe('rosca do painel — o número que a tela calcula sozinha', () => {
 const RAIZ_DO_PAINEL = {
   rota: { params: {}, path: '/admin' },
 }
+/**
+ * Reconciliação, Auditoria e Suporte saíram do menu em 22/09 (pedido do
+ * dono) — a rota e a trava de `papeis.ts` continuam, só o link some. Por
+ * isso não entram mais aqui: "master vê todas as telas de raiz" passou a
+ * significar "todas as telas de raiz QUE TÊM link", que é o que esta régua
+ * sempre mediu (a trava em si é `papeis.test.ts`, não este arquivo).
+ */
 const ITENS_DE_RAIZ = [
-  '/admin', '/admin/organizacoes', '/admin/equipe', '/admin/financeiro',
-  '/admin/auditoria', '/admin/reconciliacao', '/admin/configuracoes', '/admin/suporte',
+  '/admin', '/admin/clientes', '/admin/relatorios', '/admin/financeiro',
+  '/admin/organizacoes', '/admin/equipe', '/admin/configuracoes',
 ]
 
 /**
@@ -174,6 +181,13 @@ async function menuDe(papel: string) {
     ...RAIZ_DO_PAINEL,
     respostas: { '/api/auth/eu': { usuario: { nome: 'Fulano de Teste', email: 'f@t.invalido', papel } } },
   })
+  // Relatórios e Configurações agora são GRUPO (22/09): os filhos só entram
+  // no DOM com o acordeão aberto (`v-if`, não `v-show` — ver o comentário em
+  // admin.vue). Sem abrir, "master vê todas as telas" reprovaria pelo clique
+  // que faltou, não por permissão — abre todo grupo antes de ler os `href`.
+  for (const botao of tela.findAll('nav ul > li > button[aria-expanded]')) {
+    await botao.trigger('click')
+  }
   const href = (sel: string) =>
     tela.findAll(sel).map((a) => a.attributes('href')).filter(Boolean) as string[]
   return { tela, enderecos: href('nav ul a'), todosOsLinks: href('a') }
@@ -423,5 +437,48 @@ describe('classe morta — o bug que só aparece olhando', () => {
     }
     expect(mortas, 'classe escrita que não vira CSS nenhum — renderiza sem estilo e ninguém avisa')
       .toEqual([])
+  })
+})
+
+// ===========================================================================
+// 4. O CARTÃO QUE NÃO PODE DEPENDER DE VENDA PAGA
+// ===========================================================================
+/**
+ * Primeiro dia de venda: três pessoas geraram PIX e ninguém pagou ainda. O
+ * relatório diz "Nenhuma venda paga" — e a Cobrança é justamente o cartão que
+ * mostra os três esperando. Nasceu dentro do bloco de "tem venda paga" e sumia
+ * junto com ele (22/09).
+ */
+const RELATORIO_SEM_VENDA_PAGA = {
+  filtro: { evento: null, de: null, ate: null },
+  resumo: {
+    pedidos: 0, ingressos: 0, clientes: 0, pedidosSemCliente: 0, cobradoCents: 0,
+    faceCents: 0, taxaCents: 0, descontoCents: 0, estornadoNoLiquidoCents: 0, liquidoCents: 0,
+    ticketMedioPorPedidoCents: 0, ticketMedioPorIngressoCents: 0,
+    primeiraVenda: null, ultimaVenda: null,
+  },
+  porDia: [], porEvento: [], porForma: [], porCanal: [],
+  clientes: { total: 0, comCadastro: 0, aceitamNovidades: 0, semIdade: 0, semCidade: 0, porCidade: [], porFaixa: [] },
+  topCompradores: [],
+  cobranca: {
+    criados: 3,
+    porStatus: [
+      { status: 'aguardando_pagamento', pedidos: 3, cobradoCents: 9_900 },
+    ],
+  },
+}
+
+describe('relatórios da organização — a Cobrança sem venda paga', () => {
+  it('diz que não há venda paga E mostra quem está esperando pagar', async () => {
+    const tela = await montarTela(await import('../pages/admin/relatorios.vue'), {
+      rota: { path: '/admin/relatorios' },
+      respostas: {
+        '/api/admin/relatorios': RELATORIO_SEM_VENDA_PAGA,
+        '/api/admin/eventos': [],
+      },
+    })
+    expect(tela.text()).toContain('Nenhuma venda paga nesse recorte')
+    // ← com o cartão de volta dentro do `v-else`, esta linha fica vermelha
+    expect(tela.text()).toContain('Aguardando pagamento')
   })
 })

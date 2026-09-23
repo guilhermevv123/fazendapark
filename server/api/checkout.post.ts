@@ -30,7 +30,7 @@ import { CadastroInvalido, prepararCadastro } from '../utils/cadastro'
 import {
   EstoqueInsuficiente, liberar, LoteIndisponivel, prazoDeReserva, reservar,
 } from '../utils/estoque'
-import { faceComDesconto, type ModoTaxa } from '../utils/dinheiro'
+import { faceDoTipo, type ModoTaxa } from '../utils/dinheiro'
 import {
   aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
@@ -61,6 +61,36 @@ import * as simulado from '../utils/gateway-simulado'
  * porque é aqui que ele recusa.
  */
 export { TETO_PADRAO_POR_PEDIDO }
+
+/**
+ * Piso de cada parcela no cartão. É do Asaas (R$ 5,00): parcela menor ele
+ * recusa, e a recusa chega DEPOIS de o comprador ter escolhido.
+ *
+ * A MESMA conta mora em `app/pages/e/[slug]/pagamento.vue` (`maxParcelas`) —
+ * a tela oferece, a porta garante. O teste `checkout-parcelas.test.ts` lê o
+ * número da tela e compara com este: se um mudar sem o outro, fica vermelho.
+ */
+export const PARCELA_MINIMA_CENTS = 500
+
+/** Quantas parcelas cabem neste total: de 1 a 12, sem parcela abaixo do piso. */
+export function maxParcelas(totalCents: number): number {
+  return Math.max(1, Math.min(12, Math.floor(Number(totalCents) / PARCELA_MINIMA_CENTS)))
+}
+
+/**
+ * As parcelas que vão de fato pro pedido e pro gateway.
+ *
+ * PIX é sempre à vista: parcelas num PIX viravam CARNÊ no Asaas (uma cobrança
+ * por mês), e o webhook só entrega o ingresso na última — o comprador pagaria
+ * a primeira e ficaria sem ingresso. No cartão, o pedido acima do teto é
+ * LIMITADO ao teto e não recusado: a tela calcula o teto sobre o total antes
+ * do cupom, e o cupom pode baixar o total depois da escolha — recusar ali é
+ * derrubar uma compra por um desconto que o próprio comprador ganhou.
+ */
+export function parcelasDoPedido(forma: 'pix' | 'credito', pedidas: number, totalCents: number): number {
+  if (forma !== 'credito') return 1
+  return Math.min(Math.max(1, Math.floor(Number(pedidas) || 1)), maxParcelas(totalCents))
+}
 
 const Entrada = z.object({
   eventSlug: z.string().min(1),
@@ -200,6 +230,24 @@ export default defineEventHandler(async (event) => {
     : []
   const porTipo = new Map(tipos.map((t) => [t.id, t]))
 
+  // Lote que tem variação (inteira/meia/…) só vende COM a variação. Sem esta
+  // porta, um item sem `ticketTypeId` num lote de meia e inteira passava pelo
+  // preço cheio do lote, sem sair da cota de nenhum tipo — a soma das
+  // variações deixava de fechar com o lote e a meia podia "sobrar" com o lote
+  // esgotado. A vitrine sempre manda o tipo; quem chega sem ele montou a
+  // requisição na mão.
+  const lotesComTipo = await q<{ lot_id: string }>(
+    `SELECT DISTINCT lot_id FROM ticket_types WHERE lot_id = ANY($1::uuid[])`, [lotIds])
+  const exigeTipo = new Set(lotesComTipo.map((r) => r.lot_id))
+  for (const it of dados.itens) {
+    if (!it.ticketTypeId && exigeTipo.has(it.lotId)) {
+      throw createError({ statusCode: 400,
+        statusMessage: `Escolha o tipo de ingresso de "${porLote.get(it.lotId)!.name}" `
+          + '(inteira, meia-entrada…) antes de pagar.',
+        data: { tipo: 'tipo_obrigatorio', lotId: it.lotId } })
+    }
+  }
+
   const modo: ModoTaxa = ev.fee_mode_online
   const linhas = dados.itens.map((it) => {
     const lote = porLote.get(it.lotId)!
@@ -210,7 +258,7 @@ export default defineEventHandler(async (event) => {
       if (t.lot_id !== it.lotId) {
         throw createError({ statusCode: 400, statusMessage: 'Tipo de ingresso não é deste lote' })
       }
-      face = faceComDesconto(face, Number(t.discount_bps))
+      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), modo)
     }
     return { quantidade: it.quantidade, faceUnitCents: face }
   })
@@ -351,11 +399,13 @@ export default defineEventHandler(async (event) => {
        senhaHash, cadastro.aceitaNovidades])
 
     if (cliente.rows[0].document !== documento) {
+      // Sem nenhum pedaço do CPF gravado: esta resposta sai pra quem digitar
+      // QUALQUER e-mail, e "final 42" junto do e-mail de outra pessoa é dado
+      // pessoal dela entregue a um desconhecido (dá pra montar o CPF inteiro
+      // cruzando com outros vazamentos). Quem é o dono sabe o próprio CPF.
       throw createError({ statusCode: 409,
-        statusMessage: `O e-mail ${dados.comprador.email.toLowerCase()} já está cadastrado `
-          + `com outro CPF (final ${String(cliente.rows[0].document).slice(-2)}). `
-          + 'Use o CPF desse cadastro ou compre com outro e-mail — cada e-mail responde '
-          + 'por um CPF, que é o documento impresso no ingresso.',
+        statusMessage: 'Este e-mail já está cadastrado com outro CPF. '
+          + 'Use o CPF do cadastro ou outro e-mail.',
         data: { tipo: 'email_de_outro_cpf' } })
     }
 
@@ -371,6 +421,8 @@ export default defineEventHandler(async (event) => {
       : null
 
     const total = aplicarCupom(linhas, Number(ev.fee_bps), modo, cupom)
+    // Sobre o total JÁ com cupom: é ele que o gateway parcela.
+    const parcelas = parcelasDoPedido(dados.forma, dados.parcelas, total.totalCents)
 
     const ord = await c.query(
       `INSERT INTO orders (org_id, event_id, customer_id, code, status, channel,
@@ -380,7 +432,7 @@ export default defineEventHandler(async (event) => {
        RETURNING id, code`,
       [ev.org_id, ev.id, cliente.rows[0].id, codigo,
        total.faceCents, total.feeCents, total.platformCents, total.discountCents, total.totalCents,
-       dados.forma === 'pix' ? 'pix' : 'credito', dados.parcelas,
+       dados.forma === 'pix' ? 'pix' : 'credito', parcelas,
        cupom?.id ?? null, promoter?.id ?? null, expiraEm])
 
     for (let i = 0; i < dados.itens.length; i++) {
@@ -406,7 +458,7 @@ export default defineEventHandler(async (event) => {
     if (cupom) await c.query(`UPDATE promo_codes SET uses = uses + 1 WHERE id = $1`, [cupom.id])
 
     return { id: ord.rows[0].id, code: ord.rows[0].code, customerId: cliente.rows[0].id,
-             asaasCustomerId: cliente.rows[0].asaas_customer_id, total }
+             asaasCustomerId: cliente.rows[0].asaas_customer_id, total, parcelas }
   }).catch((e) => {
     if (e instanceof CupomRecusado) {
       throw createError({ statusCode: e.status, statusMessage: e.recado,
@@ -490,10 +542,15 @@ export default defineEventHandler(async (event) => {
       customer: asaasCustomer,
       billingType: dados.forma === 'pix' ? 'PIX' : 'CREDIT_CARD',
       value: centavosParaReais(total.totalCents),
+      // Data, não hora: o Asaas não aceita vencimento em minutos, então a
+      // cobrança sobrevive à reserva (`hold_minutes`). Quem fecha essa janela
+      // é `cancelarCobrancasDeExpirados` (a varredura cancela a cobrança do
+      // pedido que expirou) e, pro PIX pago no vão, a emissão refaz a reserva
+      // — ver `emissao.ts`.
       dueDate: vencimentoEmDias(1),
       description: `${ev.name} — pedido ${pedido.code}`,
       externalReference: pedido.id,       // é isto que liga o webhook ao pedido
-      installmentCount: dados.parcelas > 1 ? dados.parcelas : undefined,
+      installmentCount: pedido.parcelas > 1 ? pedido.parcelas : undefined,
     })
   } catch (e: any) {
     // Gateway caiu: devolve o estoque na hora. Sem isso, cada erro do Asaas
@@ -519,6 +576,7 @@ export default defineEventHandler(async (event) => {
     status: 'aguardando_pagamento',
     expiraEm: expiraEm.toISOString(),
     totalCents: total.totalCents,
+    parcelas: pedido.parcelas,
     faceCents: total.faceCents,
     feeCents: total.feeCents,
     descontoCents: total.discountCents,
@@ -560,6 +618,7 @@ async function cobrarSimulado(
     status: 'aguardando_pagamento',
     expiraEm: expiraEm.toISOString(),
     totalCents: total.totalCents,
+    parcelas: pedido.parcelas,
     faceCents: total.faceCents,
     feeCents: total.feeCents,
     descontoCents: total.discountCents,

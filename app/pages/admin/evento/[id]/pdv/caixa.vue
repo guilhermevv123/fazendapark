@@ -15,7 +15,7 @@ definePageMeta({ layout: 'admin' })
 const route = useRoute()
 const id = route.params.id as string
 
-const { data: lista, refresh: recarregarLista } = await useFetch<any>(
+const { data: lista, error: falhaLista, refresh: recarregarLista } = await useFetch<any>(
   () => `/api/admin/evento/${id}/pdv`)
 
 const turnoId = ref(String(route.query.turno ?? ''))
@@ -27,9 +27,17 @@ watchEffect(() => {
   if (aberto) turnoId.value = aberto.id
 })
 
-const { data, refresh } = await useFetch<any>(
+const { data, error: falhaTurno, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/pdv/turno?turno=${turnoId.value}`,
   { immediate: false, watch: [turnoId] })
+
+/** Tela que não carregou diz por quê — tela em branco parece "o sistema caiu". */
+const recado = (e: any, padrao: string) => {
+  const s = e?.statusCode ?? e?.status
+  if (s === 404) return 'Este caixa não existe mais neste evento. Escolha outro na lista.'
+  if (s === 403) return 'Seu acesso não inclui a conferência de caixa.'
+  return e?.data?.message ?? e?.data?.statusMessage ?? padrao
+}
 
 watch(turnoId, (v) => { if (v) refresh() }, { immediate: true })
 
@@ -57,6 +65,64 @@ const revelou = ref(false)
 
 const mov = reactive({ tipo: 'sangria', valorCents: 0, motivo: '' })
 const movendo = ref(false)
+/** erro da gaveta aparece NO cartão da gaveta, não no alto da página */
+const erroGaveta = ref('')
+
+/**
+ * Anular um lançamento errado: vira outro lançamento, de sinal contrário, com
+ * o motivo. O original continua na lista, riscado — anular não é apagar.
+ */
+const anulando = ref('')
+const motivoAnulacao = ref('')
+const erroAnulacao = ref('')
+
+async function anularMovimento(movimentoId: string) {
+  if (motivoAnulacao.value.trim().length < 3) {
+    erroAnulacao.value = 'Diga por que está anulando — pelo menos 3 letras.'
+    return
+  }
+  movendo.value = true; erroAnulacao.value = ''
+  try {
+    await $fetch(`/api/admin/evento/${id}/pdv/gaveta`, {
+      method: 'POST',
+      body: { turnoId: turnoId.value, anular: movimentoId, motivo: motivoAnulacao.value.trim() },
+    })
+    anulando.value = ''; motivoAnulacao.value = ''
+    await refresh()
+  } catch (e: any) {
+    erroAnulacao.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra anular.'
+  } finally { movendo.value = false }
+}
+
+/**
+ * Reimpressão das fichas de uma venda.
+ *
+ * O recibo do balcão é o único lugar em que a ficha nascia — fechou o recibo
+ * antes de imprimir, ou a bobina acabou no meio, e o cliente ficava sem o
+ * papel que a portaria lê. Aqui a ficha é remontada a partir do pedido, só
+ * com os ingressos que ainda valem.
+ */
+const fichas = ref<any>(null)
+const reimpressao = ref<{ evento: string; pedido: string; ingressos: any[] } | null>(null)
+const reimprimindo = ref('')
+const erroReimpressao = ref('')
+
+async function reimprimir(pedidoId: string) {
+  reimprimindo.value = pedidoId; erroReimpressao.value = ''
+  try {
+    const f: any = await $fetch(`/api/admin/pedido/${pedidoId}`)
+    const validos = (f.ingressos ?? []).filter((t: any) => t.situacao === 'valido')
+    if (!validos.length) {
+      erroReimpressao.value = `O pedido ${f.pedido.codigo} não tem ingresso valendo para imprimir.`
+      return
+    }
+    reimpressao.value = { evento: f.pedido.eventoNome, pedido: f.pedido.codigo, ingressos: validos }
+    await nextTick()
+    await fichas.value?.imprimir()
+  } catch (e: any) {
+    erroReimpressao.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra reimprimir.'
+  } finally { reimprimindo.value = '' }
+}
 
 /**
  * Cancelamento: qual venda está com o formulário aberto, e o que o operador
@@ -70,19 +136,21 @@ const cancelando = ref('')
 const motivoCancelamento = ref('')
 const enviandoCancelamento = ref(false)
 const avisoCancelamento = ref('')
+/** o erro do cancelamento aparece NA LINHA da venda, junto do formulário */
+const erroCancelamento = ref('')
 
 function abrirCancelamento(pedidoId: string) {
   cancelando.value = pedidoId
   motivoCancelamento.value = ''
-  erro.value = ''
+  erroCancelamento.value = ''
 }
 
 async function confirmarCancelamento(pedidoId: string) {
   if (motivoCancelamento.value.trim().length < 3) {
-    erro.value = 'Diga por que está cancelando — pelo menos 3 letras.'
+    erroCancelamento.value = 'Diga por que está cancelando — pelo menos 3 letras.'
     return
   }
-  enviandoCancelamento.value = true; erro.value = ''
+  enviandoCancelamento.value = true; erroCancelamento.value = ''
   try {
     const r: any = await $fetch(`/api/admin/evento/${id}/pdv/cancelamento`, {
       method: 'POST',
@@ -93,7 +161,7 @@ async function confirmarCancelamento(pedidoId: string) {
     motivoCancelamento.value = ''
     await refresh()
   } catch (e: any) {
-    erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar a venda.'
+    erroCancelamento.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar a venda.'
   } finally { enviandoCancelamento.value = false }
 }
 
@@ -107,10 +175,10 @@ const aberto = computed(() => data.value?.turno?.status === 'aberto')
 
 async function registrarMovimento() {
   if (mov.valorCents <= 0) {
-    erro.value = 'Diga quanto saiu ou entrou na gaveta antes de registrar.'
+    erroGaveta.value = 'Diga quanto saiu ou entrou na gaveta antes de registrar.'
     return
   }
-  movendo.value = true; erro.value = ''
+  movendo.value = true; erroGaveta.value = ''
   try {
     await $fetch(`/api/admin/evento/${id}/pdv/gaveta`, {
       method: 'POST',
@@ -121,7 +189,7 @@ async function registrarMovimento() {
     })
     mov.valorCents = 0; mov.motivo = ''
     await refresh()
-  } catch (e: any) { erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra registrar.' }
+  } catch (e: any) { erroGaveta.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra registrar.' }
   finally { movendo.value = false }
 }
 
@@ -158,8 +226,6 @@ async function fechar() {
 
     <AbasSecao :evento-id="id" />
 
-    <p v-if="erro" class="faixa-erro mt-4">{{ erro }}</p>
-
     <!-- o que fazer com o dinheiro depois de cancelar: fica até o operador
          fechar, porque é a parte que acontece fora do sistema -->
     <div v-if="avisoCancelamento"
@@ -169,6 +235,11 @@ async function fechar() {
         <p class="mt-1 text-sm text-tinta-corpo">{{ avisoCancelamento }}</p>
       </div>
       <button type="button" class="btn-secundario" @click="avisoCancelamento = ''">Entendi</button>
+    </div>
+
+    <div v-if="falhaLista && !lista" class="card mt-4">
+      <p class="faixa-erro">{{ recado(falhaLista, 'Não foi possível carregar os caixas. Confira a internet.') }}</p>
+      <button type="button" class="btn-secundario mt-3" @click="recarregarLista()">Tentar de novo</button>
     </div>
 
     <!-- escolher o caixa -->
@@ -186,6 +257,11 @@ async function fechar() {
     <p v-if="!turnoId" class="card mt-4 text-center text-tinta-suave">
       Escolha um caixa acima para conferir.
     </p>
+
+    <div v-else-if="falhaTurno && !data" class="card mt-4">
+      <p class="faixa-erro">{{ recado(falhaTurno, 'Não foi possível carregar este caixa. Confira a internet.') }}</p>
+      <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
+    </div>
 
     <div v-else-if="data" class="mt-4 grid gap-4 lg:grid-cols-[1fr_380px]">
       <!-- o extrato -->
@@ -261,18 +337,46 @@ async function fechar() {
           <h3 class="rotulo-kpi">Entradas e saídas da gaveta</h3>
           <table class="mt-3 w-full text-sm">
             <tbody>
-              <tr v-for="m in data.movimentos" :key="m.id" class="border-t border-linha">
-                <td class="py-2">
-                  <span :class="m.tipo === 'sangria' ? 'selo-alerta' : 'selo-ok'">
-                    {{ m.tipo === 'sangria' ? 'Sangria' : 'Suprimento' }}
-                  </span>
-                </td>
-                <td class="py-2 text-tinta-suave">{{ m.motivo || '—' }}</td>
-                <td class="py-2 text-xs text-tinta-fraca tabular-nums">{{ quando(m.em) }} · {{ m.por }}</td>
-                <td class="py-2 text-right font-semibold tabular-nums">
-                  {{ m.tipo === 'sangria' ? '−' : '+' }}{{ reais(m.valorCents) }}
-                </td>
-              </tr>
+              <template v-for="m in data.movimentos" :key="m.id">
+                <tr class="border-t border-linha" :class="m.anuladoPor ? 'text-tinta-fraca' : ''">
+                  <td class="py-2">
+                    <span :class="m.anula ? 'selo-neutro' : m.tipo === 'sangria' ? 'selo-alerta' : 'selo-ok'">
+                      {{ m.anula ? 'Anulação' : m.tipo === 'sangria' ? 'Sangria' : 'Suprimento' }}
+                    </span>
+                    <span v-if="m.anuladoPor" class="selo-neutro ml-1">anulado</span>
+                  </td>
+                  <td class="py-2 text-tinta-suave">{{ m.motivo || '—' }}</td>
+                  <td class="py-2 text-xs text-tinta-fraca tabular-nums">{{ quando(m.em) }} · {{ m.por }}</td>
+                  <td class="py-2 text-right font-semibold tabular-nums" :class="m.anuladoPor ? 'line-through' : ''">
+                    {{ m.tipo === 'sangria' ? '−' : '+' }}{{ reais(m.valorCents) }}
+                  </td>
+                  <td v-if="aberto" class="py-2 pl-2 text-right">
+                    <button v-if="!m.anula && !m.anuladoPor" type="button"
+                            class="text-sm font-semibold text-erro underline"
+                            @click="anulando = m.id; motivoAnulacao = ''; erroAnulacao = ''">
+                      Anular
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="anulando === m.id" class="border-t border-linha bg-erro-claro">
+                  <td colspan="5" class="px-2 py-3">
+                    <label class="rotulo">Por que este lançamento está errado?</label>
+                    <p v-if="erroAnulacao" class="faixa-erro mb-2">{{ erroAnulacao }}</p>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <input v-model="motivoAnulacao" class="campo flex-1"
+                             placeholder="Ex.: digitei 500 em vez de 50">
+                      <button type="button" class="btn-erro" :disabled="movendo"
+                              @click="anularMovimento(m.id)">
+                        {{ movendo ? 'Anulando…' : `Anular ${reais(m.valorCents)}` }}
+                      </button>
+                      <button type="button" class="btn-secundario" @click="anulando = ''">Voltar</button>
+                    </div>
+                    <p class="mt-2 text-xs text-tinta-corpo">
+                      O lançamento continua na lista, riscado; entra um de sinal contrário no mesmo valor.
+                    </p>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -281,6 +385,7 @@ async function fechar() {
         <div v-if="data.vendas.length" class="card mt-4 overflow-hidden p-0">
           <header class="border-b border-linha p-4">
             <h3 class="rotulo-kpi">Vendas deste caixa</h3>
+            <p v-if="erroReimpressao" class="faixa-erro mt-2">{{ erroReimpressao }}</p>
           </header>
           <div class="max-h-96 overflow-auto">
             <table class="w-full text-sm">
@@ -292,7 +397,7 @@ async function fechar() {
                   <th class="px-4 py-2 text-right">Ingressos</th>
                   <th class="px-4 py-2 text-right">Total</th>
                   <th class="px-4 py-2 text-right">Troco</th>
-                  <th v-if="aberto" class="px-4 py-2" />
+                  <th class="px-4 py-2" />
                 </tr>
               </thead>
               <tbody>
@@ -306,8 +411,13 @@ async function fechar() {
                     <td class="px-4 py-2 text-right tabular-nums text-tinta-suave">
                       {{ v.trocoCents ? reais(v.trocoCents) : '—' }}
                     </td>
-                    <td v-if="aberto" class="px-4 py-2 text-right">
-                      <button type="button" class="text-sm font-semibold text-erro underline"
+                    <td class="whitespace-nowrap px-4 py-2 text-right">
+                      <button v-if="v.situacao === 'pago' || v.situacao === 'estornado_parcial'"
+                              type="button" class="text-sm font-semibold text-acao underline"
+                              :disabled="reimprimindo === v.id" @click="reimprimir(v.id)">
+                        {{ reimprimindo === v.id ? 'Preparando…' : 'Reimprimir fichas' }}
+                      </button>
+                      <button v-if="aberto" type="button" class="ml-3 text-sm font-semibold text-erro underline"
                               @click="abrirCancelamento(v.id)">
                         Cancelar
                       </button>
@@ -317,6 +427,7 @@ async function fechar() {
                   <tr v-if="cancelando === v.id" class="border-t border-linha bg-erro-claro">
                     <td colspan="7" class="px-4 py-3">
                       <label class="rotulo">Por que está cancelando a venda {{ v.codigo }}?</label>
+                      <p v-if="erroCancelamento" class="faixa-erro mb-2">{{ erroCancelamento }}</p>
                       <div class="flex flex-wrap items-center gap-2">
                         <input v-model="motivoCancelamento" class="campo flex-1"
                                placeholder="Ex.: operador digitou 3 em vez de 2">
@@ -383,6 +494,7 @@ async function fechar() {
             <button type="button" :class="mov.tipo === 'suprimento' ? 'chip-ativo' : 'chip'"
                     @click="mov.tipo = 'suprimento'">Suprimento (entra)</button>
           </div>
+          <p v-if="erroGaveta" class="faixa-erro mt-3">{{ erroGaveta }}</p>
           <label for="mov-valor" class="rotulo mt-2">Quanto</label>
           <CampoMoeda id="mov-valor" v-model="mov.valorCents" />
           <input v-model="mov.motivo" class="campo mt-2" placeholder="Motivo (recolhido pelo gerente)">
@@ -400,6 +512,7 @@ async function fechar() {
             aparece depois — conferir sabendo a resposta não confere nada.
           </p>
 
+          <p v-if="erro" class="faixa-erro mt-3">{{ erro }}</p>
           <label for="contado" class="rotulo mt-4">Quanto tem na gaveta</label>
           <CampoMoeda id="contado" v-model="contadoCents" @input="contou = true" />
 
@@ -450,5 +563,9 @@ async function fechar() {
         </section>
       </aside>
     </div>
+
+    <!-- reimpressão: só existe na impressão (ver FichasImpressas.vue) -->
+    <FichasImpressas v-if="reimpressao" ref="fichas" :evento="reimpressao.evento"
+                     :pedido="reimpressao.pedido" :ingressos="reimpressao.ingressos" />
   </div>
 </template>

@@ -15,13 +15,21 @@
  *    valor original e com o estorno ao lado. Abater em silêncio faz o total
  *    bater e a história sumir: ninguém consegue explicar por que o dia caiu.
  *
+ * 2b. **Mas estorno TOTAL e contestação não entram nos totais.** As linhas
+ *    mostram todo pedido em que o dinheiro chegou a entrar (é a história);
+ *    os totais, os quadros e o "por dia" somam só `PEDIDO_VIVO()`, a régua
+ *    do borderô, do painel e dos financeiros. Antes o "cobrado" daqui somava
+ *    estornado, chargeback e disputa, e a mesma venda aparecia com um total
+ *    no extrato e outro em todas as outras telas. O que ficou de fora vem em
+ *    `foraDoTotal`, por status, rotulado — não some.
+ *
  * 3. **Líquido do produtor depende de quem pagou a taxa.** No online a taxa é
  *    repassada (o produtor recebe a face); no balcão ela é absorvida (o
  *    produtor recebe a face menos a taxa). São dois números diferentes na
  *    mesma tela e é por isso que existe uma coluna pra cada um.
  */
 import { q, q1 } from '../../../../utils/db'
-import { SQL_LIQUIDO } from "../../../../utils/liquido"
+import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 
 const CANAL_LEGIVEL: Record<string, string> = {
   online: 'Site',
@@ -67,9 +75,15 @@ export default defineEventHandler(async (event) => {
   if (ponto) põe(`o.pos_terminal_id = $?::uuid`, ponto)
   if (forma) põe(`o.payment_method = $?`, forma)
 
+  /** todas as linhas da história, inclusive estornadas e contestadas */
   const onde = cond.join(' AND ')
+  /** o que SOMA dinheiro: a régua das outras telas (`PEDIDO_VIVO`) */
+  const ondeVivo = `${onde} AND ${PEDIDO_VIVO('o.')}`
+  /** o que ficou fora da soma, com o motivo — estorno total e contestação */
+  const ondeFora = `${onde} AND NOT (${PEDIDO_VIVO('o.')})`
 
-  const [linhas, porCanal, porPonto, porForma, porDia, totais, pontos] = await Promise.all([
+  const [linhas, porCanal, porPonto, porForma, porDia, totais, pontos, devolvido, fora] =
+    await Promise.all([
     q<any>(
       `SELECT o.id, o.code, o.status, o.channel, o.payment_method, o.installments,
               o.face_cents, o.fee_cents, o.platform_cents, o.discount_cents,
@@ -98,7 +112,7 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
               ${SQL_LIQUIDO('o.')} AS liquido,
               COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
-         FROM orders o WHERE ${onde} GROUP BY 1 ORDER BY 2 DESC`, par),
+         FROM orders o WHERE ${ondeVivo} GROUP BY 1 ORDER BY 2 DESC`, par),
 
     // `LEFT JOIN`, não `JOIN`: venda de balcão sem ponto registrado existe
     // (importação, seed, venda anterior ao cadastro do guichê) e precisa
@@ -113,13 +127,13 @@ export default defineEventHandler(async (event) => {
          FROM orders o
          LEFT JOIN pos_terminals t ON t.id = o.pos_terminal_id
          LEFT JOIN users u ON u.id = o.sold_by
-        WHERE ${onde} AND o.channel IN ('bilheteria','pdv_produtor','pdv_ticketeira')
+        WHERE ${ondeVivo} AND o.channel IN ('bilheteria','pdv_produtor','pdv_ticketeira')
         GROUP BY 1,2,3 ORDER BY 5 DESC`, par),
 
     q<any>(
       `SELECT o.payment_method AS forma, count(*)::int AS pedidos,
               COALESCE(SUM(o.total_cents),0)::bigint AS cobrado
-         FROM orders o WHERE ${onde} GROUP BY 1 ORDER BY 3 DESC`, par),
+         FROM orders o WHERE ${ondeVivo} GROUP BY 1 ORDER BY 3 DESC`, par),
 
     q<any>(
       `SELECT date_trunc('day', o.paid_at) AS dia, count(*)::int AS pedidos,
@@ -127,7 +141,7 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.face_cents),0)::bigint AS face,
               COALESCE(SUM(o.platform_cents),0)::bigint AS taxa,
               COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
-         FROM orders o WHERE ${onde} AND o.paid_at IS NOT NULL
+         FROM orders o WHERE ${ondeVivo} AND o.paid_at IS NOT NULL
         GROUP BY 1 ORDER BY 1 DESC`, par),
 
     q1<any>(
@@ -138,12 +152,29 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.platform_cents),0)::bigint AS taxa_plataforma,
               COALESCE(SUM(o.discount_cents),0)::bigint AS desconto,
               COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
-              COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
-         FROM orders o WHERE ${onde}`, par),
+              COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos,
+              ${SQL_LIQUIDO('o.')} AS liquido
+         FROM orders o WHERE ${ondeVivo}`, par),
 
     // a lista de pontos não usa os filtros: é o seletor da tela, e um
     // seletor que some quando o filtro esvazia deixa o usuário sem saída
     q<any>(`SELECT id, name FROM pos_terminals WHERE event_id = $1 ORDER BY name`, [id]),
+
+    // O que as linhas mostram e os totais não somam, por status.
+    // A DEVOLUÇÃO é a exceção da régua, e a mesma das outras seis telas:
+    // "quanto voltou pro comprador" conta o estorno TOTAL também — ele só não
+    // tem mais líquido a apurar. Por isso sai do recorte inteiro (`onde`), e a
+    // parte descontada do líquido (só vivos) vem com nome próprio.
+    q1<any>(
+      `SELECT COALESCE(SUM(o.refunded_cents),0)::bigint AS total
+         FROM orders o WHERE ${onde}`, par),
+
+    q<any>(
+      `SELECT o.status, count(*)::int AS pedidos,
+              COALESCE(SUM(o.total_cents),0)::bigint    AS cobrado,
+              COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado
+         FROM orders o WHERE ${ondeFora}
+        GROUP BY 1 ORDER BY 3 DESC`, par),
   ])
 
   /**
@@ -173,7 +204,25 @@ export default defineEventHandler(async (event) => {
       cobradoCents: Number(totais.cobrado), faceCents: Number(totais.face),
       taxaCompradorCents: Number(totais.taxa_comprador),
       taxaPlataformaCents: Number(totais.taxa_plataforma),
-      descontoCents: Number(totais.desconto), estornadoCents: Number(totais.estornado),
+      descontoCents: Number(totais.desconto),
+      // tudo que voltou pro comprador no recorte, estorno total incluído —
+      // o mesmo `estornadoCents` do borderô, do painel e dos financeiros
+      estornadoCents: Number(devolvido?.total ?? 0),
+      // a parte da devolução que está descontada do líquido (pedidos vivos)
+      estornadoNoLiquidoCents: Number(totais.estornado),
+      // mesma `SQL_LIQUIDO` do borderô: a tela não soma dinheiro por conta própria
+      liquidoCents: Number(totais.liquido),
+    },
+    // Fora dos totais, e dito por quê: estorno total (o dinheiro voltou inteiro)
+    // e contestação (chargeback/disputa — o dinheiro está preso no banco).
+    foraDoTotal: {
+      pedidos: fora.reduce((a, l) => a + l.pedidos, 0),
+      cobradoCents: fora.reduce((a, l) => a + Number(l.cobrado), 0),
+      estornadoCents: fora.reduce((a, l) => a + Number(l.estornado), 0),
+      porStatus: fora.map((l) => ({
+        status: l.status, pedidos: l.pedidos,
+        cobradoCents: Number(l.cobrado), estornadoCents: Number(l.estornado),
+      })),
     },
     porCanal: porCanal.map((l) => ({
       canal: l.channel, nome: CANAL_LEGIVEL[l.channel] ?? l.channel,
@@ -202,6 +251,8 @@ export default defineEventHandler(async (event) => {
     })),
     linhas: linhas.map((l) => ({
       id: l.id, pedido: l.code, status: l.status,
+      // a linha fica na história, mas não entra nos totais nem no rodapé
+      foraDoTotal: !['pago', 'estornado_parcial'].includes(l.status),
       canal: CANAL_LEGIVEL[l.channel] ?? l.channel,
       ponto: l.ponto, operador: l.operador,
       forma: l.payment_method, parcelas: l.installments,

@@ -29,7 +29,11 @@ export default defineEventHandler(async (event) => {
   const sessao = (event.context as any).sessao
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Digite quanto contou na gaveta antes de fechar o caixa.',
+      data: p.error.flatten(),
+    })
   }
   const d = p.data
 

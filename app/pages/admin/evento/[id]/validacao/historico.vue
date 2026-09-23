@@ -261,8 +261,10 @@ useHead({ title: 'Histórico de leituras' })
         <label for="g" class="rotulo">Portão</label>
         <select id="g" v-model="gate" class="campo">
           <option value="">Todos</option>
-          <option v-for="g in data.portoes" :key="g.gate" :value="g.gate === '—' ? '' : g.gate">
-            {{ g.gate }} ({{ g.leituras }})
+          <!-- "Sem portão" tem valor próprio (`g.filtro`, vindo da rota): com
+               `''` ele era a mesma opção que "Todos" e o filtro não filtrava. -->
+          <option v-for="g in data.portoes" :key="g.filtro ?? g.gate" :value="g.filtro ?? g.gate">
+            {{ g.gate === '—' ? 'Sem portão' : g.gate }} ({{ g.leituras }})
           </option>
         </select>
       </div>

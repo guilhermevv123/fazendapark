@@ -48,6 +48,7 @@ import { z } from 'zod'
 // DISPOSITIVO e de mais lugar nenhum. Um gerador de uuid à mão neste arquivo é
 // o primeiro passo pra alguém "resolver" um id faltando inventando outro — e
 // aí o `ON CONFLICT (id)` nunca mais dispara e a contagem infla em silêncio.
+import { mutacaoDeOutroSite } from '../../utils/caminho'
 import { q, q1, tx } from '../../utils/db'
 import { exigir } from '../../utils/sessao'
 import { ehPapel, papelDoRoleLegado, papelPode, ROTULO } from '../../utils/papeis'
@@ -101,8 +102,7 @@ export default defineEventHandler(async (event) => {
   // ---- cerca 3: origem ----------------------------------------------------
   // O cookie é SameSite=Lax, o que já barra POST de outro site; isto é o cinto
   // além do suspensório, copiado do middleware 01 porque ele não roda aqui.
-  const origem = getRequestHeader(event, 'origin')
-  if (origem && origem !== getRequestURL(event).origin) {
+  if (mutacaoDeOutroSite(event)) {
     throw createError({ statusCode: 403, statusMessage: 'Origem não autorizada' })
   }
 

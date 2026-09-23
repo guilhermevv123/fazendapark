@@ -89,6 +89,21 @@ const { data: detalhe } = await useAsyncData('home-destaque',
   { watch: [destaque] })
 
 /** Um cartão por setor, com o lote que ainda vende (ou o primeiro, se nenhum vende). */
+/*
+ * Quando começa e quando termina, com hora (dono, 23/09: "é interessante que
+ * apareça data de início e data de final"). O fim vem de `/api/e/:slug`, que
+ * já devolve `null` quando o produtor marcou "não mostrar o término" — aí a
+ * linha do término simplesmente não sai.
+ */
+const comHora = (v: unknown) => {
+  const d = paraData(v as any)
+  return d ? `${dataPorExtenso(d)} às ${dataHora(d).slice(-5)}` : null
+}
+const quandoDestaque = computed(() => ({
+  inicio: comHora(detalhe.value?.evento?.inicio ?? destaque.value?.inicio),
+  fim: comHora(detalhe.value?.evento?.fim),
+}))
+
 const ingressos = computed(() => (detalhe.value?.setores ?? [])
   .map((s: any) => {
     const lotes: any[] = s.lotes ?? []
@@ -171,8 +186,8 @@ onMounted(async () => {
   if (typeof IntersectionObserver === 'undefined') return
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return
   // A dobra só é medida com a fonte da casa carregada: com a fonte reserva o
-  // título da capa quebra em mais linhas, a capa cresce, e "Como comprar" —
-  // que a pessoa já está vendo — seria dado como "abaixo da dobra" e sumiria.
+  // título da capa quebra em mais linhas, a capa cresce, e o que vem logo
+  // abaixo — que a pessoa já está vendo — seria dado como "abaixo da dobra" e sumiria.
   await document.fonts?.ready
   if (!montada) return
   observador = new IntersectionObserver((entradas) => {
@@ -195,21 +210,6 @@ onBeforeUnmount(() => {
   montada = false
   observador?.disconnect()
 })
-
-const PASSOS = [
-  {
-    titulo: 'Escolha o evento e os ingressos',
-    texto: 'Veja as datas, os setores e os preços. Os ingressos ficam reservados enquanto você preenche os dados.',
-  },
-  {
-    titulo: 'Pague com PIX ou cartão',
-    texto: 'O pagamento é confirmado em instantes, sem precisar enviar comprovante.',
-  },
-  {
-    titulo: 'Entre com o QR Code',
-    texto: 'Os ingressos aparecem na hora e chegam por e-mail. Na portaria, basta mostrar o QR Code no celular.',
-  },
-]
 
 const FOTOS = [
   { arquivo: 'toboaguas-coloridos-1280', titulo: 'Toboáguas', classe: 'sm:col-span-2 sm:row-span-2' },
@@ -261,6 +261,7 @@ useSeoMeta({
     <!-- capa: a foto respira, a luz da piscina passa, bolhas sobem, a água corre no pé -->
     <section class="relative isolate overflow-hidden bg-ink-950 text-white">
       <img src="/photos/vista-geral-1280.webp" alt="" fetchpriority="high"
+           srcset="/photos/vista-geral-800.webp 800w, /photos/vista-geral-1280.webp 1280w" sizes="100vw"
            class="capa-foto absolute inset-0 -z-20 h-full w-full object-cover opacity-70">
       <div aria-hidden="true"
            class="absolute inset-0 -z-10 bg-gradient-to-r from-ink-950/90 via-ink-950/60 to-ink-950/10" />
@@ -317,44 +318,6 @@ useSeoMeta({
       </div>
     </section>
 
-    <!-- como comprar -->
-    <section aria-labelledby="como-funciona" class="bg-white">
-      <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-        <h2 id="como-funciona" data-revelar
-            class="titulo text-3xl font-semibold tracking-[-0.02em] text-ink-950 sm:text-4xl">
-          Como comprar
-        </h2>
-        <ol class="mt-8 grid gap-4 md:grid-cols-3">
-          <li v-for="(passo, i) in PASSOS" :key="passo.titulo" :data-revelar="i * 120"
-              class="passo rounded-3xl bg-canvas p-6 ring-1 ring-inset ring-ink-200/60 transition duration-300 hover:-translate-y-1 hover:bg-white hover:shadow-pop hover:ring-pool-200">
-            <div class="flex items-center gap-3">
-              <span class="passo-icone grid size-10 place-items-center rounded-2xl bg-pool-700 text-white">
-                <svg v-if="i === 0" class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M8 2v4M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" />
-                  <path d="M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01" />
-                </svg>
-                <svg v-else-if="i === 1" class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
-                  <path d="m9 12 2 2 4-4" />
-                </svg>
-                <svg v-else class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect width="5" height="5" x="3" y="3" rx="1" /><rect width="5" height="5" x="16" y="3" rx="1" />
-                  <rect width="5" height="5" x="3" y="16" rx="1" />
-                  <path d="M21 16h-3a2 2 0 0 0-2 2v3M21 21v.01M12 7v3a2 2 0 0 1-2 2H7M3 12h.01M12 3h.01M12 16v.01M16 12h1M21 12v.01M12 21v-1" />
-                </svg>
-              </span>
-              <span class="text-sm font-semibold text-pool-700">Passo {{ i + 1 }}</span>
-            </div>
-            <h3 class="titulo mt-4 text-lg font-semibold text-ink-900">{{ passo.titulo }}</h3>
-            <p class="mt-2 text-[15px] leading-7 text-ink-600">{{ passo.texto }}</p>
-          </li>
-        </ol>
-      </div>
-    </section>
-
     <!-- letreiro: as atrações correndo. Decorativo — repete o que a galeria
          mostra logo abaixo —, por isso fora da leitura de tela. -->
     <div class="letreiro overflow-hidden bg-sun-400 py-4 text-ink-950" aria-hidden="true">
@@ -408,12 +371,11 @@ useSeoMeta({
             </h2>
             <p class="mt-3 max-w-2xl text-base leading-7 text-ink-600">
               {{ detalhe?.evento?.descricao
-                || 'Escolha o evento, os ingressos e pague em poucos minutos. O valor exibido já inclui a taxa de serviço.' }}
+                || 'Escolha seus ingressos e pague em poucos minutos.' }}
             </p>
           </div>
-          <NuxtLink v-if="destaque" :to="irComprar" class="btn-cta px-7 py-3.5 text-base">
-            Escolher ingressos
-          </NuxtLink>
+          <!-- sem "Escolher ingressos" aqui (dono, 23/09): a compra sai do
+               "Comprar" de cada cartão logo abaixo -->
         </div>
 
         <p v-if="pending" class="mt-8 text-ink-600">Carregando os eventos…</p>
@@ -427,18 +389,21 @@ useSeoMeta({
         </p>
 
         <template v-else>
-          <!-- o evento em destaque: o nome, quando e onde, e os ingressos com preço -->
+          <!-- o evento em destaque: quando e onde, e os ingressos com preço. O nome
+               e o selo "À VENDA" saíram (dono, 23/09) — o nome é o que o produtor
+               digitou no painel, e na vitrine só atrapalhava. -->
           <div v-if="destaque" class="mt-8">
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <h3 class="titulo text-xl font-semibold text-ink-900">{{ destaque.nome }}</h3>
-              <!-- O ponto que pulsa ("vendendo agora") é desenhado pelo CSS de
-                   `ao-vivo`, por fora do HTML do selo: o teste da home lê o selo
-                   como um span com a palavra pura dentro, sem nada antes dela. -->
-              <span :class="vende(destaque.situacao) ? 'ao-vivo' : ''"><span :class="selo(destaque.situacao).classe">{{ selo(destaque.situacao).texto }}</span></span>
-            </div>
-            <p class="mt-1 text-sm text-ink-600">
-              {{ [destaque.cidade, dataPorExtenso(destaque.inicio)].filter(Boolean).join(' · ') }}
-            </p>
+            <dl class="flex flex-col gap-1 text-sm text-ink-600 sm:flex-row sm:flex-wrap sm:gap-x-6">
+              <div v-if="quandoDestaque.inicio" class="flex gap-1.5">
+                <dt class="font-semibold text-ink-800">Início:</dt><dd>{{ quandoDestaque.inicio }}</dd>
+              </div>
+              <div v-if="quandoDestaque.fim" class="flex gap-1.5">
+                <dt class="font-semibold text-ink-800">Término:</dt><dd>{{ quandoDestaque.fim }}</dd>
+              </div>
+              <div v-if="destaque.cidade" class="flex gap-1.5">
+                <dt class="font-semibold text-ink-800">Local:</dt><dd>{{ destaque.cidade }}</dd>
+              </div>
+            </dl>
 
             <ul v-if="ingressos.length" class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <li v-for="(ing, k) in ingressos" :key="ing.id" :data-revelar="k * 90"
@@ -674,14 +639,6 @@ useSeoMeta({
   from { opacity: 0; transform: translate3d(0, 24px, 0); }
 }
 
-/* o ícone do passo dá um pulo quando o cartão recebe o mouse */
-.home-parque .passo:hover .passo-icone { animation: home-pulo 0.6s cubic-bezier(0.3, 1.5, 0.5, 1); }
-@keyframes home-pulo {
-  0% { transform: none; }
-  40% { transform: translateY(-6px) rotate(-8deg); }
-  100% { transform: none; }
-}
-
 /* o letreiro corre sem emenda (4 voltas iguais, anda metade) e para no mouse */
 .home-parque .letreiro-trilho { animation: home-letreiro 36s linear infinite; }
 .home-parque .letreiro:hover .letreiro-trilho { animation-play-state: paused; }
@@ -762,7 +719,7 @@ useSeoMeta({
   .home-parque .capa-foto, .home-parque .entra, .home-parque .palavra, .home-parque .sol-gira,
   .home-parque .seta-desce, .home-parque .mar, .home-parque .luz-agua, .home-parque .letreiro-trilho,
   .home-parque .ondas-lentas, .home-parque .raios, .home-parque .revelado, .home-parque .brilho::after,
-  .home-parque .ao-vivo > span::before, .home-parque .passo:hover .passo-icone,
+  .home-parque .ao-vivo > span::before,
   .home-parque details[open] .resposta {
     animation: none !important;
   }

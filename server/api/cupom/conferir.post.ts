@@ -38,7 +38,7 @@
 import { z } from 'zod'
 import { q, q1, tx } from '../../utils/db'
 import { aplicarCupom, CupomRecusado, resgatarCupom } from '../../utils/cupom'
-import { faceComDesconto, type ModoTaxa } from '../../utils/dinheiro'
+import { faceDoTipo, type ModoTaxa } from '../../utils/dinheiro'
 import { cpfValido } from '../../utils/documento'
 import { estaPublicado, portaDeVenda } from '../e/[slug].get'
 
@@ -170,7 +170,7 @@ async function facesDoBanco(ev: any, itens: any[]) {
       if (t.lot_id !== it.lotId) {
         throw createError({ statusCode: 400, statusMessage: 'Tipo de ingresso não é deste lote' })
       }
-      face = faceComDesconto(face, Number(t.discount_bps))
+      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), ev.fee_mode_online as ModoTaxa)
     }
     return { quantidade: it.quantidade, faceUnitCents: face }
   })

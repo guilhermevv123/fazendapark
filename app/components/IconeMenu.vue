@@ -3,7 +3,19 @@
  * Ícones do menu, inline. São SVG à mão de propósito: puxar uma biblioteca de
  * ícone inteira pra 12 desenhos custa mais que os 12 desenhos.
  */
-defineProps<{ nome: string; tamanho?: number }>()
+const props = defineProps<{ nome: string; tamanho?: number }>()
+
+/*
+ * Tamanho desenhado. Os ícones pequenos (≤18) sobem 2px e o traço engrossa
+ * de 1.7 pra 2: pedido do dono em 22/09 ("os ícones estão muito pequenos"),
+ * no telefone. Feito AQUI, num lugar, e não nos ~80 `:tamanho` das telas —
+ * a proporção entre eles (o ícone do menu maior que o do rodapé do card)
+ * continua a mesma; só a régua inteira subiu.
+ */
+const px = computed(() => {
+  const t = props.tamanho ?? 22
+  return t <= 18 ? t + 2 : t
+})
 
 const caminhos: Record<string, string> = {
   dashboard: 'M3 17l5-6 4 4 5-8 4 5',
@@ -54,8 +66,8 @@ const caminhos: Record<string, string> = {
 </script>
 
 <template>
-  <svg :width="tamanho ?? 20" :height="tamanho ?? 20" viewBox="0 0 24 24" fill="none"
-       stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+  <svg :width="px" :height="px" viewBox="0 0 24 24" fill="none"
+       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
        aria-hidden="true" class="shrink-0">
     <path v-for="(d, i) in (caminhos[nome] ?? '').split(' M').map((p, j) => (j ? 'M' + p : p))"
           :key="i" :d="d" />

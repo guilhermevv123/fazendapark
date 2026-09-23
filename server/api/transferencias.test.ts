@@ -72,6 +72,19 @@ async function titular(code: string) {
   return t
 }
 
+/** O aceite troca o código (QR novo — o print do antigo dono deixa de valer),
+ *  então depois dele o ingresso só se acha pelo id, nunca pelo código antigo. */
+async function idDoIngresso(code: string): Promise<string> {
+  const [t] = await sql(`SELECT id FROM tickets WHERE code = $1`, [code])
+  return t.id
+}
+
+async function titularPorId(id: string) {
+  const [t] = await sql(
+    `SELECT code, holder_name, holder_email, holder_document, status FROM tickets WHERE id = $1`, [id])
+  return t
+}
+
 async function enviar(corpo: any) {
   const r = await comSessao(`/api/admin/evento/${EVENTO}/transferencias`,
     { method: 'POST', body: JSON.stringify(corpo) })
@@ -186,6 +199,7 @@ describe('transferência de ingresso', () => {
   it('aceitar muda o titular, e aceitar de novo não reabre nada', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
     const code = await novoIngresso('ACEI')
+    const ingressoId = await idDoIngresso(code)
     const env = await enviar({
       codigo: code, paraNome: 'Novo Dono', paraEmail: 'novo@teste.invalido',
     })
@@ -194,9 +208,12 @@ describe('transferência de ingresso', () => {
     const um = await aberto(`/api/transferencia/${token}`, { method: 'POST', body: '{}' })
     expect(um.status).toBe(200)
 
-    const t = await titular(code)
+    const t = await titularPorId(ingressoId)
     expect(t.holder_email).toBe('novo@teste.invalido')
     expect(t.holder_name).toBe('Novo Dono')
+    // QR novo no aceite: o código que o antigo dono tem no celular morre.
+    expect(t.code, 'o aceite manteve o código antigo — o print do ex-dono ainda entra')
+      .not.toBe(code)
 
     const dois = await aberto(`/api/transferencia/${token}`, { method: 'POST', body: '{}' })
     expect(dois.status, 'o segundo clique reabriu a transferência').toBe(409)
@@ -259,6 +276,7 @@ describe('transferência de ingresso', () => {
   it('cancelar devolve os TRÊS campos do titular, não só o nome', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
     const code = await novoIngresso('CANC')
+    const ingressoId = await idDoIngresso(code)
     const env = await enviar({
       codigo: code, paraNome: 'Passageiro', paraEmail: 'passageiro@teste.invalido',
     })
@@ -276,7 +294,7 @@ describe('transferência de ingresso', () => {
 
     // Devolver só o nome deixaria o e-mail e o documento da outra pessoa
     // colados no ingresso — e é pro e-mail que a segunda via vai.
-    const t = await titular(code)
+    const t = await titularPorId(ingressoId)
     expect(t.holder_name).toBe(DONO.nome)
     expect(t.holder_email).toBe(DONO.email)
     expect(t.holder_document).toBe(DONO.doc)

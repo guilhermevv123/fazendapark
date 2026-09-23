@@ -13,12 +13,18 @@ const id = route.params.id as string
 
 const busca = ref('')
 const filtro = ref('')
-const { data, refresh, pending } = await useFetch<any>(
+const { data, refresh, pending, error: falha } = await useFetch<any>(
   () => `/api/admin/evento/${id}/transferencias`,
   { query: { busca, status: filtro } })
 
 const erro = ref('')
 const aviso = ref('')
+/**
+ * Erro do cancelamento aparece NO painel de confirmação. No alto da página
+ * ele ficava atrás do fundo do painel: "Cancelar transferência" parecia não
+ * fazer nada, e o atendente clicava de novo com o cliente no telefone.
+ */
+const erroCancelamento = ref('')
 const salvando = ref(false)
 
 const aberta = ref<any>(null)
@@ -73,7 +79,7 @@ async function enviar() {
 
 async function confirmarCancelamento() {
   const alvo = cancelando.value
-  salvando.value = true; erro.value = ''
+  salvando.value = true; erroCancelamento.value = ''
   try {
     const r: any = await $fetch(`/api/admin/evento/${id}/transferencias`, {
       method: 'PATCH', body: { transferenciaId: alvo.id, acao: 'cancelar' },
@@ -84,7 +90,9 @@ async function confirmarCancelamento() {
     cancelando.value = null
     aberta.value = null
     await refresh()
-  } catch (e: any) { erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar.' }
+  } catch (e: any) {
+    erroCancelamento.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar.'
+  }
   finally { salvando.value = false }
 }
 
@@ -297,7 +305,7 @@ function copiar(link: string) {
 
       <button v-if="aberta.status === 'aguardando' || aberta.status === 'concluido'"
               type="button" class="btn-erro mt-6 w-full"
-              @click="cancelando = aberta">
+              @click="cancelando = aberta; erroCancelamento = ''">
         Cancelar transferência
       </button>
     </ModalLateral>
@@ -309,6 +317,7 @@ function copiar(link: string) {
         <strong>o ingresso volta para {{ cancelando.de.nome ?? 'o titular anterior' }}</strong>
         e só dá pra mudar a titularidade de novo repetindo o envio. Esta ação é irreversível.
       </p>
+      <p v-if="erroCancelamento" class="faixa-erro mt-4">{{ erroCancelamento }}</p>
       <div class="mt-6 flex gap-3">
         <button type="button" class="btn-secundario flex-1" @click="cancelando = null">Fechar</button>
         <button type="button" class="btn-erro flex-1" :disabled="salvando"
@@ -320,4 +329,14 @@ function copiar(link: string) {
   </div>
 
   <div v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</div>
+
+  <div v-else class="card mt-6">
+    <p class="rotulo-kpi text-erro">Não foi possível carregar as transferências</p>
+    <p class="mt-1 text-sm text-tinta-suave">
+      {{ (falha as any)?.statusCode === 403
+        ? 'Seu acesso não inclui as vendas deste evento.'
+        : ((falha as any)?.data?.message || (falha as any)?.message || 'Confira a internet e tente de novo.') }}
+    </p>
+    <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
+  </div>
 </template>

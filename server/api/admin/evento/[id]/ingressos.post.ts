@@ -9,6 +9,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
+import { CANAIS_PADRAO, explicarErro } from '../index.post'
 
 const Setor = z.object({
   o: z.literal('setor'),
@@ -26,10 +27,15 @@ const Lote = z.object({
   nome: z.string().min(1).max(120),
   descricao: z.string().max(500).nullish(),
   faceCents: z.number().int().min(0).max(100_000_00),
+  /** R$ 0,00 só com esta marca — ver o porquê em `evento/index.post.ts` */
+  gratuito: z.boolean().default(false),
   quantidade: z.number().int().min(1).max(1_000_000),
   minPorCompra: z.number().int().min(1).max(50).default(1),
   maxPorCompra: z.number().int().min(1).max(50).default(10),
-  canais: z.array(z.enum(['online', 'bilheteria', 'cortesia'])).min(1).default(['online']),
+  // Sem `canais`, site E balcão. O padrão antigo aqui (e o do banco) era só
+  // `online`, e nenhum lote criado pelo painel vendia na bilheteria.
+  canais: z.array(z.enum(['online', 'bilheteria', 'cortesia'])).min(1)
+    .default(() => [...CANAIS_PADRAO]),
   visivel: z.boolean().default(true),
   abreEm: z.string().datetime({ offset: true }).nullish(),
   expiraEm: z.string().datetime({ offset: true }).nullish(),
@@ -51,7 +57,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error), data: p.error.flatten() })
   }
   const d = p.data
 
@@ -83,6 +89,19 @@ export default defineEventHandler(async (event) => {
     if (!setor) throw createError({ statusCode: 422, statusMessage: 'Setor não é deste evento' })
     if (d.minPorCompra > d.maxPorCompra) {
       throw createError({ statusCode: 422, statusMessage: 'O mínimo por compra não pode passar do máximo' })
+    }
+    if (d.faceCents === 0 && !d.gratuito) {
+      throw createError({
+        statusCode: 422,
+        statusMessage: 'O valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito" — '
+          + 'sem isso o lote sairia de graça no site.',
+      })
+    }
+    if (d.faceCents > 0 && d.gratuito) {
+      throw createError({
+        statusCode: 422,
+        statusMessage: 'O lote está marcado como gratuito e tem preço. Desmarque "Ingresso gratuito" ou zere o valor.',
+      })
     }
     if (d.abreEm && d.expiraEm && new Date(d.expiraEm) <= new Date(d.abreEm)) {
       throw createError({ statusCode: 422, statusMessage: 'O lote não pode expirar antes de abrir' })
@@ -120,15 +139,14 @@ export default defineEventHandler(async (event) => {
       WHERE l.id = $1 AND s.event_id = $2`, [d.loteId, eventoId])
   if (!lote) throw createError({ statusCode: 422, statusMessage: 'Lote não é deste evento' })
 
-  // A soma dos tipos não pode passar do lote: o estoque real é o do lote, e
-  // tipo que promete mais do que existe vira "esgotado" na cara do comprador
-  // no meio do checkout.
-  const somaTipos = await q1<any>(
-    `SELECT COALESCE(SUM(quantity),0)::int AS n FROM ticket_types WHERE lot_id = $1`, [d.loteId])
-  if (Number(somaTipos.n) + d.quantidade > Number(lote.quantity)) {
+  // Os tipos compartilham o estoque do lote (ver `evento/index.post.ts`):
+  // cada um vai no máximo até o lote, e o lote segura o total — a vitrine
+  // mostra por tipo o menor entre a sobra do tipo e a do lote, então tipo
+  // "maior" que o que resta não vira "esgotado" no meio do checkout.
+  if (d.quantidade > Number(lote.quantity)) {
     throw createError({
       statusCode: 422,
-      statusMessage: `Estoura o lote: ${somaTipos.n} já distribuídos de ${lote.quantity}`,
+      statusMessage: `O tipo não pode ter mais que o lote (${lote.quantity})`,
     })
   }
 

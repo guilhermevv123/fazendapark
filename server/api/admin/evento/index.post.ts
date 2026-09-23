@@ -1,9 +1,12 @@
 /**
  * POST /api/admin/evento — cria o evento.
  *
- * Nasce SEMPRE como rascunho, nunca publicado. Publicar é um ato separado
- * (PATCH de status) porque um evento recém-criado ainda não tem ingresso
- * configurado: publicar junto abriria uma página de venda sem nada pra vender.
+ * Nasce como rascunho, a não ser que o corpo peça `publicar: true` — e aí só
+ * publica se a árvore trouxer pelo menos um lote visível com preço (ou marcado
+ * gratuito de propósito). Publicar numa transação só, junto com a criação, é o
+ * que evita o meio-termo antigo: o assistente criava o rascunho, o PATCH de
+ * publicar falhava e a pessoa ficava com um evento que ela achava no ar.
+ * Publicar sem lote abriria uma página de venda sem nada pra vender.
  *
  * O slug é a única coisa aqui que o produtor não pode mudar depois sem
  * quebrar link já divulgado — então é gerado com cuidado e conferido contra
@@ -64,7 +67,9 @@ const Entrada = z.object({
     valor: z.string().min(5).max(140),
   }).nullish(),
 
-  taxaBps: z.number().int().min(0).max(5000).default(1000),
+  // sem taxa de serviço por padrão (dono, 23/09); o banco ainda tem DEFAULT 1000,
+  // mas todo evento novo passa por aqui
+  taxaBps: z.number().int().min(0).max(5000).default(0),
   modoTaxaOnline: z.enum(['repassar', 'absorver']).default('repassar'),
   modoTaxaPdv: z.enum(['repassar', 'absorver']).default('absorver'),
   maxPorCliente: z.number().int().min(1).max(200).nullish(),
@@ -98,7 +103,22 @@ const Entrada = z.object({
     lotes: z.array(z.object({
       nome: z.string().min(1).max(120),
       faceCents: z.number().int().min(0).max(100_000_00),
+      /**
+       * R$ 0,00 só passa com esta marca explícita. O campo de dinheiro nasce
+       * em zero e o checkout transforma total zero em pedido gratuito: sem a
+       * marca, esquecer de digitar o preço dava ingresso de graça no site,
+       * sem aviso nenhum. Cortesia tem fluxo próprio (`cortesias.post.ts`).
+       */
+      gratuito: z.boolean().default(false),
+      /**
+       * Onde o lote vende. Quando não vem, vai pros DOIS canais: o padrão do
+       * banco é só `{online}`, e todo lote criado pelo painel chegava ao
+       * balcão como "não está liberado para venda na bilheteria".
+       */
+      canais: z.array(z.enum(['online', 'bilheteria', 'cortesia'])).min(1).optional(),
       quantidade: z.number().int().min(1).max(1_000_000),
+      /** o lote para de vender nesta hora (a vitrine e o checkout já leem `expires_at`) */
+      expiraEm: z.string().datetime({ offset: true }).nullish(),
       minPorCompra: z.number().int().min(1).max(50).default(1),
       maxPorCompra: z.number().int().min(1).max(50).default(10),
       tipos: z.array(z.object({
@@ -109,17 +129,115 @@ const Entrada = z.object({
       })).max(20).default([]),
     })).max(40).default([]),
   })).max(60).default([]),
+
+  /** publica na mesma transação — só com ingresso de verdade pra vender */
+  publicar: z.boolean().default(false),
 })
+
+/** Canais de um lote criado pelo painel quando a tela não diz: site e balcão. */
+export const CANAIS_PADRAO = ['online', 'bilheteria'] as const
+
+/**
+ * Os rótulos que a pessoa vê na tela, pro erro de validação dizer QUAL campo.
+ * "Dados inválidos" seco é o erro que ninguém consegue consertar sozinho.
+ */
+const ROTULOS: Record<string, string> = {
+  nome: 'Nome do evento', slug: 'Endereço da página', inicio: 'Início do evento',
+  fim: 'Término do evento', suporte: 'Contato de suporte', taxaBps: 'Taxa de serviço',
+  maxPorCliente: 'Limite por cliente', minutosDeReserva: 'Minutos para concluir o pagamento',
+  linkTransmissao: 'Link de transmissão', banner: 'Banner', thumb: 'Miniatura',
+  sessoes: 'Sessões', setores: 'Setores', local: 'Endereço',
+  faceCents: 'Valor de face', quantidade: 'Quantidade', minPorCompra: 'Mínimo por compra',
+  maxPorCompra: 'Máximo por compra', canais: 'Onde vende', capacidade: 'Capacidade',
+}
+
+/** "Setores › 1 › Lotes › 2 › Quantidade: …" em vez de "Dados inválidos". */
+export function explicarErro(erro: z.ZodError, rotulos: Record<string, string> = ROTULOS): string {
+  const i = erro.issues[0]
+  if (!i) return 'Confira os campos do formulário.'
+  const caminho = i.path.map((p) => typeof p === 'number' ? `nº ${p + 1}` : (rotulos[p] ?? p))
+  return `${caminho.join(' › ') || 'Formulário'}: ${traduzir(i)}`
+}
+
+function traduzir(i: z.ZodIssue): string {
+  if (i.code === 'too_small') {
+    return i.type === 'string' ? `precisa de pelo menos ${i.minimum} caractere(s)` : `o mínimo é ${i.minimum}`
+  }
+  if (i.code === 'too_big') {
+    return i.type === 'string' ? `aceita no máximo ${i.maximum} caractere(s)` : `o máximo é ${i.maximum}`
+  }
+  if (i.code === 'invalid_type') {
+    return i.received === 'undefined' || i.received === 'null' ? 'não pode ficar vazio' : 'valor em formato errado'
+  }
+  if (i.code === 'invalid_string') {
+    // mensagem própria do schema (a do regex do slug, por ex.) vale mais que a genérica
+    if (!i.message.startsWith('Invalid')) return i.message
+    if (i.validation === 'url') return 'precisa ser um link completo (https://…)'
+    if (i.validation === 'datetime') return 'data e hora em formato errado'
+    if (i.validation === 'regex') return 'use só letras minúsculas, números e hífen'
+    return 'formato errado'
+  }
+  if (i.code === 'invalid_enum_value') return 'opção que não existe'
+  // `url().or(literal(''))`: o motivo útil é o do primeiro ramo
+  if (i.code === 'invalid_union') {
+    const dentro = i.unionErrors[0]?.issues[0]
+    return dentro ? traduzir(dentro) : 'valor em formato errado'
+  }
+  return i.message.startsWith('Invalid') || i.message.startsWith('Expected')
+    ? 'valor em formato errado' : i.message
+}
 
 export default defineEventHandler(async (event) => {
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error), data: p.error.flatten() })
   }
   const d = p.data
 
   if (new Date(d.fim) <= new Date(d.inicio)) {
     throw createError({ statusCode: 422, statusMessage: 'O término tem que ser depois do início' })
+  }
+
+  // Sessão com fim antes (ou a menos de 15 min) do início morria no CHECK
+  // `sessao_dura_15min` e a tela mostrava "Server Error". O caso real é a
+  // sessão que atravessa a meia-noite (22h–02h) mandada com a mesma data nas
+  // duas pontas — o assistente agora soma o dia, e aqui a recusa é legível.
+  for (const [i, s] of d.sessoes.entries()) {
+    const minutos = (Date.parse(s.fim) - Date.parse(s.inicio)) / 60_000
+    if (!(minutos >= 15)) {
+      throw createError({
+        statusCode: 422,
+        statusMessage: `Sessão "${s.titulo || `nº ${i + 1}`}": o fim precisa ser pelo menos `
+          + '15 minutos depois do início. Se ela passa da meia-noite, o fim é no dia seguinte.',
+      })
+    }
+  }
+
+  // Preço zero sem a marca de gratuito, e o contrário — conferido ANTES de
+  // gravar qualquer coisa, pra dizer o setor e o lote exatos.
+  for (const s of d.setores) {
+    for (const l of s.lotes) {
+      if (l.faceCents === 0 && !l.gratuito) {
+        throw createError({
+          statusCode: 422,
+          statusMessage: `"${s.nome} · ${l.nome}": o valor está R$ 0,00. Digite o preço ou `
+            + 'marque "Ingresso gratuito" — sem isso ele sairia de graça no site.',
+        })
+      }
+      if (l.faceCents > 0 && l.gratuito) {
+        throw createError({
+          statusCode: 422,
+          statusMessage: `"${s.nome} · ${l.nome}": está marcado como gratuito e tem preço. `
+            + 'Desmarque "Ingresso gratuito" ou zere o valor.',
+        })
+      }
+    }
+  }
+  if (d.publicar && !d.setores.some((s) => s.lotes.length > 0)) {
+    throw createError({
+      statusCode: 422,
+      statusMessage: 'Cadastre pelo menos um ingresso antes de publicar.',
+    })
   }
   if (d.encerraVendasEm && d.encerraVendasMinutosApos != null) {
     throw createError({
@@ -158,7 +276,7 @@ export default defineEventHandler(async (event) => {
          neighborhood, city, state, complement, banner_url, thumb_url,
          support_kind, support_value, fee_bps, fee_mode_online, fee_mode_pos,
          max_per_customer, hold_minutes, is_private)
-       VALUES ($1,$2,$3,$4,'rascunho',
+       VALUES ($1,$2,$3,$4,$36,
          $5,$6,$7,$8,$9,$10,
          $11,$12,$13,$14,$15,
          $16,$17,$18,$19,$20,$21,
@@ -176,7 +294,8 @@ export default defineEventHandler(async (event) => {
        d.banner ?? null, d.thumb ?? null,
        d.suporte?.tipo ?? null, d.suporte?.valor ?? null,
        d.taxaBps, d.modoTaxaOnline, d.modoTaxaPdv,
-       d.maxPorCliente ?? null, d.minutosDeReserva, d.privado])
+       d.maxPorCliente ?? null, d.minutosDeReserva, d.privado,
+       d.publicar ? 'ativo' : 'rascunho'])
 
     const id = ev.rows[0].id
 
@@ -218,20 +337,27 @@ export default defineEventHandler(async (event) => {
             statusMessage: `"${l.nome}": o mínimo por compra não pode passar do máximo`,
           })
         }
-        const somaTipos = l.tipos.reduce((a, t) => a + t.quantidade, 0)
-        if (somaTipos > l.quantidade) {
+        // Os tipos COMPARTILHAM o estoque do lote (modelo da Zig, 22/09): cada
+        // um vai no máximo até o lote, e é o lote que segura o total — ele é
+        // conferido antes do tipo em `reservar()`, e a vitrine mostra por tipo
+        // o menor entre o que sobra no tipo e no lote. A meia tem a cota legal
+        // própria no lote (`half_quota_bps`). Antes a soma dos tipos tinha que
+        // caber no lote: "100" virava 50 inteiras + 50 meias, e a meia
+        // esgotava com inteira sobrando.
+        const passou = l.tipos.find((t) => t.quantidade > l.quantidade)
+        if (passou) {
           throw createError({
             statusCode: 422,
-            statusMessage: `"${l.nome}": os tipos somam ${somaTipos} de ${l.quantidade} disponíveis`,
+            statusMessage: `"${l.nome} · ${passou.nome}": o tipo não pode ter mais que o lote (${l.quantidade})`,
           })
         }
 
         const rl = await c.query(
           `INSERT INTO lots (sector_id, name, price_cents, quantity,
-                             min_per_order, max_per_order, sort_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+                             min_per_order, max_per_order, channels, sort_order, expires_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
           [rs.rows[0].id, l.nome.trim(), l.faceCents, l.quantidade,
-           l.minPorCompra, l.maxPorCompra, il + 1])
+           l.minPorCompra, l.maxPorCompra, l.canais ?? [...CANAIS_PADRAO], il + 1, l.expiraEm ?? null])
         nLotes++
 
         for (const [it, t] of l.tipos.entries()) {
@@ -251,12 +377,19 @@ export default defineEventHandler(async (event) => {
       [id, JSON.stringify({
         nome: d.nome, slug, sessoes: d.sessoes.length,
         setores: d.setores.length, lotes: nLotes,
+        status: d.publicar ? 'ativo' : 'rascunho',
       })])
 
     return { id, slug: ev.rows[0].slug }
   })
 
-  return { ok: true, ...criado, status: 'rascunho' }
+  // `slugPedido` volta junto pra tela poder AVISAR quando o endereço foi
+  // renomeado ("-2") — antes ela mostrava o que a pessoa digitou, e o link
+  // divulgado apontava pra página de outro evento.
+  return {
+    ok: true, ...criado, slugPedido: d.slug ?? null,
+    status: d.publicar ? 'ativo' : 'rascunho',
+  }
 })
 
 /** "Conquista Park 4ª Edição" → "conquista-park-4a-edicao" */

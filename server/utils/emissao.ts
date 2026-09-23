@@ -10,10 +10,12 @@
  * chega segundo vê 'pago' e sai sem fazer nada.
  */
 import type { PoolClient } from 'pg'
-import { confirmar } from './estoque'
+import { confirmar, EstoqueInsuficiente, LoteIndisponivel, reservar } from './estoque'
 import { tx } from './db'
 import { gerarCodigo } from './ingresso'
-import { documentoExigido, motivoValido } from './meia-entrada'
+import {
+  conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, motivoValido,
+} from './meia-entrada'
 
 /* ===========================================================================
  * O que é cortesia — e por que `tickets.is_courtesy` não responde isso
@@ -196,6 +198,73 @@ export interface ResultadoEmissao {
    * O balcão é o caminho que produz isso hoje; quem chama pode relatar.
    */
   meiasSemMotivo?: number
+  /**
+   * O pagamento chegou com o pedido já expirado e o lugar não voltou (estoque
+   * acabou, evento fechou). Dinheiro na conta sem ingresso: quem chama NÃO
+   * pode tratar isto como "nada a fazer" — ver `aplicarEventoDoAsaas`.
+   */
+  pagoSemLugar?: boolean
+  /** saiu por reserva refeita: o pagamento chegou depois do prazo e ainda havia lugar */
+  reservaRefeita?: boolean
+}
+
+/**
+ * O pagamento de um pedido EXPIRADO chegou: tenta pôr a reserva de pé de novo.
+ *
+ * Era o P0 de 22/09. A reserva dura minutos (`events.hold_minutes`), o PIX
+ * vale até o dia seguinte (o Asaas só aceita data de vencimento, não hora), e
+ * `liberarExpirados` matava o pedido no meio. O comprador pagava o QR que
+ * estava na tela, o webhook chegava com o pedido em 'expirado', esta função
+ * respondia "pedido em expirado" e a entrega era dada como processada: o
+ * dinheiro entrava, o ingresso não saía, e nada no painel mostrava.
+ *
+ * Quem pagou tem direito ao lugar SE o lugar ainda existe. A reserva é refeita
+ * pela MESMA `reservar()` da venda (trava do lote, `WHERE` que não deixa
+ * passar do total, cota do tipo) e pela mesma cota de meia do checkout — só as
+ * portas comerciais do lote ficam de fora (ver `pagamentoAtrasado`). Tudo num
+ * SAVEPOINT: se um item de três não couber, os outros dois voltam pra
+ * prateleira na hora, sem meio pedido reservado.
+ *
+ * Só as recusas de NEGÓCIO viram "sem lugar". Erro de banco sobe, e aí a
+ * entrega do webhook fica na fila e é tentada de novo — nunca vira "sem lugar"
+ * por uma queda de conexão.
+ */
+async function refazerReserva(
+  c: PoolClient, pedido: any,
+): Promise<{ ok: true } | { ok: false; motivo: string }> {
+  const { rows: itens } = await c.query(
+    `SELECT oi.lot_id AS "lotId", oi.ticket_type_id AS "ticketTypeId",
+            oi.quantity AS quantidade, tt.kind AS especie
+       FROM order_items oi
+       LEFT JOIN ticket_types tt ON tt.id = oi.ticket_type_id
+      WHERE oi.order_id = $1`, [pedido.id])
+  if (!itens.length) return { ok: false, motivo: 'pedido sem itens' }
+
+  await c.query('SAVEPOINT refazer_reserva')
+  try {
+    await reservar(c, itens.map((i: any) => ({
+      lotId: i.lotId, ticketTypeId: i.ticketTypeId, quantidade: i.quantidade,
+    })), { canal: pedido.channel ?? 'online', pagamentoAtrasado: true })
+
+    const meias = new Map<string, number>()
+    for (const i of itens) {
+      if (i.especie === 'meia') meias.set(i.lotId, (meias.get(i.lotId) ?? 0) + i.quantidade)
+    }
+    for (const [lotId, n] of [...meias].sort((a, b) => a[0].localeCompare(b[0]))) {
+      await conferirCotaDeMeia(c, lotId, n)
+    }
+    await c.query('RELEASE SAVEPOINT refazer_reserva')
+    return { ok: true }
+  } catch (e: any) {
+    await c.query('ROLLBACK TO SAVEPOINT refazer_reserva')
+    await c.query('RELEASE SAVEPOINT refazer_reserva').catch(() => {})
+    const negocio = e instanceof EstoqueInsuficiente || e instanceof LoteIndisponivel
+      || e instanceof CotaDeMeiaEsgotada
+      // trava de dia da sessão (db/016): RAISE escrito por nós, não CHECK quebrado
+      || (e?.code === '23514' && e?.routine === 'exec_stmt_raise')
+    if (!negocio) throw e
+    return { ok: false, motivo: e.message }
+  }
 }
 
 /**
@@ -234,7 +303,29 @@ export async function emitirNaTransacao(
       `SELECT count(*)::int AS n FROM tickets WHERE order_id = $1`, [orderId])
     return { emitiu: false, motivo: 'já emitido', ingressos: rows[0].n, pedidoCode: pedido.code }
   }
-  if (!['aguardando_pagamento', 'em_analise', 'rascunho'].includes(pedido.status)) {
+  // Pago depois de a reserva cair: o lugar volta SE ainda existir. Só
+  // 'expirado' — cancelado, estornado, chargeback são decisões sobre o
+  // dinheiro, não prazo vencido, e nenhum deles revive por aqui.
+  let reservaRefeita = false
+  if (pedido.status === 'expirado') {
+    const volta = await refazerReserva(c, pedido)
+    if (!volta.ok) {
+      const motivo = `pago depois do prazo da reserva e sem lugar: ${volta.motivo}. `
+        + 'Emitir outro ingresso ou devolver o valor.'
+      // A trilha do pedido é o que o painel e a tela do comprador leem pra
+      // saber que ENTROU dinheiro aqui. Uma linha por pedido: a entrega é
+      // retentada, a anotação não precisa se repetir a cada volta.
+      await c.query(
+        `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+         SELECT $1::uuid, 'order', $2::text, 'pago_sem_lugar', $3::jsonb
+          WHERE NOT EXISTS (SELECT 1 FROM audit_log
+                             WHERE entity = 'order' AND entity_id = $2::text
+                               AND action = 'pago_sem_lugar')`,
+        [pedido.org_id, orderId, JSON.stringify({ motivo: volta.motivo, pedido: pedido.code })])
+      return { emitiu: false, motivo, ingressos: 0, pedidoCode: pedido.code, pagoSemLugar: true }
+    }
+    reservaRefeita = true
+  } else if (!['aguardando_pagamento', 'em_analise', 'rascunho'].includes(pedido.status)) {
     return { emitiu: false, motivo: `pedido em ${pedido.status}`, ingressos: 0 }
   }
 
@@ -318,13 +409,19 @@ export async function emitirNaTransacao(
     }
   }
 
+  // `canceled_at` sai junto quando a reserva foi refeita: a expiração o
+  // carimbou, e pedido pago com data de cancelamento é o relatório lendo um
+  // cancelamento que não aconteceu.
   await c.query(
-    `UPDATE orders SET status = 'pago', paid_at = COALESCE(paid_at, now()) WHERE id = $1`,
-    [orderId])
+    `UPDATE orders SET status = 'pago', paid_at = COALESCE(paid_at, now()),
+                       canceled_at = CASE WHEN $2::boolean THEN NULL ELSE canceled_at END
+      WHERE id = $1`,
+    [orderId, reservaRefeita])
   await c.query(
     `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
      VALUES ($1,'order',$2,'pago',$3::jsonb)`,
-    [pedido.org_id, orderId, JSON.stringify({ ingressos: n })])
+    [pedido.org_id, orderId, JSON.stringify(
+      reservaRefeita ? { ingressos: n, pagoDepoisDeExpirar: true } : { ingressos: n })])
 
   return {
     emitiu: true, ingressos: n, pedidoCode: pedido.code,
@@ -332,5 +429,6 @@ export async function emitirNaTransacao(
     // Asaas e balcão): mesmo fechando em zero, o que sai por aqui é venda.
     cortesia: eCortesia(fechouEmZero, pedido.channel),
     meiasSemMotivo,
+    ...(reservaRefeita ? { reservaRefeita: true } : {}),
   }
 }

@@ -17,6 +17,38 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Celular: a régua inteira sobe ~6%. As classes do Tailwind são em `rem`, então
+   subir a raiz de 16 pra 17px aumenta texto, recheio, gap e ícone de rem juntos,
+   na mesma proporção — a tela fica do mesmo desenho, só maior. Pedido do dono
+   em 22/09, olhando o painel no telefone: "as coisas muito pequenas". A maioria
+   do público (comprador E operador na portaria) usa telefone. */
+@media (max-width: 639px) {
+  html { font-size: 17px; }
+  body { font-size: 16px; }
+
+  /* Botão que é só um ícone (lápis, lixeira, subir/descer, ⋮): as telas montam
+     cada um à mão com `p-1` — 27px de alvo, menor que um dedo. Aqui ganha 40px
+     no telefone sem mexer em tela nenhuma. Só o que tem o <svg> como único
+     filho ELEMENTO — o CSS não enxerga texto solto, então "[ícone] Criar
+     evento" também casa aqui. Por isso a regra NÃO troca o `display`: só
+     garante o mínimo; trocar pra grid empilhava o ícone em cima do texto
+     (visto no build de produção, 22/09). */
+  main :is(button, a):has(> svg:only-child) {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
+    align-items: center;
+  }
+
+  /* Ação em texto dentro de célula de tabela ("Nova senha", "Editar",
+     "Nomear", o código do pedido que abre a ficha): eram 20px de altura. */
+  main td :is(button, a):not(:has(> svg:only-child)) {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
 ::selection {
   background: theme('colors.pool.200');
   color: theme('colors.ink.950');
@@ -30,6 +62,13 @@ body {
   letter-spacing: -0.015em;
 }
 
+/* Item de grid e cartão NÃO crescem pelo conteúdo. Por padrão um filho de grid
+   tem `min-width: auto` = a largura mínima do que está dentro; uma tabela larga
+   num `overflow-x-auto` dentro de uma coluna de grid empurrava a COLUNA (e a
+   página) em vez de rolar dentro da caixa. No celular o dashboard do evento
+   ficava com 579px numa tela de 390 — medido em 22/09. */
+main .grid > *, .card { min-width: 0; }
+
 @layer components {
   /* Cartão do sistema do parque: branco, raio 16, contorno de 1px em ink-200 a
      70% e uma sombra curta. O contorno é `ring` (sombra), não `border`: não
@@ -38,16 +77,17 @@ body {
   .card {
     @apply rounded-2xl bg-white p-5 shadow-card ring-1 ring-ink-200/70;
   }
-  .rotulo-kpi { @apply titulo text-[13px] font-semibold text-ink-500; }
+  .rotulo-kpi { @apply titulo text-[13px] font-semibold text-ink-600; }
   .numero-kpi { @apply titulo text-[28px] font-semibold leading-none tabular-nums text-ink-900; }
 
-  /* Botão: 40px de altura (py-2.5 + linha de 20), raio 12, peso 600. A altura
+  /* Botão: 44px no celular (py-3 — o mínimo de alvo de toque) e 40px do `sm`
+     pra cima (py-2.5 + linha de 20), raio 12, peso 600. A altura
      vem do recheio e não de `h-10` DE PROPÓSITO: as telas encolhem ou esticam o
      botão com `py-1`/`py-3`, e uma altura fixa venceria o recheio em silêncio.
      `disabled` apaga em vez de trocar de cor e desliga o clique. */
   .btn {
     @apply inline-flex select-none items-center justify-center gap-2 whitespace-nowrap
-           rounded-xl px-4 py-2.5 text-sm font-semibold leading-5
+           rounded-xl px-4 py-3 text-sm font-semibold leading-5 sm:py-2.5
            transition-[background-color,box-shadow,color,transform] duration-150
            active:translate-y-px disabled:pointer-events-none disabled:opacity-[0.55];
   }
@@ -79,17 +119,18 @@ body {
   .faixa-aviso { @apply rounded-xl bg-pool-50 px-4 py-3 text-sm leading-6 text-pool-900 ring-1 ring-inset ring-pool-200; }
 
   /* Filtro em botão (período, situação): claro por padrão, o selecionado vira
-     tinta escura cheia — o mesmo par do filtro de período do sistema do parque. */
+     azul piscina cheio (era tinta quase preta até 22/09 — lia como "desligado"
+     no celular). No telefone ganha recheio pra passar de 40px de altura. */
   .chip {
     @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg
-           bg-white px-3 py-1.5 text-[13px] font-semibold text-ink-600
-           ring-1 ring-inset ring-ink-200 transition-colors hover:bg-ink-50
+           bg-white px-3.5 py-2 text-[13px] font-semibold text-ink-700
+           ring-1 ring-inset ring-ink-200 transition-colors hover:bg-ink-50 sm:px-3 sm:py-1.5
            disabled:pointer-events-none disabled:opacity-[0.55];
   }
   .chip-ativo {
     @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg
-           bg-ink-900 px-3 py-1.5 text-[13px] font-semibold text-white
-           ring-1 ring-inset ring-ink-900 transition-colors
+           bg-pool-700 px-3.5 py-2 text-[13px] font-semibold text-white shadow-sm
+           ring-1 ring-inset ring-pool-700 transition-colors sm:px-3 sm:py-1.5
            disabled:pointer-events-none disabled:opacity-[0.55];
   }
 
@@ -109,21 +150,21 @@ body {
            sm:text-[15px];
   }
   .rotulo {
-    @apply mb-1 block text-[13px] font-semibold text-ink-800;
+    @apply mb-1.5 block text-[13px] font-semibold text-ink-800;
   }
 
   /* Cabeçalho de bloco do módulo de criação: título 20 + apoio 14. */
   .titulo-bloco { @apply titulo text-xl font-semibold text-ink-900; }
-  .apoio-bloco  { @apply mt-1 text-sm text-ink-500; }
+  .apoio-bloco  { @apply mt-1 text-sm text-ink-600; }
 
   /* Selo de situação: pílula com contorno interno, a mesma palavra sempre com a
      mesma cor em qualquer tela. As quatro são as que as telas usam — nome fora
      desta lista renderiza sem cor, e `telas.test.ts` acusa. */
-  .selo        { @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset; }
-  .selo-ok     { @apply selo bg-success-50 text-success-800 ring-success-600/20; }
-  .selo-alerta { @apply selo bg-warning-50 text-warning-800 ring-warning-600/25; }
-  .selo-erro   { @apply selo bg-danger-50 text-danger-700 ring-danger-600/20; }
-  .selo-neutro { @apply selo bg-ink-100 text-ink-700 ring-ink-200; }
+  .selo        { @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold tracking-[0.02em] ring-1 ring-inset; }
+  .selo-ok     { @apply selo bg-success-100 text-success-800 ring-success-600/30; }
+  .selo-alerta { @apply selo bg-warning-100 text-warning-800 ring-warning-600/35; }
+  .selo-erro   { @apply selo bg-danger-100 text-danger-700 ring-danger-600/30; }
+  .selo-neutro { @apply selo bg-ink-100 text-ink-800 ring-ink-300; }
 }
 
 /* ---- Ficha do balcão -------------------------------------------------------
@@ -149,6 +190,12 @@ body {
   .ficha-item { font-size: 10pt; font-weight: 600; line-height: 1.25; }
   .ficha-rodape { margin-top: 2mm; font-size: 7.5pt; line-height: 1.2; }
 }
+
+/* Fila que rola de lado (abas, filtros) sem a barra cinza por baixo: no
+   celular ela aparecia como um risco no meio da tela. A última aba cortada
+   na borda já diz que tem mais. */
+.sem-barra { scrollbar-width: none; }
+.sem-barra::-webkit-scrollbar { display: none; }
 
 *:focus-visible { outline: 2px solid theme('colors.pool.600'); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

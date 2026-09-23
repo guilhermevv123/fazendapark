@@ -17,9 +17,11 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../utils/auditoria'
 
 const Entrada = z.object({
-  nome: z.string().min(2).max(160).optional(),
+  // trim ANTES do min: "   " passava no min(2) e apagava o nome da organização
+  nome: z.string().trim().min(2).max(160).optional(),
   documento: z.string().max(20).nullish(),
   ambienteAsaas: z.enum(['sandbox', 'production']).optional(),
   chaveAsaas: z.string().min(20).max(400).nullish(),
@@ -44,7 +46,7 @@ export default defineEventHandler(async (event) => {
   const d = p.data
 
   const atual = await q1<any>(
-    `SELECT asaas_env, asaas_api_key IS NOT NULL AS tem_chave
+    `SELECT name, document, asaas_env, asaas_wallet, asaas_api_key IS NOT NULL AS tem_chave
        FROM organizations WHERE id = $1`, [orgId])
   if (!atual) throw createError({ statusCode: 404, statusMessage: 'Organização não encontrada' })
 
@@ -84,20 +86,22 @@ export default defineEventHandler(async (event) => {
 
   const set: string[] = []
   const par: any[] = [orgId]
-  const log: any = {}
-  const por = (coluna: string, valor: any, rotulo?: string) => {
+  const antes: Record<string, unknown> = {}
+  const log: Record<string, unknown> = {}
+  const por = (coluna: string, valor: any, rotulo?: string, anterior?: unknown) => {
     par.push(valor)
     set.push(`${coluna} = $${par.length}`)
-    if (rotulo) log[rotulo] = valor
+    if (rotulo) { log[rotulo] = valor; antes[rotulo] = anterior ?? null }
   }
 
-  if (d.nome !== undefined) por('name', d.nome.trim(), 'nome')
-  if (d.documento !== undefined) por('document', d.documento, 'documento')
-  if (d.ambienteAsaas !== undefined) por('asaas_env', d.ambienteAsaas, 'ambienteAsaas')
-  if (d.carteiraAsaas !== undefined) por('asaas_wallet', d.carteiraAsaas, 'carteiraAsaas')
+  if (d.nome !== undefined) por('name', d.nome, 'nome', atual.name)
+  if (d.documento !== undefined) por('document', d.documento, 'documento', atual.document)
+  if (d.ambienteAsaas !== undefined) por('asaas_env', d.ambienteAsaas, 'ambienteAsaas', atual.asaas_env)
+  if (d.carteiraAsaas !== undefined) por('asaas_wallet', d.carteiraAsaas, 'carteiraAsaas', atual.asaas_wallet)
   // o VALOR da chave não entra no log de auditoria — só o fato da troca
   if (d.chaveAsaas !== undefined) {
     por('asaas_api_key', d.chaveAsaas)
+    antes.chaveAsaas = atual.tem_chave ? 'configurada' : 'ausente'
     log.chaveAsaas = d.chaveAsaas === null ? 'removida' : 'trocada'
   }
 
@@ -106,10 +110,16 @@ export default defineEventHandler(async (event) => {
   return await tx(async (c) => {
     try {
       await c.query(`UPDATE organizations SET ${set.join(', ')} WHERE id = $1`, par)
-      await c.query(
-        `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-         VALUES ($1,'organizacao',$1,'editada',$2::jsonb)`,
-        [orgId, JSON.stringify({ ...log, porQuem: sessao.email })])
+      // Autor nas colunas, na mesma transação. `registrarAuditoria` não grava
+      // quando antes == depois (salvar sem mexer em nada não é ato).
+      await registrarAuditoria({
+        autor: autorDaRequisicao(event),
+        entidade: 'organizacao',
+        entidadeId: orgId,
+        acao: 'editada',
+        antes,
+        depois: log,
+      }, c)
       return { ok: true }
     } catch (e: any) {
       if (e?.code === '23505') {

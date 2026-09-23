@@ -424,8 +424,8 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     if (pular()) return
     const r = await comprar({
       itens: [
-        { lotId, quantidade: 15 },
-        { lotId, quantidade: 15 },
+        { lotId, ticketTypeId: tipoId, quantidade: 15 },
+        { lotId, ticketTypeId: tipoId, quantidade: 15 },
       ],
     })
     expect(r.status).toBe(409)
@@ -437,8 +437,8 @@ describe('checkout pela HTTP — o que ele recusa', () => {
   it('respeita o teto por pedido configurado no evento', async () => {
     if (pular()) return
     await q(`UPDATE events SET max_per_order = 4 WHERE id = $1`, [eventId])
-    expect((await comprar({ itens: [{ lotId, quantidade: 5 }] })).status).toBe(409)
-    expect((await comprar({ itens: [{ lotId, quantidade: 4 }] })).status).toBe(200)
+    expect((await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 5 }] })).status).toBe(409)
+    expect((await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 4 }] })).status).toBe(200)
   })
 
   it('teto por CPF no evento soma o que a pessoa JÁ tem — não só este pedido', async () => {
@@ -447,11 +447,11 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     const doc = cpf()
     const email = `mesmo.${Date.now()}@exemplo.com`
 
-    const um = await comprar({ itens: [{ lotId, quantidade: 2 }],
+    const um = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 2 }],
       comprador: { nome: 'Mesma Pessoa', email, documento: doc, telefone: '73998260963' } })
     expect(um.status).toBe(200)
 
-    const dois = await comprar({ itens: [{ lotId, quantidade: 2 }],
+    const dois = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 2 }],
       comprador: { nome: 'Mesma Pessoa', email, documento: doc, telefone: '73998260963' } })
     expect(dois.status).toBe(409)
     expect(dois.recado).toMatch(/no máximo 3 ingressos neste evento/)
@@ -466,8 +466,8 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     const email = `lote.${Date.now()}@exemplo.com`
     const comprador = { nome: 'Pessoa Do Lote', email, documento: doc, telefone: '73998260963' }
 
-    expect((await comprar({ itens: [{ lotId, quantidade: 2 }], comprador })).status).toBe(200)
-    const r = await comprar({ itens: [{ lotId, quantidade: 1 }], comprador })
+    expect((await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 2 }], comprador })).status).toBe(200)
+    const r = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], comprador })
     expect(r.status).toBe(409)
     expect(r.recado).toMatch(/no máximo 2 de "Lote Único"/)
   })
@@ -516,7 +516,7 @@ describe('checkout pela HTTP — o que ele recusa', () => {
       await trava.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, [eventId, doc])
 
       resposta = post('/api/checkout', {
-        eventSlug: SLUG, itens: [{ lotId, quantidade: 1 }], comprador, forma: 'pix',
+        eventSlug: SLUG, itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], comprador, forma: 'pix',
       })
       resposta.then(() => { respondeu = true }, () => { respondeu = true })
 
@@ -538,7 +538,7 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     if (pular()) return
     await q(`UPDATE events SET starts_at = now() - interval '2 days',
                                ends_at = now() - interval '1 day' WHERE id = $1`, [eventId])
-    const r = await comprar({ itens: [{ lotId, quantidade: 1 }] })
+    const r = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }] })
     expect(r.status).toBe(409)
     expect(r.recado).toMatch(/Este evento terminou em \d{2}\/\d{2}\/\d{4}/)
   })
@@ -552,7 +552,7 @@ describe('checkout pela HTTP — o que ele recusa', () => {
                                ends_at = now() + interval '3 hours',
                                sales_end_at = NULL,
                                sales_end_minutes_after = 60 WHERE id = $1`, [eventId])
-    const r = await comprar({ itens: [{ lotId, quantidade: 1 }] })
+    const r = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }] })
     expect(r.status).toBe(409)
     expect(r.recado).toMatch(/As vendas deste evento encerraram em/)
   })
@@ -560,7 +560,7 @@ describe('checkout pela HTTP — o que ele recusa', () => {
   it('cupom bom desconta de verdade, e o teto do cupom segura o desconto', async () => {
     if (pular()) return
     const codigo = await novoCupom({ kind: 'percentual', value: 5000, max_discount_cents: 1500 })
-    const r = await comprar({ itens: [{ lotId, quantidade: 2 }], cupom: codigo })
+    const r = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 2 }], cupom: codigo })
     expect(r.status).toBe(200)
     // face 2 × R$ 100 = R$ 200; 50% seriam R$ 100, mas o teto é R$ 15
     expect(r.corpo.faceCents).toBe(20_000)
@@ -576,12 +576,12 @@ describe('checkout pela HTTP — o que ele recusa', () => {
       nome: 'Reusador', email: `reuso.${Date.now()}@exemplo.com`,
       documento: doc, telefone: '73998260963',
     }
-    expect((await comprar({ itens: [{ lotId, quantidade: 1 }], cupom: codigo, comprador })).status)
+    expect((await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], cupom: codigo, comprador })).status)
       .toBe(200)
 
     // Outro e-mail, MESMO CPF: é a pessoa que tem limite, não o cadastro.
     const r = await comprar({
-      itens: [{ lotId, quantidade: 1 }], cupom: codigo,
+      itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], cupom: codigo,
       comprador: { ...comprador, email: `reuso2.${Date.now()}@exemplo.com` },
     })
     expect(r.status).toBe(409)
@@ -608,15 +608,15 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     const como = (documento: string) =>
       ({ nome: 'Mesma Caixa De Entrada', email, documento, telefone: '73998260963' })
 
-    expect((await comprar({ itens: [{ lotId, quantidade: 2 }], comprador: como(a) })).status).toBe(200)
+    expect((await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 2 }], comprador: como(a) })).status).toBe(200)
 
     // CPF diferente num e-mail que já tem dono: para aqui, com recado.
-    const trocado = await comprar({ itens: [{ lotId, quantidade: 2 }], comprador: como(b) })
+    const trocado = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 2 }], comprador: como(b) })
     expect(trocado.status).toBe(409)
     expect(trocado.corpo.data?.tipo).toBe('email_de_outro_cpf')
 
     // e o CPF de verdade continua preso ao teto dele — a contagem não sumiu
-    const volta = await comprar({ itens: [{ lotId, quantidade: 2 }], comprador: como(a) })
+    const volta = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 2 }], comprador: como(a) })
     expect(volta.status).toBe(409)
     expect(volta.recado).toMatch(/já tem 2/)
 
@@ -642,9 +642,9 @@ describe('checkout pela HTTP — o que ele recusa', () => {
       ({ nome: 'Familia Inteira', email, documento, telefone: '73998260963' })
 
     expect((await comprar({
-      itens: [{ lotId, quantidade: 1 }], cupom: codigo, comprador: como(a) })).status).toBe(200)
+      itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], cupom: codigo, comprador: como(a) })).status).toBe(200)
 
-    const r = await comprar({ itens: [{ lotId, quantidade: 1 }], cupom: codigo, comprador: como(b) })
+    const r = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], cupom: codigo, comprador: como(b) })
     expect(r.status).toBe(409)
     expect(r.recado).not.toMatch(/já usou o cupom/)
     expect(r.corpo.data?.tipo).toBe('email_de_outro_cpf')
@@ -654,7 +654,7 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     if (pular()) return
     const codigo = await novoCupom({ active: false })
     const antes = await q1<any>(`SELECT sold, reserved FROM lots WHERE id = $1`, [lotId])
-    const r = await comprar({ itens: [{ lotId, quantidade: 3 }], cupom: codigo })
+    const r = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 3 }], cupom: codigo })
     expect(r.status).toBe(409)
     const depois = await q1<any>(`SELECT sold, reserved FROM lots WHERE id = $1`, [lotId])
     expect(depois).toEqual(antes)
@@ -724,7 +724,7 @@ describe('recusas que o comprador consegue entender', () => {
 
     const r = await post('/api/cupom/conferir', {
       eventSlug: SLUG, codigo, documento: cpf(),
-      itens: [{ lotId, quantidade: 1 }],
+      itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }],
     })
     const corpo = await r.json()
 
@@ -751,7 +751,7 @@ describe('recusas que o comprador consegue entender', () => {
         eventSlug: SLUG, codigo, documento: cpf(),
         // preço inventado pelo cliente: aceitar isto seria deixar o comprador
         // escolher quanto o desconto dele vale
-        itens: [{ lotId, quantidade: 1, faceCents: 9_000_000, precoCents: 9_000_000 }],
+        itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1, faceCents: 9_000_000, precoCents: 9_000_000 }],
       })
       const corpo = await r.json()
       expect(corpo.ok).toBe(true)
@@ -764,11 +764,11 @@ describe('recusas que o comprador consegue entender', () => {
     const documento = cpf()
 
     const conferencia = await (await post('/api/cupom/conferir', {
-      eventSlug: SLUG, codigo, documento, itens: [{ lotId, quantidade: 1 }],
+      eventSlug: SLUG, codigo, documento, itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }],
     })).json()
 
     const cobranca = await comprar({
-      itens: [{ lotId, quantidade: 1 }], cupom: codigo,
+      itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], cupom: codigo,
       comprador: { nome: 'Comprador de Teste', email: `c.${Date.now()}@exemplo.com`, documento },
     })
 
@@ -792,19 +792,19 @@ describe('recusas que o comprador consegue entender', () => {
 
     // a pessoa já usou o cupom
     expect((await comprar({
-      itens: [{ lotId, quantidade: 1 }], cupom: codigo,
+      itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], cupom: codigo,
       comprador: { nome: 'Comprador de Teste', email: `c.${Date.now()}@exemplo.com`, documento },
     })).status).toBe(200)
 
     const semCpf = await (await post('/api/cupom/conferir', {
-      eventSlug: SLUG, codigo, itens: [{ lotId, quantidade: 1 }],
+      eventSlug: SLUG, codigo, itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }],
     })).json()
     expect(semCpf.ok).toBe(true)
     // ← sem o aviso, a tela pintaria de verde um cupom que a cobrança recusa
     expect(semCpf.parcial).toBe(true)
 
     const comCpf = await (await post('/api/cupom/conferir', {
-      eventSlug: SLUG, codigo, documento, itens: [{ lotId, quantidade: 1 }],
+      eventSlug: SLUG, codigo, documento, itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }],
     })).json()
     expect(comCpf.ok).toBe(false)
     expect(comCpf.recado).toMatch(/já usou/)
@@ -817,9 +817,9 @@ describe('recusas que o comprador consegue entender', () => {
                                ends_at = now() - interval '1 day' WHERE id = $1`, [eventId])
 
     const conferencia = await (await post('/api/cupom/conferir', {
-      eventSlug: SLUG, codigo, documento: cpf(), itens: [{ lotId, quantidade: 1 }],
+      eventSlug: SLUG, codigo, documento: cpf(), itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }],
     })).json()
-    const cobranca = await comprar({ itens: [{ lotId, quantidade: 1 }], cupom: codigo })
+    const cobranca = await comprar({ itens: [{ lotId, ticketTypeId: tipoId, quantidade: 1 }], cupom: codigo })
 
     expect(conferencia.ok).toBe(false)
     expect(conferencia.motivo).toBe('venda_fechada')

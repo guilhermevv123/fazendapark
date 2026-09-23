@@ -33,47 +33,86 @@ import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
 
 /**
- * `de` e `ate` chegam como DIA (`2026-09-21`), e dia é coisa de calendário
- * local — não de UTC.
+ * `de` e `ate` chegam como DIA (`2026-09-21`), e dia é coisa de calendário —
+ * do calendário DO EVENTO, não do servidor.
  *
- * `new Date('2026-09-21')` é MEIA-NOITE UTC, ou seja 21h do dia ANTERIOR na
- * Bahia. O botão "Hoje" mandava a data certa e a rota abria a janela três
- * horas cedo demais: medido no evento semeado às 02h47 de 21/09, o painel
- * dizia R$ 11.228,00 de "hoje" contra R$ 6.732,00 de verdade — 64 pedidos da
- * noite de ontem (21h–24h) entravam no dia de hoje, e a própria curva do
- * painel mostrava DOIS dias dentro de um filtro de um dia só.
+ * Primeiro defeito (já consertado antes): `new Date('2026-09-21')` é
+ * meia-noite UTC, 21h do dia anterior na Bahia, e o "Hoje" puxava 64 pedidos
+ * da noite de ontem.
  *
- * O fim do período já era lido em hora local (`...T23:59:59.999`, sem `Z`).
- * Era só o começo que falava UTC — e janela com as duas pontas em fusos
- * diferentes não erra por igual: ela cresce.
+ * Segundo defeito, o deste bloco: o conserto lia o dia "em hora local" — a
+ * hora local do processo Node. E o card "hoje" usava `date_trunc('day',
+ * now())`, que é o dia no fuso da SESSÃO do Postgres. Dois relógios que só
+ * concordam enquanto o servidor, o banco e o parque estiverem no mesmo fuso;
+ * no dia em que o Node subir em UTC (container, é o padrão), o filtro "Hoje"
+ * e o card "hoje" passam a cortar o dia em horas diferentes, calados.
+ *
+ * Agora os dois lados cortam no fuso do evento (`events.timezone`, que já
+ * existe e é o que o checkout usa; padrão `America/Bahia`), e o corte é feito
+ * pelo Postgres (`AT TIME ZONE`), que conhece horário de verão de qualquer
+ * fuso. O botão "Hoje" manda `periodo=hoje` e o servidor decide que dia é —
+ * o navegador do produtor pode estar em outro fuso.
  *
  * Data impossível (`?de=ontem`) vira `null` e a rota cai no padrão, em vez de
- * mandar `Invalid Date` pro banco e devolver erro 500 pra quem só digitou
- * errado na URL.
+ * devolver erro 500 pra quem só digitou errado na URL.
  */
-function diaLocal(texto: string, horas: string): Date | null {
-  const dia = String(texto).slice(0, 10)
+function diaValido(texto: unknown): string | null {
+  const dia = String(texto ?? '').slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return null
-  const d = new Date(`${dia}T${horas}`)
-  return Number.isNaN(d.getTime()) ? null : d
+  return Number.isNaN(new Date(`${dia}T12:00:00Z`).getTime()) ? null : dia
 }
-const inicioDoDiaLocal = (texto: string) => diaLocal(texto, '00:00:00.000')
-const fimDoDiaLocal = (texto: string) => diaLocal(texto, '23:59:59.999')
+
+/** o dia de hoje no calendário do fuso, `AAAA-MM-DD` */
+export function hojeNoFuso(fuso: string, agora = new Date()): string {
+  // en-CA escreve a data em ISO; `toISOString` cortaria em UTC
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: fuso, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(agora)
+}
+
+/** soma dias a um `AAAA-MM-DD` sem passar por fuso nenhum */
+function somarDias(dia: string, n: number): string {
+  const d = new Date(`${dia}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
-  const { de, ate } = getQuery(event) as { de?: string; ate?: string }
+  const { de, ate, periodo } = getQuery(event) as { de?: string; ate?: string; periodo?: string }
 
+  // O fuso é conferido contra a lista do próprio Postgres: um texto torto na
+  // coluna faria o `AT TIME ZONE` estourar 500 no painel inteiro.
   const ev = await q1<any>(
-    `SELECT id, name, status, starts_at, fee_bps FROM events WHERE id = $1`, [id])
+    `SELECT id, name, status, starts_at, fee_bps,
+            COALESCE((SELECT z.name FROM pg_timezone_names z WHERE z.name = events.timezone),
+                     'America/Bahia') AS fuso
+       FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
+  const fuso: string = ev.fuso
+
+  const hoje = hojeNoFuso(fuso)
+  let diaDe = diaValido(de)
+  let diaAte = diaValido(ate)
+  if (periodo === 'hoje') { diaDe = hoje; diaAte = hoje }
+  else if (periodo === '7d') { diaDe = somarDias(hoje, -6); diaAte = hoje }
 
   // "Todo o período" tem que significar TODO o período. Ancorar o padrão na
   // criação do evento parece razoável e não é: basta um pedido com data
   // anterior (importação, migração, ajuste manual) pra o total da tela ficar
   // menor que a soma da tabela logo abaixo dela, sem nenhum aviso.
-  const inicio = de ? inicioDoDiaLocal(de) ?? new Date(0) : new Date(0)
-  const fim = ate ? fimDoDiaLocal(ate) ?? new Date() : new Date()
+  //
+  // O corte do dia é do Postgres, no fuso do evento — e o começo de "hoje"
+  // sai da MESMA consulta, pro card "hoje" e o filtro "Hoje" cortarem igual.
+  const janela = await q1<any>(
+    `SELECT CASE WHEN $2::date IS NULL THEN to_timestamp(0)
+                 ELSE ($2::date)::timestamp AT TIME ZONE $1 END                        AS inicio,
+            CASE WHEN $3::date IS NULL THEN now()
+                 ELSE (($3::date + 1)::timestamp AT TIME ZONE $1) - interval '1 millisecond' END AS fim,
+            ($4::date)::timestamp AT TIME ZONE $1                                      AS hoje_inicio`,
+    [fuso, diaDe, diaAte, hoje])
+  const inicio: Date = janela.inicio
+  const fim: Date = janela.fim
   const p = [id, inicio, fim]
 
   // A régua do período, uma vez só. `PEDIDO_VIVO` no lugar de `status =
@@ -82,7 +121,7 @@ export default defineEventHandler(async (event) => {
   // líquido, não um recorte que apaga o pedido inteiro.
   const vivoNoPeriodo = `${PEDIDO_VIVO('o.')} AND o.paid_at BETWEEN $2 AND $3`
 
-  const [totais, hoje, porDia, funil, porForma, porCanal, porSetor, publico] = await Promise.all([
+  const [totais, vendasHoje, porDia, funil, porForma, porCanal, porSetor, publico] = await Promise.all([
     q1<any>(
       `SELECT COALESCE(SUM(o.total_cents),0)::bigint  AS cobrado,
               COALESCE(SUM(o.face_cents),0)::bigint   AS face,
@@ -102,11 +141,13 @@ export default defineEventHandler(async (event) => {
       `SELECT COALESCE(SUM(total_cents),0)::bigint AS cobrado,
               ${SQL_LIQUIDO()} AS liquido
          FROM orders
-        WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at >= date_trunc('day', now())`,
-      [id]),
+        WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at >= $2`,
+      [id, janela.hoje_inicio]),
 
+    // o dia da curva também é o do evento — senão a venda das 22h cai no
+    // ponto de amanhã quando o banco está em outro fuso
     q<any>(
-      `SELECT date_trunc('day', o.paid_at)::date AS dia,
+      `SELECT (o.paid_at AT TIME ZONE '${fuso.replace(/'/g, "''")}')::date AS dia,
               COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
               ${SQL_LIQUIDO('o.')} AS liquido,
               COALESCE(SUM(oi.n),0)::int AS ingressos
@@ -278,7 +319,7 @@ export default defineEventHandler(async (event) => {
   }
 
   return {
-    periodo: { de: inicio.toISOString(), ate: fim.toISOString() },
+    periodo: { de: inicio.toISOString(), ate: fim.toISOString(), fuso, hoje },
     regua: 'pedido que virou dinheiro, pela data do pagamento',
     totais: {
       cobradoCents: Number(totais.cobrado),
@@ -292,8 +333,8 @@ export default defineEventHandler(async (event) => {
       estornadoNoLiquidoCents: Number(totais.estornado),
       // o que sobra pro produtor — mesma conta do borderô e dos financeiros
       liquidoCents: Number(totais.liquido),
-      hojeCents: Number(hoje?.cobrado ?? 0),
-      hojeLiquidoCents: Number(hoje?.liquido ?? 0),
+      hojeCents: Number(vendasHoje?.cobrado ?? 0),
+      hojeLiquidoCents: Number(vendasHoje?.liquido ?? 0),
       pedidos,
       pedidosFechados: Number(totais.fechados),
       pedidosComEstorno: Number(totais.com_estorno),

@@ -12,9 +12,16 @@ definePageMeta({ layout: 'admin' })
 const route = useRoute()
 const id = route.params.id as string
 
-const { data, refresh, pending } = await useFetch<any>(() => `/api/admin/evento/${id}/pdv`)
+const { data, refresh, pending, error: falha } = await useFetch<any>(() => `/api/admin/evento/${id}/pdv`)
 
 const erro = ref('')
+/**
+ * Erro de quem está com um modal aberto aparece DENTRO do modal. No alto da
+ * página ele ficava atrás do fundo escuro: "Abrir e vender" não fazia nada
+ * (ponto com caixa já aberto, 409) e "Salvar" também não (ponto sem forma de
+ * pagamento, 400) — o operador apertava de novo e de novo.
+ */
+const erroModal = ref('')
 const aviso = ref('')
 const salvando = ref(false)
 const criando = ref(false)
@@ -89,7 +96,8 @@ async function criar() {
 
 async function salvarEdicao() {
   const p = editando.value
-  salvando.value = true; erro.value = ''
+  if (!p.formas.length) { erroModal.value = 'Marque pelo menos uma forma de pagamento.'; return }
+  salvando.value = true; erroModal.value = ''
   try {
     await $fetch(`/api/admin/evento/${id}/pdv`, {
       method: 'PATCH',
@@ -98,7 +106,7 @@ async function salvarEdicao() {
     aviso.value = 'Ponto de venda salvo.'
     editando.value = null
     await refresh()
-  } catch (e: any) { erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra salvar.' }
+  } catch (e: any) { erroModal.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra salvar.' }
   finally { salvando.value = false }
 }
 
@@ -126,14 +134,19 @@ const fundoCents = ref(0)
 
 async function abrirCaixa() {
   const p = abrindo.value
-  salvando.value = true; erro.value = ''
+  salvando.value = true; erroModal.value = ''
   try {
     const r: any = await $fetch(`/api/admin/evento/${id}/pdv/turno`, {
       method: 'POST', body: { pontoId: p.id, fundoCents: fundoCents.value },
     })
     abrindo.value = null; fundoCents.value = 0
     await navigateTo(`/admin/evento/${id}/pdv/vender?turno=${r.turnoId}`)
-  } catch (e: any) { erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra abrir o caixa.' }
+  } catch (e: any) {
+    erroModal.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra abrir o caixa.'
+    // o 409 mais comum é "já tem caixa aberto neste ponto": a lista atrás do
+    // modal passa a mostrar o botão Vender dele
+    await refresh()
+  }
   finally { salvando.value = false }
 }
 </script>
@@ -218,13 +231,13 @@ async function abrirCaixa() {
           <NuxtLink v-if="p.turno" :to="`/admin/evento/${id}/pdv/vender?turno=${p.turno.id}`"
                     class="btn-primario">Vender</NuxtLink>
           <button v-else-if="p.ativo" type="button" class="btn-primario"
-                  @click="abrindo = p; fundoCents = 0">Abrir caixa</button>
+                  @click="abrindo = p; fundoCents = 0; erroModal = ''">Abrir caixa</button>
 
           <NuxtLink v-if="p.turno" :to="`/admin/evento/${id}/pdv/caixa?turno=${p.turno.id}`"
                     class="btn-secundario">Conferir e fechar</NuxtLink>
 
           <button type="button" class="btn-secundario"
-                  @click="editando = { id: p.id, nome: p.nome, local: p.local, formas: [...p.formas] }">
+                  @click="editando = { id: p.id, nome: p.nome, local: p.local, formas: [...p.formas] }; erroModal = ''">
             Editar
           </button>
           <button v-if="p.ativo" type="button" class="btn-secundario" :disabled="salvando"
@@ -379,6 +392,7 @@ async function abrirCaixa() {
           Quanto de troco está na gaveta agora, antes de vender qualquer coisa?
           Esse número é o que faz a conferência do fim da noite bater.
         </p>
+        <p v-if="erroModal" class="faixa-erro mt-3">{{ erroModal }}</p>
         <label for="fundo" class="rotulo mt-4">Fundo de troco</label>
         <CampoMoeda id="fundo" v-model="fundoCents" @keyup.enter="abrirCaixa" />
         <div class="mt-5 flex gap-2">
@@ -395,6 +409,7 @@ async function abrirCaixa() {
          @click.self="editando = null">
       <div class="w-full max-w-md rounded-card bg-fundo-card p-5">
         <h2 class="titulo text-lg font-semibold text-tinta">Editar ponto de venda</h2>
+        <p v-if="erroModal" class="faixa-erro mt-3">{{ erroModal }}</p>
         <label class="rotulo mt-4">Nome</label>
         <input v-model="editando.nome" class="campo">
         <label class="rotulo mt-3">Onde fica</label>
@@ -413,5 +428,17 @@ async function abrirCaixa() {
         </div>
       </div>
     </div>
+  </div>
+
+  <p v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</p>
+
+  <div v-else class="card mt-6">
+    <p class="rotulo-kpi text-erro">Não foi possível carregar os pontos de venda</p>
+    <p class="mt-1 text-sm text-tinta-suave">
+      {{ (falha as any)?.statusCode === 403
+        ? 'Seu acesso não inclui a bilheteria.'
+        : ((falha as any)?.data?.message || (falha as any)?.message || 'Confira a internet e tente de novo.') }}
+    </p>
+    <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
   </div>
 </template>

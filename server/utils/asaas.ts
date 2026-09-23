@@ -15,9 +15,9 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { cpfValido } from './documento'
-import { q, q1, tx } from './db'
+import { db, q, q1, tx } from './db'
 import { emitirNaTransacao } from './emissao'
-import { liberar } from './estoque'
+import { liberar, SQL_COBRANCAS_A_CANCELAR } from './estoque'
 
 const PROD_URL = 'https://api.asaas.com/v3'
 const SANDBOX_URL = 'https://api-sandbox.asaas.com/v3'
@@ -188,6 +188,96 @@ export async function qrCodePix(
 
 export async function cancelarCobranca(cfg: ConfigAsaas, id: string): Promise<any> {
   return chamar(cfg, 'DELETE', `/payments/${id}`)
+}
+
+/* ------------------------------------------- cobrança de reserva que caiu */
+
+/** Como a varredura cancela a cobrança no gateway. Injetável pelo teste. */
+export type Cancelador = (cfg: ConfigAsaas, paymentId: string) => Promise<any>
+
+let canceladorInjetado: Cancelador | null = null
+
+/** Mesmo motivo do `usarConsultaDeCobranca`: o teste precisa de um que responda sem rede. */
+export function usarCancelador(f: Cancelador | null) {
+  canceladorInjetado = f
+}
+
+/** Tentativas por pedido antes de desistir e deixar a trilha dizendo por quê. */
+export const MAX_TENTATIVAS_CANCELAR = 3
+
+export interface ResultadoDoCancelamento {
+  pedidoId: string
+  ok: boolean
+  erro: string | null
+}
+
+/**
+ * Cancela no Asaas a cobrança de todo pedido que expirou.
+ *
+ * O P0 de 22/09: reserva morria, cobrança seguia viva, o comprador pagava o
+ * QR que ainda estava na tela e o dinheiro entrava sem ingresso. Cancelar a
+ * cobrança fecha a porta na origem — o PIX cancelado não é mais pagável.
+ *
+ * Três decisões:
+ *
+ *  • **fora da transação que expira o pedido.** Quem chama é a tarefa de fundo,
+ *    DEPOIS do commit da expiração. Chamada de rede com lote travado é fila, e
+ *    gateway fora do ar não pode segurar estoque preso;
+ *  • **erro não trava nada, e não some.** Cada tentativa vira linha no
+ *    `audit_log` do pedido (`cobranca_cancelada` / `cobranca_cancelar_falhou`
+ *    com a mensagem do gateway). Até `MAX_TENTATIVAS_CANCELAR`, com espera
+ *    entre elas. O motivo mais comum de falha é o bom: o comprador pagou no
+ *    último segundo e o Asaas recusa apagar cobrança recebida — aí quem
+ *    resolve é o webhook, que tenta emitir de novo (`emissao.ts`);
+ *  • **uma instância por vez.** A trava consultiva de SESSÃO faz a segunda
+ *    cópia do servidor passar reto em vez de cancelar a mesma cobrança duas
+ *    vezes (a segunda viraria um "falhou" falso na trilha).
+ *
+ * 404 do gateway conta como cancelada: a cobrança já não existe.
+ */
+export async function cancelarCobrancasDeExpirados(limite = 50): Promise<ResultadoDoCancelamento[]> {
+  const conexao = await db().connect()
+  const feitos: ResultadoDoCancelamento[] = []
+  let travou = false
+  try {
+    const { rows: trava } = await conexao.query(
+      `SELECT pg_try_advisory_lock(hashtext('dt:cancelar-cobrancas-expiradas')) AS ok`)
+    travou = !!trava[0]?.ok
+    if (!travou) return feitos
+
+    const pendentes = await q<any>(SQL_COBRANCAS_A_CANCELAR, [limite, MAX_TENTATIVAS_CANCELAR])
+    const cancelar = canceladorInjetado ?? cancelarCobranca
+    for (const p of pendentes) {
+      let erro: string | null = null
+      if (!p.asaas_api_key && !canceladorInjetado) {
+        erro = 'organização sem chave do Asaas: não dá pra cancelar a cobrança'
+      } else {
+        try {
+          await cancelar({ apiKey: p.asaas_api_key, environment: p.asaas_env,
+                           walletId: p.asaas_wallet }, p.asaas_payment_id)
+        } catch (e: any) {
+          if (!(e instanceof ErroAsaas && e.status === 404)) erro = e?.message ?? String(e)
+        }
+      }
+      await q(
+        `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+         VALUES ($1, 'order', $2, $3, $4::jsonb)`,
+        [p.org_id, p.id, erro ? 'cobranca_cancelar_falhou' : 'cobranca_cancelada',
+         JSON.stringify({ cobranca: p.asaas_payment_id, pedido: p.code, erro })])
+      if (erro) {
+        console.warn(`[asaas] não cancelou a cobrança ${p.asaas_payment_id} do pedido `
+          + `${p.code} (expirado): ${erro}`)
+      }
+      feitos.push({ pedidoId: p.id, ok: !erro, erro })
+    }
+    return feitos
+  } finally {
+    if (travou) {
+      await conexao.query(`SELECT pg_advisory_unlock(hashtext('dt:cancelar-cobrancas-expiradas'))`)
+        .catch(() => {})
+    }
+    conexao.release()
+  }
 }
 
 export async function estornar(cfg: ConfigAsaas, id: string, valorCents?: number): Promise<any> {
@@ -1537,6 +1627,30 @@ export async function aplicarEventoDoAsaas(
     const r = await emitirNaTransacao(c, pedido.id)
     const recado = [v.aviso, r.emitiu ? null : `não emitiu: ${r.motivo}`]
       .filter(Boolean).join(' · ') || null
+
+    if (r.pagoSemLugar) {
+      // PIX pago depois de a reserva cair, e o lugar já foi de outra pessoa.
+      // NÃO dá baixa: dar baixa aqui era o P0 de 22/09 — o dinheiro entrava, a
+      // linha saía da fila como "processada" e ninguém ficava sabendo. Sem
+      // `processed_at` a entrega fica na lista de penduradas do painel
+      // (Financeiro → entregas), com o erro escrito, e o reprocessador tenta
+      // de novo com espera crescente: se alguém desistir e o lugar voltar, o
+      // ingresso sai sozinho. Se não voltar, é decisão de gente — outro
+      // ingresso ou devolução do dinheiro — e a trilha do pedido já tem a
+      // linha `pago_sem_lugar` (gravada por `emitirNaTransacao`).
+      //
+      // O efeito da transação (a tentativa de reservar) já foi desfeito no
+      // savepoint da emissão; o que fica gravado é só a anotação.
+      await c.query(
+        `UPDATE payment_events SET attempts = attempts + 1, error = $2 WHERE id = $1`,
+        [e.registroId, recado])
+      console.warn(`[webhook asaas] ${recado} (pedido ${pedido.id})`)
+      return {
+        ok: true, pedido: pedido.id, emitiu: false, ingressos: 0, pendente: true,
+        pagoSemLugar: true, aviso: recado,
+      }
+    }
+
     await concluir(recado)
     return {
       ok: true, pedido: pedido.id, emitiu: r.emitiu, ingressos: r.ingressos,

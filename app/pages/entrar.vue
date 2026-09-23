@@ -95,6 +95,14 @@ useHead({ title: 'Entrar' })
           <button type="submit" class="btn-primario w-full py-3" :disabled="enviando">
             {{ enviando ? 'Entrando…' : 'Entrar' }}
           </button>
+
+          <!-- Sem "recuperar por e-mail" de propósito: não há provedor de
+               e-mail configurado (server/utils/email.ts só simula), e um link
+               que promete e-mail que nunca chega é pior que dizer o caminho
+               que existe de verdade. -->
+          <p class="text-center text-[13px] leading-5 text-ink-500">
+            Esqueceu a senha? Peça a um master da equipe para gerar uma nova em Equipe.
+          </p>
         </form>
       </div>
 

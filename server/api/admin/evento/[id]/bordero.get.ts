@@ -23,9 +23,11 @@
  *     o pedido com estorno parcial inteiro e faz esta tela discordar do painel
  *     e de relatórios.
  */
-import { q, q1 } from '../../../../utils/db'
+import { db, q, q1 } from '../../../../utils/db'
 import { SQL_LIBERA_EM } from '../../../../utils/retencao'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
+import { saldoParaSaque } from '../../../../utils/saque'
+import { retratoDoPublico, SQL_PUBLICO } from '../../../../utils/catraca'
 import { eCortesiaMesmo } from './cortesias.post'
 
 /**
@@ -168,13 +170,36 @@ export default defineEventHandler(async (event) => {
   const emitidos = await q1<any>(
     `SELECT count(*)::int AS total,
             count(*) FILTER (WHERE ${E_CORTESIA('t')} AND t.status <> 'cancelado')::int AS cortesias,
-            count(*) FILTER (WHERE t.status = 'usado')::int AS usados,
             count(*) FILTER (WHERE t.status = 'cancelado')::int AS cancelados
        FROM tickets t WHERE t.event_id = $1`, [id])
 
+  // Quem entrou sai do LIVRO de entradas (`SQL_PUBLICO`), a mesma régua do
+  // leitor, do histórico e do painel. Era `tickets.status = 'usado'`, que é a
+  // TRAVA do QR e não o registro de passagem: volta atrás em cancelamento e
+  // nunca existiu pra entrada retroativa — o borderô dizia um comparecimento
+  // e o leitor outro, do mesmo evento, no mesmo minuto.
+  const publico = retratoDoPublico(await q1<any>(SQL_PUBLICO, [id]))
+
   const pago = await q1<any>(
-    `SELECT COALESCE(SUM(amount_cents) FILTER (WHERE status = 'concluida'), 0)::bigint AS transferido
+    `SELECT COALESCE(SUM(amount_cents) FILTER (WHERE status = 'concluida'), 0)::bigint AS transferido,
+            COALESCE(SUM(amount_cents) FILTER (WHERE status IN ('solicitada','processando')), 0)::bigint
+              AS em_curso
        FROM payouts WHERE event_id = $1`, [id])
+
+  // O "a receber" é o MESMO saldo que trava o saque e que o financeiro do
+  // evento e o da organização mostram: na plataforma − transferido − em
+  // curso. Era `líquido − transferido`, que ignorava o saque já pedido e
+  // somava o dinheiro do balcão (que está na gaveta do produtor, não aqui).
+  // Medido: R$ 840 pela plataforma + R$ 135 de balcão, R$ 500 transferidos e
+  // R$ 340 pedidos → este borderô dizia R$ 475 "a receber" com as outras duas
+  // telas dizendo R$ 0 e R$ 135.
+  const conexao = await db().connect()
+  let saldo: Awaited<ReturnType<typeof saldoParaSaque>>
+  try {
+    saldo = await saldoParaSaque(conexao, id!)
+  } finally {
+    conexao.release()
+  }
 
   const face = Number(t.face)
   const estornado = Number(t.estornado)
@@ -201,20 +226,25 @@ export default defineEventHandler(async (event) => {
       estornadoNoLiquidoCents: Number(t.estornado_liquido),
       liquidoCents: liquido,
       transferidoCents: Number(pago.transferido),
-      aReceberCents: liquido - Number(pago.transferido),
+      emCursoCents: Number(pago.em_curso),
+      // as duas metades do líquido — a de cima fica na plataforma até o
+      // saque, a de baixo já está com o produtor e nunca vira "a receber"
+      naPlataformaCents: saldo.gatewayCents,
+      recebidoDiretoCents: saldo.diretoCents,
+      aReceberCents: Math.max(saldo.disponivelCents, 0),
       pedidosPagos: t.pedidos,
       pedidosPendentes: t.pendentes,
       pedidosPerdidos: t.perdidos,
       ingressosEmitidos: emitidos.total,
       cortesias: emitidos.cortesias,
-      ingressosUsados: emitidos.usados,
+      // ingressos DISTINTOS que passaram na porta, pelo livro de entradas
+      ingressosUsados: publico.ingressos,
+      // pessoas dentro — uma mesa de 4 é um ingresso e quatro pessoas
+      pessoasQueEntraram: publico.pessoas,
       ingressosCancelados: emitidos.cancelados,
-      // Comparecimento só faz sentido sobre o que vale: cancelado não ia
-      // entrar mesmo, e deixá-lo no denominador faz um evento lotado parecer
-      // meio vazio.
-      comparecimentoPct: emitidos.total - emitidos.cancelados > 0
-        ? Math.round((emitidos.usados / (emitidos.total - emitidos.cancelados)) * 100)
-        : 0,
+      // o mesmo percentual do leitor e do histórico (`retratoDoPublico`)
+      comparecimentoPct: publico.comparecimentoPct,
+      aptos: publico.aptos,
     },
     lotes: linhas.map((l) => ({
       setor: l.setor, setorTipo: l.setor_tipo, lote: l.lote, loteId: l.lote_id,

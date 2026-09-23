@@ -21,10 +21,22 @@
  * R$ 2.450,00 no borderô/painel/relatórios; a quebra por forma somando
  * R$ 1.900,00 contra R$ 2.835,00 de cobrado. Um evento em que a face aparece
  * MENOR que o próprio líquido — e a tela inteira verde.
+ *
+ * ## O saldo é o do `saldoParaSaque`, não o do líquido
+ *
+ * Retido e disponível daqui saíam de `liquido − transferido − em curso`, e o
+ * líquido inclui o dinheiro do balcão, que nunca passou pela plataforma.
+ * Medido (evento com R$ 840 pela plataforma e R$ 135 em espécie): antes de
+ * sacar, o evento dizia R$ 840 e esta tela R$ 975; depois de R$ 500
+ * transferidos e R$ 340 pedidos, o evento dizia R$ 0 e esta tela R$ 135 — um
+ * dinheiro que já estava na gaveta do produtor, oferecido de novo como saldo.
+ * Agora o saldo de cada evento é o MESMO `saldoParaSaque` que trava o saque
+ * (`utils/saque.ts`), e o recebido direto vem numa coluna própria, com nome.
  */
-import { q, q1 } from '../../utils/db'
+import { db, q } from '../../utils/db'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../utils/retencao'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../utils/liquido'
+import { saldoParaSaque } from '../../utils/saque'
 
 export default defineEventHandler(async (event) => {
   const orgId = (event.context as any).sessao?.orgId
@@ -119,19 +131,37 @@ export default defineEventHandler(async (event) => {
         GROUP BY 1 ORDER BY 3 DESC`, [orgId]),
   ])
 
+  // O saldo de cada evento sai de `saldoParaSaque` — a MESMA função que trava
+  // o saque. Uma conexão só pra todos os eventos: a organização é um parque,
+  // são poucos eventos, e N consultas numa conexão custam menos que N
+  // conexões disputando o pool.
+  const saldos = new Map<string, Awaited<ReturnType<typeof saldoParaSaque>>>()
+  const conexao = await db().connect()
+  try {
+    for (const e of porEvento) saldos.set(e.id, await saldoParaSaque(conexao, e.id))
+  } finally {
+    conexao.release()
+  }
+
   let face = 0, taxa = 0, estornado = 0, transferido = 0, emCurso = 0, retido = 0, disponivel = 0
-  let somaLiquido = 0
+  let somaLiquido = 0, naPlataforma = 0, recebidoDireto = 0
   const eventos = porEvento.map((e) => {
     // conta única em `utils/liquido.ts` — a face cheia mentia sempre que a
     // taxa foi absorvida ou um cupom entrou
     const liquido = Number(e.liquido)
     const t = Number(e.transferido)
     const c = Number(e.em_curso)
-    const preso = e.liberado ? 0 : Math.max(liquido - t - c, 0)
-    const livre = Math.max(liquido - t - c - preso, 0)
+    const s = saldos.get(e.id)!
+    // `saldoParaSaque().disponivelCents` = na plataforma − transferido − em
+    // curso. É o número que o financeiro do evento e o borderô mostram; aqui
+    // ele só é partido em "preso pela retenção" e "livre".
+    const saldo = Math.max(s.disponivelCents, 0)
+    const preso = e.liberado ? 0 : saldo
+    const livre = saldo - preso
 
     face += Number(e.face); taxa += Number(e.taxa); estornado += Number(e.estornado)
     somaLiquido += liquido
+    naPlataforma += s.gatewayCents; recebidoDireto += s.diretoCents
     transferido += t; emCurso += c; retido += preso; disponivel += livre
 
     return {
@@ -146,8 +176,13 @@ export default defineEventHandler(async (event) => {
       pedidosFechados: e.fechados,
       faceCents: Number(e.face), taxaCents: Number(e.taxa),
       estornadoCents: Number(e.estornado), liquidoCents: liquido,
+      // as duas metades do líquido, com nome: sem elas o líquido fica maior
+      // que o saldo e o produtor acha que o sistema comeu a venda do balcão
+      naPlataformaCents: s.gatewayCents, recebidoDiretoCents: s.diretoCents,
       transferidoCents: t, emCursoCents: c,
       retidoCents: preso, disponivelCents: livre,
+      // retido + disponível: o "a receber" do borderô e do financeiro do evento
+      saldoCents: saldo,
     }
   })
 
@@ -159,8 +194,10 @@ export default defineEventHandler(async (event) => {
       // total que não é a soma das linhas é o jeito clássico de a tela do
       // dinheiro discordar de si mesma
       liquidoCents: somaLiquido,
+      naPlataformaCents: naPlataforma, recebidoDiretoCents: recebidoDireto,
       transferidoCents: transferido, emCursoCents: emCurso,
       retidoCents: retido, disponivelCents: disponivel,
+      saldoCents: retido + disponivel,
     },
     eventos,
     porMes: porMes.map((m) => ({

@@ -29,6 +29,13 @@
  *    pessoa navegando com o cookie que já tinha até ele vencer — o acesso
  *    "cortado" continua de pé por dias.
  *
+ * 4. **"Nova senha" não vale pra si mesmo.** Sortear a própria senha revogava
+ *    TODAS as sessões do alvo — inclusive a de quem clicou —, o `refresh()`
+ *    seguinte voltava 401 e a senha sorteada sumia da tela junto com a página:
+ *    o master ficava trancado fora com uma senha que ninguém viu. A própria
+ *    senha se troca em `POST /api/auth/senha` (menu da conta), que pede a
+ *    atual e mantém a sessão de quem troca.
+ *
  * Mudar de papel também derruba as sessões: não porque a sessão carregue
  * permissão (o `middleware/03.papel.ts` relê o papel do banco a cada
  * requisição), mas porque quem foi rebaixado fica com a tela anterior aberta,
@@ -39,11 +46,13 @@ import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
 import { q1, tx } from '../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 import { PAPEIS, ehPapel, papelDoRoleLegado, roleLegado } from '../../../utils/papeis'
 
 const Entrada = z.object({
   id: z.string().uuid(),
-  nome: z.string().min(2).max(120).optional(),
+  // trim ANTES do min: "   " passava no min(2) e gravava nome vazio
+  nome: z.string().trim().min(2).max(120).optional(),
   papel: z.enum(PAPEIS as [string, ...string[]]).optional(),
   ativo: z.boolean().optional(),
   novaSenha: z.literal(true).optional(),
@@ -85,6 +94,13 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  if (euMesmo && d.novaSenha) {
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Pra trocar a sua senha, use 'Trocar senha' no menu da conta.",
+    })
+  }
+
   return await tx(async (c) => {
     // A TRAVA VEM ANTES DA DECISÃO. Pega as linhas de todos os masters ativos
     // da organização; dois pedidos concorrentes disputam as MESMAS linhas, na
@@ -118,16 +134,25 @@ export default defineEventHandler(async (event) => {
 
     const set: string[] = []
     const par: any[] = [alvo.id]
-    const depois: any = {}
+    // `email` nos dois lados: não muda, mas é por ele que alguém procura o ato
+    const antes: Record<string, unknown> = { email: alvo.email }
+    const depois: Record<string, unknown> = { email: alvo.email }
 
-    if (d.nome !== undefined) { par.push(d.nome.trim()); set.push(`name = $${par.length}`); depois.nome = d.nome }
+    if (d.nome !== undefined) {
+      par.push(d.nome); set.push(`name = $${par.length}`)
+      antes.nome = alvo.name; depois.nome = d.nome
+    }
     if (papelNovo !== undefined) {
+      antes.papel = papelAtual
       // as duas colunas andam juntas — ver o comentário do POST
       par.push(papelNovo); set.push(`papel = $${par.length}`)
       par.push(roleLegado(papelNovo)); set.push(`role = $${par.length}`)
       depois.papel = papelNovo
     }
-    if (d.ativo !== undefined) { par.push(d.ativo); set.push(`active = $${par.length}`); depois.ativo = d.ativo }
+    if (d.ativo !== undefined) {
+      par.push(d.ativo); set.push(`active = $${par.length}`)
+      antes.ativo = agora.active; depois.ativo = d.ativo
+    }
 
     let senha: string | null = null
     if (d.novaSenha) {
@@ -151,10 +176,17 @@ export default defineEventHandler(async (event) => {
       depois.sessoesRevogadas = true
     }
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'usuario',$2,'editado',$3::jsonb)`,
-      [orgId, alvo.id, JSON.stringify({ ...depois, porQuem: sessao.email })])
+    // Na MESMA transação do ato, com autor (user_id, e-mail, IP) nas colunas
+    // — o INSERT cru de antes gravava a linha sem dizer quem. A senha sorteada
+    // não entra: só o fato de ter sido trocada.
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event),
+      entidade: 'usuario',
+      entidadeId: alvo.id,
+      acao: 'editado',
+      antes,
+      depois,
+    }, c)
 
     return { ok: true, senhaProvisoria: senha }
   })

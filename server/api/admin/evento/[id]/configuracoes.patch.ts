@@ -15,10 +15,24 @@
  * - **`sales_end_at` e `sales_end_minutes_after` se excluem** (é CHECK no
  *   banco). Preencher um limpa o outro aqui, senão a gravação morre com
  *   violação de constraint e a tela mostra "erro interno".
+ *
+ * E quatro sobre a situação e a data, porque aqui elas eram só rótulo:
+ *
+ * - **cancelado e adiado não se escolhem aqui.** Mudar o status pra
+ *   'cancelado' fechava a vitrine e mais nada: pedido seguia pago, ingresso
+ *   válido, catraca abrindo. Quem cancela é `cancelar.post.ts` (invalida e
+ *   devolve); quem adia é `remarcar.post.ts` (avisa e dá a escolha).
+ * - **cancelado não volta.** O dinheiro já está sendo devolvido e o ingresso
+ *   já morreu; reabrir a venda venderia um evento sem ninguém dentro.
+ * - **publicar exige ingresso.** Sem lote visível, a página abre sem nada
+ *   pra vender.
+ * - **com venda feita, a data não muda por aqui.** Quem comprou pro dia 10 e
+ *   não foi avisado chega no portão no dia 10. Adiar é o caminho que avisa.
  */
 import { z } from 'zod'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { q1, tx } from '../../../../utils/db'
+import { explicarErro } from '../index.post'
 
 /**
  * URL externa (`https://…`, quem cola um link de fora) OU caminho relativo
@@ -39,6 +53,8 @@ const Entrada = z.object({
   slug: z.string().min(3).max(80).regex(/^[a-z0-9-]+$/,
     'Use só letras minúsculas, números e hífen').optional(),
   descricao: z.string().max(20_000).nullish(),
+  // 'cancelado' e 'adiado' continuam no enum SÓ pra a recusa sair com frase,
+  // e não com "opção inválida" — ver a trava lá embaixo.
   status: z.enum(['rascunho', 'ativo', 'encerrado', 'cancelado', 'adiado', 'oculto']).optional(),
   comecaEm: z.string().datetime({ offset: true }).optional(),
   terminaEm: z.string().datetime({ offset: true }).optional(),
@@ -87,19 +103,97 @@ const COLUNA: Record<string, string> = {
   maxPorCliente: 'max_per_customer',
 }
 
+/** O nome do campo como a tela de Configurações mostra — pro erro dizer QUAL. */
+const ROTULO: Record<string, string> = {
+  nome: 'Nome do evento', slug: 'Endereço público', descricao: 'Descrição', status: 'Situação',
+  comecaEm: 'Começa em', terminaEm: 'Termina em', vendaAte: 'Venda encerra em',
+  vendaAteMinutos: 'Minutos após o início', esconderFim: 'Não mostrar a data de término',
+  classificacao: 'Classificação etária', substantivo: 'Como chamar o ingresso',
+  urlTransmissao: 'Link da transmissão', local: 'Nome do local', cep: 'CEP',
+  endereco: 'Endereço', numero: 'Número', bairro: 'Bairro', cidade: 'Cidade', uf: 'UF',
+  complemento: 'Complemento', banner: 'Banner', thumb: 'Miniatura', categoria: 'Categoria',
+  tags: 'Tags', suporteTipo: 'Canal de suporte', suporteValor: 'Contato de suporte',
+  minutosDeReserva: 'Minutos de reserva no carrinho', taxaBps: 'Taxa de serviço',
+  modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa na bilheteria',
+  maxPorCliente: 'Máximo por cliente',
+}
+
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({
+      statusCode: 400,
+      statusMessage: explicarErro(p.error, ROTULO),
+      data: p.error.flatten(),
+    })
   }
   const campos = { ...p.data }
 
+  // `vendidos` conta pedido pago e estornado parcial: o parcial ainda tem
+  // ingresso válido e gente vindo, e é gente que precisa ser avisada.
   const atual = await q1<any>(
     `SELECT id, org_id, slug, status, starts_at, ends_at,
-            (SELECT count(*) FROM orders WHERE event_id = events.id AND status = 'pago')::int AS vendidos
+            (SELECT count(*) FROM orders WHERE event_id = events.id
+                AND status IN ('pago', 'estornado_parcial'))::int AS vendidos
        FROM events WHERE id = $1`, [id])
   if (!atual) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
+
+  // Mandar a situação que já está gravada não é mudança — a tela manda o
+  // formulário que o operador viu, e o status igual não pode esbarrar nas
+  // travas de baixo.
+  if (campos.status === atual.status) delete campos.status
+
+  if (atual.status === 'cancelado' && campos.status) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'Evento cancelado não volta a vender: os ingressos foram invalidados e '
+        + 'as compras estão na fila de devolução. Para vender de novo, crie um evento novo.',
+    })
+  }
+  if (campos.status === 'cancelado') {
+    throw createError({
+      statusCode: 422,
+      statusMessage: 'Cancelar é pelo botão "Cancelar evento e devolver", no fim desta tela — '
+        + 'é ele que invalida os ingressos e devolve o dinheiro.',
+    })
+  }
+  if (campos.status === 'adiado') {
+    throw createError({
+      statusCode: 422,
+      statusMessage: 'Adiar é pelo bloco "Adiar para outra data", no fim desta tela — '
+        + 'é ele que muda a data e avisa quem comprou.',
+    })
+  }
+
+  // Publicar (ou deixar vendendo por link) sem nada à venda abre uma página
+  // vazia. Lote com preço zero só existe com a marca de gratuito (as rotas de
+  // ingresso recusam R$ 0,00 sem ela), então "visível e com estoque" basta.
+  if (campos.status === 'ativo' || campos.status === 'oculto') {
+    const tem = await q1<any>(
+      `SELECT 1 FROM lots l JOIN sectors s ON s.id = l.sector_id
+        WHERE s.event_id = $1 AND l.visible AND l.quantity > 0 LIMIT 1`, [id])
+    if (!tem) {
+      throw createError({
+        statusCode: 422,
+        statusMessage: 'Cadastre pelo menos um ingresso antes de publicar — '
+          + 'nenhum lote deste evento está visível à venda.',
+      })
+    }
+  }
+
+  // Data mexida com venda feita: o comprador não fica sabendo e chega no dia
+  // velho. Compara o INSTANTE, não o texto — a tela pode mandar o mesmo
+  // horário em outro formato.
+  const mexeNaData = (novo: string | undefined, velho: string | Date) =>
+    novo !== undefined && new Date(novo).getTime() !== new Date(velho).getTime()
+  if (atual.vendidos > 0
+      && (mexeNaData(campos.comecaEm, atual.starts_at) || mexeNaData(campos.terminaEm, atual.ends_at))) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'Com ingressos vendidos, mude a data por Adiar evento — os compradores são avisados.',
+    })
+  }
 
   if (campos.slug && campos.slug !== atual.slug && atual.vendidos > 0) {
     throw createError({

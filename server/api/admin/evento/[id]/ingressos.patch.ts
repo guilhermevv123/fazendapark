@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { tx } from '../../../../utils/db'
+import { explicarErro } from '../index.post'
 
 const Entrada = z.object({
   // 'evento' entra aqui porque as chaves que a tela de ingressos liga e
@@ -24,6 +25,8 @@ const Entrada = z.object({
     nome: z.string().min(1).max(120).optional(),
     descricao: z.string().max(500).nullish(),
     faceCents: z.number().int().min(0).max(100_000_00).optional(),
+    /** R$ 0,00 só com esta marca — ver o porquê em `evento/index.post.ts` */
+    gratuito: z.boolean().optional(),
     quantidade: z.number().int().min(0).max(1_000_000).optional(),
     minPorCompra: z.number().int().min(1).max(50).optional(),
     maxPorCompra: z.number().int().min(1).max(50).optional(),
@@ -75,9 +78,19 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error), data: p.error.flatten() })
   }
   const { o, id, campos } = p.data
+
+  // Preço zerado por descuido (o "Preço redondo" com total pequeno, o campo
+  // apagado) vira ingresso de graça no site. Só passa com a marca explícita.
+  if (o === 'lote' && campos.faceCents === 0 && !campos.gratuito) {
+    throw createError({
+      statusCode: 422,
+      statusMessage: 'O valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito" — '
+        + 'sem isso o lote sairia de graça no site.',
+    })
+  }
 
   const mapa = COLUNAS[o]
   const pares = Object.entries(campos).filter(([k, v]) => k in mapa && v !== undefined)
@@ -115,6 +128,77 @@ export default defineEventHandler(async (event) => {
       const max = campos.maxPorCompra ?? Number(linha.max_per_order)
       if (min > max) {
         throw createError({ statusCode: 422, statusMessage: 'O mínimo por compra não pode passar do máximo' })
+      }
+      // A mesma trava do POST, agora na edição: mandar só uma das datas
+      // compara contra a outra que já está gravada. `null` é "apagar a data".
+      const abre = campos.abreEm !== undefined ? campos.abreEm : linha.starts_at
+      const expira = campos.expiraEm !== undefined ? campos.expiraEm : linha.expires_at
+      if (abre && expira && new Date(expira).getTime() <= new Date(abre).getTime()) {
+        throw createError({ statusCode: 422, statusMessage: 'O lote não pode fechar antes de abrir.' })
+      }
+    }
+
+    // As contas de estoque do POST, repetidas aqui. Sem elas, a trava de
+    // capacidade só valia na criação: um setor de 100 aceitava o lote editado
+    // pra 1000, a capacidade baixada pra 1 com 3 vendidos, ou um tipo de 5000
+    // dentro de um lote de 1000 — e a vitrine vendia o que o espaço não tem.
+    if (o === 'lote' && campos.quantidade !== undefined) {
+      // Trava o SETOR: duas edições de lotes irmãos ao mesmo tempo, cada uma
+      // vendo a soma antiga, passariam juntas por cima da capacidade.
+      const { rows: [setor] } = await c.query(
+        `SELECT capacity FROM sectors WHERE id = $1 FOR UPDATE`, [linha.sector_id])
+      if (setor?.capacity) {
+        const { rows: [irmaos] } = await c.query(
+          `SELECT COALESCE(SUM(quantity),0)::int AS n FROM lots WHERE sector_id = $1 AND id <> $2`,
+          [linha.sector_id, id])
+        const soma = Number(irmaos.n) + campos.quantidade
+        if (soma > Number(setor.capacity)) {
+          throw createError({
+            statusCode: 422,
+            statusMessage: `Estoura a capacidade do setor: os lotes somariam ${soma} para `
+              + `uma capacidade de ${setor.capacity}. Os outros lotes já ocupam ${irmaos.n}.`,
+          })
+        }
+      }
+      // Tipos compartilham o lote: o tipo que ACOMPANHAVA o lote (quantidade
+      // igual à dele) acompanha a mudança; o que tinha teto próprio de
+      // propósito ("Criança: 50") fica. Nunca abaixo do que já vendeu.
+      await c.query(
+        `UPDATE ticket_types SET quantity = GREATEST(sold, $2)
+          WHERE lot_id = $1 AND quantity = $3`,
+        [id, campos.quantidade, Number(linha.quantity)])
+    }
+
+    if (o === 'setor' && campos.capacidade != null) {
+      const { rows: [uso] } = await c.query(
+        `SELECT COALESCE(SUM(quantity),0)::int AS lotes,
+                COALESCE(SUM(sold + reserved),0)::int AS saiu
+           FROM lots WHERE sector_id = $1`, [id])
+      if (campos.capacidade < Number(uso.saiu)) {
+        throw createError({
+          statusCode: 409,
+          statusMessage: `Já saíram ${uso.saiu} ingressos deste setor. `
+            + 'A capacidade não pode ficar abaixo disso.',
+        })
+      }
+      if (campos.capacidade < Number(uso.lotes)) {
+        throw createError({
+          statusCode: 422,
+          statusMessage: `Os lotes deste setor somam ${uso.lotes}. Diminua os lotes antes, `
+            + `ou deixe a capacidade em pelo menos ${uso.lotes}.`,
+        })
+      }
+    }
+
+    if (o === 'tipo' && campos.quantidade !== undefined) {
+      const { rows: [lote] } = await c.query(
+        `SELECT quantity FROM lots WHERE id = $1 FOR UPDATE`, [linha.lot_id])
+      // tipos compartilham o lote: cada um no máximo até ele (ver `evento/index.post.ts`)
+      if (campos.quantidade > Number(lote.quantity)) {
+        throw createError({
+          statusCode: 422,
+          statusMessage: `O tipo não pode ter mais que o lote (${lote.quantity}).`,
+        })
       }
     }
 

@@ -3,8 +3,9 @@
  *
  * Rota PÚBLICA: quem abre o link não tem conta. Por isso ela devolve o
  * mínimo pra decidir ("qual evento, qual lugar, quem mandou") e nada que só
- * interesse à produção: sem id de ingresso, sem valor pago, sem documento de
- * ninguém. Quem tem o link tem o ingresso — o link já é a credencial.
+ * interesse à produção: sem valor pago, sem documento de ninguém, e o id do
+ * ingresso só depois do aceite (é com ele que a página monta o QR de quem
+ * recebeu). Quem tem o link tem o ingresso — o link já é a credencial.
  *
  * O e-mail de quem mandou aparece parcialmente coberto: a pessoa precisa
  * reconhecer o remetente, não precisa do endereço dele.
@@ -26,7 +27,13 @@ export default defineEventHandler(async (event) => {
   const tr = await q1<any>(
     `SELECT tr.status, tr.created_at, tr.expires_at, tr.accepted_at,
             tr.de_nome, tr.de_email, tr.para_nome, tr.para_email,
-            t.code AS ingresso, t.status AS ingresso_status,
+            t.id AS ingresso_id, t.code AS ingresso, t.status AS ingresso_status,
+            -- em vigor = nenhuma transferência do mesmo ingresso aceita DEPOIS
+            -- desta (quem recebeu pode ter passado adiante)
+            NOT EXISTS (SELECT 1 FROM ticket_transfers depois
+                         WHERE depois.ticket_id = tr.ticket_id
+                           AND depois.status = 'concluido'
+                           AND depois.accepted_at > tr.accepted_at) AS em_vigor,
             e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.slug,
             s.name AS setor, l.name AS lote, tt.name AS tipo,
             se.label AS assento,
@@ -50,6 +57,18 @@ export default defineEventHandler(async (event) => {
     && tr.expires_at && new Date(tr.expires_at).getTime() < Date.now()
   const status = vencida ? 'expirado' : tr.status
 
+  // O QR de quem RECEBEU mora aqui, e não no pedido de quem mandou.
+  //
+  // Escolha de 22/09: o destinatário não tem pedido (quem pagou foi o outro) e
+  // mandar ele pro `/ingressos/<pedido do remetente>` entregaria os dados da
+  // compra e os OUTROS ingressos do pedido. O link de aceite já é a credencial
+  // dele — é o mesmo modelo do código do pedido pra quem compra —, então,
+  // depois do aceite, a própria página da transferência passa a mostrar o QR.
+  // Só enquanto esta for a transferência em vigor e o ingresso valer: passou
+  // adiante, foi cancelada ou o ingresso morreu, o QR some daqui.
+  const doDestinatario = status === 'concluido' && tr.em_vigor
+  const qrDisponivel = doDestinatario && tr.ingresso_status === 'valido'
+
   return {
     status,
     statusTexto: STATUS_LEGIVEL[status] ?? status,
@@ -65,7 +84,12 @@ export default defineEventHandler(async (event) => {
       setor: tr.setor, lote: tr.lote, tipo: tr.tipo,
       assento: tr.assento, sessao: tr.sessao, sessaoInicio: tr.sessao_inicio,
       // o código só aparece depois de aceito: antes disso ele é do outro
-      codigo: status === 'concluido' ? tr.ingresso : null,
+      codigo: doDestinatario ? tr.ingresso : null,
+      /** `valido` | `usado` | `cancelado` — só depois do aceite */
+      situacao: doDestinatario ? tr.ingresso_status : null,
+      // o id só serve junto do token (`/api/ingresso/:id/qr.png?transferencia=`)
+      id: qrDisponivel ? tr.ingresso_id : null,
+      qrDisponivel,
     },
   }
 })

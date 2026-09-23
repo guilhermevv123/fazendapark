@@ -160,7 +160,8 @@ useHead({ title: 'Relatórios' })
     <div class="mt-4 grid gap-3 lg:grid-cols-2">
       <div class="card">
         <p class="rotulo-kpi">Funil de pedidos</p>
-        <table class="mt-3 w-full text-sm">
+        <div class="mt-3 overflow-x-auto">
+          <table class="w-full text-sm">
           <tbody>
             <tr v-for="s in data.funil.porStatus" :key="s.status"
                 class="border-b border-linha last:border-0">
@@ -179,6 +180,7 @@ useHead({ title: 'Relatórios' })
             </tr>
           </tbody>
         </table>
+        </div>
         <p class="mt-3 text-xs text-tinta-fraca">
           {{ data.funil.abandonoPct }}% dos pedidos não chegaram ao pagamento.
           Rascunho não entra nesta conta — só pedido que chegou a existir de verdade.
@@ -188,7 +190,8 @@ useHead({ title: 'Relatórios' })
       <div class="card">
         <p class="rotulo-kpi">Quando a venda acontece</p>
         <p class="mt-0.5 text-xs text-tinta-fraca">em relação ao dia do evento</p>
-        <table class="mt-3 w-full text-sm">
+        <div class="mt-3 overflow-x-auto">
+          <table class="w-full text-sm">
           <tbody>
             <tr v-for="f in antecedencia" :key="f.rotulo" class="border-b border-linha last:border-0">
               <td class="py-2 text-tinta">{{ f.rotulo }}</td>
@@ -202,6 +205,7 @@ useHead({ title: 'Relatórios' })
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -244,7 +248,8 @@ useHead({ title: 'Relatórios' })
         <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
           O que cada promoter trouxe
         </p>
-        <table class="w-full text-sm">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
           <tbody>
             <tr v-for="p in data.porPromoter" :key="p.id" class="border-b border-linha last:border-0">
               <td class="px-4 py-2.5">
@@ -262,13 +267,15 @@ useHead({ title: 'Relatórios' })
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       <div v-if="data.porCupom.length" class="card p-0">
         <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
           Cupons usados
         </p>
-        <table class="w-full text-sm">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
           <tbody>
             <tr v-for="c in data.porCupom" :key="c.id" class="border-b border-linha last:border-0">
               <td class="px-4 py-2.5 font-mono text-acao">{{ c.codigo }}</td>
@@ -281,6 +288,7 @@ useHead({ title: 'Relatórios' })
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -288,7 +296,8 @@ useHead({ title: 'Relatórios' })
       <p class="titulo border-b border-linha px-4 py-3 text-sm font-semibold text-tinta-rotulo">
         Quem mais comprou
       </p>
-      <table class="w-full text-sm">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
         <tbody>
           <tr v-for="(c, i) in data.topCompradores" :key="c.id"
               class="border-b border-linha last:border-0">
@@ -306,6 +315,7 @@ useHead({ title: 'Relatórios' })
           </tr>
         </tbody>
       </table>
+      </div>
     </div>
 
     <div v-if="data.porParcela.length" class="card mt-4">

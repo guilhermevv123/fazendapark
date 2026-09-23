@@ -238,20 +238,33 @@ useHead(() => ({
 
     <main class="mx-auto max-w-5xl px-4">
       <!-- ======================================================= capa ---- -->
-      <section class="card mt-6 overflow-hidden p-0">
+      <section class="card mt-4 overflow-hidden p-0 sm:mt-6">
+        <!-- Faixa de capa: o banner do evento, ou a foto do próprio parque
+             quando o evento não tem um. Sem ela a página abria num cartão
+             branco com texto preto — "muito vazio, pouca cor" (dono, 22/09),
+             e é a primeira coisa que o comprador vê pelo link no celular. -->
+        <div class="relative h-48 sm:h-56 md:h-64">
+          <img :src="data.evento.banner || '/photos/vista-geral-800.webp'"
+               :srcset="data.evento.banner ? undefined : '/photos/vista-geral-800.webp 800w, /photos/vista-geral-1280.webp 1280w'"
+               sizes="(min-width: 1024px) 1024px, 100vw"
+               alt="" class="absolute inset-0 size-full object-cover" fetchpriority="high">
+          <div class="absolute inset-0 bg-gradient-to-t from-ink-950/90 via-ink-950/35 to-transparent" aria-hidden="true" />
+          <div class="absolute inset-x-0 bottom-0 p-5 md:p-8">
+            <span v-if="!data.evento.vendasAbertas" class="selo-neutro mb-2">VENDAS FECHADAS</span>
+            <h1 class="titulo text-[28px] font-bold leading-tight text-white drop-shadow md:text-4xl">
+              {{ data.evento.nome }}
+            </h1>
+          </div>
+        </div>
         <div class="grid gap-0 md:grid-cols-[1fr_260px]">
-          <div class="p-6 md:p-8">
-            <span v-if="!data.evento.vendasAbertas" class="selo-neutro mb-3">VENDAS FECHADAS</span>
+          <div class="p-5 md:p-8">
             <!-- por que fechou, em português: cancelado e adiado não são a
                  mesma notícia que "acabou o prazo" -->
             <p v-if="data.evento.avisoDeVenda" class="mb-3 text-sm text-tinta-suave">
               {{ data.evento.avisoDeVenda }}
             </p>
-            <h1 class="titulo text-3xl font-bold leading-tight text-tinta md:text-4xl">
-              {{ data.evento.nome }}
-            </h1>
 
-            <dl class="mt-5 grid gap-3 text-[15px]">
+            <dl class="grid gap-3 text-[15px]">
               <div class="flex gap-3">
                 <dt class="w-20 shrink-0 text-sm font-medium text-tinta-fraca">Quando</dt>
                 <dd class="min-w-0 text-tinta-corpo">
@@ -277,13 +290,13 @@ useHead(() => ({
             </dl>
           </div>
 
-          <div class="flex items-center border-t border-linha bg-acao-fraco px-6 py-5 md:border-l md:border-t-0">
+          <div class="flex items-center bg-gradient-to-br from-pool-700 to-grape-700 px-5 py-5 text-white md:px-6">
             <div class="w-full">
-              <p class="text-sm font-medium text-tinta-suave">A partir de</p>
-              <p class="titulo mt-1 text-3xl font-bold text-tinta">
+              <p class="text-sm font-medium text-white/80">A partir de</p>
+              <p class="titulo mt-1 text-3xl font-bold">
                 {{ data.evento.aPartirDeCents != null ? reais(data.evento.aPartirDeCents) : '—' }}
               </p>
-              <p class="mt-1 text-xs text-tinta-fraca">taxa de serviço já incluída</p>
+              <p class="mt-1 text-xs text-white/75">taxa de serviço já incluída</p>
             </div>
           </div>
         </div>

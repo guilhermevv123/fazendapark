@@ -11,13 +11,14 @@
  * o sistema está quebrado — quando na verdade ninguém marcou o canal.
  */
 import { q, q1 } from '../../../../../utils/db'
-import { precificar, type ModoTaxa } from '../../../../../utils/dinheiro'
+import { faceDoTipo, precificar, type ModoTaxa } from '../../../../../utils/dinheiro'
+import { SQL_FIM_DO_DIA_DO_LOTE } from '../../../../../utils/caixa'
 
 export default defineEventHandler(async (event) => {
   const eventId = getRouterParam(event, 'id')!
 
   const ev = await q1<any>(
-    `SELECT id, name, fee_bps, fee_mode_pos, status, sales_end_at FROM events WHERE id = $1`,
+    `SELECT id, name, fee_bps, fee_mode_pos, status, sales_end_at, timezone FROM events WHERE id = $1`,
     [eventId])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
 
@@ -41,6 +42,11 @@ export default defineEventHandler(async (event) => {
       WHERE s.event_id = $1
       ORDER BY t.name`, [eventId])
 
+  // O dia de cada lote, pela mesma régua que a venda usa pra recusar.
+  const fimDoDia = new Map<string, Date | null>(
+    (await q<any>(SQL_FIM_DO_DIA_DO_LOTE, [linhas.map((l) => l.id)]))
+      .map((r) => [r.lot_id, r.fim_do_dia ? new Date(r.fim_do_dia) : null]))
+
   const modo: ModoTaxa = ev.fee_mode_pos
   const agora = new Date()
 
@@ -61,12 +67,18 @@ export default defineEventHandler(async (event) => {
       minimo: Number(l.min_per_order),
       maximo: Number(l.max_per_order),
       tipos: tipos.filter((t) => t.lot_id === l.id).map((t) => {
-        const face = Math.round(Number(l.price_cents) * (10_000 - Number(t.discount_bps)) / 10_000)
+        // A MESMA conta que a venda cobra (`faceDoTipo`). Era um
+        // `Math.round(p × (1 − b))` daqui, que arredonda o preço e não o
+        // desconto: em face ímpar com meia, a tela dizia R$ 12,50 e o
+        // servidor cobrava R$ 12,49 — o operador falava um valor e o
+        // recibo saía com outro.
+        const face = faceDoTipo(Number(l.price_cents), Number(t.discount_bps), Number(ev.fee_bps), modo)
         const pt = precificar(face, Number(ev.fee_bps), modo)
         return {
           id: t.id, nome: t.name, faceCents: face, balcaoCents: pt.totalCents,
           exigeDocumento: t.requires_document,
-          disponivel: Number(t.quantity) - Number(t.sold),
+          // tipos compartilham o lote: o que o tipo ainda tem, até o que sobra no lote
+          disponivel: Math.min(Number(t.quantity) - Number(t.sold), disponivel),
         }
       }),
     }
@@ -76,7 +88,7 @@ export default defineEventHandler(async (event) => {
   const bloqueados: { nome: string; setor: string; motivo: string; id: string }[] = []
 
   for (const l of linhas) {
-    const motivo = porQueNao(l, agora)
+    const motivo = porQueNao(l, agora, fimDoDia.get(l.id) ?? null, ev.timezone)
     if (motivo) bloqueados.push({ id: l.id, nome: l.name, setor: l.setor, motivo })
     else vendaveis.push(monta(l))
   }
@@ -95,11 +107,20 @@ export default defineEventHandler(async (event) => {
  * ouvir. "Sem estoque" quando na verdade o canal não está marcado manda a
  * pessoa procurar ingresso que existe.
  */
-function porQueNao(l: any, agora: Date): string | null {
+function porQueNao(l: any, agora: Date, fimDoDia: Date | null, fuso?: string | null): string | null {
   if (!l.channels?.includes('bilheteria')) {
     return 'Não está liberado para venda na bilheteria'
   }
   if (!l.visible) return 'Lote desativado'
+  // Dia que já passou vem antes de "encerrou" e de "esgotado": é o motivo que
+  // explica, e o único que nenhuma configuração de lote resolve.
+  if (fimDoDia && fimDoDia.getTime() <= agora.getTime()) {
+    const dia = fimDoDia.toLocaleString('pt-BR', {
+      timeZone: fuso || 'America/Bahia', day: '2-digit', month: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+    })
+    return `O dia deste ingresso já terminou (${dia})`
+  }
   if (l.starts_at && new Date(l.starts_at) > agora) return 'Ainda não abriu'
   if (l.expires_at && new Date(l.expires_at) <= agora) return 'Já encerrou'
   if (Number(l.quantity) - Number(l.sold) - Number(l.reserved) <= 0) return 'Esgotado'

@@ -14,6 +14,7 @@
 import { z } from 'zod'
 import { q1, tx } from '../../utils/db'
 import { SQL_ACEITA_TRANSFERENCIA } from '../../utils/transferencia'
+import { novoCodigoDoIngresso } from '../../utils/ingresso'
 
 const Entrada = z.object({
   /** a pessoa confirma o próprio nome; pode corrigir grafia, não trocar de dono */
@@ -66,17 +67,35 @@ export default defineEventHandler(async (event) => {
     }
 
     const nome = (d.nome ?? tr.para_nome).trim()
-    await c.query(
-      `UPDATE tickets SET holder_name = $2, holder_email = $3, holder_document = $4
-        WHERE id = $1`,
-      [tr.ticket_id, nome, tr.para_email, d.documento ?? tr.para_documento ?? null])
+    // CÓDIGO NOVO no aceite. Trocar só o titular deixava o QR do remetente
+    // valendo — a assinatura é HMAC(evento:código), e o código não mudava.
+    // Medido antes do conserto: depois do aceite, o QR antigo seguia dando
+    // "Liberado" na /api/checkin, e os dois entravam. Com o código novo o QR
+    // antigo (print, e-mail, tela do pedido) morre na hora: a catraca procura
+    // o código e não acha. `status = 'valido'` no WHERE: ingresso que entrou
+    // ou foi cancelado entre a checagem e aqui não troca de dono.
+    const antigo = await c.query(
+      `SELECT code FROM tickets WHERE id = $1 FOR UPDATE`, [tr.ticket_id])
+    const codigoNovo = novoCodigoDoIngresso(antigo.rows[0]?.code)
+    const mudou = await c.query(
+      `UPDATE tickets SET holder_name = $2, holder_email = $3, holder_document = $4, code = $5
+        WHERE id = $1 AND status = 'valido'`,
+      [tr.ticket_id, nome, tr.para_email, d.documento ?? tr.para_documento ?? null, codigoNovo])
+    if (mudou.rowCount !== 1) {
+      throw createError({ statusCode: 409,
+        statusMessage: 'Este ingresso já foi usado ou cancelado e não pode mais ser transferido.' })
+    }
 
     await c.query(
       `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
        VALUES ($1,'ingresso',$2,'transferencia_aceita',$3::jsonb)`,
-      [tr.org_id, tr.ticket_id, JSON.stringify({ transferencia: tr.id, titular: tr.para_email })])
+      [tr.org_id, tr.ticket_id, JSON.stringify({
+        transferencia: tr.id, titular: tr.para_email,
+        // o código antigo fica na trilha: é por ele que a portaria vai
+        // perguntar quando alguém aparecer com o print velho
+        codigoAnterior: antigo.rows[0]?.code, codigoNovo,
+      })])
 
-    const t = await c.query(`SELECT code FROM tickets WHERE id = $1`, [tr.ticket_id])
-    return { ok: true, titular: nome, ingresso: t.rows[0]?.code }
+    return { ok: true, titular: nome, ingresso: codigoNovo }
   })
 })

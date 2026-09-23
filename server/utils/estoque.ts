@@ -124,7 +124,21 @@ export function prazoDeReserva(minutosDoEvento?: number | string | null, agora =
 export async function reservar(
   c: PoolClient,
   itens: PedidoDeReserva[],
-  opts: { canal: string; agora?: Date } = { canal: 'online' },
+  opts: {
+    canal: string
+    agora?: Date
+    /**
+     * O dinheiro JÁ entrou: é o PIX pago depois de a reserva ter caído
+     * (`emissao.ts`, pedido 'expirado'). As portas COMERCIAIS do lote
+     * (visível, datas, canal, mínimo/máximo) valiam quando o pedido nasceu e
+     * foram respeitadas naquela hora — recusar agora porque o lote virou é
+     * deixar sem ingresso quem pagou o preço combinado. O que continua
+     * valendo: evento com vendas abertas e, principalmente, o ESTOQUE, com a
+     * mesma trava e o mesmo WHERE de sempre. Lugar que não existe não se cria
+     * nem pra quem pagou.
+     */
+    pagamentoAtrasado?: boolean
+  } = { canal: 'online' },
 ): Promise<void> {
   if (!itens.length) throw new Error('pedido sem itens')
   const agora = opts.agora ?? new Date()
@@ -150,23 +164,25 @@ export async function reservar(
     if (lote.sales_end_at && new Date(lote.sales_end_at) <= agora) {
       throw new LoteIndisponivel(item.lotId, 'As vendas deste evento já encerraram')
     }
-    if (!lote.visible) {
-      throw new LoteIndisponivel(item.lotId, 'Lote não está disponível')
-    }
-    if (lote.starts_at && new Date(lote.starts_at) > agora) {
-      throw new LoteIndisponivel(item.lotId, 'Este lote ainda não abriu')
-    }
-    if (lote.expires_at && new Date(lote.expires_at) <= agora) {
-      throw new LoteIndisponivel(item.lotId, 'Este lote já encerrou')
-    }
-    if (!lote.channels.includes(opts.canal)) {
-      throw new LoteIndisponivel(item.lotId, 'Lote não é vendido por este canal')
-    }
-    if (item.quantidade < lote.min_per_order) {
-      throw new LoteIndisponivel(item.lotId, `Mínimo de ${lote.min_per_order} por compra`)
-    }
-    if (item.quantidade > lote.max_per_order) {
-      throw new LoteIndisponivel(item.lotId, `Máximo de ${lote.max_per_order} por compra`)
+    if (!opts.pagamentoAtrasado) {
+      if (!lote.visible) {
+        throw new LoteIndisponivel(item.lotId, 'Lote não está disponível')
+      }
+      if (lote.starts_at && new Date(lote.starts_at) > agora) {
+        throw new LoteIndisponivel(item.lotId, 'Este lote ainda não abriu')
+      }
+      if (lote.expires_at && new Date(lote.expires_at) <= agora) {
+        throw new LoteIndisponivel(item.lotId, 'Este lote já encerrou')
+      }
+      if (!lote.channels.includes(opts.canal)) {
+        throw new LoteIndisponivel(item.lotId, 'Lote não é vendido por este canal')
+      }
+      if (item.quantidade < lote.min_per_order) {
+        throw new LoteIndisponivel(item.lotId, `Mínimo de ${lote.min_per_order} por compra`)
+      }
+      if (item.quantidade > lote.max_per_order) {
+        throw new LoteIndisponivel(item.lotId, `Máximo de ${lote.max_per_order} por compra`)
+      }
     }
 
     // ---- estoque ----------------------------------------------------------
@@ -325,6 +341,48 @@ async function matarPedidoVencido(c: PoolClient, orderId: string): Promise<boole
   await liberar(c, itens)
   return true
 }
+
+/**
+ * O pedido expirado ainda tem cobrança viva no gateway?
+ *
+ * Matar a reserva sem cancelar a cobrança era o P0 de 22/09: o PIX nasce com
+ * vencimento de um dia (`vencimentoEmDias(1)` no checkout — o Asaas só aceita
+ * DATA, não hora) e a reserva dura minutos. O comprador pagava o QR que ainda
+ * estava na tela dele, o dinheiro entrava e o ingresso não saía.
+ *
+ * O cancelamento em si mora em `asaas.ts` (`cancelarCobrancasDeExpirados`) e
+ * roda FORA da transação: chamada de rede com a linha do lote travada é fila
+ * na virada de lote, e gateway fora do ar não pode impedir o estoque de
+ * voltar. Esta consulta é o elo entre os dois — ela acha, sem depender de quem
+ * matou o pedido (varredura ou `reclamarVencidosDoLote`), as cobranças que
+ * ainda precisam ser canceladas. A marca de "já tentei" é o `audit_log`, que
+ * já existe e já é a trilha que o painel lê: nenhuma coluna nova.
+ *
+ * `sim_` fica de fora: cobrança do gateway simulado não existe em lugar nenhum.
+ * Janela de 3 dias: passado disso o PIX já venceu sozinho no Asaas.
+ */
+export const SQL_COBRANCAS_A_CANCELAR = `
+  SELECT o.id, o.org_id, o.code, o.asaas_payment_id,
+         org.asaas_api_key, org.asaas_env, org.asaas_wallet
+    FROM orders o
+    JOIN organizations org ON org.id = o.org_id
+   WHERE o.status = 'expirado'
+     AND o.asaas_payment_id IS NOT NULL
+     AND left(o.asaas_payment_id, 4) <> 'sim_'
+     AND o.canceled_at > now() - interval '3 days'
+     AND NOT EXISTS (SELECT 1 FROM audit_log a
+                      WHERE a.entity = 'order' AND a.entity_id = o.id::text
+                        AND a.action = 'cobranca_cancelada')
+     AND (SELECT count(*) FROM audit_log a
+           WHERE a.entity = 'order' AND a.entity_id = o.id::text
+             AND a.action = 'cobranca_cancelar_falhou') < $2
+     -- espera crescente entre tentativas: gateway fora não leva uma por minuto
+     AND COALESCE((SELECT max(a.created_at) FROM audit_log a
+                    WHERE a.entity = 'order' AND a.entity_id = o.id::text
+                      AND a.action = 'cobranca_cancelar_falhou'), '-infinity')
+         < now() - interval '10 minutes'
+   ORDER BY o.canceled_at
+   LIMIT $1`
 
 /**
  * Varre pedidos pendentes vencidos e devolve o estoque.

@@ -10,6 +10,7 @@
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id as string
 
 const busca = ref('')
@@ -42,6 +43,11 @@ const SITUACOES: Record<string, { texto: string; classe: string }> = {
   cancelado:            { texto: 'CANCELADO', classe: 'selo-erro' },
   expirado:             { texto: 'EXPIRADO',  classe: 'selo-neutro' },
   estornado:            { texto: 'ESTORNADO', classe: 'selo-erro' },
+  // Devolução PARCIAL: o pedido segue valendo, só parte do dinheiro voltou.
+  // O status cru ("estornado_parcial") aparecia na tela e não estava no filtro.
+  estornado_parcial:    { texto: 'ESTORNADO EM PARTE', classe: 'selo-alerta' },
+  em_analise:           { texto: 'EM ANÁLISE', classe: 'selo-alerta' },
+  falhou:               { texto: 'FALHOU',    classe: 'selo-neutro' },
   rascunho:             { texto: 'RASCUNHO',  classe: 'selo-neutro' },
 }
 const CANAIS: Record<string, string> = {
@@ -53,10 +59,97 @@ const FORMAS: Record<string, string> = {
 }
 
 /* ------------------------------------------------------------ ficha ----- */
-const abertoId = ref('')
-const { data: ficha, pending: carregandoFicha } = await useFetch<any>(
-  () => (abertoId.value ? `/api/admin/pedido/${abertoId.value}` : ''),
-  { immediate: false, watch: [abertoId] })
+// `?pedido=<id>` abre a ficha direto: é o link que Participantes (e quem
+// manda o endereço no WhatsApp da equipe) usa pra cair NO pedido, e não na
+// lista inteira pra procurar de novo.
+const abertoId = ref(String(route.query.pedido ?? ''))
+const { data: ficha, pending: carregandoFicha, error: falhaFicha, refresh: recarregarFicha } =
+  await useFetch<any>(
+    () => (abertoId.value ? `/api/admin/pedido/${abertoId.value}` : ''),
+    { immediate: !!abertoId.value, watch: [abertoId] })
+
+function abrirFicha(pedidoId: string) {
+  abertoId.value = pedidoId
+  limparAcoes()
+}
+function fecharFicha() {
+  abertoId.value = ''
+  limparAcoes()
+  // sem isto, recarregar a página reabria a ficha que a pessoa acabou de fechar
+  if (route.query.pedido) router.replace({ query: { ...route.query, pedido: undefined } })
+}
+
+/* ------------------------------------------------ ações da ficha ----- */
+// Cada ação mostra o erro DENTRO da ficha, junto do botão que falhou.
+
+// reenviar ingresso por e-mail (a rota já existia; faltava o botão)
+const reenvio = reactive({ aberto: false, email: '', enviando: false, erro: '', resultado: '', simulado: false })
+async function reenviar() {
+  reenvio.enviando = true; reenvio.erro = ''; reenvio.resultado = ''
+  try {
+    const r: any = await $fetch(`/api/admin/evento/${id}/reenviar`, {
+      method: 'POST',
+      body: { pedido: ficha.value.pedido.id, email: reenvio.email.trim() || null },
+    })
+    reenvio.resultado = r.mensagem
+    reenvio.simulado = !!r.simulado
+  } catch (e: any) {
+    reenvio.erro = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra reenviar.'
+  } finally { reenvio.enviando = false }
+}
+
+// reimpressão das fichas do balcão
+const fichasImpressas = ref<any>(null)
+const erroReimpressao = ref('')
+/** as fichas só são montadas no clique: cada uma baixa o QR do ingresso */
+const montarFichas = ref(false)
+const paraImprimir = computed(() =>
+  (ficha.value?.ingressos ?? []).filter((t: any) => t.situacao === 'valido'))
+async function reimprimir() {
+  erroReimpressao.value = ''
+  if (!paraImprimir.value.length) {
+    erroReimpressao.value = 'Este pedido não tem ingresso valendo para imprimir.'
+    return
+  }
+  montarFichas.value = true
+  await nextTick()
+  await fichasImpressas.value?.imprimir()
+}
+
+// cancelar o pedido: motivo obrigatório e confirmação em dois passos
+const cancelamento = reactive({
+  aberto: false, motivo: '', desistencia: false, enviando: false, erro: '', aviso: '',
+})
+async function cancelarPedido() {
+  if (cancelamento.motivo.trim().length < 3) {
+    cancelamento.erro = 'Diga por que o pedido está sendo cancelado — pelo menos 3 letras.'
+    return
+  }
+  cancelamento.enviando = true; cancelamento.erro = ''
+  try {
+    // A desistência do comprador (CDC art. 49) segue pelo caminho dela, que
+    // registra o motivo 'arrependimento'; o resto é a produtora desfazendo a
+    // venda — que não finge ser desistência.
+    const r: any = await $fetch(`/api/admin/evento/${id}/cancelar`, {
+      method: 'POST',
+      body: cancelamento.desistencia
+        ? { escopo: 'pedido', pedidoId: ficha.value.pedido.id, motivo: cancelamento.motivo.trim() }
+        : { escopo: 'pedido_administrativo', pedidoId: ficha.value.pedido.id, motivo: cancelamento.motivo.trim() },
+    })
+    cancelamento.aviso = r.aviso
+    cancelamento.aberto = false
+    await Promise.all([recarregarFicha(), refresh()])
+  } catch (e: any) {
+    cancelamento.erro = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra cancelar o pedido.'
+  } finally { cancelamento.enviando = false }
+}
+
+function limparAcoes() {
+  Object.assign(reenvio, { aberto: false, email: '', enviando: false, erro: '', resultado: '', simulado: false })
+  Object.assign(cancelamento, { aberto: false, motivo: '', desistencia: false, enviando: false, erro: '', aviso: '' })
+  erroReimpressao.value = ''
+  montarFichas.value = false
+}
 
 const paginas = computed(() => Math.max(1, Math.ceil((data.value?.total ?? 0) / (data.value?.porPagina ?? 50))))
 
@@ -138,7 +231,7 @@ useHead({ title: 'Vendas' })
         <tbody>
           <tr v-for="p in data.pedidos" :key="p.id"
               class="cursor-pointer border-b border-linha last:border-0 hover:bg-acao-fraco"
-              @click="abertoId = p.id">
+              @click="abrirFicha(p.id)">
             <td class="whitespace-nowrap px-4 py-3 font-medium text-tinta">{{ p.codigo }}</td>
             <td class="px-4 py-3">
               <p class="text-tinta">{{ p.cliente ?? '—' }}</p>
@@ -188,7 +281,7 @@ useHead({ title: 'Vendas' })
 
     <!-- ficha do pedido -->
     <div v-if="abertoId" class="fixed inset-0 z-30 flex justify-end bg-black/30"
-         @click.self="abertoId = ''">
+         @click.self="fecharFicha">
       <aside class="flex h-full w-full max-w-lg flex-col overflow-y-auto bg-white shadow-xl">
         <header class="sticky top-0 flex items-center gap-3 border-b border-linha bg-white px-5 py-4">
           <h2 class="titulo text-lg font-semibold text-tinta">
@@ -198,14 +291,113 @@ useHead({ title: 'Vendas' })
             {{ SITUACOES[ficha.pedido.situacao]?.texto ?? ficha.pedido.situacao }}
           </span>
           <button type="button" class="ml-auto text-tinta-fraca hover:text-tinta"
-                  aria-label="Fechar" @click="abertoId = ''">
+                  aria-label="Fechar" @click="fecharFicha">
             <IconeMenu nome="fechar" />
           </button>
         </header>
 
         <p v-if="carregandoFicha && !ficha" class="p-5 text-tinta-suave">Carregando…</p>
 
+        <!-- ficha que não carregou diz por quê (antes: painel vazio) -->
+        <div v-else-if="falhaFicha" class="p-5">
+          <p class="faixa-erro">
+            {{ (falhaFicha as any)?.statusCode === 404
+              ? 'Este pedido não foi encontrado — o link pode estar errado ou ser de outro evento.'
+              : ((falhaFicha as any)?.data?.message || 'Não foi possível carregar o pedido. Confira a internet.') }}
+          </p>
+          <button type="button" class="btn-secundario mt-3" @click="recarregarFicha()">Tentar de novo</button>
+        </div>
+
         <div v-else-if="ficha" class="space-y-5 p-5">
+          <!-- o resultado do cancelamento fica até alguém ler: é ali que está
+               "devolva R$ 50,00 em dinheiro", a parte que acontece fora do sistema -->
+          <div v-if="cancelamento.aviso" class="rounded-card border border-alerta bg-alerta-claro p-3">
+            <p class="rotulo-kpi">Pedido cancelado</p>
+            <p class="mt-1 text-sm text-tinta-corpo">{{ cancelamento.aviso }}</p>
+          </div>
+
+          <!-- ações -->
+          <section v-if="ficha.acoes" class="flex flex-wrap gap-2">
+            <button v-if="ficha.acoes.reimprimir" type="button"
+                    class="btn-secundario" @click="reimprimir">
+              Reimprimir fichas
+            </button>
+            <button v-if="ficha.acoes.reenviar" type="button" class="btn-secundario"
+                    @click="reenvio.aberto = !reenvio.aberto; reenvio.erro = ''; reenvio.resultado = ''">
+              Reenviar ingresso
+            </button>
+            <button v-if="ficha.pedido.situacao === 'pago' || ficha.pedido.situacao === 'estornado_parcial'"
+                    type="button" class="btn-erro"
+                    @click="cancelamento.aberto = !cancelamento.aberto; cancelamento.erro = ''">
+              {{ ficha.acoes.devolucaoPendente ? 'Tentar a devolução de novo' : 'Cancelar pedido' }}
+            </button>
+          </section>
+          <p v-if="erroReimpressao" class="faixa-erro">{{ erroReimpressao }}</p>
+
+          <!-- reenviar -->
+          <section v-if="reenvio.aberto" class="rounded-card border border-linha p-3">
+            <label for="reenvio-email" class="rotulo">Mandar para</label>
+            <input id="reenvio-email" v-model="reenvio.email" type="email" class="campo"
+                   :placeholder="ficha.cliente.email || 'e-mail do cliente'">
+            <p class="mt-1 text-xs text-tinta-fraca">
+              Em branco, vai para o e-mail do cadastro{{ ficha.cliente.email ? ` (${ficha.cliente.email})` : '' }}.
+              Preencha só se o cliente pediu outro endereço.
+            </p>
+            <p v-if="reenvio.erro" class="faixa-erro mt-2">{{ reenvio.erro }}</p>
+            <p v-if="reenvio.resultado" class="mt-2"
+               :class="reenvio.simulado ? 'faixa-aviso' : 'rounded-card bg-ok-claro px-3 py-2 text-sm text-ok'">
+              {{ reenvio.resultado }}
+            </p>
+            <button type="button" class="btn-primario mt-3" :disabled="reenvio.enviando" @click="reenviar">
+              {{ reenvio.enviando ? 'Enviando…' : 'Reenviar agora' }}
+            </button>
+          </section>
+
+          <!-- cancelar -->
+          <section v-if="cancelamento.aberto" class="rounded-card border border-erro bg-erro-claro p-3">
+            <p v-if="!ficha.acoes.cancelar" class="text-sm text-tinta-corpo">
+              {{ ficha.acoes.impedimento }}
+            </p>
+            <template v-else>
+              <p class="text-sm text-tinta-corpo">
+                <template v-if="ficha.acoes.devolucaoPendente">
+                  Os ingressos deste pedido já foram cancelados, mas a devolução de
+                  {{ reais(ficha.acoes.aDevolverCents) }} pelo banco não saiu. Confirme para tentar de novo —
+                  o sistema confere no banco antes, e não devolve em dobro.
+                </template>
+                <template v-else>
+                  Os {{ ficha.ingressos.filter((t: any) => t.situacao === 'valido').length }} ingresso(s)
+                  deixam de valer na portaria e {{ reais(ficha.acoes.aDevolverCents) }}
+                  {{ ficha.acoes.passouPelaPlataforma
+                    ? 'voltam ao cliente pelo banco.'
+                    : 'precisam ser devolvidos por você: esta venda não passou pela plataforma.' }}
+                </template>
+              </p>
+              <label v-if="ficha.acoes.arrependimento && !ficha.acoes.devolucaoPendente"
+                     class="mt-3 flex items-start gap-2 text-sm text-tinta-corpo">
+                <input v-model="cancelamento.desistencia" type="checkbox" class="mt-1">
+                <span>
+                  É desistência do comprador (CDC art. 49).
+                  <span class="block text-xs text-tinta-fraca">{{ ficha.acoes.arrependimentoMotivo }}</span>
+                </span>
+              </label>
+              <label for="motivo-cancelamento" class="rotulo mt-3">Por que está cancelando?</label>
+              <input id="motivo-cancelamento" v-model="cancelamento.motivo" class="campo"
+                     placeholder="Ex.: cliente pediu o dinheiro de volta no balcão">
+              <p v-if="cancelamento.erro" class="faixa-erro mt-2">{{ cancelamento.erro }}</p>
+              <div class="mt-3 flex gap-2">
+                <button type="button" class="btn-secundario flex-1" @click="cancelamento.aberto = false">
+                  Voltar
+                </button>
+                <button type="button" class="btn-erro flex-1" :disabled="cancelamento.enviando"
+                        @click="cancelarPedido">
+                  {{ cancelamento.enviando ? 'Cancelando…'
+                    : ficha.acoes.devolucaoPendente ? 'Tentar a devolução' : `Cancelar ${ficha.pedido.codigo}` }}
+                </button>
+              </div>
+            </template>
+          </section>
+
           <section>
             <p class="rotulo-kpi">Cliente</p>
             <p class="mt-1 text-tinta">{{ ficha.cliente.nome ?? '—' }}</p>
@@ -306,5 +498,10 @@ useHead({ title: 'Vendas' })
         </div>
       </aside>
     </div>
+
+    <!-- as fichas do balcão, pra reimpressão (só existem na impressão) -->
+    <FichasImpressas v-if="montarFichas && ficha && abertoId && paraImprimir.length" ref="fichasImpressas"
+                     :evento="ficha.pedido.eventoNome" :pedido="ficha.pedido.codigo"
+                     :ingressos="paraImprimir" />
   </div>
 </template>

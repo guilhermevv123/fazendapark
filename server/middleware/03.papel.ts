@@ -23,11 +23,12 @@
  * dele" seria mentira até lá. É uma leitura por chave primária — a mesma
  * linha que o 01 acabou de ler pra montar a sessão.
  */
+import { caminhoDaRota } from '../utils/caminho'
 import { q1 } from '../utils/db'
 import { decidirAcesso, ehPapel, papelDoRoleLegado, rotaGateada } from '../utils/papeis'
 
 export default defineEventHandler(async (event) => {
-  const caminho = getRequestURL(event).pathname
+  const caminho = caminhoDaRota(event)
   if (!rotaGateada(caminho)) return
 
   const sessao = (event.context as any).sessao

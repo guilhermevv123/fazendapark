@@ -169,6 +169,8 @@ beforeAll(async () => {
   // ---- Edição 2 -------------------------------------------------------------
   await pedido({ evento: EV2, cliente: bia, forma: 'pix', face: 30_000, taxa: 3_000, plataforma: 3_000, pagoHa: 40, ingressos: 4, lote: lote2 })
   await pedido({ evento: EV2, cliente: duda, canal: 'bilheteria', forma: 'debito', face: 8_000, taxa: 0, plataforma: 800, pagoHa: 2, ingressos: 2, lote: lote2 })
+  // rascunho: carrinho que o comprador nem viu — fora de TUDO, inclusive da Cobrança
+  await pedido({ evento: EV2, cliente: duda, status: 'rascunho', forma: 'pix', face: 50_000, taxa: 5_000, plataforma: 5_000, pagoHa: null })
   // ---- de OUTRA organização: nunca pode aparecer -----------------------------
   await pedido({ evento: EV_DE_FORA, org: OUTRA_ORG, cliente: fora, forma: 'pix', face: 90_000, taxa: 9_000, plataforma: 9_000, pagoHa: 3 })
 }, 90_000)
@@ -317,6 +319,42 @@ describe('o recorte', () => {
     expect(d.resumo.cobradoCents).toBe(0)
     // e sem filtro nenhum, o pedido de R$ 900 da outra organização não entra no total
     expect((await json('/api/admin/relatorios')).resumo.cobradoCents).toBe(TOTAL.cobradoCents)
+  })
+})
+
+describe('cobrança — todo pedido que saiu do rascunho, não só quem pagou', () => {
+  it('entra o expirado; ficam fora o rascunho e a outra organização', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const d = await json('/api/admin/relatorios')
+    const por = Object.fromEntries(
+      d.cobranca.porStatus.map((s: any) => [s.status, [s.pedidos, s.cobradoCents]]))
+    // pagos: 11000 + 22000 + 5000 (balcão) + 33000 + 8000 (balcão)
+    expect(por).toEqual({
+      pago: [5, 79_000], estornado_parcial: [1, 11_000], expirado: [1, 11_000],
+    })
+    expect(d.cobranca.criados).toBe(7)
+  })
+
+  it('pago + estornado em parte = os pedidos do resumo, com e sem filtro de evento', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    for (const filtro of ['', `?evento=${EV1}`, `?evento=${EV2}`]) {
+      const d = await json(`/api/admin/relatorios${filtro}`)
+      const vivos = d.cobranca.porStatus
+        .filter((s: any) => s.status === 'pago' || s.status === 'estornado_parcial')
+        .reduce((n: number, s: any) => n + s.pedidos, 0)
+      expect(vivos, filtro || 'sem filtro').toBe(d.resumo.pedidos)
+    }
+  })
+
+  it('o período da Cobrança é pela CRIAÇÃO: quem nunca pagou não some com filtro de data', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    // a fixture nasce toda hoje e foi "paga" dias atrás: filtrando por hoje, o
+    // resumo (dia do pagamento) zera e o funil (dia da criação) continua com os 7
+    const hoje = (await q1<any>(`SELECT current_date::text AS d`))!.d
+    const d = await json(`/api/admin/relatorios?de=${hoje}`)
+    expect(d.resumo.pedidos).toBe(0)
+    expect(d.cobranca.criados).toBe(7)
+    expect(d.cobranca.porStatus.find((s: any) => s.status === 'expirado')?.pedidos).toBe(1)
   })
 })
 

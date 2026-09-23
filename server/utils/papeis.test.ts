@@ -1997,8 +1997,21 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
     const doMaster = linksDoMiolo(await pagina('master', '/admin/suporte'))
+    // O suporte fala do evento "rolando ou o próximo" do banco inteiro — não
+    // necessariamente o EVENTO semeado: basta outra fixture (de outro arquivo,
+    // ou de outra rodada ao mesmo tempo) com evento mais próximo pra ele virar
+    // o foco. O que este caso cobra é o atalho existir, então o id sai da
+    // própria tela — e tem que ser UM só e de um evento que existe.
+    const idsDoFoco = [...new Set(doMaster
+      .map((l) => l.match(/^\/admin\/evento\/([0-9a-f-]{36})\//)?.[1])
+      .filter(Boolean) as string[])]
+    expect(idsDoFoco, 'o suporte do master misturou atalhos de mais de um evento — ou não '
+      + 'ofereceu nenhum').toHaveLength(1)
+    const foco = idsDoFoco[0]!
+    expect(await q1<any>(`SELECT id FROM events WHERE id = $1`, [foco]),
+      'o suporte apontou pra um evento que não existe').toBeTruthy()
     for (const destino of ['/admin/equipe', '/admin/configuracoes',
-      `/admin/evento/${EVENTO}/vendas`, `/admin/evento/${EVENTO}/financeiro`]) {
+      `/admin/evento/${foco}/vendas`, `/admin/evento/${foco}/financeiro`]) {
       expect(doMaster, `o master perdeu o atalho ${destino}`).toContain(destino)
     }
 

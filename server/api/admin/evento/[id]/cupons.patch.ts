@@ -8,6 +8,7 @@
  */
 import { z } from 'zod'
 import { q1 } from '../../../../utils/db'
+import { explicarErro } from '../index.post'
 
 const Entrada = z.object({
   id: z.string().uuid(),
@@ -31,7 +32,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error), data: p.error.flatten() })
   }
   const { id, campos } = p.data
 
@@ -50,6 +51,24 @@ export default defineEventHandler(async (event) => {
       statusCode: 409,
       statusMessage: `Este cupom já foi usado ${atual.uses} vezes. O limite não pode ficar abaixo disso.`,
     })
+  }
+
+  // As duas travas do POST, que a edição pulava: sem elas o cupom editado
+  // podia terminar antes de começar (nunca vale, e ninguém sabe por quê) ou
+  // ficar restrito a lote de OUTRO evento. Mandar só uma das datas compara
+  // contra a outra que já está gravada; `null` é "sem data".
+  const comeca = campos.comecaEm !== undefined ? campos.comecaEm : atual.starts_at
+  const termina = campos.terminaEm !== undefined ? campos.terminaEm : atual.ends_at
+  if (comeca && termina && new Date(termina).getTime() <= new Date(comeca).getTime()) {
+    throw createError({ statusCode: 422, statusMessage: 'O cupom não pode terminar antes de começar' })
+  }
+  if (campos.loteIds?.length) {
+    const n = await q1<any>(
+      `SELECT count(*)::int AS n FROM lots l JOIN sectors s ON s.id = l.sector_id
+        WHERE l.id = ANY($1::uuid[]) AND s.event_id = $2`, [campos.loteIds, eventoId])
+    if (Number(n.n) !== new Set(campos.loteIds).size) {
+      throw createError({ statusCode: 422, statusMessage: 'Há lote que não é deste evento na restrição' })
+    }
   }
 
   const pares = Object.entries(campos).filter(([k, v]) => k in COLUNAS && v !== undefined)

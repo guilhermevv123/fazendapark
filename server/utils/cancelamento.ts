@@ -209,8 +209,19 @@ export const SQL_CANCELA_EVENTO = `
    RETURNING id, status`
 
 /**
- * Adia: data nova, situação 'adiado', a data velha guardada e o prazo da
- * escolha do comprador aberto.
+ * Adia: data nova, a data velha guardada e o prazo da escolha do comprador
+ * aberto.
+ *
+ * **A situação do evento NÃO vira 'adiado'.** Virava, e 'adiado' fecha a porta
+ * de venda (`e/[slug].get.ts`) e tira a vitrine da home: remarcar o parque
+ * para daqui a duas semanas parava a bilheteria inteira de um evento que VAI
+ * acontecer — o oposto do que a remarcação existe pra fazer (é o caminho em
+ * que o dinheiro fica). Com data nova o evento segue vendendo; o adiamento
+ * fica registrado onde sempre esteve: `postponed_from`, `choice_deadline` e a
+ * linha 'adiado' em `event_cancellations`, que é de onde sai a escolha do
+ * comprador. Um evento que ficou preso em 'adiado' antes desta regra volta
+ * pra 'ativo' ao ser remarcado; qualquer outra situação (rascunho, oculto)
+ * fica como estava.
  *
  * `postponed_from` só é escrito na PRIMEIRA vez (COALESCE): num segundo
  * adiamento o que interessa continua sendo a data que a pessoa comprou.
@@ -219,7 +230,7 @@ export const SQL_CANCELA_EVENTO = `
  */
 export const SQL_ADIA_EVENTO = `
   UPDATE events
-     SET status = 'adiado',
+     SET status = CASE WHEN status = 'adiado' THEN 'ativo' ELSE status END,
          postponed_from = COALESCE(postponed_from, starts_at),
          starts_at = $2, ends_at = $3,
          choice_deadline = $4,
@@ -361,6 +372,69 @@ export const SQL_MARCA_PEDIDO_ESTORNADO = `
          refunded_cents = refunded_cents + $2
    WHERE id = $1 AND status IN ('pago','estornado_parcial')
    RETURNING id, refunded_cents, total_cents`
+
+/* ------------------------------------- cancelamento administrativo */
+
+/**
+ * Uma pessoa por vez cancelando o MESMO pedido pela ficha.
+ *
+ * É trava de sessão (advisory), e não `FOR UPDATE`, porque ela precisa durar
+ * ALÉM do commit: o estorno no gateway acontece depois dele, fora da
+ * transação, e dois cliques simultâneos em "Cancelar pedido" chamariam o
+ * gateway duas vezes — a API de estorno do Asaas não tem idempotência. Quem
+ * chega segundo ouve "já está sendo cancelado", em vez de esperar.
+ */
+export const SQL_TRAVA_CANCELAMENTO_ADMIN =
+  `SELECT pg_try_advisory_lock(hashtext('cancelamento_admin'), hashtext($1::text)) AS ok`
+export const SQL_SOLTA_CANCELAMENTO_ADMIN =
+  `SELECT pg_advisory_unlock(hashtext('cancelamento_admin'), hashtext($1::text))`
+
+/**
+ * Devolve pelo gateway o dinheiro de UM pedido cancelado pela ficha.
+ *
+ * Não usa a fila de estorno de propósito: a fila classifica o motivo da
+ * devolução (evento cancelado, adiado, arrependimento) e "a produtora decidiu
+ * desfazer esta venda" não é nenhum dos três — gravar como arrependimento
+ * sujaria o recorte que o Procon pede. É o mesmo desenho do cancelamento no
+ * guichê: banco antes, gateway depois, resultado nomeado na resposta.
+ *
+ * `retentativa` = já houve uma tentativa antes (o pedido ficou com os
+ * ingressos mortos e o dinheiro sem voltar). Aí a regra da fila vale aqui
+ * também: PERGUNTA ao gateway antes de mandar de novo. Sem um "não saiu"
+ * claro, não manda — devolver em dobro é pior do que devolver depois.
+ */
+export async function devolverPeloGateway(p: {
+  orderId: string; orgId: string; paymentId: string; valorCents: number
+  jaNoPedidoCents: number; retentativa: boolean
+}): Promise<{ status: 'estornado' | 'simulado' | 'falhou'; erro: string | null; reciboId: string | null }> {
+  const pedido: PedidoDeEstorno = {
+    jobId: `admin:${p.orderId}`, orgId: p.orgId, orderId: p.orderId,
+    paymentId: p.paymentId, valorCents: p.valorCents, tentativa: p.retentativa ? 2 : 1,
+  }
+  if (p.paymentId.startsWith('sim_')) {
+    return { status: 'simulado', erro: null, reciboId: `sim_refund_${p.orderId}` }
+  }
+  if (p.retentativa) {
+    try {
+      const conferido = await conferirAgora(pedido)
+      if (conferido.devolvidoCents >= p.jaNoPedidoCents + p.valorCents) {
+        return { status: 'estornado', erro: null, reciboId: conferido.reciboId }
+      }
+    } catch (e: any) {
+      return {
+        status: 'falhou', reciboId: null,
+        erro: `Não consegui confirmar no banco se a devolução de ${brl(p.valorCents)} já saiu, `
+          + `e por isso NÃO mandei de novo: ${e?.message ?? e}`,
+      }
+    }
+  }
+  try {
+    const r = await estornarAgora(pedido)
+    return { status: 'estornado', erro: null, reciboId: r?.id ?? null }
+  } catch (e: any) {
+    return { status: 'falhou', erro: legivel(e, p.valorCents), reciboId: null }
+  }
+}
 
 /* ------------------------------------------------ estoque de volta */
 

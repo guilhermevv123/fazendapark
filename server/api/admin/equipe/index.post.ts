@@ -46,10 +46,12 @@ import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
 import { q1, tx } from '../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 import { PAPEIS, ROTULO, roleLegado } from '../../../utils/papeis'
 
 const Entrada = z.object({
-  nome: z.string().min(2).max(120),
+  // trim ANTES do min: "   " passava no min(2) e virava acesso sem nome
+  nome: z.string().trim().min(2).max(120),
   email: z.string().email().max(160),
   papel: z.enum(PAPEIS as [string, ...string[]]),
 })
@@ -114,13 +116,16 @@ export default defineEventHandler(async (event) => {
     const { rows } = await c.query(
       `INSERT INTO users (org_id, name, email, password_hash, papel, role)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, name, email, papel`,
-      [orgId, d.nome.trim(), email, hash, papel, roleLegado(papel)])
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'usuario',$2,'criado',$3::jsonb)`,
-      // a senha NÃO entra no log de auditoria
-      [orgId, rows[0].id, JSON.stringify({ nome: d.nome, email, papel,
-                                           criadoPor: sessao.email })])
+      [orgId, d.nome, email, hash, papel, roleLegado(papel)])
+    // Autor nas colunas (user_id, e-mail, IP), na mesma transação do INSERT.
+    // A senha NÃO entra no registro.
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event),
+      entidade: 'usuario',
+      entidadeId: rows[0].id,
+      acao: 'criado',
+      depois: { nome: d.nome, email, papel },
+    }, c)
     return rows[0]
   })
 

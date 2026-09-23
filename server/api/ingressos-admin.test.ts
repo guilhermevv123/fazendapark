@@ -99,12 +99,18 @@ describe('configuração de ingressos', () => {
     expect(r.corpo.statusMessage).toMatch(/capacidade do setor/i)
   })
 
-  it('não deixa a soma dos tipos passar do lote', async () => {
+  it('tipos compartilham o lote: cada um vai até o lote inteiro, nenhum passa dele', async () => {
     if (!noAr) return void console.warn('  (pulado)')
-    const { loteId } = await cenario('TESTE tipos ' + Date.now())
-    const r = await chamar('POST', { o: 'tipo', loteId, nome: 'Inteira', quantidade: 80 })
+    const { loteId } = await cenario('TESTE tipos ' + Date.now()) // lote de 60
+    // Inteira e Meia com 60 cada: os dois dividem o MESMO estoque (é o lote que segura o total)
+    const inteira = await chamar('POST', { o: 'tipo', loteId, nome: 'Inteira', quantidade: 60 })
+    expect(inteira.status, JSON.stringify(inteira.corpo)).toBe(200)
+    const meia = await chamar('POST', { o: 'tipo', loteId, nome: 'Meia', quantidade: 60, descontoBps: 5000 })
+    expect(meia.status, JSON.stringify(meia.corpo)).toBe(200)
+    // mas nenhum tipo sozinho passa do lote
+    const r = await chamar('POST', { o: 'tipo', loteId, nome: 'Criança', quantidade: 61 })
     expect(r.status).toBe(422)
-    expect(r.corpo.statusMessage).toMatch(/estoura o lote/i)
+    expect(r.corpo.statusMessage).toMatch(/mais que o lote \(60\)/i)
   })
 
   it('não apaga nem encolhe o que já vendeu', async () => {

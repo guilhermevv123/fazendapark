@@ -76,7 +76,23 @@ export default defineEventHandler(async (event) => {
   const ITENS = `LEFT JOIN LATERAL (SELECT SUM(quantity)::int AS n FROM order_items
                                      WHERE order_id = o.id) oi ON true`
 
-  const [resumo, porDia, porEvento, porForma, porCanal, base, porCidade, porFaixa, top] =
+  /**
+   * O recorte da Cobrança é OUTRO, de propósito: todo o resto desta rota usa
+   * `PEDIDO_VIVO` (só pago/estornado parcial) e filtra por `paid_at`, que é
+   * NULO em quem nunca pagou. Um funil que só soubesse contar quem já pagou
+   * não seria funil — a pergunta aqui é "de quem tentou comprar no período,
+   * quanto virou dinheiro e quanto ficou pra trás", por isso o filtro de data
+   * é por `created_at` (existe sempre) e todo status entra, exceto rascunho
+   * (carrinho que nem chegou a existir pro comprador).
+   */
+  const paramsFunil: any[] = [orgId]
+  const condFunil = [`o.org_id = $1`, `o.status <> 'rascunho'`]
+  if (evento) { paramsFunil.push(evento); condFunil.push(`o.event_id = $${paramsFunil.length}`) }
+  if (de) { paramsFunil.push(de); condFunil.push(`o.created_at >= $${paramsFunil.length}::date`) }
+  if (ate) { paramsFunil.push(ate); condFunil.push(`o.created_at < ($${paramsFunil.length}::date + 1)`) }
+  const ONDE_FUNIL = condFunil.join(' AND ')
+
+  const [resumo, porDia, porEvento, porForma, porCanal, base, porCidade, porFaixa, top, funil] =
     await Promise.all([
       q1<any>(
         `SELECT COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
@@ -172,6 +188,13 @@ export default defineEventHandler(async (event) => {
           WHERE ${ONDE}
           GROUP BY cu.id, cu.name, cu.email
           ORDER BY gasto DESC, cu.name LIMIT 10`, params),
+
+      q<any>(
+        `SELECT o.status, count(*)::int AS n,
+                COALESCE(SUM(o.total_cents),0)::bigint AS cobrado
+           FROM orders o
+          WHERE ${ONDE_FUNIL}
+          GROUP BY 1 ORDER BY 2 DESC`, paramsFunil),
     ])
 
   const pedidos = Number(resumo.pedidos)
@@ -234,5 +257,13 @@ export default defineEventHandler(async (event) => {
       id: c.id, nome: c.name, email: c.email, pedidos: c.pedidos, ingressos: c.ingressos,
       gastoCents: Number(c.gasto),
     })),
+    // Cobrança: todo pedido que saiu do rascunho, não só quem pagou — a régua
+    // e o comentário de `ONDE_FUNIL` explicam o porquê do recorte diferente.
+    cobranca: {
+      criados: funil.reduce((s: number, f: any) => s + Number(f.n), 0),
+      porStatus: funil.map((f: any) => ({
+        status: f.status, pedidos: Number(f.n), cobradoCents: Number(f.cobrado),
+      })),
+    },
   }
 })

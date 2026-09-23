@@ -10,6 +10,7 @@
  * Aqui, esquecer é o contrário: rota nova nasce TRANCADA. Quem quiser abrir
  * precisa entrar na lista `PUBLICAS` de propósito, e isso aparece no diff.
  */
+import { caminhoDaRota, mutacaoDeOutroSite } from '../utils/caminho'
 import { lerSessao, podeFazer, type Sessao } from '../utils/sessao'
 
 /** Rotas administrativas que rodam sem login. Adicionar aqui é decisão. */
@@ -36,7 +37,7 @@ const AREAS: [string, string][] = [
 const PORTARIA = ['/api/checkin']
 
 export default defineEventHandler(async (event) => {
-  const caminho = getRequestURL(event).pathname
+  const caminho = caminhoDaRota(event)
   const metodo = event.method
 
   const admin = caminho.startsWith('/api/admin/')
@@ -52,14 +53,8 @@ export default defineEventHandler(async (event) => {
   // suspensório, e de propósito NÃO é um token com prazo próprio — token de
   // CSRF que vence antes da sessão devolve 403 em todo salvamento com o
   // usuário logado, e o motivo real fica invisível.
-  if (metodo !== 'GET' && metodo !== 'HEAD') {
-    const origem = getRequestHeader(event, 'origin')
-    if (origem) {
-      const meu = getRequestURL(event).origin
-      if (origem !== meu) {
-        throw createError({ statusCode: 403, statusMessage: 'Origem não autorizada' })
-      }
-    }
+  if (metodo !== 'GET' && metodo !== 'HEAD' && mutacaoDeOutroSite(event)) {
+    throw createError({ statusCode: 403, statusMessage: 'Origem não autorizada' })
   }
 
   const area = portaria ? 'portaria' : AREAS.find(([p]) => caminho.startsWith(p))?.[1]

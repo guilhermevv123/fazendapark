@@ -74,7 +74,15 @@ export default defineEventHandler(async (event) => {
   // ingresso válido a quem ainda não pagou.
   const ingressos = o.status === 'pago'
     ? (await q<any>(
+        // `transferido`: o ingresso segue ligado a ESTE pedido (é o pedido de
+        // quem comprou), mas passou pra outra pessoa por transferência aceita.
+        // `tickets.status` continua 'valido' de propósito — é o destinatário
+        // que entra com ele —, então quem responde "ainda é deste comprador?"
+        // é a transferência concluída. Cancelar a transferência a tira de
+        // 'concluido', e o ingresso volta a aparecer aqui.
         `SELECT t.id, t.code, t.status, t.holder_name, t.checked_in_at, t.is_courtesy,
+                EXISTS (SELECT 1 FROM ticket_transfers tr
+                         WHERE tr.ticket_id = t.id AND tr.status = 'concluido') AS transferido,
                 l.name AS lote, s.name AS setor, tt.name AS tipo,
                 ses.title AS sessao, ses.starts_at AS sessao_inicio
            FROM tickets t
@@ -84,19 +92,36 @@ export default defineEventHandler(async (event) => {
            LEFT JOIN event_sessions ses ON ses.id = s.session_id
           WHERE t.order_id = $1
           ORDER BY s.sort_order, t.issued_at`, [o.id]))
-        .map((t) => ({
-          id: t.id, codigo: t.code, status: t.status, titular: t.holder_name,
-          // `is_courtesy` sozinho é "fechou em zero"; a origem é quem decide.
-          // Aqui o pedido está na mão, então não há consulta a fazer — é a
-          // mesma conta de `SQL_E_CORTESIA`, feita em TypeScript.
-          cortesia: eCortesia(t.is_courtesy, o.channel),
-          /** saiu de graça, mas é VENDA: promoção de 100%, criança, lote R$ 0 */
-          gratuito: Boolean(t.is_courtesy) && !eCortesia(t.is_courtesy, o.channel),
-          usadoEm: t.checked_in_at, setor: t.setor, lote: t.lote, tipo: t.tipo,
-          sessao: t.sessao, sessaoInicio: t.sessao_inicio,
-          qr: montarQr(t.code, o.event_id),
-        }))
+        .map((t) => {
+          const status = t.transferido && t.status === 'valido' ? 'transferido' : t.status
+          // QR (e o código legível, que a portaria aceita digitado) só pro
+          // ingresso que ENTRA por este pedido. Ingresso cancelado não tem o
+          // que mostrar; o transferido é de outra pessoa agora — mostrar o QR
+          // dele aqui era deixar o remetente e o destinatário entrarem os dois.
+          const entra = status === 'valido'
+          return {
+            id: t.id, codigo: status === 'transferido' ? null : t.code, status,
+            titular: t.holder_name,
+            // `is_courtesy` sozinho é "fechou em zero"; a origem é quem decide.
+            // Aqui o pedido está na mão, então não há consulta a fazer — é a
+            // mesma conta de `SQL_E_CORTESIA`, feita em TypeScript.
+            cortesia: eCortesia(t.is_courtesy, o.channel),
+            /** saiu de graça, mas é VENDA: promoção de 100%, criança, lote R$ 0 */
+            gratuito: Boolean(t.is_courtesy) && !eCortesia(t.is_courtesy, o.channel),
+            usadoEm: t.checked_in_at, setor: t.setor, lote: t.lote, tipo: t.tipo,
+            sessao: t.sessao, sessaoInicio: t.sessao_inicio,
+            qr: entra ? montarQr(t.code, o.event_id) : null,
+          }
+        })
     : []
+
+  // PIX pago depois do prazo e sem lugar pra refazer a reserva (ver
+  // `emissao.ts`). O pedido segue 'expirado', mas ENTROU dinheiro: a tela não
+  // pode mandar essa pessoa "escolher de novo" e pagar duas vezes.
+  const pagoSemIngresso = o.status === 'expirado' && !!(await q1<any>(
+    `SELECT 1 FROM audit_log
+      WHERE entity = 'order' AND entity_id = $1::text AND action = 'pago_sem_lugar'
+      LIMIT 1`, [o.id]))
 
   return {
     pedido: o.code,
@@ -135,6 +160,7 @@ export default defineEventHandler(async (event) => {
       ? { forma: o.payment_method, pixPayload: o.pix_payload, pixQrBase64: o.pix_qr_base64 }
       : null,
     ingressos,
+    pagoSemIngresso,
   }
 })
 

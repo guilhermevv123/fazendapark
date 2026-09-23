@@ -32,6 +32,26 @@ export function gerarCodigo(prefixo = 'ING'): string {
   return `${prefixo.toUpperCase().slice(0, 4)}-${s.slice(0, 4)}-${s.slice(4)}`
 }
 
+/**
+ * Código NOVO pro mesmo ingresso, com o mesmo prefixo do antigo.
+ *
+ * É o que invalida um QR: a assinatura é HMAC(evento:código), então trocar o
+ * código mata na hora todo QR, print e e-mail que carregavam o antigo — a
+ * catraca procura o código e não acha. Usado na transferência: sem isto o
+ * remetente continuava com um QR que dava "Liberado", e os dois entravam.
+ *
+ * O prefixo é mantido (CON-…) porque é o que o operador reconhece de olho
+ * como sendo deste evento.
+ */
+export function novoCodigoDoIngresso(codigoAtual?: string | null): string {
+  const prefixo = String(codigoAtual ?? '').split('-')[0].replace(/[^a-zA-Z]/g, '')
+  let novo = gerarCodigo(prefixo || 'ING')
+  // chance ínfima (32^8), mas "igual ao antigo" seria o único resultado que
+  // não invalida nada — e ele custa uma comparação pra excluir
+  while (novo === codigoAtual) novo = gerarCodigo(prefixo || 'ING')
+  return novo
+}
+
 /** Assinatura curta (10 chars base32) de um código, amarrada ao evento. */
 export function assinar(code: string, eventId: string): string {
   const mac = createHmac('sha256', segredo()).update(`${eventId}:${code}`).digest()

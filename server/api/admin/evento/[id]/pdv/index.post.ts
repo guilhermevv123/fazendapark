@@ -21,7 +21,14 @@ export default defineEventHandler(async (event) => {
   const sessao = (event.context as any).sessao
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    const campos = p.error.flatten().fieldErrors
+    throw createError({
+      statusCode: 400,
+      statusMessage: campos.formas ? 'Marque pelo menos uma forma de pagamento para este ponto.'
+        : campos.nome ? 'Dê um nome ao ponto de venda (de 2 a 80 letras).'
+          : 'Não entendi os dados do ponto de venda. Confira e tente de novo.',
+      data: p.error.flatten(),
+    })
   }
 
   const ev = await q1<any>(`SELECT org_id FROM events WHERE id = $1`, [eventId])

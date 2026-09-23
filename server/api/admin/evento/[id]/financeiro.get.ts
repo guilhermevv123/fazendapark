@@ -18,11 +18,10 @@
  * Por isso a data de liberação vem na resposta: "retido" sem "até quando" é o
  * que faz o produtor ligar.
  */
-import { q, q1 } from '../../../../utils/db'
+import { db, q, q1 } from '../../../../utils/db'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../../../utils/retencao'
-import {
-  PEDIDO_VIVO, SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY,
-} from '../../../../utils/liquido'
+import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
+import { saldoParaSaque } from '../../../../utils/saque'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -63,8 +62,6 @@ export default defineEventHandler(async (event) => {
   // número que o borderô e o financeiro da organização mostram com esse nome.
   const v = await q1<any>(
     `SELECT ${SQL_LIQUIDO()}                                                     AS liquido,
-            ${SQL_LIQUIDO_GATEWAY()}                                             AS gateway,
-            ${SQL_LIQUIDO_DIRETO()}                                              AS direto,
             COALESCE(SUM(face_cents) FILTER (WHERE ${PEDIDO_VIVO()}), 0)::bigint AS bruto,
             COALESCE(SUM(discount_cents)
                        FILTER (WHERE ${PEDIDO_VIVO()}), 0)::bigint               AS descontos,
@@ -78,8 +75,19 @@ export default defineEventHandler(async (event) => {
   // Só o que passou pelo gateway está NA PLATAFORMA. O recebido direto
   // (notas na gaveta, pix na chave do produtor) já é dele e nunca entra no
   // que dá pra transferir — ver `utils/liquido.ts`.
-  const gateway = Number(v.gateway)
-  const direto = Number(v.direto)
+  //
+  // O saldo sai de `saldoParaSaque`, a MESMA função que trava o pedido de
+  // saque, e que o borderô e o financeiro da organização também chamam. Três
+  // telas com três contas próprias mostravam três saldos do mesmo evento.
+  const conexao = await db().connect()
+  let s: Awaited<ReturnType<typeof saldoParaSaque>>
+  try {
+    s = await saldoParaSaque(conexao, id!)
+  } finally {
+    conexao.release()
+  }
+  const gateway = s.gatewayCents
+  const direto = s.diretoCents
 
   const t = await q1<any>(
     `SELECT COALESCE(SUM(amount_cents) FILTER (WHERE status = 'concluida'), 0)::bigint AS concluido,
@@ -91,8 +99,9 @@ export default defineEventHandler(async (event) => {
   const emCurso = Number(t.em_curso)
   // Retido é tudo enquanto o prazo não vence. Depois, zero — o que sobra do
   // líquido já transferido é o disponível.
-  const retido = ev.liberado ? 0 : Math.max(gateway - transferido - emCurso, 0)
-  const disponivel = Math.max(gateway - transferido - emCurso - retido, 0)
+  const saldo = Math.max(s.disponivelCents, 0)
+  const retido = ev.liberado ? 0 : saldo
+  const disponivel = saldo - retido
 
   const lista = await q<any>(
     `SELECT p.id, p.code, p.beneficiary_name, p.beneficiary_doc, p.destination_kind,
@@ -126,6 +135,8 @@ export default defineEventHandler(async (event) => {
       transferidoCents: transferido,
       emCursoCents: emCurso,
       disponivelCents: disponivel,
+      // retido + disponível: o "a receber" do borderô, com o mesmo valor
+      saldoCents: saldo,
       // a população que as somas acima usam — pedido que virou dinheiro,
       // inclusive o que devolveu uma parte. É o mesmo número que relatórios,
       // o painel e o financeiro da organização chamam de `pedidos`.

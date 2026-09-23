@@ -94,6 +94,20 @@ export default defineEventHandler(async (event) => {
    * números voltam a discordar.
    */
   const registrar = async (resultado: ResultadoCheckin, ticketId: string | null, codigo: string) => {
+    // "Só conferir" é PERGUNTA, não leitura de porta: não grava nada, em
+    // nenhum ramo. Antes só o ramo do ingresso válido respeitava isso — a
+    // consulta de um ingresso já usado, cancelado, de outro evento ou
+    // inexistente caía aqui e virava linha em `checkins`, inflando as
+    // "recusadas" do histórico com perguntas que o operador fez sem ninguém
+    // na catraca.
+    if (apenasConsultar) {
+      return {
+        ok: false,
+        resultado,
+        mensagem: MENSAGEM_CHECKIN[resultado],
+        consulta: true as const,
+      }
+    }
     const [, publico] = await Promise.all([
       q(`INSERT INTO checkins (event_id, ticket_id, code_lido, resultado, gate, operator_id)
          VALUES ($1,$2,$3,$4,$5,$6)`,

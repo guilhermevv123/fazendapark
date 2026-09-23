@@ -8,23 +8,32 @@ const periodo = ref<'tudo' | 'hoje' | '7d'>('tudo')
 const aba = ref<'geral' | 'publico'>('geral')
 
 /**
- * A régua de período sai de `diaLocal`, não de `toISOString().slice(0, 10)`.
+ * A tela manda o NOME do período (`periodo=hoje`), não a data.
  *
- * O `toISOString` converte pra UTC antes de cortar: às 21h da Bahia ele já
- * devolve amanhã. O botão "Hoje" pedia `de=amanhã&ate=amanhã` e o dashboard
- * mostrava a noite de venda vazia — na noite do evento, que é quando esta
- * tela é aberta. Nada quebrava, nada aparecia no console: o número só ficava
- * errado.
+ * Primeiro era `toISOString().slice(0, 10)`, que corta em UTC: às 21h da
+ * Bahia o "Hoje" pedia amanhã. Depois virou `diaLocal()` — o dia do
+ * NAVEGADOR, que acerta enquanto o produtor estiver no mesmo fuso do parque.
+ * Quem decide que dia é "hoje" agora é o servidor, no fuso do evento, que é
+ * o mesmo relógio do card "hoje" (ver `dashboard.get.ts`).
  */
-const janela = computed(() => {
-  if (periodo.value === 'hoje') return { de: diaLocal(), ate: diaLocal() }
-  if (periodo.value === '7d') return { de: diaLocalMais(-6), ate: diaLocal() }
-  return {}
-})
+const janela = computed(() =>
+  periodo.value === 'tudo' ? {} : { periodo: periodo.value })
 
-const { data, pending } = await useFetch<any>(
+const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/dashboard`,
   { query: janela, watch: [janela] })
+
+/**
+ * O porquê da falha, com as palavras do servidor. Sem isto a tela ficava EM
+ * BRANCO pra quem não pode ver dinheiro (403) ou quando a rota caía (500):
+ * nem "Carregando…", nem erro — só o cabeçalho e os chips.
+ */
+const motivoDaFalha = computed(() => {
+  const f = falha.value as any
+  if (!f) return ''
+  return f?.data?.statusMessage || f?.statusMessage || f?.message
+    || 'Não foi possível carregar o painel.'
+})
 
 const num = (n: number) => n.toLocaleString('pt-BR')
 
@@ -120,12 +129,22 @@ const nomeCanal: Record<string, string> = { online: 'Online', bilheteria: 'Bilhe
 // consultas de quem só queria ver o faturamento do dia.
 const publico = ref<any>(null)
 const carregandoPublico = ref(false)
-watch(aba, async (v) => {
-  if (v !== 'publico' || publico.value || carregandoPublico.value) return
+/** a falha da aba Público — sem ela um 403/500 aparecia como "Sem dados de público" */
+const falhaPublico = ref('')
+async function carregarPublico() {
+  if (publico.value || carregandoPublico.value) return
   carregandoPublico.value = true
-  try { publico.value = await $fetch(`/api/admin/evento/${id}/publico`) }
-  finally { carregandoPublico.value = false }
-})
+  falhaPublico.value = ''
+  try {
+    publico.value = await $fetch(`/api/admin/evento/${id}/publico`)
+  } catch (e: any) {
+    falhaPublico.value = e?.data?.statusMessage || e?.statusMessage
+      || 'Não foi possível carregar o público. Confira a conexão e tente de novo.'
+  } finally {
+    carregandoPublico.value = false
+  }
+}
+watch(aba, (v) => { if (v === 'publico') carregarPublico() })
 
 /** barra proporcional que não mente: 14 em 5000 não pode virar 0%. */
 function pct(parte: number, total: number): number {
@@ -180,10 +199,19 @@ useHead({ title: 'Dashboard do evento' })
       </div>
     </div>
 
-    <div v-if="pending && !data" class="card text-tinta-suave">Carregando…</div>
+    <div v-if="pending && !data && aba === 'geral'" class="card text-tinta-suave">Carregando…</div>
+
+    <!-- O mesmo bloco de erro das outras telas do painel. -->
+    <div v-else-if="falha && !data && aba === 'geral'" class="card" data-parte="falha-painel">
+      <p class="rotulo-kpi text-erro">Não foi possível carregar o painel</p>
+      <p class="mt-1 text-sm text-tinta-suave">{{ motivoDaFalha }}</p>
+      <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
+    </div>
 
     <template v-else-if="data && aba === 'geral'">
-      <!-- ===================================================== KPIs topo -->
+      <!-- ===================================================== KPIs topo
+           Um tom da logo por indicador (piscina, uva, sol, limão): os quatro
+           com o mesmo azul-clarinho liam como um bloco só, "apagado". -->
       <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <article class="card flex items-start justify-between">
           <div>
@@ -201,7 +229,7 @@ useHead({ title: 'Dashboard do evento' })
               − {{ reais(data.totais.estornadoCents) }} devolvidos ao comprador
             </p>
           </div>
-          <span class="flex h-10 w-10 items-center justify-center rounded-full bg-acao-fraco text-acao">
+          <span class="grid size-12 shrink-0 place-items-center rounded-2xl shadow-sm bg-gradient-to-br from-pool-500 to-pool-700 text-white">
             <IconeMenu nome="carteira" />
           </span>
         </article>
@@ -214,7 +242,7 @@ useHead({ title: 'Dashboard do evento' })
               {{ num(data.totais.pagos) }} pagos / {{ num(data.totais.cortesiasEmitidas) }} cortesias
             </p>
           </div>
-          <span class="flex h-10 w-10 items-center justify-center rounded-full bg-acao-fraco text-acao">
+          <span class="grid size-12 shrink-0 place-items-center rounded-2xl shadow-sm bg-gradient-to-br from-grape-500 to-grape-700 text-white">
             <IconeMenu nome="bilhetes" />
           </span>
         </article>
@@ -234,7 +262,7 @@ useHead({ title: 'Dashboard do evento' })
               {{ reais(data.totais.ticketMedioPorPedidoCents) }} por pedido
             </p>
           </div>
-          <span class="flex h-10 w-10 items-center justify-center rounded-full bg-acao-fraco text-acao">
+          <span class="grid size-12 shrink-0 place-items-center rounded-2xl shadow-sm bg-gradient-to-br from-sun-300 to-sun-500 text-ink-950">
             <IconeMenu nome="ingresso" />
           </span>
         </article>
@@ -247,7 +275,7 @@ useHead({ title: 'Dashboard do evento' })
               {{ data.totais.ingressosPorPedido }} ingressos por pedido
             </p>
           </div>
-          <span class="flex h-10 w-10 items-center justify-center rounded-full bg-acao-fraco text-acao">
+          <span class="grid size-12 shrink-0 place-items-center rounded-2xl shadow-sm bg-gradient-to-br from-citrus-400 to-citrus-600 text-white">
             <IconeMenu nome="pedido" />
           </span>
         </article>
@@ -421,7 +449,15 @@ useHead({ title: 'Dashboard do evento' })
 
     <!-- ========================================================== público -->
     <template v-else-if="aba === 'publico'">
-      <div v-if="!publico" class="card text-tinta-suave">
+      <div v-if="!publico && falhaPublico" class="card" data-parte="falha-publico">
+        <p class="rotulo-kpi text-erro">Não foi possível carregar o público</p>
+        <p class="mt-1 text-sm text-tinta-suave">{{ falhaPublico }}</p>
+        <button type="button" class="btn-secundario mt-3" :disabled="carregandoPublico"
+                @click="carregarPublico()">
+          Tentar de novo
+        </button>
+      </div>
+      <div v-else-if="!publico" class="card text-tinta-suave">
         {{ carregandoPublico ? 'Carregando o público…' : 'Sem dados de público.' }}
       </div>
 

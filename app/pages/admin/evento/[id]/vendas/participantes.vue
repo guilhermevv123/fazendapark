@@ -75,6 +75,7 @@ const salvando = ref(false)
 
 const form = reactive({ aberto: false, id: '', codigo: '', nome: '', email: '', documento: '' })
 function abrir(p: any) {
+  erro.value = ''
   Object.assign(form, {
     aberto: true, id: p.id, codigo: p.codigo,
     nome: p.nome ?? '', email: p.email ?? '', documento: p.documento ?? '',
@@ -92,7 +93,9 @@ async function salvar() {
     await refresh()
     form.aberto = false
   } catch (e: any) {
-    erro.value = e?.data?.statusMessage || 'Não foi possível salvar.'
+    // aparece DENTRO do painel de nomear: no alto da página ficava atrás do
+    // fundo do painel, e o "Salvar" parecia simplesmente não funcionar
+    erro.value = e?.data?.message || e?.data?.statusMessage || 'Não foi possível salvar.'
   } finally {
     salvando.value = false
   }
@@ -203,10 +206,6 @@ useHead({ title: 'Participantes' })
     </div>
 
     <AbasSecao :evento-id="id" />
-
-    <p v-if="erro" class="mt-4 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
-      {{ erro }}
-    </p>
 
     <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <div class="card">
@@ -371,13 +370,16 @@ useHead({ title: 'Participantes' })
 
     <ModalLateral v-if="form.aberto" :titulo="`Nomear ${form.codigo}`" @fechar="form.aberto = false">
       <div class="grid gap-3">
+        <p v-if="erro" class="rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
+          {{ erro }}
+        </p>
         <div>
           <label class="rotulo">Nome de quem vai usar</label>
           <input v-model="form.nome" class="campo" placeholder="Nome completo">
         </div>
         <div>
           <label class="rotulo">Documento</label>
-          <input v-model="form.documento" class="campo" placeholder="CPF ou RG">
+          <input v-model="form.documento" class="campo" placeholder="CPF (11 números) ou RG">
           <p class="mt-1 text-xs text-tinta-fraca">
             É o que a portaria confere quando o ingresso exige documento.
           </p>

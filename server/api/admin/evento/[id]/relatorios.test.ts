@@ -1068,20 +1068,20 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
    * - **contagem** — `pedidos` é a população que somou; `pedidosFechados` é a
    *   outra pergunta e tem nome próprio.
    *
-   * ## A EXCEÇÃO DO `/extrato`, escrita e provada
+   * ## O `/extrato`: linhas de MOVIMENTO, totais de pedido VIVO
    *
-   * O extrato NÃO entra na igualdade de face/taxa/cobrado, e isso é decisão,
-   * não desleixo: ele é extrato de MOVIMENTO e a população dele é todo pedido
-   * que mexeu dinheiro — `pago`, `estornado`, `estornado_parcial`,
-   * `chargeback`, `disputa`. O pedido devolvido por inteiro precisa aparecer
-   * numa tela que existe pra explicar linha a linha por que o dia caiu;
-   * escondê-lo ali seria o defeito oposto.
+   * As LINHAS do extrato continuam mostrando todo pedido que mexeu dinheiro —
+   * `pago`, `estornado`, `estornado_parcial`, `chargeback`, `disputa`: o
+   * pedido devolvido por inteiro precisa aparecer numa tela que existe pra
+   * explicar linha a linha por que o dia caiu. Mas os TOTAIS somam só
+   * `PEDIDO_VIVO()`, a régua das outras telas, e o que ficou de fora vem em
+   * `foraDoTotal`, por status, rotulado.
    *
-   * Por isso o caso não ignora a diferença: ele a AFIRMA. A face do extrato
-   * tem que ser maior exatamente pela face dos pedidos que mexeram dinheiro e
-   * não estão vivos, lida do banco. Assim o dia em que o extrato começar a
-   * derrubar o estorno total — ou a somar um pedido a mais — esta linha fica
-   * vermelha do mesmo jeito.
+   * Por isso o caso afirma as DUAS metades: os totais do extrato batem com
+   * as outras telas em face/taxa/cobrado, e o `foraDoTotal` bate, status a
+   * status, com os pedidos não vivos lidos do banco. O dia em que o extrato
+   * voltar a somar o estorno total no total — ou a esconder o pedido morto
+   * sem dizer — esta parte fica vermelha.
    */
   it('as SETE telas do dinheiro dizem o MESMO em cada campo comparável', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
@@ -1231,42 +1231,69 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
       .not.toBe(PEDIDOS_FECHADOS)
 
     // ---------------------------------------------------------------------
-    // 6. A EXCEÇÃO DO EXTRATO — afirmada, não ignorada.
+    // 6. O EXTRATO — totais pelos vivos, o resto em `foraDoTotal`.
     //
-    // O extrato inclui de propósito todo pedido que MEXEU dinheiro, vivo ou
-    // não. A diferença dele pras outras telas tem que ser exatamente a face
-    // (e o cobrado) desses pedidos — nem um centavo a mais.
-    const [fora] = await sql(
-      `SELECT COALESCE(SUM(face_cents),0)::bigint  AS face,
-              COALESCE(SUM(total_cents),0)::bigint AS cobrado,
-              COALESCE(SUM(fee_cents),0)::bigint   AS taxa,
-              count(*)::int                        AS pedidos
+    // As linhas incluem de propósito todo pedido que MEXEU dinheiro, vivo ou
+    // não. Os totais somam só os vivos (a mesma régua das outras telas), e o
+    // que ficou de fora aparece em `foraDoTotal` por status — nem um centavo
+    // a mais, nem um pedido a menos.
+    const foraPorStatus = await sql(
+      `SELECT status,
+              COALESCE(SUM(total_cents),0)::bigint    AS cobrado,
+              COALESCE(SUM(refunded_cents),0)::bigint AS estornado,
+              count(*)::int                           AS pedidos
          FROM orders
         WHERE event_id = $1
-          AND status IN ('estornado','chargeback','disputa')`, [EVENTO])
+          AND status IN ('estornado','chargeback','disputa')
+        GROUP BY status`, [EVENTO])
+    const fora = {
+      pedidos: foraPorStatus.reduce((a: number, l: any) => a + l.pedidos, 0),
+      cobrado: foraPorStatus.reduce((a: number, l: any) => a + Number(l.cobrado), 0),
+      estornado: foraPorStatus.reduce((a: number, l: any) => a + Number(l.estornado), 0),
+    }
 
+    // 6a. Totais: o extrato entra na igualdade das outras telas.
     expect({
-      face: t.extrato.totais.faceCents - face.bordero,
-      cobrado: t.extrato.totais.cobradoCents - cobrado.relatorios,
-      taxa: t.extrato.totais.taxaCompradorCents - taxa.bordero,
-    }, 'o extrato deixou de ser extrato de MOVIMENTO: a diferença dele pras ' +
-       'outras telas não é mais a dos pedidos que mexeram dinheiro e não ' +
-       'estão vivos')
+      face: t.extrato.totais.faceCents,
+      cobrado: t.extrato.totais.cobradoCents,
+      taxa: t.extrato.totais.taxaCompradorCents,
+      liquido: t.extrato.totais.liquidoCents,
+    }, 'o extrato voltou a somar pedido não vivo (estorno total/contestação) ' +
+       'nos totais — a mesma venda com um total no extrato e outro nas demais')
       .toEqual({
-        face: Number(fora.face), cobrado: Number(fora.cobrado), taxa: Number(fora.taxa),
+        face: face.bordero, cobrado: cobrado.relatorios, taxa: taxa.bordero,
+        liquido: liquido.bordero,
       })
 
-    // E a exceção só é exceção enquanto existir pedido morto que mexeu
-    // dinheiro: sem ele o extrato bateria com as outras por acidente e esta
-    // parte do caso não provaria nada.
-    expect(Number(fora.pedidos),
-      'a fixture perdeu o pedido estornado por inteiro — a exceção do extrato ' +
-      'passou a ser indistinguível de igualdade')
+    // 6b. `foraDoTotal`: exatamente os pedidos não vivos, status a status.
+    expect({
+      pedidos: t.extrato.foraDoTotal.pedidos,
+      cobrado: t.extrato.foraDoTotal.cobradoCents,
+      estornado: t.extrato.foraDoTotal.estornadoCents,
+    }, 'o foraDoTotal do extrato não é o dos pedidos que mexeram dinheiro e ' +
+       'não estão vivos')
+      .toEqual(fora)
+    const porStatus = (lista: any[]) => Object.fromEntries(lista.map((l) => [l.status, l]))
+    expect(porStatus(t.extrato.foraDoTotal.porStatus.map((l: any) => ({
+      status: l.status, pedidos: l.pedidos, cobrado: l.cobradoCents, estornado: l.estornadoCents,
+    })))).toEqual(porStatus(foraPorStatus.map((l: any) => ({
+      status: l.status, pedidos: l.pedidos, cobrado: Number(l.cobrado), estornado: Number(l.estornado),
+    }))))
+
+    // A exceção só prova algo enquanto existir pedido morto que mexeu
+    // dinheiro: sem ele `foraDoTotal` vazio passaria por acerto.
+    expect(fora.pedidos,
+      'a fixture perdeu o pedido estornado por inteiro — o foraDoTotal ' +
+      'passou a ser indistinguível de vazio')
       .toBeGreaterThan(0)
-    expect(t.extrato.totais.faceCents,
-      'o extrato passou a recortar pelos vivos e parou de mostrar o pedido ' +
-      'devolvido por inteiro, que é a linha que explica a queda do dia')
-      .toBeGreaterThan(face.bordero)
+
+    // 6c. A história não some: as linhas ainda mostram o pedido morto,
+    // marcado como fora do total.
+    const linhasFora = t.extrato.linhas.filter((l: any) => l.foraDoTotal)
+    expect(linhasFora.length,
+      'o extrato parou de mostrar nas LINHAS o pedido devolvido por inteiro, ' +
+      'que é a linha que explica a queda do dia')
+      .toBe(fora.pedidos)
   }, 30_000)
 
   /**

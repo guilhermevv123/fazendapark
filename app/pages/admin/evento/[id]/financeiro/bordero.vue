@@ -114,10 +114,17 @@ useHead({ title: 'Borderô' })
         </div>
         <div class="flex justify-between">
           <dt class="text-tinta-suave">Já transferido</dt>
-          <dd class="tabular-nums text-tinta">{{ reais(data.totais.transferidoCents) }}</dd>
+          <dd class="tabular-nums text-tinta">
+            {{ reais(data.totais.transferidoCents) }}
+            <span v-if="data.totais.emCursoCents" class="block text-right text-xs text-alerta">
+              +{{ reais(data.totais.emCursoCents) }} em curso
+            </span>
+          </dd>
         </div>
+        <!-- O MESMO saldo do financeiro do evento e do da organização
+             (`saldoParaSaque`): na plataforma − transferido − em curso. -->
         <div class="flex justify-between">
-          <dt class="text-tinta-suave">A receber</dt>
+          <dt class="text-tinta-suave">A receber da plataforma</dt>
           <dd class="tabular-nums font-semibold text-tinta">{{ reais(data.totais.aReceberCents) }}</dd>
         </div>
         <div class="flex justify-between">
@@ -127,6 +134,16 @@ useHead({ title: 'Borderô' })
           </dd>
         </div>
       </dl>
+
+      <!-- O recebido direto não é "a receber": já está com o produtor. Sem
+           esta linha o líquido lá em cima fica maior que a soma de
+           transferido + a receber, e a diferença parece dinheiro sumido. -->
+      <p v-if="data.totais.recebidoDiretoCents" class="mt-3 text-sm text-tinta-suave"
+         data-parte="recebido-direto">
+        <strong class="text-tinta">{{ reais(data.totais.recebidoDiretoCents) }}</strong>
+        recebidos direto (dinheiro no balcão ou pix na sua chave) já estão com você e não
+        entram no saldo a receber da plataforma.
+      </p>
     </section>
 
     <!-- ========================================================= público -->
@@ -146,11 +163,17 @@ useHead({ title: 'Borderô' })
         <div>
           <dt class="text-xs text-tinta-fraca">Entraram</dt>
           <dd class="numero-kpi">{{ data.totais.ingressosUsados }}</dd>
+          <dd v-if="data.totais.pessoasQueEntraram !== data.totais.ingressosUsados"
+              class="text-xs text-tinta-fraca">
+            {{ data.totais.pessoasQueEntraram }} pessoas
+          </dd>
         </div>
         <div>
           <dt class="text-xs text-tinta-fraca">Comparecimento</dt>
-          <dd class="numero-kpi">{{ data.totais.comparecimentoPct }}%</dd>
-          <dd class="text-xs text-tinta-fraca">sobre os ingressos válidos</dd>
+          <dd class="numero-kpi">
+            {{ Number(data.totais.comparecimentoPct).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) }}%
+          </dd>
+          <dd class="text-xs text-tinta-fraca">de {{ data.totais.aptos }} ingressos aptos</dd>
         </div>
         <div>
           <dt class="text-xs text-tinta-fraca">Cancelados</dt>

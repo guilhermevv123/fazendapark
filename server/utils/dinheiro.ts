@@ -107,6 +107,41 @@ export function faceComDesconto(faceLoteCents: number, descontoBps: number): num
   return faceLoteCents - arredonda(faceLoteCents * descontoBps, 10_000)
 }
 
+/**
+ * A face de um TIPO de ingresso (meia, promocional…) — a única conta de preço
+ * de tipo que as rotas devem usar. Vitrine, checkout, prévia de cupom, PDV e
+ * painel chamam ESTA; se um lado usar outra, a tela avisa "o preço mudou".
+ *
+ * O desconto vale sobre o que o comprador PAGA, não sobre a face:
+ *
+ *   absorver → comprador paga a face, então desconto na face já é desconto no
+ *              total (`faceComDesconto`).
+ *   repassar → comprador paga face + taxa. Descontar a face e recalcular a
+ *              taxa arredonda duas vezes: inteira R$ 30,00 (face 27,27) virava
+ *              meia de R$ 14,99 (face 13,63 + taxa 1,36). Aqui o alvo é o
+ *              TOTAL da inteira com desconto (R$ 15,00) e a face sai de
+ *              `faceParaTotal` (13,64 + 1,36).
+ *
+ * Quando o total-alvo não é alcançável (a taxa arredondada pula um centavo),
+ * `faceParaTotal` devolve a maior face cujo total não passa do alvo: a meia
+ * nunca sai mais cara que a metade, no máximo um centavo abaixo.
+ */
+export function faceDoTipo(
+  faceLoteCents: number,
+  descontoBps: number,
+  feeBps: number,
+  modo: ModoTaxa,
+): number {
+  inteiro(faceLoteCents, 'faceLoteCents')
+  inteiro(descontoBps, 'descontoBps')
+  if (modo === 'absorver') return faceComDesconto(faceLoteCents, descontoBps)
+  if (descontoBps === 0) return faceLoteCents
+  if (descontoBps >= 10_000) return 0
+  const totalInteira = precificar(faceLoteCents, feeBps, modo).totalCents
+  const totalAlvo = arredonda(totalInteira * (10_000 - descontoBps), 10_000)
+  return faceParaTotal(totalAlvo, feeBps, modo).faceCents
+}
+
 export interface LinhaPedido {
   quantidade: number
   faceUnitCents: number

@@ -17,6 +17,19 @@ const salvando = ref(false)
 const f = reactive({ nome: '', documento: '', ambienteAsaas: 'sandbox', carteiraAsaas: '' })
 const chaveNova = ref('')
 const trocandoChave = ref(false)
+/** "Remover" a chave em dois passos: apagar a credencial de cobrança num clique solto não tem desfazer. */
+const confirmandoRemocao = ref(false)
+
+/**
+ * A chave colada conta quando a pessoa está TROCANDO uma existente — ou
+ * quando ainda não existe nenhuma. Só `trocandoChave` deixava a PRIMEIRA
+ * chave de fora: com `temChave: false` o campo aparece aberto, mas colar não
+ * habilitava Salvar, e trocar pra Produção mandava o PATCH sem ela (422).
+ */
+const chaveParaEnviar = computed(() =>
+  (trocandoChave.value || !data.value?.temChave) && chaveNova.value.trim().length >= 20
+    ? chaveNova.value.trim()
+    : null)
 
 watch(data, (d) => {
   if (!d) return
@@ -32,7 +45,7 @@ const mudou = computed(() => {
     || f.documento !== (data.value.documento ?? '')
     || f.ambienteAsaas !== data.value.ambienteAsaas
     || f.carteiraAsaas !== (data.value.carteiraAsaas ?? '')
-    || (trocandoChave.value && chaveNova.value.length >= 20)
+    || chaveParaEnviar.value !== null
 })
 
 async function salvar() {
@@ -45,7 +58,7 @@ async function salvar() {
     if (f.documento !== (data.value.documento ?? '')) corpo.documento = f.documento || null
     if (f.ambienteAsaas !== data.value.ambienteAsaas) corpo.ambienteAsaas = f.ambienteAsaas
     if (f.carteiraAsaas !== (data.value.carteiraAsaas ?? '')) corpo.carteiraAsaas = f.carteiraAsaas || null
-    if (trocandoChave.value && chaveNova.value.length >= 20) corpo.chaveAsaas = chaveNova.value.trim()
+    if (chaveParaEnviar.value) corpo.chaveAsaas = chaveParaEnviar.value
 
     await $fetch('/api/admin/organizacao', { method: 'PATCH', body: corpo })
     chaveNova.value = ''
@@ -61,6 +74,9 @@ async function salvar() {
 }
 
 async function removerChave() {
+  // primeiro clique só arma; o segundo remove
+  if (!confirmandoRemocao.value) { confirmandoRemocao.value = true; return }
+  confirmandoRemocao.value = false
   erro.value = ''
   salvando.value = true
   try {
@@ -147,9 +163,14 @@ useHead({ title: 'Configurações' })
                   configurada · termina em <strong>{{ data.chaveFinal }}</strong>
                 </span>
                 <button type="button" class="btn-secundario py-1 text-sm"
-                        @click="trocandoChave = true">Trocar</button>
+                        @click="trocandoChave = true; confirmandoRemocao = false">Trocar</button>
                 <button type="button" class="px-2 text-sm text-erro hover:underline"
-                        :disabled="salvando" @click="removerChave">Remover</button>
+                        :class="confirmandoRemocao && 'font-semibold'"
+                        :disabled="salvando" @click="removerChave">
+                  {{ confirmandoRemocao ? 'Confirmar remoção' : 'Remover' }}
+                </button>
+                <button v-if="confirmandoRemocao" type="button" class="px-2 text-sm text-tinta-fraca hover:underline"
+                        @click="confirmandoRemocao = false">Cancelar</button>
               </div>
               <div v-else>
                 <input v-model="chaveNova" type="password" autocomplete="off" class="campo font-mono"

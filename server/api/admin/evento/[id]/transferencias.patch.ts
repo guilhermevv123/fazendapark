@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
+import { novoCodigoDoIngresso } from '../../../../utils/ingresso'
 
 const Entrada = z.object({
   transferenciaId: z.string().uuid().optional(),
@@ -75,11 +76,20 @@ export default defineEventHandler(async (event) => {
 
     // Só mexe no ingresso se a transferência chegou a mudar o titular. Uma
     // pendente cancelada não tem nada pra devolver — o ingresso nunca saiu.
+    //
+    // E o código muda DE NOVO: o destinatário viu o QR do código atual (na
+    // página da transferência) e pode ter guardado print. Devolver o titular
+    // sem trocar o código deixaria o destinatário entrando com o ingresso que
+    // voltou pro remetente — o mesmo "os dois entram" do aceite, ao contrário.
+    // O remetente enxerga o código novo no pedido dele, que volta a mostrar o
+    // ingresso assim que esta transferência sai de 'concluido'.
+    let codigoNovo: string | null = null
     if (tr.status === 'concluido') {
+      codigoNovo = novoCodigoDoIngresso(tr.ingresso_codigo)
       await c.query(
-        `UPDATE tickets SET holder_name = $2, holder_email = $3, holder_document = $4
+        `UPDATE tickets SET holder_name = $2, holder_email = $3, holder_document = $4, code = $5
           WHERE id = $1`,
-        [tr.ticket_id, tr.de_nome, tr.de_email, tr.de_documento])
+        [tr.ticket_id, tr.de_nome, tr.de_email, tr.de_documento, codigoNovo])
     }
 
     await c.query(
@@ -88,6 +98,7 @@ export default defineEventHandler(async (event) => {
       [ev.org_id, tr.ticket_id, JSON.stringify({
         transferencia: tr.id, eraStatus: tr.status,
         voltouPara: tr.status === 'concluido' ? tr.de_email : null,
+        ...(codigoNovo ? { codigoAnterior: tr.ingresso_codigo, codigoNovo } : {}),
       })])
 
     return {

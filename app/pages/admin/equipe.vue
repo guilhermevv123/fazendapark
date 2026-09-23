@@ -14,7 +14,17 @@ const { data, refresh, pending, error: falha } = await useFetch<any>('/api/admin
 const erro = ref('')
 const salvando = ref(false)
 const senhaNaTela = ref<{ nome: string; email: string; senha: string; papel?: string } | null>(null)
+/** Duas confirmações em dois passos, cada uma com o seu estado: clicar
+ *  "Desativar" numa linha não pode deixar "Nova senha" armado na mesma. */
 const confirmando = ref('')
+const confirmandoSenha = ref('')
+/**
+ * O `<select>` de papel é controlado por `:value`. Quando o servidor recusa
+ * (422), `p.papel` não muda — então o Vue não tem o que corrigir e o select
+ * continua mostrando o papel que NÃO foi gravado. Trocar a `key` depois do
+ * erro recria o elemento com o valor verdadeiro.
+ */
+const versaoDasLinhas = ref(0)
 
 /**
  * A lista de papéis vem do SERVIDOR (`data.papeis`), não daqui. Ela já foi
@@ -28,6 +38,10 @@ const rotuloDoPapel = (v: string) =>
   papeis.value.find((p) => p.valor === v)?.rotulo ?? v
 
 const novo = reactive({ aberto: false, nome: '', email: '', papel: 'operacao' })
+function abrirNovo() {
+  erro.value = ''
+  novo.aberto = true
+}
 
 async function criar() {
   erro.value = ''
@@ -59,10 +73,26 @@ async function mudar(p: any, corpo: any) {
     await refresh()
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível salvar.'
+    versaoDasLinhas.value++
   } finally {
     salvando.value = false
     confirmando.value = ''
+    confirmandoSenha.value = ''
   }
+}
+
+/** "Nova senha": primeiro clique arma, segundo sorteia. Derruba as sessões da pessoa. */
+function pedirNovaSenha(p: any) {
+  confirmando.value = ''
+  if (confirmandoSenha.value === p.id) return mudar(p, { novaSenha: true })
+  confirmandoSenha.value = p.id
+}
+
+function pedirDesativar(p: any) {
+  confirmandoSenha.value = ''
+  if (!p.ativo) return mudar(p, { ativo: true })
+  if (confirmando.value === p.id) return mudar(p, { ativo: false })
+  confirmando.value = p.id
 }
 
 const copiado = ref(false)
@@ -81,23 +111,28 @@ useHead({ title: 'Equipe' })
 </script>
 
 <template>
-  <div v-if="data">
-    <div class="flex flex-wrap items-start justify-between gap-3 py-5">
-      <div>
-        <h1 class="titulo text-2xl font-semibold text-tinta">Equipe</h1>
-        <p class="mt-1 text-tinta-suave">
-          Quem entra no painel de {{ data.organizacao?.nome }} e com que poder.
-        </p>
+  <div>
+    <template v-if="data">
+      <div class="flex flex-wrap items-start justify-between gap-3 py-5">
+        <div>
+          <h1 class="titulo text-2xl font-semibold text-tinta">Equipe</h1>
+          <p class="mt-1 text-tinta-suave">
+            Quem entra no painel de {{ data.organizacao?.nome }} e com que poder.
+          </p>
+        </div>
+        <button type="button" class="btn-primario" @click="abrirNovo">
+          Dar acesso a alguém
+        </button>
       </div>
-      <button type="button" class="btn-primario" @click="novo.aberto = true">
-        Dar acesso a alguém
-      </button>
-    </div>
 
-    <p v-if="erro" class="rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
-      {{ erro }}
-    </p>
+      <p v-if="erro" class="rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
+        {{ erro }}
+      </p>
+    </template>
 
+    <!-- A senha sorteada fica FORA do `v-if="data"`: se o refresh depois do
+         sorteio falhar, o Nuxt zera `data` e a senha — que só existe aqui —
+         sumiria junto com a tabela. -->
     <div v-if="senhaNaTela"
          class="mt-4 rounded-card border-2 border-acao bg-acao-fraco px-5 py-4 entra-bloco">
       <p class="titulo text-base font-semibold text-tinta">
@@ -122,121 +157,130 @@ useHead({ title: 'Equipe' })
       </p>
     </div>
 
-    <div class="card mt-4 overflow-x-auto p-0">
-      <table class="w-full min-w-[820px] border-collapse text-sm">
-        <thead>
-          <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
-            <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pessoa</th>
-            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Papel</th>
-            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Última entrada</th>
-            <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Sessões</th>
-            <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="p in data.pessoas" :key="p.id"
-              class="border-b border-linha last:border-0" :class="p.ativo ? '' : 'opacity-55'">
-            <td class="px-4 py-3">
-              <p class="font-medium text-tinta">
-                {{ p.nome }}
-                <span v-if="p.id === data.eu" class="selo-neutro ml-1">você</span>
-                <span v-if="!p.ativo" class="selo-erro ml-1">DESATIVADO</span>
-              </p>
-              <p class="text-xs text-tinta-fraca">{{ p.email }}</p>
-            </td>
-            <td class="px-3 py-3">
-              <select :value="p.papel" class="campo py-1 text-sm"
-                      :disabled="salvando || p.id === data.eu"
-                      @change="mudar(p, { papel: ($event.target as HTMLSelectElement).value })">
-                <option v-for="o in papeis" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
-              </select>
-            </td>
-            <td class="px-3 py-3 text-xs text-tinta-suave">
-              {{ quando(p.ultimaEntrada) }}
-              <span v-if="p.leituras" class="block text-tinta-fraca">
-                {{ p.leituras }} leituras na porta
-              </span>
-            </td>
-            <td class="px-3 py-3 text-center tabular-nums"
-                :class="p.sessoesAbertas ? 'text-tinta' : 'text-tinta-fraca'">
-              {{ p.sessoesAbertas }}
-            </td>
-            <td class="px-4 py-3 text-right">
-              <button type="button" class="px-2 text-sm text-tinta-fraca hover:text-acao"
-                      :disabled="salvando" @click="mudar(p, { novaSenha: true })">
-                Nova senha
-              </button>
-              <button type="button" class="px-2 text-sm disabled:opacity-30"
-                      :class="confirmando === p.id ? 'font-semibold text-erro' : 'text-tinta-fraca hover:text-erro'"
-                      :disabled="salvando || p.id === data.eu"
-                      @click="p.ativo
-                        ? (confirmando === p.id ? mudar(p, { ativo: false }) : confirmando = p.id)
-                        : mudar(p, { ativo: true })">
-                {{ p.ativo ? (confirmando === p.id ? 'Confirmar' : 'Desativar') : 'Reativar' }}
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <div v-if="data">
+      <div class="card mt-4 overflow-x-auto p-0">
+        <table class="w-full min-w-[820px] border-collapse text-sm">
+          <thead>
+            <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
+              <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pessoa</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Papel</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Última entrada</th>
+              <th class="titulo px-3 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Sessões</th>
+              <th class="titulo px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in data.pessoas" :key="p.id"
+                class="border-b border-linha last:border-0" :class="p.ativo ? '' : 'opacity-55'">
+              <td class="px-4 py-3">
+                <p class="font-medium text-tinta">
+                  {{ p.nome }}
+                  <span v-if="p.id === data.eu" class="selo-neutro ml-1">você</span>
+                  <span v-if="!p.ativo" class="selo-erro ml-1">DESATIVADO</span>
+                </p>
+                <p class="text-xs text-tinta-fraca">{{ p.email }}</p>
+              </td>
+              <td class="px-3 py-3">
+                <select :key="`${p.id}-${versaoDasLinhas}`" :value="p.papel" class="campo py-1 text-sm"
+                        :disabled="salvando || p.id === data.eu"
+                        @change="mudar(p, { papel: ($event.target as HTMLSelectElement).value })">
+                  <option v-for="o in papeis" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
+                </select>
+              </td>
+              <td class="px-3 py-3 text-xs text-tinta-suave">
+                {{ quando(p.ultimaEntrada) }}
+                <span v-if="p.leituras" class="block text-tinta-fraca">
+                  {{ p.leituras }} leituras na porta
+                </span>
+              </td>
+              <td class="px-3 py-3 text-center tabular-nums"
+                  :class="p.sessoesAbertas ? 'text-tinta' : 'text-tinta-fraca'">
+                {{ p.sessoesAbertas }}
+              </td>
+              <td class="px-4 py-3 text-right">
+                <!-- Na linha "você" fica travado: sortear a própria senha derrubava
+                     a sessão de quem clicou. A própria se troca no menu da conta. -->
+                <button type="button" class="px-2 text-sm disabled:opacity-30"
+                        :class="confirmandoSenha === p.id ? 'font-semibold text-acao' : 'text-tinta-fraca hover:text-acao'"
+                        :disabled="salvando || p.id === data.eu"
+                        :title="p.id === data.eu ? 'Pra trocar a sua senha, use “Trocar senha” no menu da conta.' : undefined"
+                        @click="pedirNovaSenha(p)">
+                  {{ confirmandoSenha === p.id ? 'Confirmar nova senha' : 'Nova senha' }}
+                </button>
+                <button type="button" class="px-2 text-sm disabled:opacity-30"
+                        :class="confirmando === p.id ? 'font-semibold text-erro' : 'text-tinta-fraca hover:text-erro'"
+                        :disabled="salvando || p.id === data.eu"
+                        @click="pedirDesativar(p)">
+                  {{ p.ativo ? (confirmando === p.id ? 'Confirmar' : 'Desativar') : 'Reativar' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-    <div class="card mt-4">
-      <p class="rotulo-kpi">O que cada papel pode</p>
-      <dl class="mt-3 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
-        <div v-for="o in papeis" :key="o.valor" class="flex gap-2">
-          <dt class="w-28 shrink-0 font-medium text-tinta">{{ o.rotulo }}</dt>
-          <dd class="text-tinta-suave">{{ o.resumo }}</dd>
-        </div>
-      </dl>
-      <p class="mt-3 border-t border-linha pt-3 text-xs text-tinta-fraca">
-        Quem tranca é o servidor, em toda chamada — não o menu. Rebaixar alguém
-        aqui vale na requisição seguinte, mesmo com a tela dele já aberta.
-      </p>
-    </div>
-
-    <ModalLateral v-if="novo.aberto" titulo="Dar acesso a alguém" @fechar="novo.aberto = false">
-      <div class="grid gap-3">
-        <div>
-          <label class="rotulo">Nome</label>
-          <input v-model="novo.nome" class="campo" placeholder="Nome completo">
-        </div>
-        <div>
-          <label class="rotulo">E-mail (é o login)</label>
-          <input v-model="novo.email" type="email" class="campo" placeholder="pessoa@empresa.com.br">
-        </div>
-        <div>
-          <label class="rotulo">Papel</label>
-          <select v-model="novo.papel" class="campo">
-            <option v-for="o in papeis" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
-          </select>
-          <p class="mt-1 text-xs text-tinta-suave">
-            {{ papeis.find((o) => o.valor === novo.papel)?.resumo }}
-          </p>
-        </div>
-        <p class="rounded-card bg-fundo-cinza px-3 py-2 text-xs text-tinta-suave">
-          A senha é sorteada pelo sistema e aparece uma vez, na tela, depois de criar.
-          Não existe campo de senha aqui de propósito.
+      <div class="card mt-4">
+        <p class="rotulo-kpi">O que cada papel pode</p>
+        <dl class="mt-3 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
+          <div v-for="o in papeis" :key="o.valor" class="flex gap-2">
+            <dt class="w-28 shrink-0 font-medium text-tinta">{{ o.rotulo }}</dt>
+            <dd class="text-tinta-suave">{{ o.resumo }}</dd>
+          </div>
+        </dl>
+        <p class="mt-3 border-t border-linha pt-3 text-xs text-tinta-fraca">
+          Quem tranca é o servidor, em toda chamada — não o menu. Rebaixar alguém
+          aqui vale na requisição seguinte, mesmo com a tela dele já aberta.
         </p>
       </div>
-      <template #acoes>
-        <button type="button" class="btn-secundario" @click="novo.aberto = false">Cancelar</button>
-        <button type="button" class="btn-primario"
-                :disabled="salvando || novo.nome.trim().length < 2 || !novo.email.includes('@')"
-                @click="criar">
-          {{ salvando ? 'Criando…' : 'Criar acesso' }}
-        </button>
-      </template>
-    </ModalLateral>
-  </div>
 
-  <p v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</p>
+      <ModalLateral v-if="novo.aberto" titulo="Dar acesso a alguém" @fechar="novo.aberto = false">
+        <div class="grid gap-3">
+          <!-- o erro repete aqui dentro: o de cima da página fica atrás do fundo escuro -->
+          <p v-if="erro" class="rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro" role="alert">
+            {{ erro }}
+          </p>
+          <div>
+            <label class="rotulo">Nome</label>
+            <input v-model="novo.nome" class="campo" placeholder="Nome completo">
+          </div>
+          <div>
+            <label class="rotulo">E-mail (é o login)</label>
+            <input v-model="novo.email" type="email" class="campo" placeholder="pessoa@empresa.com.br">
+          </div>
+          <div>
+            <label class="rotulo">Papel</label>
+            <select v-model="novo.papel" class="campo">
+              <option v-for="o in papeis" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
+            </select>
+            <p class="mt-1 text-xs text-tinta-suave">
+              {{ papeis.find((o) => o.valor === novo.papel)?.resumo }}
+            </p>
+          </div>
+          <p class="rounded-card bg-fundo-cinza px-3 py-2 text-xs text-tinta-suave">
+            A senha é sorteada pelo sistema e aparece uma vez, na tela, depois de criar.
+            Não existe campo de senha aqui de propósito.
+          </p>
+        </div>
+        <template #acoes>
+          <button type="button" class="btn-secundario" @click="novo.aberto = false">Cancelar</button>
+          <button type="button" class="btn-primario"
+                  :disabled="salvando || novo.nome.trim().length < 2 || !novo.email.includes('@')"
+                  @click="criar">
+            {{ salvando ? 'Criando…' : 'Criar acesso' }}
+          </button>
+        </template>
+      </ModalLateral>
+    </div>
 
-  <div v-else class="card mt-6">
-    <p class="rotulo-kpi text-erro">Não foi possível carregar a equipe</p>
-    <p class="mt-1 text-sm text-tinta-suave">
-      {{ (falha as any)?.data?.statusMessage || (falha as any)?.message || 'Erro desconhecido.' }}
-    </p>
-    <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
+    <p v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</p>
+
+    <div v-else class="card mt-6">
+      <p class="rotulo-kpi text-erro">Não foi possível carregar a equipe</p>
+      <p class="mt-1 text-sm text-tinta-suave">
+        {{ (falha as any)?.data?.statusMessage || (falha as any)?.message || 'Erro desconhecido.' }}
+      </p>
+      <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
+    </div>
   </div>
 </template>
 

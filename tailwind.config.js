@@ -59,8 +59,10 @@ export default {
         acao:  { DEFAULT: '#146f83', forte: '#1789a1', escuro: '#155b6b', claro: '#d9f2f9', fraco: '#effafd', passo: '#146f83' },
         // fundo: fundo de página, de cartão e o cinza de apoio (hover, cabeçalho de tabela)
         fundo: { DEFAULT: '#f4f6f9', card: '#ffffff', cinza: '#f7f7fa' },
-        // tinta: títulos e números (ink-900), texto corrido (ink-800), apoio (ink-600 e ink-500)
-        tinta: { DEFAULT: '#1e1a2e', corpo: '#2d293f', suave: '#5a5570', fraca: '#716c87', rotulo: '#2d293f', passo: '#a09cb2' },
+        // tinta: títulos e números (ink-900), texto corrido (ink-800), apoio (ink-700 e ink-600).
+        // Apoio subiu um degrau em 22/09 ("tá tudo apagado", o dono olhando no celular):
+        // ink-600/500 passavam no AA, mas em tela de telefone ao sol liam como desligado.
+        tinta: { DEFAULT: '#1e1a2e', corpo: '#2d293f', suave: '#433e57', fraca: '#5a5570', rotulo: '#2d293f', passo: '#a09cb2' },
         linha: { DEFAULT: '#e2e0ea', forte: '#c8c5d5', campo: '#e2e0ea' },
         // semânticas, separadas do azul de ação de propósito
         ok:    { DEFAULT: '#15803d', claro: '#edfcf2' },
@@ -97,12 +99,50 @@ export default {
           from: { transform: 'translate3d(-3%, -2%, 0) scale(1)' },
           to: { transform: 'translate3d(3%, 2%, 0) scale(1.08)' },
         },
+        // ---- assistente de criação (22/09): o movimento ENSINA a direção ----
+        // avançar entra pela direita, voltar entra pela esquerda
+        'passo-frente': { from: { opacity: '0', transform: 'translateX(28px)' }, to: { opacity: '1', transform: 'none' } },
+        'passo-volta': { from: { opacity: '0', transform: 'translateX(-28px)' }, to: { opacity: '1', transform: 'none' } },
+        // peça nova no mapa do evento: nasce pequena e encaixa
+        encaixa: {
+          '0%': { opacity: '0', transform: 'translateY(-6px) scale(0.92)' },
+          '60%': { opacity: '1', transform: 'translateY(0) scale(1.03)' },
+          '100%': { opacity: '1', transform: 'none' },
+        },
+        // erro de validação: "não dá pra passar"
+        sacode: {
+          '0%, 100%': { transform: 'none' },
+          '20%, 60%': { transform: 'translateX(-6px)' },
+          '40%, 80%': { transform: 'translateX(6px)' },
+        },
+        // segmento da régua de passos enchendo da esquerda
+        enche: { from: { transform: 'scaleX(0)' }, to: { transform: 'scaleX(1)' } },
+        // o ✓ do "evento criado" se desenhando
+        desenha: { from: { strokeDashoffset: '48' }, to: { strokeDashoffset: '0' } },
+        pop: {
+          '0%': { opacity: '0', transform: 'scale(0.6)' },
+          '70%': { opacity: '1', transform: 'scale(1.08)' },
+          '100%': { opacity: '1', transform: 'none' },
+        },
+        // brilho que passa na barra de ação quando o passo está pronto
+        pulso: {
+          '0%, 100%': { boxShadow: '0 0 0 0 rgb(255 255 255 / 0.55)' },
+          '50%': { boxShadow: '0 0 0 8px rgb(255 255 255 / 0)' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 160ms ease-out both',
         'rise-in': 'rise-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
         'slide-in-left': 'slide-in-left 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
         drift: 'drift 22s ease-in-out infinite alternate',
+        'passo-frente': 'passo-frente 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
+        'passo-volta': 'passo-volta 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
+        encaixa: 'encaixa 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
+        sacode: 'sacode 380ms ease-in-out both',
+        enche: 'enche 480ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
+        desenha: 'desenha 520ms 180ms ease-out both',
+        pop: 'pop 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
+        pulso: 'pulso 1.8s ease-in-out 2',
       },
     },
   },
