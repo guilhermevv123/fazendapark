@@ -15,7 +15,8 @@ const id = route.params.id as string
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   `/api/admin/evento/${id}/promoters`)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+// `reais` vem de `app/composables/formato.ts` (espaço normal depois do R$, nunca o fino
+// do toLocaleString — ADM-48)
 const erro = ref('')
 const salvando = ref(false)
 
@@ -62,6 +63,15 @@ async function salvar() {
     ? await chamar('PATCH', { id: form.id, campos: comum })
     : await chamar('POST', { ...comum, codigo: form.codigo || null })
   if (ok) form.aberto = false
+}
+
+/**
+ * Liga/desliga com trava: dois cliques rápidos mandavam dois PATCH com valores OPOSTOS e o
+ * divulgador voltava ao estado de antes (ADM-51). Enquanto grava, o segundo clique é ignorado.
+ */
+async function alternar(p: any) {
+  if (salvando.value) return
+  await chamar('PATCH', { id: p.id, campos: { ativo: !p.ativo } })
 }
 
 const confirmando = ref('')
@@ -164,9 +174,9 @@ useHead({ title: 'Promoters' })
             </td>
             <td class="px-3 py-3">
               <div class="flex items-center justify-end gap-1">
-                <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
-                        :title="p.ativo ? 'Desativar' : 'Ativar'"
-                        @click="chamar('PATCH', { id: p.id, campos: { ativo: !p.ativo } })">
+                <button type="button" class="p-1 text-tinta-fraca hover:text-acao disabled:opacity-40"
+                        :title="p.ativo ? 'Desativar' : 'Ativar'" :disabled="salvando"
+                        @click="alternar(p)">
                   <IconeMenu :nome="p.ativo ? 'check' : 'fechar'" :tamanho="16" />
                 </button>
                 <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
@@ -178,7 +188,7 @@ useHead({ title: 'Promoters' })
                         :disabled="!p.podeApagar"
                         :title="p.podeApagar
                           ? (confirmando === p.id ? 'Clique de novo para confirmar' : 'Apagar')
-                          : 'Divulgador com venda: desative em vez de apagar'"
+                          : `Tem ${p.pedidosAtribuidos} pedido(s) atribuído(s), pagos ou não: desative em vez de apagar`"
                         @click="apagar(p.id)">
                   <IconeMenu nome="lixo" :tamanho="16" />
                 </button>
