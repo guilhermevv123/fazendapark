@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export default defineNuxtConfig({
@@ -8,6 +9,19 @@ export default defineNuxtConfig({
   // arquivos ao mesmo tempo — medido em 27/09: `router.options.mjs` levou 83 s e o E2E estourou
   // tempo. `scripts/dev-e2e.mjs` põe o dele em `.nuxt-e2e`. Sem a variável, nada muda.
   buildDir: process.env.NUXT_PASTA_BUILD || '.nuxt',
+  // O cache de dependências do Vite também por instância: as cópias de trabalho das frotas de
+  // correção dividem o `node_modules` (link pro repositório principal), e um servidor reotimizando
+  // dependências reescrevia o cache que os outros estavam servindo — a página recarregava no meio de
+  // um teste. Sem a variável, fica no lugar de sempre (`node_modules/.cache/vite`).
+  // E, nessas cópias, o `node_modules` real mora fora da pasta do projeto: sem liberar o caminho
+  // verdadeiro, o Vite respondia 403 pra fonte Geist (a página caía na fonte reserva e os prints
+  // e medidas de tela saíam errados). No repositório principal o caminho é o mesmo de sempre.
+  vite: {
+    ...(process.env.NUXT_PASTA_BUILD
+      ? { cacheDir: `node_modules/.cache/vite${process.env.NUXT_PASTA_BUILD.replace(/^\.nuxt/, '')}` }
+      : {}),
+    server: { fs: { allow: [realpathSync(fileURLToPath(new URL('./node_modules', import.meta.url)))] } },
+  },
   // Cabeçalhos de segurança — a produção (27/09) saía sem NENHUM: sem HSTS, o painel podia ser
   // posto dentro de um iframe de outro site (clickjacking no botão de estornar), e o navegador
   // adivinhava tipo de arquivo. `camera=(self)` porque o leitor da portaria usa a câmera.
