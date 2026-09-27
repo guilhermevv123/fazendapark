@@ -209,7 +209,7 @@ describe('balcão: o que o guichê digita e o que ele cobra', () => {
     const turno = await abrirCaixa('ZZ GUICHE MEIA')
     const r = await vender({
       turnoId: turno, forma: 'dinheiro',
-      itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 2 }],
+      itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 2, meia: { motivo: 'estudante' } }],
       comprador: { nome: 'Maria Estudante', documento: '529.982.247-25' },
     })
     expect(r.status, JSON.stringify(r.corpo)).toBe(200)
@@ -237,7 +237,7 @@ describe('balcão: o que o guichê digita e o que ele cobra', () => {
 
     const turno = await abrirCaixa('ZZ GUICHE PRECO')
     const r = await vender({
-      turnoId: turno, forma: 'dinheiro', itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 1 }],
+      turnoId: turno, forma: 'dinheiro', itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 1, meia: { motivo: 'estudante' } }],
       comprador: { documento: CPF },
     })
     expect(r.status, JSON.stringify(r.corpo)).toBe(200)

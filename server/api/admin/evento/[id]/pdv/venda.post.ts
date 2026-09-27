@@ -25,6 +25,9 @@ import { gerarCodigo } from '../../../../../utils/ingresso'
 import { emitirNaTransacao } from '../../../../../utils/emissao'
 import { SQL_FIM_DO_DIA_DO_LOTE, SQL_TRAVA_TURNO_ABERTO } from '../../../../../utils/caixa'
 import { cpfValido } from '../../../../../utils/documento'
+import {
+  conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, MOTIVOS, MOTIVOS_EM_TEXTO, motivoValido,
+} from '../../../../../utils/meia-entrada'
 
 const Entrada = z.object({
   turnoId: z.string().uuid(),
@@ -32,6 +35,16 @@ const Entrada = z.object({
     lotId: z.string().uuid(),
     ticketTypeId: z.string().uuid().nullish(),
     quantidade: z.number().int().positive().max(50),
+    /**
+     * Por que esta linha é meia-entrada — a mesma declaração do checkout. O guichê pergunta
+     * o motivo (estudante, idoso, PCD…) porque é ele que diz à portaria QUAL papel pedir;
+     * `documento` é o número da credencial (carteira estudantil, ID Jovem), opcional aqui:
+     * o operador está com o documento na mão, e sem número a linha leva o CPF do cliente.
+     */
+    meia: z.object({
+      motivo: z.string().min(1).max(40),
+      documento: z.string().trim().max(40).nullish(),
+    }).nullish(),
   })).min(1).max(20),
   forma: z.enum(['dinheiro', 'debito', 'credito', 'pix']),
   /** só em dinheiro: o que a pessoa entregou, pra calcular o troco */
@@ -171,7 +184,7 @@ export default defineEventHandler(async (event) => {
 
   const tipoIds = d.itens.map((i) => i.ticketTypeId).filter(Boolean) as string[]
   const tipos = tipoIds.length
-    ? await q<any>(`SELECT id, lot_id, name, discount_bps, requires_document
+    ? await q<any>(`SELECT id, lot_id, name, kind, discount_bps, requires_document
                       FROM ticket_types WHERE id = ANY($1::uuid[])`, [tipoIds])
     : []
   const porTipo = new Map(tipos.map((t) => [t.id, t]))
@@ -210,6 +223,53 @@ export default defineEventHandler(async (event) => {
   if (documento && !cpfValido(documento)) {
     throw createError({ statusCode: 400, statusMessage: 'CPF inválido' })
   }
+
+  // ------------------------------------------ meia-entrada: motivo e cota (ADM-02)
+  // O guichê vendia meia sem perguntar o motivo e sem conferir a cota de 40% do lote: o
+  // checkout recusava a 5ª meia de um lote de 10, e o balcão vendia a 5ª, a 6ª, a 7ª. O
+  // motivo é o que diz à portaria qual documento pedir; a cota é a lei (Decreto 8.537/2015).
+  // A declaração é conferida AQUI, antes de qualquer escrita; a cota, lá dentro da transação,
+  // depois de `reservar()` — a mesma ordem do checkout (ver `conferirCotaDeMeia`).
+  const meiaDaLinha = d.itens.map((it, i) => {
+    const t = it.ticketTypeId ? porTipo.get(it.ticketTypeId) : null
+    const declarado = it.meia ?? null
+    if (t?.kind !== 'meia') {
+      if (declarado) {
+        throw createError({
+          statusCode: 422,
+          statusMessage: `"${t?.name ?? porLote.get(it.lotId)?.name ?? 'Este ingresso'}" não é meia-entrada: `
+            + 'tire o motivo da meia desta linha ou escolha a opção de meia.',
+          data: { tipo: 'meia_em_inteira' },
+        })
+      }
+      return null
+    }
+    if (!declarado?.motivo) {
+      throw createError({
+        statusCode: 422,
+        statusMessage: `Pergunte ao cliente o motivo da meia-entrada de "${t.name}" e escolha na venda: `
+          + `${MOTIVOS_EM_TEXTO}. É ele que diz à portaria qual documento pedir.`,
+        data: { tipo: 'meia_sem_motivo', motivos: Object.keys(MOTIVOS) },
+      })
+    }
+    if (!motivoValido(declarado.motivo)) {
+      throw createError({
+        statusCode: 422,
+        statusMessage: `"${declarado.motivo}" não dá direito a meia-entrada. Os motivos da lei são: ${MOTIVOS_EM_TEXTO}.`,
+        data: { tipo: 'meia_motivo_invalido', motivos: Object.keys(MOTIVOS) },
+      })
+    }
+    return {
+      motivo: declarado.motivo,
+      // o número da credencial, quando o operador digitou; senão o CPF do cliente (se houver)
+      documento: declarado.documento?.trim() || docDaLinha[i],
+      exigido: documentoExigido(declarado.motivo),
+    }
+  })
+  const meiasPorLote = new Map<string, number>()
+  d.itens.forEach((it, i) => {
+    if (meiaDaLinha[i]) meiasPorLote.set(it.lotId, (meiasPorLote.get(it.lotId) ?? 0) + it.quantidade)
+  })
 
   // --------------------------------------------------------------- cupom
   let cupom: any = null
@@ -264,6 +324,13 @@ export default defineEventHandler(async (event) => {
       lotId: i.lotId, ticketTypeId: i.ticketTypeId ?? null, quantidade: i.quantidade,
     })), { canal: 'bilheteria' })
 
+    // A cota de meia, com a trava do lote na mão e ESTA venda já somada em `sold` — a mesma
+    // conferência do checkout, na mesma ordem (lotes ordenados: duas vendas que levam os
+    // mesmos lotes travam na mesma sequência e não se prendem uma na outra).
+    for (const [lotId, quantas] of [...meiasPorLote].sort((a, b) => a[0].localeCompare(b[0]))) {
+      await conferirCotaDeMeia(c, lotId, quantas)
+    }
+
     // Cliente é OPCIONAL no balcão. Quem compra no portão raramente dá
     // e-mail, e exigir um faria o operador inventar um — o que polui a base
     // de contatos com endereços que não existem.
@@ -308,10 +375,14 @@ export default defineEventHandler(async (event) => {
       await c.query(
         `INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity,
                                   unit_face_cents, unit_fee_cents, unit_total_cents,
-                                  half_document)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                                  half_reason, half_document, half_document_required)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        // motivo, número e exigência entram na LINHA; a emissão os carimba em cada ingresso
         [ord.rows[0].id, it.lotId, it.ticketTypeId ?? null, it.quantidade,
-         l.faceCents, l.feeCents, l.totalCents, docDaLinha[i]])
+         l.faceCents, l.feeCents, l.totalCents,
+         meiaDaLinha[i]?.motivo ?? null,
+         meiaDaLinha[i]?.documento ?? docDaLinha[i],
+         meiaDaLinha[i]?.exigido ?? null])
     }
 
     if (cupom) await c.query(`UPDATE promo_codes SET uses = uses + 1 WHERE id = $1`, [cupom.id])
@@ -362,6 +433,10 @@ export default defineEventHandler(async (event) => {
     }
     if (e instanceof LoteIndisponivel) {
       throw createError({ statusCode: 409, statusMessage: e.message, data: { tipo: 'lote' } })
+    }
+    if (e instanceof CotaDeMeiaEsgotada) {
+      throw createError({ statusCode: 409, statusMessage: e.recadoNoBalcao,
+        data: { tipo: 'cota_meia', cota: e.cota, restavam: e.restavam } })
     }
     // Trava de DIA, que mora no banco (gatilho `sessao_confere_vaga`,
     // db/016): dia lotado, lote de outro dia. A mensagem do RAISE já foi

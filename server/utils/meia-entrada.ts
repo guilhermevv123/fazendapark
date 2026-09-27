@@ -18,10 +18,10 @@
  *     sem a linha do lote travada passa em teste sequencial e não segura nada.
  *     Por isso `conferirCotaDeMeia` TRAVA primeiro e conta depois.
  *
- * Quem chama: server/api/checkout.post.ts. O balcão (pdv/venda.post.ts) ainda
- * não passa por aqui — ele exige o documento do comprador mas não pergunta o
- * motivo nem confere a cota. Está relatado na entrega; a função já está pronta
- * para ele.
+ * Quem chama: server/api/checkout.post.ts e, desde 27/09, o balcão
+ * (pdv/venda.post.ts): ele pergunta o motivo de cada linha de meia, grava
+ * motivo/documento/exigência no item e confere a cota dentro da mesma
+ * transação da venda (ADM-02 — antes vendia a 5ª meia de um lote de 10).
  */
 import type { PoolClient } from 'pg'
 
@@ -168,6 +168,20 @@ export class CotaDeMeiaEsgotada extends Error {
       : `Restaram ${this.restavam} meias-entradas`
     return `${resta} em "${this.nomeDoLote}" e você pediu ${this.pedido}. `
       + `Leve ${this.restavam} como meia e o resto como inteira.`
+  }
+
+  /**
+   * O mesmo aviso, escrito pra quem está no GUICHÊ (quem lê é o operador, não o comprador):
+   * diz a cota e o que fazer com o cliente na frente.
+   */
+  get recadoNoBalcao(): string {
+    if (this.restavam <= 0) {
+      return `Acabaram as meias-entradas de "${this.nomeDoLote}": a lei limita a ${this.cota} `
+        + '(40% do lote) e todas já saíram. Venda como inteira.'
+    }
+    const cabe = this.restavam === 1 ? 'Só cabe mais 1 meia-entrada' : `Só cabem mais ${this.restavam} meias-entradas`
+    return `${cabe} em "${this.nomeDoLote}" e a venda pedia ${this.pedido}. `
+      + `Venda ${this.restavam} como meia e o resto como inteira.`
   }
 }
 
