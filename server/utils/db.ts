@@ -24,7 +24,11 @@ export function db(): pg.Pool {
     max: Number(process.env.PG_POOL_MAX || 10),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
-    ssl: connectionString.includes('localhost') ? undefined : { rejectUnauthorized: false },
+    // Banco local e o Postgres interno do EasyPanel (rede do Docker, sem TLS)
+    // conectam sem SSL — esse segundo avisa com `sslmode=disable` na URL; sem
+    // isso o pool exigia SSL e o servidor recusava a conexão no primeiro boot.
+    ssl: connectionString.includes('localhost') || connectionString.includes('sslmode=disable')
+      ? undefined : { rejectUnauthorized: false },
   })
   pool.on('error', (e) => console.error('[db] erro no cliente ocioso:', e.message))
   return pool

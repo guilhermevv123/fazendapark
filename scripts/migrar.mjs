@@ -60,6 +60,29 @@ try {
     await c.query('INSERT INTO schema_migrations (arquivo) VALUES ($1)', [f])
   }
   console.log(faltam.length ? `[migrar] ${faltam.length} aplicada(s)` : '[migrar] nada pendente')
+
+  // Carga inicial (opcional): a organização e o primeiro acesso de um banco
+  // novo em produção, sem abrir a porta do Postgres pra internet. O SQL vem em
+  // base64 numa variável do painel de deploy (nunca no repositório) e só roda
+  // com o banco SEM organização nenhuma — reiniciar o container depois não
+  // duplica nada. Aplicou → apague a variável.
+  if (process.env.CARGA_INICIAL_SQL_B64) {
+    const { rows: [n] } = await c.query('SELECT count(*)::int AS n FROM organizations')
+    if (n.n > 0) {
+      console.log('[migrar] carga inicial ignorada: o banco já tem organização (pode apagar a variável)')
+    } else {
+      const sql = Buffer.from(process.env.CARGA_INICIAL_SQL_B64, 'base64').toString('utf8')
+      await c.query('BEGIN')
+      try {
+        await c.query(sql)
+        await c.query('COMMIT')
+      } catch (e) {
+        await c.query('ROLLBACK')
+        throw e
+      }
+      console.log('[migrar] carga inicial aplicada')
+    }
+  }
 } catch (e) {
   console.error('[migrar] falhou:', e.message)
   process.exitCode = 1
