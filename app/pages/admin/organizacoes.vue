@@ -23,7 +23,9 @@ const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
  */
 function situacao(o: any): { chave: 'sem' | 'testes' | 'recebendo'; t: string; c: string } {
   if (!o.temAsaas) return { chave: 'sem', t: 'SEM COBRANÇA', c: 'selo-erro' }
-  return o.ambienteAsaas === 'production'
+  // o ambiente EFETIVO (prefixo da chave): o `<select>` cru já pintou "EM TESTES"
+  // numa conta cobrando de verdade (ORG-01)
+  return (o.ambienteEfetivo ?? o.ambienteAsaas) === 'production'
     ? { chave: 'recebendo', t: 'RECEBENDO', c: 'selo-ok' }
     : { chave: 'testes', t: 'EM TESTES', c: 'selo-alerta' }
 }
@@ -98,6 +100,10 @@ useHead({ title: 'Organização' })
                   <p class="font-mono text-xs text-tinta-fraca">/{{ o.slug }}</p>
                   <p v-if="!o.temAsaas" class="mt-1 text-xs font-medium text-alerta">
                     Sem chave do Asaas — nenhuma cobrança sai daqui.
+                  </p>
+                  <p v-if="o.ambienteDivergente" class="mt-1 text-xs font-medium text-erro" data-parte="ambiente-divergente">
+                    A chave gravada e o ambiente marcado discordam — a cobrança vai para
+                    {{ o.ambienteEfetivo === 'production' ? 'PRODUÇÃO' : 'TESTES' }}. Corrija em Configurações.
                   </p>
                 </td>
                 <td class="px-3 py-3 text-tinta-suave">{{ o.documento || '—' }}</td>

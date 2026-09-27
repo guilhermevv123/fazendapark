@@ -15,6 +15,9 @@ const aviso = ref('')
 const salvando = ref(false)
 
 const f = reactive({ nome: '', documento: '', ambienteAsaas: 'sandbox', carteiraAsaas: '' })
+
+/** para onde a cobrança VAI (prefixo da chave), não o que o `<select>` diz — ORG-01 */
+const ambienteMostrado = computed(() => data.value?.ambienteEfetivo ?? data.value?.ambienteAsaas)
 const chaveNova = ref('')
 const trocandoChave = ref(false)
 /** "Remover" a chave em dois passos: apagar a credencial de cobrança num clique solto não tem desfazer. */
@@ -137,13 +140,24 @@ useHead({ title: 'Configurações' })
         <section class="card">
           <div class="flex items-center justify-between">
             <h2 class="titulo text-base font-semibold text-tinta">Recebimento — Asaas</h2>
-            <span :class="data.ambienteAsaas === 'production' ? 'selo-ok' : 'selo-alerta'">
-              {{ data.ambienteAsaas === 'production' ? 'PRODUÇÃO' : 'TESTES' }}
+            <!-- o ambiente EFETIVO: o prefixo da chave é quem escolhe o gateway
+                 (utils/asaas-ambiente.ts). O `<select>` cru já mostrou "TESTES"
+                 em cima de chave de produção cobrando de verdade (ORG-01). -->
+            <span data-parte="selo-ambiente" :class="ambienteMostrado === 'production' ? 'selo-ok' : 'selo-alerta'">
+              {{ ambienteMostrado === 'production' ? 'PRODUÇÃO' : 'TESTES' }}
             </span>
           </div>
           <p class="mt-1 text-sm text-tinta-suave">
             É por aqui que o PIX e o cartão do comprador entram. Em testes, nada é cobrado
             de verdade.
+          </p>
+          <p v-if="data.ambienteDivergente" class="faixa-erro mt-3" role="alert" data-parte="ambiente-divergente">
+            A chave gravada é de <strong>{{ ambienteMostrado === 'production' ? 'PRODUÇÃO' : 'TESTES' }}</strong>,
+            mas o ambiente marcado é
+            <strong>{{ data.ambienteAsaas === 'production' ? 'Produção' : 'Testes' }}</strong>.
+            Hoje as cobranças vão para
+            {{ ambienteMostrado === 'production' ? 'PRODUÇÃO — cobram de verdade' : 'TESTES — ninguém consegue pagar' }}.
+            Cole a chave do ambiente certo (ou troque o ambiente) e salve.
           </p>
 
           <div class="mt-3 grid gap-3">
