@@ -14,6 +14,16 @@ const senha = ref('')
 const erro = ref('')
 const enviando = ref(false)
 
+// Digitou antes de a página terminar de carregar (celular com internet lenta): quando a
+// hidratação do Vue chega, o v-model escreve o valor dele ('') por cima do que está no campo e o
+// login vai vazio. `onBeforeMount` roda ANTES da hidratação, com o HTML do servidor ainda na
+// tela — é a última chance de ler o que a pessoa já digitou. Achado pelo E2E em 27/09.
+onBeforeMount(() => {
+  const campo = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value ?? ''
+  if (!email.value) email.value = campo('email')
+  if (!senha.value) senha.value = campo('senha')
+})
+
 async function entrar() {
   erro.value = ''
   enviando.value = true
