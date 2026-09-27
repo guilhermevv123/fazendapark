@@ -6,6 +6,8 @@
  * exatamente estas linhas, não uma cópia.
  */
 
+import { diaLocal } from '~/composables/formato'
+
 /** o que a portaria pede quando o ingresso é meia — ver o comentário no setup */
 export type Meia = { motivo: string | null; rotulo: string; documento: string; numero: string | null }
 
@@ -124,15 +126,76 @@ export function respostaForaDaLista(listaEm: string | null): Resposta {
              + '— chame o supervisor.' }
 }
 
-/** o título grande do veredito — o MESMO no cartão e em cima da câmera */
+/**
+ * O título grande do veredito — o MESMO no cartão e em cima da câmera.
+ *
+ * A consulta boa diz "VÁLIDO — NÃO ENTROU" (ADM-03): era "VÁLIDO", no mesmo verde e com o
+ * mesmo bipe do PODE ENTRAR, e com o "Só conferir" esquecido ligado o portão deixava a fila
+ * passar sem queimar ingresso nenhum — o mesmo QR entrava quantas vezes fosse lido.
+ */
 export function tituloDoVeredito(r: Resposta): string {
   if (r.resultado === 'nao_lido') return 'NÃO LIDO — TENTE DE NOVO'
   if (r.resultado === 'fora_da_lista') return 'CHAME O SUPERVISOR'
   if (r.consulta) {
-    if (r.ok) return 'VÁLIDO'
+    if (r.ok) return 'VÁLIDO — NÃO ENTROU'
     return r.resultado === 'fora_da_sessao' ? 'AINDA NÃO' : 'BARRADO'
   }
   return r.ok ? 'PODE ENTRAR' : 'BARRADO'
+}
+
+/** a cor da CONSULTA boa: roxo da marca, nunca o verde de quem entrou (ADM-03) */
+export const CLASSE_CONSULTA = 'bg-grape-600 text-white'
+
+/** a cor do cartão (e da faixa da câmera) pra ESTA resposta */
+export function classeDoVeredito(r: Resposta): string {
+  if (r.consulta && r.ok) return CLASSE_CONSULTA
+  return CLASSE[r.resultado] ?? 'bg-erro text-white'
+}
+
+/**
+ * Passaporte de vários dias SEM REDE (ADM-04) — a mesma régua da porta online, com o que desce
+ * na lista: quantos dias cobre, quais dias já usou (no fuso do parque) e em quais dias vale.
+ * `null` = pode entrar. O dia de hoje é o do relógio do aparelho — o tablet está no parque.
+ */
+export type PassaporteLocal = {
+  diasCobertos?: number; diasUsados?: string[]
+  sessoes?: { inicio: string; fim: string | null }[]
+  /** os dias em que ESTE aparelho já deixou passar, sem rede */
+  diasAqui?: string[]
+}
+export function decisaoDoPassaporte(t: PassaporteLocal, agora = new Date()): Resposta | null {
+  const cobre = Number(t.diasCobertos ?? 1)
+  if (t.sessoes?.length) {
+    const n = agora.getTime()
+    const aberta = t.sessoes.some((s) => {
+      const abre = new Date(s.inicio).getTime() - 2 * 3600_000
+      const fecha = new Date(s.fim ?? s.inicio).getTime() + 2 * 3600_000
+      return n >= abre && n <= fecha
+    })
+    if (!aberta) {
+      return { local: true, ok: false, resultado: 'fora_da_sessao',
+               mensagem: 'Este passaporte não vale neste dia/horário' }
+    }
+  }
+  const usados = new Set([...(t.diasUsados ?? []), ...(t.diasAqui ?? [])])
+  if (usados.has(diaLocal(agora))) {
+    return { local: true, ok: false, resultado: 'ja_usado', mensagem: 'Este passaporte já entrou hoje' }
+  }
+  if (usados.size >= cobre) {
+    return { local: true, ok: false, resultado: 'ja_usado',
+             mensagem: `Este passaporte já usou os ${cobre} dias que cobre` }
+  }
+  return null
+}
+
+/**
+ * A lista baixada envelhece mesmo COM rede (ADM-06): só descia na montagem e no botão, e o
+ * ingresso cancelado às 11h entrava às 14h quando o 4G caía, pela foto das 8h. Com rede, a
+ * lista é conferida a cada minuto e desce de novo quando passa de `LISTA_VELHA_MS`.
+ */
+export const CONFERIR_LISTA_A_CADA_MS = 60_000
+export function precisaRenovarLista(online: boolean, listaEm: string | null, agora = Date.now()): boolean {
+  return online && listaVelha(listaEm, agora)
 }
 
 /**
@@ -152,6 +215,7 @@ export const CLASSE: Record<string, string> = {
 
 /** a bolinha do histórico da tela, com a mesma régua de cor */
 export function corDoPonto(r: Resposta): string {
+  if (r.consulta && r.ok) return 'bg-grape-600'
   if (r.ok) return 'bg-ok'
   if (r.resultado === 'nao_lido') return 'bg-tinta-suave'
   if (r.resultado === 'fora_da_lista' || r.resultado === 'ja_usado'
@@ -236,7 +300,7 @@ type IngressoLocal = {
   sessaoInicio: string | null; sessaoFim: string | null
   /** marcado por ESTE aparelho enquanto estava sem rede */
   usadoAqui?: { em: string; gate: string | null }
-}
+} & PassaporteLocal
 type Passagem = { id: string; qr: string; gate: string | null; em: string; offline: boolean }
 
 const CHAVE_LISTA = `dt_portaria_lista_${id}`
@@ -411,6 +475,20 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('online', aoVoltarRede)
   clearInterval(timerDeReconexao)
+  clearInterval(timerDaLista)
+})
+
+/**
+ * Com rede, a lista do aparelho não pode envelhecer (ADM-06): a cada minuto confere a idade e,
+ * passada de `LISTA_VELHA_MS`, desce de novo — em segundo plano, sem segurar leitura nenhuma.
+ */
+let timerDaLista: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  timerDaLista = setInterval(() => {
+    if (precisaRenovarLista(online.value, listaEm.value) && !sincronizando.value) {
+      void sincronizar({ comLista: true })
+    }
+  }, CONFERIR_LISTA_A_CADA_MS)
 })
 
 /** lista vazia OU antiga desce de novo junto com a volta da rede */
@@ -494,7 +572,8 @@ function codigoDoQr(bruto: string): { codigo: string; eventoDoQr: string | null 
  * o QR não sai do servidor, então conferir assinatura aqui seria impossível
  * de qualquer jeito.
  */
-function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
+function validarLocal(bruto: string, idPassagem: string = novoId(),
+                      consultar: boolean = apenasConsultar.value): Resposta {
   const { codigo: cod, eventoDoQr } = codigoDoQr(bruto)
   const base = { local: true, ok: false }
 
@@ -519,10 +598,19 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   if (t.status === 'cancelado') {
     return { ...base, resultado: 'cancelado', mensagem: 'Ingresso cancelado' }
   }
-  if (t.status === 'usado' || t.usadoAqui) {
+  // Passaporte de vários dias: `usadoAqui` é de UM dia, não do ingresso (ADM-04)
+  const passaporte = Number(t.diasCobertos ?? 1) > 1
+  if (t.status === 'usado' || (t.usadoAqui && !passaporte)) {
     return { ...base, resultado: 'ja_usado', mensagem: 'Este ingresso já entrou',
              titular: t.titular, entrouEm: t.usadoAqui?.em ?? null,
              portao: t.usadoAqui?.gate ?? null }
+  }
+  if (passaporte) {
+    const barrado = decisaoDoPassaporte(t)
+    if (barrado && !consultar) {
+      return { ...barrado, titular: t.titular, entrouEm: t.usadoAqui?.em ?? null,
+               portao: t.usadoAqui?.gate ?? null }
+    }
   }
   let foraDaSessao = false
   if (t.sessaoInicio) {
@@ -543,7 +631,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   // os dados do ingresso, e diz se o horário ainda não chegou. As duas portas
   // precisam responder igual — offline, a pergunta "o que este cliente precisa
   // trazer?" é a única que o operador ainda consegue resolver sozinho.
-  if (apenasConsultar.value) {
+  if (consultar) {
     return { local: true, ok: !foraDaSessao,
              resultado: foraDaSessao ? 'fora_da_sessao' : 'ok',
              mensagem: foraDaSessao
@@ -562,6 +650,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   // conflito em vez de escondê-lo.
   const em = new Date().toISOString()
   t.usadoAqui = { em, gate: gate.value || null }
+  if (passaporte) t.diasAqui = [...new Set([...(t.diasAqui ?? []), diaLocal(new Date(em))])]
   fila.value = [...fila.value, { id: idPassagem, qr: bruto.trim(), gate: gate.value || null,
                                  em, offline: true }]
   guardar(CHAVE_FILA, fila.value)
@@ -588,6 +677,10 @@ async function ler() {
     return
   }
   lendo.value = true
+  // "Só conferir" vale UMA leitura (ADM-03): ficava ligado entre leituras e o portão seguia
+  // respondendo VÁLIDO sem queimar ingresso — o mesmo QR entrava de novo, inclusive passado
+  // pela grade pra outra pessoa. A escolha é lida AGORA e desligada no fim desta leitura.
+  const consultar = apenasConsultar.value
   /**
    * UM id por passagem FÍSICA, criado antes de saber se vai ter rede.
    *
@@ -607,7 +700,7 @@ async function ler() {
   const idPassagem = novoId()
   try {
     if (!online.value) {
-      ultima.value = validarLocal(c, idPassagem)
+      ultima.value = validarLocal(c, idPassagem, consultar)
       // "Tentar de novo na próxima leitura" SEM segurar a fila: a decisão
       // desta pessoa já saiu pela lista, e a volta ao servidor corre por
       // fora. Se a rede voltou, a próxima leitura já vai online — e esta
@@ -618,7 +711,7 @@ async function ler() {
         ultima.value = await $fetch<Resposta>('/api/checkin', {
           method: 'POST',
           body: { qr: c, eventId: id, gate: gate.value || undefined,
-                  apenasConsultar: apenasConsultar.value,
+                  apenasConsultar: consultar,
                   entradaId: idPassagem, deviceId: aparelho.value },
         })
         // O retrato do público vem DENTRO da resposta da porta (o mesmo
@@ -642,7 +735,7 @@ async function ler() {
           // MESMO id da tentativa online: o servidor pode ter gravado antes de
           // a resposta se perder, e é o id que decide se isto é a mesma pessoa
           // ou uma segunda.
-          ultima.value = validarLocal(c, idPassagem)
+          ultima.value = validarLocal(c, idPassagem, consultar)
         }
       }
     }
@@ -651,6 +744,7 @@ async function ler() {
       historico.value = historico.value.slice(0, 12)
     }
   } finally {
+    if (consultar) apenasConsultar.value = false
     codigo.value = ''
     lendo.value = false
     // nextTick: o input só volta a existir depois do repintar
@@ -681,14 +775,18 @@ function destravarSom() {
   try { som ??= new AudioContext(); void som.resume() } catch { /* sem áudio: sobram a cor e a vibração */ }
 }
 
-/** Com a câmera o operador olha pro QR, não pra tela: o veredito precisa ser ouvido e sentido. */
-function avisar(ok: boolean) {
-  navigator.vibrate?.(ok ? 60 : [140, 70, 140])
+/**
+ * Com a câmera o operador olha pro QR, não pra tela: o veredito precisa ser ouvido e sentido.
+ * A consulta tem o seu som (dois toques curtos, tom do meio): o bipe agudo do PODE ENTRAR numa
+ * consulta dizia "entrou" sem ninguém ter entrado (ADM-03).
+ */
+function avisar(ok: boolean, consulta = false) {
+  navigator.vibrate?.(consulta ? [40, 60, 40] : ok ? 60 : [140, 70, 140])
   if (!som) return
   try {
     const osc = som.createOscillator()
     const ganho = som.createGain()
-    osc.frequency.value = ok ? 880 : 220
+    osc.frequency.value = consulta ? 520 : ok ? 880 : 220
     ganho.gain.value = 0.15
     osc.connect(ganho)
     ganho.connect(som.destination)
@@ -702,7 +800,7 @@ const leituraN = ref(0)
 watch(ultima, (r) => {
   if (!r) return
   leituraN.value++
-  if (modoCamera.value) avisar(r.ok)
+  if (modoCamera.value) avisar(r.ok, !!r.consulta)
 })
 
 /** O veredito em cima da própria imagem da câmera — o mesmo texto e a mesma cor do cartão grande. */
@@ -713,7 +811,7 @@ const vereditoCamera = computed(() => {
     chave: leituraN.value,
     titulo: tituloDoVeredito(r),
     detalhe: [r.ingresso?.titular ?? r.titular, r.mensagem].filter(Boolean).join(' · '),
-    classe: CLASSE[r.resultado] ?? 'bg-erro text-white',
+    classe: classeDoVeredito(r),
   }
 })
 
@@ -1092,14 +1190,22 @@ useHead({ title: 'Leitor de entrada' })
          data-parte="aviso-codigo">
         {{ avisoCodigo }}
       </p>
-      <label class="mt-3 flex items-center gap-2 text-sm text-tinta-suave">
-        <input v-model="apenasConsultar" type="checkbox" class="h-4 w-4 accent-acao">
-        Só conferir (não marca entrada)
+      <!-- "Só conferir" vale UMA leitura e desliga sozinho (ADM-03). Ligado, a faixa roxa diz
+           com todas as letras que ninguém está entrando — o verde fica só pra quem entra. -->
+      <label class="mt-3 flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl px-3 text-sm font-semibold"
+             :class="apenasConsultar ? 'bg-grape-600 text-white' : 'bg-fundo-cinza text-tinta-suave'"
+             data-parte="so-conferir">
+        <input v-model="apenasConsultar" type="checkbox" class="h-5 w-5 accent-grape-600">
+        Só conferir a próxima leitura (não marca entrada)
       </label>
+      <p v-if="apenasConsultar" class="mt-2 rounded-xl bg-grape-50 px-3 py-2 text-sm font-semibold text-grape-700"
+         role="status" data-parte="modo-consulta">
+        MODO CONSULTA — a próxima leitura NÃO deixa ninguém entrar. Desliga sozinho depois dela.
+      </p>
     </div>
 
     <div v-if="ultima" class="mt-4 rounded-card px-6 py-8 text-center entra-resposta"
-         :class="CLASSE[ultima.resultado] ?? 'bg-erro text-white'">
+         :class="classeDoVeredito(ultima)" data-parte="cartao-veredito">
       <!-- "Só conferir" agora responde mesmo fora do horário da sessão (o
            cliente que chega cedo é quem ainda dá tempo de mandar buscar o
            documento em casa). Então o veredito da consulta deixa de ser

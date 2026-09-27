@@ -248,3 +248,117 @@ describe('leitor montado', () => {
     expect(t.text()).toContain('Não está na lista deste aparelho')
   })
 })
+
+// ===========================================================================
+// 27/09 — "Só conferir" que ficava ligado, passaporte de vários dias sem rede e a lista que
+// envelhecia com a rede de pé (ADM-03, ADM-04, ADM-06)
+// ===========================================================================
+
+describe('só conferir — pergunta, não passagem (ADM-03)', () => {
+  it('a consulta boa não se parece com PODE ENTRAR: outro título, outra cor', async () => {
+    const { tituloDoVeredito, classeDoVeredito, CLASSE, corDoPonto } = await tela()
+    const consulta = { ok: true, resultado: 'ok', mensagem: 'Válido (não marcado)', consulta: true }
+    const entrada = { ok: true, resultado: 'ok', mensagem: 'Liberado' }
+    expect(tituloDoVeredito(consulta)).toBe('VÁLIDO — NÃO ENTROU')
+    expect(tituloDoVeredito(entrada)).toBe('PODE ENTRAR')
+    expect(classeDoVeredito(consulta), 'consulta pintada do verde de quem entrou').not.toBe(CLASSE.ok)
+    expect(classeDoVeredito(entrada)).toBe(CLASSE.ok)
+    expect(corDoPonto(consulta)).not.toBe(corDoPonto(entrada))
+  })
+
+  it('vale UMA leitura: a seguinte já marca entrada, e a faixa de modo consulta some', async () => {
+    const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'Válido (não marcado)', consulta: true })
+    await t.find('[data-parte="so-conferir"] input').setValue(true)
+    expect(t.find('[data-parte="modo-consulta"]').exists(), 'ligado sem aviso na tela').toBe(true)
+
+    await lerCodigo(t, 'CON-AAAA-BBBB')
+    await lerCodigo(t, 'CON-CCCC-DDDD')
+    const corpos = chamadas.filter((c) => c.url === '/api/checkin').map((c) => c.opcoes.body)
+    expect(corpos).toHaveLength(2)
+    expect(corpos[0].apenasConsultar, 'a primeira leitura não foi consulta').toBe(true)
+    expect(corpos[1].apenasConsultar,
+      '"Só conferir" ficou ligado: o portão seguiu sem queimar ingresso').toBe(false)
+    expect(t.find('[data-parte="modo-consulta"]').exists()).toBe(false)
+    expect((t.find('[data-parte="so-conferir"] input').element as HTMLInputElement).checked).toBe(false)
+  })
+})
+
+describe('passaporte de vários dias sem rede (ADM-04)', () => {
+  const hoje = new Date(2026, 9, 10, 15, 0)   // 10/10 às 15h, no relógio do aparelho
+  const ontem = '2026-10-09'
+
+  it('um dia usado de três: entra hoje', async () => {
+    const { decisaoDoPassaporte } = await tela()
+    expect(decisaoDoPassaporte({ diasCobertos: 3, diasUsados: [ontem] }, hoje)).toBeNull()
+  })
+
+  it('já entrou hoje (pela lista ou por este aparelho): JÁ USADO', async () => {
+    const { decisaoDoPassaporte } = await tela()
+    expect(decisaoDoPassaporte({ diasCobertos: 3, diasUsados: ['2026-10-10'] }, hoje)?.resultado).toBe('ja_usado')
+    expect(decisaoDoPassaporte({ diasCobertos: 3, diasAqui: ['2026-10-10'] }, hoje)?.mensagem)
+      .toBe('Este passaporte já entrou hoje')
+  })
+
+  it('usou os três dias: JÁ USADO com o motivo', async () => {
+    const { decisaoDoPassaporte } = await tela()
+    const r = decisaoDoPassaporte({ diasCobertos: 3, diasUsados: ['2026-10-07', '2026-10-08', ontem] }, hoje)
+    expect(r?.resultado).toBe('ja_usado')
+    expect(r?.mensagem).toContain('3 dias')
+  })
+
+  it('lote com dias marcados: fora deles, FORA DO HORÁRIO', async () => {
+    const { decisaoDoPassaporte } = await tela()
+    const sabado = { inicio: new Date(2026, 9, 10, 9).toISOString(), fim: new Date(2026, 9, 10, 18).toISOString() }
+    const domingo = { inicio: new Date(2026, 9, 11, 9).toISOString(), fim: new Date(2026, 9, 11, 18).toISOString() }
+    expect(decisaoDoPassaporte({ diasCobertos: 2, sessoes: [sabado, domingo] }, hoje)).toBeNull()
+    expect(decisaoDoPassaporte({ diasCobertos: 2, sessoes: [domingo] }, hoje)?.resultado).toBe('fora_da_sessao')
+  })
+
+  it('montado e sem rede: o passaporte que entrou ontem passa hoje; o de um dia só não passa duas vezes', async () => {
+    const dia = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const ontemDeVerdade = new Date(Date.now() - 24 * 3600_000)
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), {
+      ...SINC_OK,
+      lista: { geradaEm: new Date().toISOString(), truncada: false, ingressos: [
+        { codigo: 'CON-PASS-AAAA', status: 'valido', titular: 'Passaporte', setor: 'P', lote: 'L',
+          tipo: null, pessoas: 1, sessaoInicio: null, sessaoFim: null,
+          diasCobertos: 3, diasUsados: [dia(ontemDeVerdade)], sessoes: [] },
+      ] },
+    })
+    await lerCodigo(t, 'CON-PASS-AAAA')   // a rede cai nesta leitura: decide pela lista
+    expect(t.find('[data-parte="veredito"]').text(), 'passaporte de 3 dias barrado no 2º dia').toBe('PODE ENTRAR')
+    await lerCodigo(t, 'CON-PASS-AAAA')
+    expect(t.find('[data-parte="veredito"]').text(), 'o mesmo passaporte passou duas vezes no mesmo dia')
+      .toBe('BARRADO')
+    expect(t.text()).toContain('já entrou hoje')
+  })
+})
+
+describe('a lista baixada não envelhece com rede (ADM-06)', () => {
+  it('regra: com rede e lista antiga, renova; sem rede, não tenta', async () => {
+    const { precisaRenovarLista, LISTA_VELHA_MS } = await tela()
+    const agora = Date.parse('2026-10-10T14:00:00Z')
+    const velha = new Date(agora - LISTA_VELHA_MS - 1).toISOString()
+    const nova = new Date(agora - 60_000).toISOString()
+    expect(precisaRenovarLista(true, velha, agora)).toBe(true)
+    expect(precisaRenovarLista(true, nova, agora)).toBe(false)
+    expect(precisaRenovarLista(false, velha, agora)).toBe(false)
+  })
+
+  it('montado: passados os 15 min, a lista desce de novo sozinha', async () => {
+    const { LISTA_VELHA_MS, CONFERIR_LISTA_A_CADA_MS } = await tela()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'Liberado' }, {
+        ...SINC_OK, lista: { geradaEm: new Date().toISOString(), truncada: false, ingressos: [] },
+      })
+      const baixadas = () => chamadas.filter((c) => c.url === '/api/portaria/sincronizar' && c.opcoes.body.comLista).length
+      const antes = baixadas()
+      await vi.advanceTimersByTimeAsync(LISTA_VELHA_MS + CONFERIR_LISTA_A_CADA_MS + 1_000)
+      await t.vm.$nextTick()
+      expect(baixadas(), 'com rede, a lista da abertura ficou o dia inteiro no aparelho').toBeGreaterThan(antes)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
