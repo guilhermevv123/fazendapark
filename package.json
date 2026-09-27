@@ -9,7 +9,7 @@
     "build": "nuxt build",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
-    "db:push": "node scripts/db-push.mjs",
+    "db:push": "node scripts/migrar.mjs",
     "test": "vitest run",
     "seed": "node scripts/seed.mjs",
     "seed:teste": "SEED_TESTE=1 node scripts/seed.mjs"
