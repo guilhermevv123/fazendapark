@@ -3,6 +3,33 @@ import { fileURLToPath } from 'node:url'
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-01',
   modules: ['@nuxtjs/tailwindcss'],
+  // Pasta de compilação por instância. Os três `nuxt dev` (3100 real, 3101 vitest, 3120 E2E)
+  // rodam no MESMO diretório; dividindo `.nuxt/`, cada edição fazia os três regenerarem os mesmos
+  // arquivos ao mesmo tempo — medido em 27/09: `router.options.mjs` levou 83 s e o E2E estourou
+  // tempo. `scripts/dev-e2e.mjs` põe o dele em `.nuxt-e2e`. Sem a variável, nada muda.
+  buildDir: process.env.NUXT_PASTA_BUILD || '.nuxt',
+  // Cabeçalhos de segurança — a produção (27/09) saía sem NENHUM: sem HSTS, o painel podia ser
+  // posto dentro de um iframe de outro site (clickjacking no botão de estornar), e o navegador
+  // adivinhava tipo de arquivo. `camera=(self)` porque o leitor da portaria usa a câmera.
+  // CSP completa (script com nonce) exige módulo próprio; aqui vão as diretivas que não quebram
+  // nada do Nuxt e fecham o que importa: ninguém emoldura a página, nenhum plugin, nenhum <base>.
+  routeRules: {
+    '/**': {
+      headers: {
+        'Strict-Transport-Security': 'max-age=31536000',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+        'Permissions-Policy': 'camera=(self), microphone=(), geolocation=(), payment=()',
+        'Content-Security-Policy': "frame-ancestors 'self'; base-uri 'self'; object-src 'none'",
+      },
+    },
+    // o painel e a sessão não ficam em cache de computador compartilhado nem em buscador
+    '/admin/**': { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } },
+    '/entrar': { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } },
+    '/api/admin/**': { headers: { 'Cache-Control': 'no-store' } },
+    '/api/auth/**': { headers: { 'Cache-Control': 'no-store' } },
+  },
   // Geist, a fonte do site do parque, servida por nós e não pelo Google: vem de
   // /_nuxt/, que o service worker da portaria guarda, então o leitor de entrada
   // mantém a tipografia inclusive sem rede. A ordem importa — o base.css vem por
