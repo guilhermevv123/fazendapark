@@ -218,7 +218,7 @@ describe('PIX pago depois do prazo · ainda tem lugar', () => {
     const vista = await fetch(`${BASE}/api/pedido/ZZQA-ATR-2`).then((x) => x.json())
     expect(vista.status).toBe('pago')
     expect(vista.ingressos).toHaveLength(1)
-    expect(vista.ingressos[0].qr).toMatch(/^DT1:/)
+    expect(vista.ingressos[0].qr).toMatch(/^DT[12]:/)
     expect(vista.pagoSemIngresso).toBe(false)
   }, 30_000)
 })

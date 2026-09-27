@@ -109,8 +109,10 @@ describe('fluxo de compra pela HTTP', () => {
     expect(pago.ingressos).toHaveLength(2)
     expect(pago.comprador.email).toContain('•')   // e-mail não vaza inteiro
     for (const t of pago.ingressos) {
-      // shape: versão : evento : código legível : assinatura de 10 chars
-      expect(t.qr).toMatch(/^DT1:[0-9a-f-]{36}:[A-Z0-9-]+:[A-Z0-9]{10}$/)
+      // shape: versão [: chave] : evento : código legível : assinatura de 10 chars.
+      // DT2 (com o kid da chave de TICKET_KEYS) quando a chave própria do
+      // ingresso está configurada; DT1 enquanto não está (utils/ingresso.ts).
+      expect(t.qr).toMatch(/^(DT1|DT2:[a-z0-9]{1,8}):[0-9a-f-]{36}:[A-Z0-9-]+:[A-Z0-9]{10}$/i)
       expect(t.status).toBe('valido')
     }
 
@@ -128,7 +130,8 @@ describe('fluxo de compra pela HTTP', () => {
     expect(comCodigoErrado.status).toBe(404)
 
     // ---------------------------------------------------- 7. portaria
-    const ev2 = pago.ingressos[0].qr.split(':')[1]
+    const partesDoQr = pago.ingressos[0].qr.split(':')
+    const ev2 = partesDoQr[partesDoQr[0] === 'DT2' ? 2 : 1]
     const forjado = await http('/api/checkin', {
       method: 'POST',
       body: JSON.stringify({ eventId: ev2, qr: pago.ingressos[0].qr.slice(0, -3) + 'XXX' }),
