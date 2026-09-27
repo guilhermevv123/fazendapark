@@ -62,7 +62,19 @@ const resultado = ref<any>(null)
 
 /** a gaveta só revela o esperado depois que o operador se compromete */
 const revelou = ref(false)
-
+/**
+ * Trocar de caixa zera a conferência (ADM-21): a contagem, o "contou" e o resultado do
+ * caixa anterior ficavam na tela — o botão Fechar do caixa B já vinha liberado com os
+ * R$ 500 contados no A, e o bloco de resultado ainda mostrava o A.
+ */
+watch(turnoId, () => {
+  contadoCents.value = 0
+  contou.value = false
+  observacao.value = ''
+  resultado.value = null
+  revelou.value = false
+  erro.value = ''
+})
 const mov = reactive({ tipo: 'sangria', valorCents: 0, motivo: '' })
 const movendo = ref(false)
 /** erro da gaveta aparece NO cartão da gaveta, não no alto da página */
@@ -229,7 +241,7 @@ async function fechar() {
     <!-- o que fazer com o dinheiro depois de cancelar: fica até o operador
          fechar, porque é a parte que acontece fora do sistema -->
     <div v-if="avisoCancelamento"
-         class="card mt-4 flex flex-wrap items-center justify-between gap-3 border-alerta bg-alerta-claro">
+         class="card mt-4 flex flex-wrap items-center justify-between gap-3 bg-alerta-claro ring-alerta/50">
       <div>
         <p class="rotulo-kpi">Venda cancelada</p>
         <p class="mt-1 text-sm text-tinta-corpo">{{ avisoCancelamento }}</p>
@@ -280,7 +292,31 @@ async function fechar() {
             </span>
           </header>
 
-          <dl class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <!-- Conferência CEGA (ADM-07): com o caixa aberto, quem conta não vê o dinheiro da
+               gaveta — nem o esperado, nem as parcelas que somam até ele. A rota nem manda. -->
+          <template v-if="data.contagem.cega">
+            <p class="mt-4 rounded-xl bg-grape-50 px-3 py-2 text-sm font-semibold text-grape-700"
+               data-parte="conferencia-cega">
+              Conferência cega: o dinheiro que a gaveta deve ter aparece depois que você gravar a contagem.
+            </p>
+            <dl class="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <dt class="text-xs text-tinta-suave">Cartão e pix</dt>
+                <dd class="numero-kpi">{{ reais(data.contagem.eletronicoCents) }}</dd>
+                <dd class="text-xs text-tinta-suave">não está na gaveta</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-tinta-suave">Ingressos emitidos</dt>
+                <dd class="numero-kpi">{{ data.contagem.ingressos }}</dd>
+                <dd class="text-xs text-tinta-suave">{{ data.contagem.pedidos }} venda(s)</dd>
+              </div>
+            </dl>
+          </template>
+          <p v-else-if="aberto" class="mt-3 text-xs text-tinta-suave" data-parte="master-ve">
+            Você vê o dinheiro da gaveta porque é master. Quem conta o caixa não vê até gravar a contagem.
+          </p>
+
+          <dl v-if="!data.contagem.cega" class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <dt class="text-xs text-tinta-fraca">Fundo de troco</dt>
               <dd class="numero-kpi">{{ reais(data.contagem.aberturaCents) }}</dd>
@@ -301,8 +337,8 @@ async function fechar() {
             </div>
           </dl>
 
-          <div v-if="data.contagem.sangriaCents || data.contagem.suprimentoCents
-                     || data.contagem.cancelamentos.length"
+          <div v-if="!data.contagem.cega && (data.contagem.sangriaCents || data.contagem.suprimentoCents
+                     || data.contagem.cancelamentos.length)"
                class="mt-4 flex flex-wrap gap-4 border-t border-linha pt-3 text-sm">
             <span>Sangrias: <strong class="tabular-nums">−{{ reais(data.contagem.sangriaCents) }}</strong></span>
             <span>Suprimentos: <strong class="tabular-nums">+{{ reais(data.contagem.suprimentoCents) }}</strong></span>
@@ -472,7 +508,9 @@ async function fechar() {
                 <td class="py-2 text-xs text-tinta-fraca tabular-nums">
                   {{ quando(k.em) }} · {{ k.por ?? '—' }}
                 </td>
-                <td class="py-2 text-right font-semibold tabular-nums">−{{ reais(k.totalCents) }}</td>
+                <td class="py-2 text-right font-semibold tabular-nums">
+                  {{ k.totalCents === null ? '—' : `−${reais(k.totalCents)}` }}
+                </td>
               </tr>
             </tbody>
           </table>

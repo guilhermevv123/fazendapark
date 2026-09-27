@@ -120,17 +120,27 @@ export default defineEventHandler(async (event) => {
     }
 
     // Dinheiro que sai não pode ser mais do que o que está na gaveta.
+    //
+    // A recusa NÃO diz quanto a gaveta deve ter a quem não é master (ADM-07): "deve ter
+    // R$ X" era o esperado da conferência cega entregue numa mensagem de erro — bastava
+    // pedir uma sangria absurda pra ler o alvo e digitá-lo no fechamento.
     if (tipo === 'sangria') {
       const conta = await contarTurno(c, d.turnoId)
       if (valorCents > conta.esperadoCents) {
+        const master = (event.context as any).papel === 'master'
         throw createError({
           statusCode: 409,
-          statusMessage: `A gaveta deste caixa deve ter ${brl(Math.max(conta.esperadoCents, 0))} `
-            + `e a saída é de ${brl(valorCents)}. Confira o valor digitado — `
+          statusMessage: (master
+            ? `A gaveta deste caixa deve ter ${brl(Math.max(conta.esperadoCents, 0))} `
+              + `e a saída é de ${brl(valorCents)}. `
+            : `A saída de ${brl(valorCents)} é maior que o dinheiro que deve estar na gaveta. `)
+            + 'Confira o valor digitado — '
             + (anulaId
               ? 'anular este suprimento deixaria a gaveta negativa.'
               : 'não dá para tirar mais do que tem.'),
-          data: { tipo: 'sangria_acima_do_saldo', saldoCents: conta.esperadoCents },
+          data: master
+            ? { tipo: 'sangria_acima_do_saldo', saldoCents: conta.esperadoCents }
+            : { tipo: 'sangria_acima_do_saldo' },
         })
       }
     }

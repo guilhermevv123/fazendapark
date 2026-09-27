@@ -152,3 +152,73 @@ describe('balcão — a tela', () => {
     expect(opcoes).toContain('Idoso (60 anos ou mais)')
   })
 })
+
+// ===========================================================================
+// Conferência de caixa (pdv/caixa.vue) — cega de verdade (ADM-07) e trocar de caixa zera o
+// formulário (ADM-21)
+// ===========================================================================
+import { defineComponent, h } from 'vue'
+
+const caixa = () => import('../pages/admin/evento/[id]/pdv/caixa.vue')
+
+/** o CampoMoeda da casa, reduzido a um input que emite o que a tela escuta */
+const CampoMoeda = defineComponent({
+  props: { modelValue: Number },
+  emits: ['update:modelValue', 'input'],
+  setup: (p, { emit }) => () => h('input', {
+    'data-parte': 'campo-moeda', value: p.modelValue,
+    onInput: (e: any) => { emit('update:modelValue', Number(e.target.value)); emit('input', e) },
+  }),
+})
+
+const LISTA_DE_CAIXAS = { turnos: [
+  { id: 'A', status: 'aberto', ponto: 'Guichê A', operador: 'Ana', abriuEm: '2026-10-10T12:00:00Z' },
+  { id: 'B', status: 'aberto', ponto: 'Guichê B', operador: 'Bia', abriuEm: '2026-10-10T12:00:00Z' },
+] }
+const TURNO_CEGO = {
+  turno: { id: 'A', status: 'aberto', ponto: 'Guichê A', operador: 'Ana', abriuEm: '2026-10-10T12:00:00Z',
+           fechouEm: null, fundoCents: 10000, contadoCents: null, esperadoNoFechamentoCents: null, observacao: null },
+  contagem: { cega: true, esperadoCents: null, aberturaCents: null, dinheiroCents: null, sangriaCents: null,
+              suprimentoCents: null, devolvidoDinheiroCents: null, eletronicoCents: 5000, pedidos: 3, ingressos: 4,
+              porForma: [{ forma: 'debito', pedidos: 1, totalCents: 5000 }], devolvidoEletronicoCents: 0,
+              cancelamentos: [] },
+  movimentos: [], vendas: [],
+}
+
+async function montarCaixa(turno: any = TURNO_CEGO) {
+  return montarTela(await caixa(), {
+    rota: { params: { id: EV }, query: { turno: 'A' } },
+    respostas: {
+      [`/api/admin/evento/${EV}/pdv/turno`]: turno,
+      [`/api/admin/evento/${EV}/pdv`]: LISTA_DE_CAIXAS,
+    },
+    stubs: { AbasSecao: true, FichasImpressas: true, CampoMoeda },
+  })
+}
+
+describe('conferência de caixa — a tela', () => {
+  it('caixa aberto e cego: nada de fundo, vendas em dinheiro ou esperado na tela (ADM-07)', async () => {
+    const w = await montarCaixa()
+    const texto = w.text()
+    expect(w.find('[data-parte="conferencia-cega"]').exists()).toBe(true)
+    expect(texto).not.toContain('Vendas em dinheiro')
+    expect(texto).not.toContain('Fundo de troco')
+    expect(texto).not.toContain('Sangrias:')
+    expect(texto).toContain('Cartão e pix')
+  })
+
+  it('trocar de caixa zera a contagem e o resultado do anterior (ADM-21)', async () => {
+    const w = await montarCaixa()
+    const fechar = () => w.findAll('button').find((b) => b.text().includes('Conferir e fechar'))!
+    await w.find('#contado').setValue('50000')
+    expect(fechar().attributes('disabled'), 'contou e o botão não liberou').toBeUndefined()
+    await fechar().trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(w.text()).toContain('Resultado da conferência')
+
+    await w.find('select').setValue('B')
+    await w.vm.$nextTick()
+    expect(w.text(), 'o resultado do caixa A continuou na tela do B').not.toContain('Resultado da conferência')
+    expect(fechar().attributes('disabled'), 'o caixa B veio com a contagem do A').toBeDefined()
+  })
+})

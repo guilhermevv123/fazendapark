@@ -306,10 +306,11 @@ function imprimir() {
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Balcão</h1>
+        <!-- contagem, não dinheiro: o total vendido em dinheiro é a conferência cega do caixa
+             (ADM-07) — somado aqui, o operador leria o alvo antes de contar a gaveta -->
         <p v-if="turno?.turno" class="mt-1 text-tinta-suave">
           {{ turno.turno.ponto }} · operador {{ turno.turno.operador }} ·
-          vendeu {{ reais(turno.contagem.pedidos ? turno.contagem.dinheiroCents + turno.contagem.eletronicoCents : 0) }}
-          neste turno
+          {{ turno.contagem.pedidos }} venda(s), {{ turno.contagem.ingressos }} ingresso(s) neste turno
         </p>
         <p v-else class="mt-1 text-tinta-suave">Escolha um caixa aberto para vender.</p>
       </div>
