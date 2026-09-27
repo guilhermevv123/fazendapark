@@ -14,6 +14,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 
 /**
  * Prefixos que já são rota do site. Um evento com slug "admin" ou "api"
@@ -22,11 +23,15 @@ import { q1, tx } from '../../../utils/db'
  */
 const RESERVADOS = new Set([
   'admin', 'api', 'e', 'p', 'ingressos', 'pedido', 'checkin', 'login',
-  'sobre', 'termos', 'privacidade', 'suporte', 'ajuda', '_nuxt', 'assets',
+  'sobre', 'termos', 'privacidade', 'cancelamento', 'suporte', 'ajuda', '_nuxt', 'assets',
 ])
 
 const Entrada = z.object({
-  orgId: z.string().uuid(),
+  // Opcional: a organização vem da SESSÃO (ver o handler). O assistente mandava o id escolhido num
+  // select alimentado por `/api/admin/organizacoes`, que é área só do master — pra quem é de
+  // operação o select vinha vazio e o passo 1 travava em "Escolha a organização vinculada",
+  // com o botão "Criar evento" na tela prometendo o contrário (auditoria EVT-01).
+  orgId: z.string().uuid().optional(),
   nome: z.string().min(3).max(140),
   slug: z.string().min(3).max(80).regex(/^[a-z0-9-]+$/).optional(),
   descricao: z.string().max(20_000).optional(),
@@ -258,7 +263,7 @@ export default defineEventHandler(async (event) => {
   // slug à escolha, e o evento nasceria no painel do vizinho.
   const orgId = (event.context as any).sessao?.orgId
   if (!orgId) throw createError({ statusCode: 401, statusMessage: 'Sessão sem organização' })
-  if (d.orgId !== orgId) {
+  if (d.orgId && d.orgId !== orgId) {
     throw createError({
       statusCode: 403,
       statusMessage: 'Você só cria evento na sua própria organização.',
@@ -371,14 +376,20 @@ export default defineEventHandler(async (event) => {
       }
     }
 
-    await c.query(
-      `INSERT INTO audit_log (entity, entity_id, action, after)
-       VALUES ('event', $1, 'criado', $2::jsonb)`,
-      [id, JSON.stringify({
+    // Pelo helper, na MESMA transação: o INSERT cru que morava aqui gravava a linha sem
+    // `org_id`, sem autor e sem IP — e a tela de Auditoria, que recorta por organização, nunca
+    // mostrava a criação de evento nenhum (auditoria AUD-02).
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event),
+      entidade: 'evento',
+      entidadeId: id,
+      acao: 'criado',
+      depois: {
         nome: d.nome, slug, sessoes: d.sessoes.length,
         setores: d.setores.length, lotes: nLotes,
         status: d.publicar ? 'ativo' : 'rascunho',
-      })])
+      },
+    }, c)
 
     return { id, slug: ev.rows[0].slug }
   })

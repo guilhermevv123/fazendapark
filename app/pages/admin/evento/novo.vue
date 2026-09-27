@@ -44,7 +44,6 @@ const erros = ref<string[]>([])
 
 /* ------------------------------------------------------------- estado --- */
 const f = reactive({
-  orgId: '',
   nome: '',
   faixaEtaria: 18,
   privado: false,
@@ -101,8 +100,10 @@ type Lote = {
 }
 type Setor = { nome: string; tipo: string; descricao: string; capacidade: number | null; indiceSessao: number | null; lotes: Lote[] }
 
-const { data: orgs } = await useFetch<any>('/api/admin/organizacoes')
-watchEffect(() => { if (!f.orgId && orgs.value?.length) f.orgId = orgs.value[0].id })
+/* A organização do evento é a da SESSÃO — o servidor tira de lá (`index.post.ts`). O select que
+ * existia aqui lia `/api/admin/organizacoes`, que é só do master: pra quem é de operação vinha
+ * vazio e o passo 1 travava em "Escolha a organização vinculada" (auditoria EVT-01). O parque é
+ * uma organização só; não há o que escolher. */
 
 /* ----------------------------------------------------- endereço (slug) ---
  * Sem campo na tela (dono, 23/09: "que a pessoa sempre fosse no site
@@ -253,7 +254,6 @@ const precoDoTipo = (faceLote: number, descontoBps: number) =>
 function validar(p: number): string[] {
   const e: string[] = []
   if (p === 1) {
-    if (!f.orgId) e.push('Escolha a organização vinculada.')
     if (f.nome.trim().length < 3) e.push('O nome do evento precisa de pelo menos 3 letras.')
     if (f.online && !/^https?:\/\//.test(f.linkTransmissao)) {
       e.push('Evento online precisa do link de transmissão.')
@@ -363,7 +363,6 @@ async function publicar() {
   erro.value = ''
   try {
     const corpo: any = {
-      orgId: f.orgId,
       nome: f.nome.trim(),
       descricao: f.descricao || undefined,
       inicio: iso(f.inicioData, f.inicioHora),
@@ -554,14 +553,7 @@ useHead({ title: 'Criar evento' })
           <input id="nome" v-model="f.nome" class="campo" placeholder="Nome do Evento">
         </div>
 
-        <div class="mt-4 grid gap-4 lg:grid-cols-3">
-          <div>
-            <label for="org" class="rotulo">Organização vinculada</label>
-            <select id="org" v-model="f.orgId" class="campo">
-              <option value="" disabled>Organização</option>
-              <option v-for="o in orgs ?? []" :key="o.id" :value="o.id">{{ o.nome }}</option>
-            </select>
-          </div>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
             <label for="idade" class="rotulo">Faixa etária</label>
             <select id="idade" v-model.number="f.faixaEtaria" class="campo">

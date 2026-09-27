@@ -64,3 +64,20 @@ describe('ORG-01 — Configurações e Organização mostram para onde a cobran�
     expect(tela.get('[data-parte="ambiente-divergente"]').text()).toMatch(/discordam/)
   })
 })
+
+// ===========================================================================
+// EVT-01 — o assistente não pede organização (ela vem da sessão)
+// ===========================================================================
+describe('EVT-01 — criar evento não trava quem é de operação', () => {
+  it('o passo 1 não tem o select de organização (a rota dele é só do master)', async () => {
+    // ← mutação: devolver o `<select id="org">` alimentado por /api/admin/organizacoes deixa
+    //   este caso vermelho — pra operação ele vinha vazio e o passo 1 travava
+    const tela = await montarTela(await import('../pages/admin/evento/novo.vue'), {
+      rota: { path: '/admin/evento/novo' },
+      respostas: {},
+    })
+    expect(tela.find('#org').exists()).toBe(false)
+    expect(tela.text()).not.toContain('Organização vinculada')
+    expect(tela.find('#nome').exists(), 'o passo 1 nem montou').toBe(true)
+  })
+})
