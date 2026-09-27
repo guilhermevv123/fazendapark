@@ -2,8 +2,16 @@
 .env.*
 !.env.example
 !.env.test.example
+!.env.e2e.example
 node_modules
 .nuxt
 .output
 dist
 *.log
+
+# bateria E2E (Playwright): resultados, rastros e sessões guardadas
+e2e-resultados
+e2e/.auth
+playwright-report
+test-results
+.nuxt-*

@@ -61,6 +61,11 @@ export default defineNuxtConfig({
   nitro: {
     experimental: { asyncContext: true, tasks: true },
 
+    // Build de conferência em pasta própria (NUXT_PASTA_SAIDA), pelo mesmo motivo do `buildDir`:
+    // duas instâncias de teste buildando juntas escreviam no mesmo `.output`. Produção não define
+    // a variável e continua em `.output` — é onde o Dockerfile procura.
+    output: { dir: process.env.NUXT_PASTA_SAIDA || '.output' },
+
     // O plugin que liga as filas de fundo, registrado NA MÃO.
     //
     // A pasta `server/plugins/` é varrida automaticamente, e no build ela é —

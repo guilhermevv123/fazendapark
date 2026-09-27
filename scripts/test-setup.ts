@@ -39,8 +39,15 @@ function carregar(arquivo: string, sobrescrever: boolean) {
 }
 carregar('.env', false)
 // por cima, sobrescrevendo — é o que manda a suíte pro banco de teste em vez
-// do banco que o painel real usa (ver o item 1 lá em cima).
-carregar('.env.test', true)
+// do banco que o painel real usa (ver o item 1 lá em cima). ENV_TESTE_ARQUIVO
+// troca o arquivo (ex.: `.env.e2e`, banco e servidor da auditoria na 3120) pra
+// duas frotas rodarem a suíte ao mesmo tempo sem disputar banco nem servidor.
+carregar(process.env.ENV_TESTE_ARQUIVO ?? '.env.test', true)
+// Trava: o incidente dos 939 pedidos falsos foi a suíte escrevendo no banco
+// real. Se qualquer arquivo de env apontar pra ele, nenhum caso roda.
+if (/\/diamond_tickets(\?|$)/.test(String(process.env.DATABASE_URL ?? ''))) {
+  throw new Error('a suíte ia rodar no banco REAL (diamond_tickets) — confira o .env.test / ENV_TESTE_ARQUIVO')
+}
 
 // ------------------------------------------------- 2. sonda do servidor
 export const BASE_DE_TESTE = process.env.BASE_TESTE ?? 'http://localhost:3101'

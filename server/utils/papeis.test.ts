@@ -42,6 +42,7 @@ import { fileURLToPath } from 'node:url'
 import bcrypt from 'bcryptjs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { comSessao } from '../../scripts/teste-sessao'
+import { compraPagaDeTeste } from '../../scripts/teste-compra'
 import { menuDoEvento } from '../../app/composables/menuDoEvento'
 import { db, q, q1 } from './db'
 import { podeFazer } from './sessao'
@@ -809,10 +810,16 @@ beforeAll(async () => {
     http[nome] = comSessao(await entrarCom(u.email))
   }
 
+  const ingressoValido = () => q1<any>(
+    `SELECT code FROM tickets WHERE event_id = $1 AND status = 'valido' LIMIT 1`, [EVENTO])
+  // banco que nasce vazio (npm run e2e:banco) não tem venda: o caso compra a dele em vez de contar
+  // com resto de rodada anterior — ver scripts/teste-compra.ts
+  if (noAr && !(await ingressoValido())) await compraPagaDeTeste()
   pedidoId = (await q1<any>(`SELECT id FROM orders WHERE event_id = $1 LIMIT 1`, [EVENTO]))?.id ?? ''
-  codigoReal = (await q1<any>(
-    `SELECT code FROM tickets WHERE event_id = $1 AND status = 'valido' LIMIT 1`, [EVENTO]))?.code ?? ''
-})
+  codigoReal = (await ingressoValido())?.code ?? ''
+  // doze logins de verdade (bcrypt no servidor) e, em banco novo, uma compra inteira: no `nuxt dev`
+  // frio isso passa dos 10 s padrão e a suíte cheia caía aqui (27/09) — sozinho, o arquivo passava
+}, 120_000)
 
 afterAll(async () => {
   await q(`DELETE FROM organizations WHERE id = ANY($1::uuid[])`, [[ORG_EQUIPE, ORG_VIZINHA]])

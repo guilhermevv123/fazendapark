@@ -22,6 +22,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { comSessao, entrar } from '../../scripts/teste-sessao'
+import { compraPagaDeTeste } from '../../scripts/teste-compra'
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
 const SLUG = 'conquista-park-4-edicao'
@@ -165,9 +166,17 @@ describe('cerca de organização', () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
     // ← sem esta asserção, a cerca poderia estar bloqueando TODO MUNDO e os
     //   testes acima ficariam verdes com o sistema inteiro quebrado.
-    const r = await comSessao(cookieDono)(`/api/admin/evento/${eventoAlheio}/dashboard`)
+    // o dono tem que ver DINHEIRO de verdade, não uma tela vazia que a cerca poderia estar
+    // devolvendo pra todo mundo — então garante uma venda paga (banco novo não tem nenhuma)
+    const painel = () => comSessao(cookieDono)(`/api/admin/evento/${eventoAlheio}/dashboard`)
+    let r = await painel()
     expect(r.status).toBe(200)
-    const d = await r.json()
+    let d = await r.json()
+    if (!(d.totais.cobradoCents > 0)) {
+      await compraPagaDeTeste(SLUG)
+      r = await painel()
+      d = await r.json()
+    }
     expect(d.totais.cobradoCents).toBeGreaterThan(0)
   }, 20_000)
 
