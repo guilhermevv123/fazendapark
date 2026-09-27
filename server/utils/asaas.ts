@@ -106,7 +106,10 @@ export type FormaAsaas = 'PIX' | 'CREDIT_CARD' | 'BOLETO' | 'UNDEFINED'
 export interface NovaCobranca {
   customer: string
   billingType: FormaAsaas
-  value: number              // em REAIS (o Asaas fala reais; convertemos na borda)
+  /** à vista, em REAIS (o Asaas fala reais; convertemos na borda). Parcelado NÃO manda — ver `valorDaCobranca` */
+  value?: number
+  /** parcelado: o TOTAL da compra, em reais; o Asaas divide e põe o centavo do arredondamento na última */
+  totalValue?: number
   dueDate: string            // YYYY-MM-DD
   description?: string
   externalReference?: string // nosso order.id — é o que liga webhook a pedido
@@ -123,6 +126,23 @@ export interface NovaCobranca {
 export function centavosParaReais(cents: number): number {
   if (!Number.isInteger(cents)) throw new Error('centavos precisa ser inteiro')
   return Number((cents / 100).toFixed(2))
+}
+
+/**
+ * O valor da cobrança no formato que o Asaas DOCUMENTA pro `POST /v3/payments`.
+ *
+ * À vista: `value`. Parcelado: `installmentCount` + `totalValue`, e SEM `value`. A doc diz que a
+ * cobrança parcelada leva o número de parcelas junto de `installmentValue` (valor de cada uma) OU
+ * `totalValue` (o total, que o Asaas divide). O checkout mandava `value` = TOTAL junto de
+ * `installmentCount` — combinação fora do contrato, que arrisca o gateway ler o total como valor de
+ * CADA parcela: a compra de R$ 60 em 3x virando R$ 180 no cartão do cliente. Achado na auditoria
+ * de 27/09 (B06). `totalValue` deixa a divisão (e o centavo que sobra) com quem cobra.
+ */
+export function valorDaCobranca(totalCents: number, parcelas: number | null | undefined)
+  : Pick<NovaCobranca, 'value' | 'totalValue' | 'installmentCount'> {
+  const reais = centavosParaReais(totalCents)
+  const n = Number(parcelas)
+  return Number.isInteger(n) && n > 1 ? { installmentCount: n, totalValue: reais } : { value: reais }
 }
 
 /**

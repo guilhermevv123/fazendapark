@@ -35,7 +35,7 @@ import {
   aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
 import {
-  acharOuCriarCliente, cancelarCobranca, centavosParaReais, criarCobranca,
+  acharOuCriarCliente, cancelarCobranca, centavosParaReais, criarCobranca, valorDaCobranca,
   qrCodePix, vencimentoEmDias, type ConfigAsaas,
 } from '../utils/asaas'
 import {
@@ -541,7 +541,8 @@ export default defineEventHandler(async (event) => {
     cobranca = await criarCobranca(cfg, {
       customer: asaasCustomer,
       billingType: dados.forma === 'pix' ? 'PIX' : 'CREDIT_CARD',
-      value: centavosParaReais(total.totalCents),
+      // à vista vai `value`; parcelado vai `installmentCount` + `totalValue` (ver valorDaCobranca)
+      ...valorDaCobranca(total.totalCents, pedido.parcelas),
       // Data, não hora: o Asaas não aceita vencimento em minutos, então a
       // cobrança sobrevive à reserva (`hold_minutes`). Quem fecha essa janela
       // é `cancelarCobrancasDeExpirados` (a varredura cancela a cobrança do
@@ -550,7 +551,6 @@ export default defineEventHandler(async (event) => {
       dueDate: vencimentoEmDias(1),
       description: `${ev.name} — pedido ${pedido.code}`,
       externalReference: pedido.id,       // é isto que liga o webhook ao pedido
-      installmentCount: pedido.parcelas > 1 ? pedido.parcelas : undefined,
     })
   } catch (e: any) {
     // Gateway caiu: devolve o estoque na hora. Sem isso, cada erro do Asaas
