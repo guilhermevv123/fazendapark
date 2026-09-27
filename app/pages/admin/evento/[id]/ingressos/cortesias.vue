@@ -1,3 +1,30 @@
+<script lang="ts">
+/**
+ * Regras puras da tela de cortesias — exportadas pra o teste importar DAQUI
+ * (`app/composables/evento-cortesias.test.ts`).
+ */
+
+/**
+ * Campo de cota → número ou "sem teto" (null). Zero é teto de verdade ("aqui não se dá").
+ *
+ * Aceita string E número (ADM-05): `v-model` em `input type="number"` entrega Number (o Vue
+ * converte sozinho), e o `v.trim()` de antes estourava TypeError com qualquer número digitado
+ * — a tela respondia "Não foi possível salvar a cota" e o teto de cortesia não se definia.
+ */
+export function numeroOuNulo(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  const t = String(v).trim()
+  if (t === '') return null
+  const n = Math.trunc(Number(t))
+  return Number.isFinite(n) ? Math.max(0, n) : null
+}
+
+/** o status do ingresso como a casa escreve — com acento, não o valor do banco em caixa alta (ADM-44) */
+export const ROTULO_DO_STATUS: Record<string, string> = {
+  valido: 'VÁLIDO', usado: 'JÁ ENTROU', cancelado: 'CANCELADO', transferido: 'TRANSFERIDO',
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Cortesias.
@@ -37,7 +64,7 @@ const { data, refresh, pending, error: falha } = await useFetch<any>(
 const { data: eu } = await useFetch<any>('/api/auth/eu')
 const souMaster = computed(() => eu.value?.usuario?.papel === 'master')
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+// `reais` vem de `app/composables/formato.ts` (sem o espaço fino do toLocaleString — ADM-48)
 const erro = ref('')
 const salvando = ref(false)
 
@@ -158,8 +185,8 @@ async function emitir() {
 
 const cota = reactive({
   aberto: false,
-  evento: '' as string,
-  lotes: [] as { id: string; nome: string; setor: string; emitidas: number; cota: string }[],
+  evento: '' as string | number,
+  lotes: [] as { id: string; nome: string; setor: string; emitidas: number; cota: string | number }[],
 })
 function abrirCota() {
   Object.assign(cota, {
@@ -171,8 +198,7 @@ function abrirCota() {
     })),
   })
 }
-/** campo em branco = sem teto. Zero é um teto de verdade ("aqui não se dá"). */
-const numeroOuNulo = (v: string) => (v.trim() === '' ? null : Math.max(0, Math.trunc(Number(v) || 0)))
+// `numeroOuNulo` mora no <script> de cima: campo em branco = sem teto, zero = teto de verdade
 
 async function salvarCota() {
   erro.value = ''
@@ -375,7 +401,7 @@ useHead({ title: 'Cortesias' })
             </td>
             <td class="px-3 py-3 text-xs text-tinta-suave">{{ quando(t.entrouEm) }}</td>
             <td class="px-3 py-3">
-              <span :class="SELO[t.status] ?? 'selo-neutro'">{{ t.status.toUpperCase() }}</span>
+              <span :class="SELO[t.status] ?? 'selo-neutro'">{{ ROTULO_DO_STATUS[t.status] ?? t.status }}</span>
             </td>
             <td class="px-3 py-3 text-right">
               <!-- O rótulo acompanha o estado: um botão desabilitado escrito
