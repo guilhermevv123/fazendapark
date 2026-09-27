@@ -109,6 +109,15 @@ export const SQL_PRIMEIRA_ENTRADA = `
    ORDER BY e.entered_at ASC
    LIMIT 1`
 
+/** A passagem MAIS RECENTE — a que responde "já entrou hoje" no passaporte de vários dias. */
+export const SQL_ULTIMA_ENTRADA = `
+  SELECT e.entered_at, e.gate, e.device_id, e.offline, u.name AS operador
+    FROM entries e
+    LEFT JOIN users u ON u.id = e.operator_id
+   WHERE e.ticket_id = $1
+   ORDER BY e.entered_at DESC
+   LIMIT 1`
+
 /**
  * Quanta gente está dentro. `sum(people)`, não `count(*)`.
  *
@@ -213,6 +222,14 @@ export function retratoDoPublico(linha: any): RetratoDoPublico {
 }
 
 /**
+ * A chave do DIA DE USO de uma passagem do livro (passaporte de vários dias, ver
+ * `passarPassaporte`): a sessão, quando ela foi gravada; senão o dia no fuso do evento.
+ * `e` é o alias de `entries`, `ev` o de `events`.
+ */
+export const SQL_DIA_DA_PASSAGEM = (e = 'e', ev = 'ev') =>
+  `COALESCE(${e}.session_id::text, to_char(${e}.entered_at AT TIME ZONE COALESCE(${ev}.timezone, 'America/Bahia'), 'YYYY-MM-DD'))`
+
+/**
  * O conflito: o mesmo ingresso com mais de uma passagem.
  *
  * Duas catracas sem rede não se enxergam — as duas têm o ingresso como válido
@@ -225,11 +242,11 @@ export function retratoDoPublico(linha: any): RetratoDoPublico {
  * `LEFT JOIN users`: operador nulo (entrada retroativa, login apagado) some com
  * JOIN comum, e some justamente a linha mais suspeita.
  *
- * Quando o passaporte de N sessões existir, este HAVING ganha uma cláusula:
- * duas passagens em SESSÕES diferentes de um ingresso com
- * `sectors.sessions_covered > 1` são reentrada legítima, não conflito. Hoje
- * nenhum ingresso volta a `valido` depois de entrar, então toda segunda
- * passagem é conflito de verdade.
+ * **Passaporte** (`sectors.sessions_covered > 1`, ADM-04): duas passagens em
+ * DIAS DE USO diferentes (`SQL_DIA_DA_PASSAGEM`) são o passaporte funcionando,
+ * não conflito. Conflito do passaporte é passar duas vezes no MESMO dia de uso,
+ * ou passar em mais dias do que ele cobre. `JOIN sectors` é seguro: a coluna é
+ * NOT NULL com RESTRICT, não existe ingresso sem setor.
  */
 export const SQL_CONFLITOS = `
   SELECT t.id                                             AS ticket_id,
@@ -246,13 +263,173 @@ export const SQL_CONFLITOS = `
            'dispositivo', e.device_id, 'offline', e.offline, 'operador', u.name
          ) ORDER BY e.entered_at) AS detalhe
     FROM entries e
-    JOIN tickets t ON t.id = e.ticket_id
+    JOIN tickets t  ON t.id = e.ticket_id
+    JOIN sectors s  ON s.id = t.sector_id
+    JOIN events  ev ON ev.id = e.event_id
     LEFT JOIN users u ON u.id = e.operator_id
    WHERE e.event_id = $1
-   GROUP BY t.id, t.code, t.holder_name
+   GROUP BY t.id, t.code, t.holder_name, s.sessions_covered
   HAVING count(*) > 1
+     AND (COALESCE(s.sessions_covered, 1) <= 1
+          OR count(*) > count(DISTINCT ${SQL_DIA_DA_PASSAGEM()})
+          OR count(DISTINCT ${SQL_DIA_DA_PASSAGEM()}) > s.sessions_covered)
    ORDER BY max(e.entered_at) DESC
    LIMIT 200`
+
+/* ------------------------------------------------ passaporte de N dias */
+
+/**
+ * Passaporte de vários dias — entra UMA vez por dia de uso, até N dias (ADM-04, 27/09).
+ *
+ * `sectors.sessions_covered` existe desde a 006 ("Passaporte de 3 dias = 3") e a tela de
+ * Passaportes promete isso, mas a porta nunca leu a coluna: o check-in era o mesmo `UPDATE …
+ * SET status = 'usado' WHERE status = 'valido'` do ingresso de um dia, e no dia 2 o leitor
+ * respondia JÁ USADO pra quem pagou três. Enquanto isso a venda já ocupava vaga nos três dias.
+ *
+ * A regra agora, só pra ingresso de setor com `sessions_covered > 1` (o resto não muda nada,
+ * e nenhuma consulta a mais é feita pra ele):
+ *
+ *  • **dia de uso** = a SESSÃO do lote aberta na hora da passagem (lote ligado a dias em
+ *    `lot_sessions`, com a mesma folga de 2h da porta), ou — lote sem dias — o dia do
+ *    calendário no fuso do evento. É a chave `SQL_DIA_DA_PASSAGEM` do livro;
+ *  • entra se ainda não passou NESTE dia de uso e se usou menos dias do que cobre;
+ *  • o ingresso continua `valido` até o último dia; no N-ésimo vira `usado`. O
+ *    `checked_in_at` marca a PRIMEIRA entrada (é o que as travas de cancelamento leem:
+ *    passaporte que já entrou um dia não se devolve como se nunca tivesse entrado);
+ *  • a trava é a linha do ingresso (`FOR UPDATE`) ANTES de contar os dias: dois portões lendo
+ *    o mesmo passaporte no mesmo dia se enfileiram, e o segundo já enxerga a passagem do
+ *    primeiro.
+ */
+export const ehPassaporte = (sessoesCobertas: unknown): boolean => Number(sessoesCobertas ?? 1) > 1
+
+/** A trava do passaporte: a linha do ingresso, antes de qualquer contagem. $1 ticketId */
+export const SQL_TRAVA_PASSAPORTE = `
+  SELECT t.id, t.status, t.lot_id, t.session_id, s.sessions_covered, ev.timezone,
+         (SELECT count(*)::int FROM lot_sessions ls WHERE ls.lot_id = t.lot_id) AS dias_do_lote
+    FROM tickets t
+    JOIN sectors s ON s.id = t.sector_id
+    JOIN events ev ON ev.id = t.event_id
+   WHERE t.id = $1
+     FOR UPDATE OF t`
+
+/**
+ * A sessão do lote aberta no instante $2 (null = agora), com a folga de 2h da porta.
+ * $1 lotId · $2 instante
+ */
+export const SQL_SESSAO_DO_LOTE_NO_INSTANTE = `
+  SELECT es.id, es.starts_at, es.ends_at
+    FROM lot_sessions ls
+    JOIN event_sessions es ON es.id = ls.session_id
+   WHERE ls.lot_id = $1
+     AND COALESCE($2::timestamptz, now())
+         BETWEEN es.starts_at - interval '2 hours'
+             AND COALESCE(es.ends_at, es.starts_at) + interval '2 hours'
+   ORDER BY es.starts_at DESC
+   LIMIT 1`
+
+/**
+ * Os dias de uso deste ingresso no livro, e quantas passagens caíram no dia pedido.
+ * $1 ticketId · $2 sessão do dia (ou null) · $3 instante (null = agora)
+ */
+export const SQL_DIAS_DO_PASSAPORTE = `
+  WITH chave AS (
+    SELECT COALESCE($2::text,
+                    to_char(COALESCE($3::timestamptz, now())
+                              AT TIME ZONE COALESCE((SELECT ev.timezone FROM tickets t
+                                                       JOIN events ev ON ev.id = t.event_id
+                                                      WHERE t.id = $1), 'America/Bahia'),
+                            'YYYY-MM-DD')) AS k)
+  SELECT (SELECT k FROM chave)                                              AS chave,
+         count(DISTINCT ${SQL_DIA_DA_PASSAGEM()})::int                          AS dias,
+         count(*) FILTER (WHERE ${SQL_DIA_DA_PASSAGEM()} = (SELECT k FROM chave))::int AS no_dia
+    FROM entries e
+    JOIN events ev ON ev.id = e.event_id
+   WHERE e.ticket_id = $1`
+
+/**
+ * O livro do passaporte grava a SESSÃO do dia de uso (o ingresso de vários dias nasce sem
+ * sessão). Mesmo formato de `SQL_GRAVA_ENTRADA`, com $9 = a sessão (null = a do ingresso).
+ */
+export const SQL_GRAVA_ENTRADA_NA_SESSAO = `
+  INSERT INTO entries (id, org_id, event_id, ticket_id, session_id, people,
+                       gate, device_id, operator_id, offline, entered_at)
+  SELECT $1, t.org_id, t.event_id, t.id, COALESCE($9::uuid, t.session_id), s.admits,
+         $4, $5, $6, $7, COALESCE($8::timestamptz, now())
+    FROM tickets t
+    JOIN sectors s ON s.id = t.sector_id
+   WHERE t.id = $2 AND t.org_id = $3
+  ON CONFLICT (id) DO NOTHING
+  RETURNING id, people`
+
+/**
+ * Carimba a passagem do passaporte: `usado` só quando ela fecha os dias cobertos ($3);
+ * antes disso o ingresso continua `valido`, com a primeira entrada em `checked_in_at`.
+ * $1 ticketId · $2 operador · $3 fecha os dias? · $4 instante (null = agora)
+ */
+export const SQL_MARCA_PASSAPORTE = `
+  UPDATE tickets
+     SET status = CASE WHEN $3::boolean THEN 'usado' ELSE status END,
+         checked_in_at = COALESCE(checked_in_at, COALESCE($4::timestamptz, now())),
+         checked_in_by = COALESCE(checked_in_by, $2)
+   WHERE id = $1 AND status = 'valido'
+   RETURNING id`
+
+export type PassagemDePassaporte =
+  | { resultado: 'ok'; pessoas: number; dia: number; dias: number; ultimoDia: boolean }
+  | { resultado: 'ja_usado'; motivo: 'mesmo_dia' | 'dias_esgotados'; dias: number; cobre: number }
+  | { resultado: 'fora_da_sessao' }
+
+/**
+ * A passagem ONLINE de um passaporte, dentro da transação da porta (ver o cabeçalho do bloco).
+ * Quem chama já tirou cancelado, evento errado e ingresso de outra casa.
+ */
+export async function passarPassaporte(c: { query: (t: string, p?: any[]) => Promise<any> }, a: {
+  ticketId: string; orgId: string; operador: string | null; entradaId: string
+  gate: string | null; deviceId: string | null; novoId: () => string
+}): Promise<PassagemDePassaporte> {
+  const trava = (await c.query(SQL_TRAVA_PASSAPORTE, [a.ticketId])).rows[0]
+  const cobre = Number(trava?.sessions_covered ?? 1)
+  if (!trava || trava.status !== 'valido') {
+    return { resultado: 'ja_usado', motivo: 'dias_esgotados', dias: cobre, cobre }
+  }
+
+  // o dia de uso: a sessão do lote aberta agora; lote ligado a dias e nenhum aberto = fora do dia
+  let sessao: string | null = null
+  if (Number(trava.dias_do_lote) > 0) {
+    const s = (await c.query(SQL_SESSAO_DO_LOTE_NO_INSTANTE, [trava.lot_id, null])).rows[0]
+    if (!s) return { resultado: 'fora_da_sessao' }
+    sessao = s.id
+  }
+
+  const uso = (await c.query(SQL_DIAS_DO_PASSAPORTE, [a.ticketId, sessao, null])).rows[0]
+  const dias = Number(uso?.dias ?? 0)
+  if (Number(uso?.no_dia ?? 0) > 0) return { resultado: 'ja_usado', motivo: 'mesmo_dia', dias, cobre }
+  if (dias >= cobre) return { resultado: 'ja_usado', motivo: 'dias_esgotados', dias, cobre }
+
+  const gravar = (id: string) => c.query(SQL_GRAVA_ENTRADA_NA_SESSAO,
+    [id, a.ticketId, a.orgId, a.gate, a.deviceId, a.operador, false, null, sessao])
+  let livro = await gravar(a.entradaId)
+  if (livro.rowCount !== 1) livro = await gravar(a.novoId())
+
+  const ultimoDia = dias + 1 >= cobre
+  await c.query(SQL_MARCA_PASSAPORTE, [a.ticketId, a.operador, ultimoDia, null])
+  return { resultado: 'ok', pessoas: Number(livro.rows[0]?.people ?? 1), dia: dias + 1, dias: cobre, ultimoDia }
+}
+
+/**
+ * A mensagem da porta pro passaporte — diz qual dia é, ou por que não passa hoje.
+ */
+export function mensagemDoPassaporte(p: PassagemDePassaporte): string {
+  if (p.resultado === 'ok') {
+    return p.ultimoDia
+      ? `Passaporte: ${p.dia}º e último dia`
+      : `Passaporte: ${p.dia}º de ${p.dias} dias — pode voltar nos outros dias`
+  }
+  if (p.resultado === 'fora_da_sessao') return 'Este passaporte não vale neste dia/horário'
+  return p.motivo === 'mesmo_dia'
+    ? 'Este passaporte já entrou hoje'
+    : `Este passaporte já usou os ${p.cobre} dias que cobre`
+}
 
 /* ------------------------------------------------------- meia na portaria */
 

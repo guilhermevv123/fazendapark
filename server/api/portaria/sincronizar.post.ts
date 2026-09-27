@@ -54,9 +54,10 @@ import { exigir } from '../../utils/sessao'
 import { ehPapel, papelDoRoleLegado, papelPode, ROTULO } from '../../utils/papeis'
 import { lerQr } from '../../utils/ingresso'
 import {
-  conferirRelogio, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA, MENSAGEM_DE_RELOGIO,
-  normalizarFila, retratoDoPublico, SQL_CONFLITOS, SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA_EM,
-  SQL_PUBLICO, type Relogio, type ResultadoDaFila,
+  conferirRelogio, ehPassaporte, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA, MENSAGEM_DE_RELOGIO,
+  normalizarFila, retratoDoPublico, SQL_CONFLITOS, SQL_DIAS_DO_PASSAPORTE, SQL_GRAVA_ENTRADA,
+  SQL_GRAVA_ENTRADA_NA_SESSAO, SQL_MARCA_ENTRADA_EM, SQL_MARCA_PASSAPORTE, SQL_PUBLICO,
+  SQL_SESSAO_DO_LOTE_NO_INSTANTE, SQL_TRAVA_PASSAPORTE, type Relogio, type ResultadoDaFila,
 } from '../../utils/catraca'
 
 /** Teto da lista que desce. Acima disso o tablet não aguentaria mesmo. */
@@ -171,11 +172,46 @@ export default defineEventHandler(async (event) => {
     if (lido.ok && lido.eventId !== eventId) { registra('invalido'); continue }
 
     const ingresso = await q1<any>(
-      `SELECT id, status FROM tickets WHERE code = $1 AND org_id = $2 AND event_id = $3`,
+      `SELECT t.id, t.status, s.sessions_covered
+         FROM tickets t JOIN sectors s ON s.id = t.sector_id
+        WHERE t.code = $1 AND t.org_id = $2 AND t.event_id = $3`,
       [codigo, orgId, eventId])
     if (!ingresso) { registra('invalido'); continue }
 
     const quando = relogio.em
+
+    // Passaporte de vários dias (ADM-04): a passagem de OUTRO dia de uso é o passaporte
+    // funcionando, não conflito. Conflito é o mesmo dia duas vezes, ou mais dias do que cobre.
+    // A passagem entra no livro SEMPRE (a pessoa está dentro) — o que muda é o relato.
+    if (ehPassaporte(ingresso.sessions_covered)) {
+      const desfechoPassaporte = await tx(async (c) => {
+        const trava = (await c.query(SQL_TRAVA_PASSAPORTE, [ingresso.id])).rows[0]
+        let sessao: string | null = null
+        if (Number(trava?.dias_do_lote ?? 0) > 0) {
+          sessao = (await c.query(SQL_SESSAO_DO_LOTE_NO_INSTANTE, [trava.lot_id, quando])).rows[0]?.id ?? null
+        }
+        const gravou = await c.query(SQL_GRAVA_ENTRADA_NA_SESSAO, [
+          item.id, ingresso.id, orgId, item.gate ?? null,
+          deviceId ?? null, operador, item.offline, quando, sessao,
+        ])
+        if (gravou.rowCount !== 1) return 'repetida' as const
+
+        const uso = (await c.query(SQL_DIAS_DO_PASSAPORTE, [ingresso.id, sessao, quando])).rows[0]
+        const cobre = Number(trava?.sessions_covered ?? 1)
+        const dias = Number(uso?.dias ?? 1)
+        await c.query(
+          `INSERT INTO checkins (event_id, ticket_id, code_lido, resultado, gate, operator_id, created_at)
+           VALUES ($1,$2,$3,'ok',$4,$5, COALESCE($6::timestamptz, now()))`,
+          [eventId, ingresso.id, codigo.slice(0, 120), item.gate ?? null, operador, quando])
+
+        if (trava?.status === 'cancelado') return 'cancelado' as const
+        const marcou = await c.query(SQL_MARCA_PASSAPORTE, [ingresso.id, operador, dias >= cobre, quando])
+        if (Number(uso?.no_dia ?? 1) > 1 || dias > cobre || marcou.rowCount !== 1) return 'conflito' as const
+        return 'aplicada' as const
+      })
+      registra(desfechoPassaporte)
+      continue
+    }
 
     const desfecho = await tx(async (c) => {
       const gravou = await c.query(SQL_GRAVA_ENTRADA, [
@@ -317,13 +353,26 @@ export default defineEventHandler(async (event) => {
  */
 async function listaDoEvento(eventId: string, orgId: string) {
   const linhas = await q<any>(
+    // Passaporte (ADM-04): os dias já usados e os dias do lote descem junto, só pra ele — é o que
+    // deixa o portão sem rede dizer "já entrou hoje" ou "pode entrar, 2º dia".
     `SELECT t.code, t.status, t.holder_name, s.name AS setor, s.admits,
             l.name AS lote, tt.name AS tipo, tt.kind AS especie,
             t.half_reason, t.half_document, t.half_document_required,
-            es.id AS sessao_id, es.starts_at, es.ends_at
+            es.id AS sessao_id, es.starts_at, es.ends_at,
+            s.sessions_covered,
+            CASE WHEN COALESCE(s.sessions_covered, 1) > 1 THEN
+              (SELECT COALESCE(json_agg(DISTINCT to_char(e.entered_at AT TIME ZONE ev.timezone, 'YYYY-MM-DD')), '[]'::json)
+                 FROM entries e WHERE e.ticket_id = t.id)
+            END AS dias_usados,
+            CASE WHEN COALESCE(s.sessions_covered, 1) > 1 THEN
+              (SELECT json_agg(json_build_object('inicio', es2.starts_at, 'fim', es2.ends_at) ORDER BY es2.starts_at)
+                 FROM lot_sessions ls JOIN event_sessions es2 ON es2.id = ls.session_id
+                WHERE ls.lot_id = t.lot_id)
+            END AS sessoes_do_lote
        FROM tickets t
        JOIN sectors s ON s.id = t.sector_id
        JOIN lots    l ON l.id = t.lot_id
+       JOIN events ev ON ev.id = t.event_id
        LEFT JOIN ticket_types  tt ON tt.id = t.ticket_type_id
        LEFT JOIN event_sessions es ON es.id = t.session_id
       WHERE t.event_id = $1 AND t.org_id = $2
@@ -348,6 +397,11 @@ async function listaDoEvento(eventId: string, orgId: string) {
       meia: meiaDoIngresso(t),
       sessaoInicio: t.starts_at,
       sessaoFim: t.ends_at,
+      // só no passaporte de vários dias (ADM-04): quantos cobre, quais dias já usou, em quais vale
+      ...(Number(t.sessions_covered ?? 1) > 1
+        ? { diasCobertos: Number(t.sessions_covered), diasUsados: t.dias_usados ?? [],
+            sessoes: t.sessoes_do_lote ?? [] }
+        : {}),
     })),
   }
 }
