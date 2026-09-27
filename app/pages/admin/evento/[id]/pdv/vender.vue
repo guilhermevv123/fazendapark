@@ -1,3 +1,54 @@
+<script lang="ts">
+/**
+ * Regras puras da venda no balcão — exportadas pra o teste importar DAQUI (o código que o
+ * guichê roda), não uma cópia (`app/composables/evento-pdv.test.ts`).
+ */
+import { MOTIVOS } from '~~/server/utils/meia-entrada'
+
+export { MOTIVOS }
+
+/** Onde a venda EM ANDAMENTO (chave + carrinho) sobrevive a um F5 — uma por caixa. */
+export const chaveDaVendaGuardada = (eventoId: string, turnoId: string) => `pdv-venda:${eventoId}:${turnoId}`
+
+export interface VendaGuardada { chave: string; carrinho: any[]; forma: string }
+
+/**
+ * Lê a venda em andamento guardada nesta aba. Chave da venda só existia na memória: F5 com a
+ * resposta a caminho gerava chave NOVA e o servidor via duas vendas — dois pedidos, dois
+ * jogos de ingressos, dinheiro contado duas vezes na gaveta (ADM-08). Guardada até o recibo
+ * aparecer, a mesma venda mandada de novo cai no `codigoDaVenda` e volta como `repetida`.
+ * Armazenamento bloqueado (aba anônima, política do navegador) não derruba a venda.
+ */
+export function lerVendaGuardada(armazem: Pick<Storage, 'getItem'> | null | undefined, chave: string): VendaGuardada | null {
+  try {
+    const bruto = armazem?.getItem(chave)
+    if (!bruto) return null
+    const v = JSON.parse(bruto)
+    if (!v || typeof v.chave !== 'string' || !/^[0-9a-f-]{36}$/i.test(v.chave)) return null
+    return { chave: v.chave, carrinho: Array.isArray(v.carrinho) ? v.carrinho : [], forma: String(v.forma ?? '') }
+  } catch { return null }
+}
+
+export function guardarVenda(armazem: Pick<Storage, 'setItem'> | null | undefined, chave: string, v: VendaGuardada) {
+  try { armazem?.setItem(chave, JSON.stringify(v)) } catch { /* sem armazenamento: segue sem a rede */ }
+}
+
+/** Toda linha de meia precisa do motivo antes de vender (ADM-02). */
+export function faltaMotivoDeMeia(carrinho: { especie?: string | null; motivo?: string }[]): boolean {
+  return carrinho.some((i) => i.especie === 'meia' && !i.motivo)
+}
+
+/** A linha como a rota espera — com a declaração de meia só onde a linha É meia. */
+export function itemDaVenda(i: any) {
+  return {
+    lotId: i.lotId, ticketTypeId: i.ticketTypeId, quantidade: i.quantidade,
+    meia: i.especie === 'meia'
+      ? { motivo: i.motivo, documento: String(i.documentoMeia ?? '').trim() || null }
+      : null,
+  }
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Balcão — a tela de vender no guichê.
@@ -49,6 +100,9 @@ const recadoDoTurno = computed(() => {
 const novaChave = () => (globalThis.crypto?.randomUUID?.()
   ?? 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)))
 const chaveDaVenda = ref(novaChave())
+/** o `sessionStorage` desta aba, quando existe (no servidor não existe) */
+const armazem = () => (typeof window !== 'undefined' ? window.sessionStorage : null)
+const chaveGuardada = computed(() => chaveDaVendaGuardada(id, turnoId.value))
 
 /** a ficha impressa (componente que sabe imprimir a térmica) */
 const fichas = ref<any>(null)
@@ -77,6 +131,20 @@ const forma = ref('')
 const recebidoCents = ref(0)
 const comprador = reactive({ nome: '', email: '', documento: '' })
 const vendendo = ref(false)
+
+// A venda em andamento sobrevive ao F5 (ADM-08): a chave e o carrinho voltam iguais, e
+// "Vender" de novo devolve o recibo da venda que já tinha valido em vez de vender outra vez.
+onMounted(() => {
+  const v = lerVendaGuardada(armazem(), chaveGuardada.value)
+  if (!v) return
+  chaveDaVenda.value = v.chave
+  if (v.carrinho.length) carrinho.value = v.carrinho
+  if (v.forma) forma.value = v.forma
+})
+watch([carrinho, forma, chaveDaVenda], () => {
+  guardarVenda(armazem(), chaveGuardada.value,
+    { chave: chaveDaVenda.value, carrinho: carrinho.value, forma: forma.value })
+}, { deep: true })
 const erro = ref('')
 const recibo = ref<any>(null)
 
@@ -138,6 +206,7 @@ const podeVender = computed(() =>
   && !!forma.value
   && (forma.value !== 'dinheiro' || recebidoCents.value >= totalCents.value)
   && (!exigeDocumento.value || comprador.documento.replace(/\D/g, '').length === 11)
+  && !faltaMotivoDeMeia(carrinho.value)
   && turno.value?.turno?.status === 'aberto')
 
 function chave(lote: any, tipo: any) { return `${lote.id}|${tipo?.id ?? ''}` }
@@ -159,6 +228,11 @@ function juntar(lote: any, tipo: any = null) {
     setor: lote.setor,
     precoCents: tipo ? tipo.balcaoCents : lote.balcaoCents,
     exigeDocumento: !!tipo?.exigeDocumento,
+    // meia-entrada pergunta o motivo na linha (estudante, idoso, PCD…) — é ele que diz à
+    // portaria qual documento pedir, e é a mesma declaração do site (ADM-02)
+    especie: tipo?.especie ?? null,
+    motivo: '',
+    documentoMeia: '',
     quantidade: 1,
     teto,
   })
@@ -184,16 +258,19 @@ const NOTAS = [500, 1000, 2000, 5000, 10000, 20000]
 function nota(c: number) { recebidoCents.value += c }
 
 async function vender() {
+  if (vendendo.value) return
   vendendo.value = true; erro.value = ''
+  // a chave vai pro armazenamento ANTES do pedido sair: é ela que um F5 no meio precisa achar
+  guardarVenda(armazem(), chaveGuardada.value,
+    { chave: chaveDaVenda.value, carrinho: carrinho.value, forma: forma.value })
+  const totalPedido = totalCents.value
   try {
     const doc = comprador.documento.replace(/\D/g, '')
     const r: any = await $fetch(`/api/admin/evento/${id}/pdv/venda`, {
       method: 'POST',
       body: {
         turnoId: turnoId.value,
-        itens: carrinho.value.map((i) => ({
-          lotId: i.lotId, ticketTypeId: i.ticketTypeId, quantidade: i.quantidade,
-        })),
+        itens: carrinho.value.map(itemDaVenda),
         forma: forma.value,
         recebidoCents: forma.value === 'dinheiro' ? recebidoCents.value : null,
         comprador: (comprador.nome || comprador.email || doc)
@@ -206,7 +283,9 @@ async function vender() {
         chave: chaveDaVenda.value,
       },
     })
-    recibo.value = r
+    // Venda repetida com OUTRO carrinho (o operador refez depois do F5): o recibo é o da venda
+    // que valeu, e o total pode não ser o que ele montou agora — tem que saltar aos olhos.
+    recibo.value = { ...r, divergente: !!r.repetida && Number(r.totalCents) !== totalPedido }
     limpar()
     // O catálogo também: o "disponíveis" de cada botão é o que impede o
     // operador de montar um carrinho que o servidor vai recusar.
@@ -318,7 +397,7 @@ function imprimir() {
       </section>
 
       <!-- carrinho -->
-      <aside class="card h-fit lg:sticky lg:top-4">
+      <aside id="venda" class="card h-fit scroll-mt-4 lg:sticky lg:top-4">
         <h2 class="rotulo-kpi">Venda</h2>
 
         <p v-if="erro" class="faixa-erro mt-3">{{ erro }}</p>
@@ -328,23 +407,41 @@ function imprimir() {
         </p>
 
         <ul v-else class="mt-3 space-y-2">
-          <li v-for="i in carrinho" :key="i.chave"
-              class="flex items-center gap-2 border-b border-linha pb-2">
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-semibold text-tinta">{{ i.nome }}</p>
-              <p class="text-xs text-tinta-fraca">{{ reais(i.precoCents) }} cada</p>
+          <li v-for="i in carrinho" :key="i.chave" class="border-b border-linha pb-2">
+            <div class="flex items-center gap-2">
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-semibold text-tinta">{{ i.nome }}</p>
+                <p class="text-xs text-tinta-suave">{{ reais(i.precoCents) }} cada</p>
+              </div>
+              <div class="flex items-center gap-1">
+                <button type="button" class="h-10 w-10 rounded-xl border border-linha-forte text-lg font-semibold"
+                        :aria-label="`Tirar um ${i.nome}`" @click="menos(i)">−</button>
+                <span class="w-8 text-center font-semibold tabular-nums">{{ i.quantidade }}</span>
+                <button type="button" class="h-10 w-10 rounded-xl border border-linha-forte text-lg font-semibold disabled:opacity-40"
+                        :aria-label="`Mais um ${i.nome}`" :disabled="i.quantidade >= i.teto"
+                        @click="i.quantidade++">+</button>
+              </div>
+              <span class="w-20 text-right font-semibold tabular-nums">
+                {{ reais(i.precoCents * i.quantidade) }}
+              </span>
             </div>
-            <div class="flex items-center gap-1">
-              <button type="button" class="h-9 w-9 rounded-card border border-linha-forte text-lg font-semibold"
-                      @click="menos(i)">−</button>
-              <span class="w-8 text-center font-semibold tabular-nums">{{ i.quantidade }}</span>
-              <button type="button" class="h-9 w-9 rounded-card border border-linha-forte text-lg font-semibold"
-                      :disabled="i.quantidade >= i.teto"
-                      @click="i.quantidade++">+</button>
+            <!-- meia-entrada: o motivo é pergunta obrigatória (ADM-02) — é ele que diz à
+                 portaria qual documento pedir. O número da credencial é opcional no guichê. -->
+            <div v-if="i.especie === 'meia'" class="mt-2 rounded-xl bg-alerta-claro p-2">
+              <label :for="`motivo-${i.chave}`" class="text-xs font-semibold text-alerta">
+                Motivo da meia-entrada
+              </label>
+              <select :id="`motivo-${i.chave}`" v-model="i.motivo" class="campo mt-1"
+                      :class="i.motivo ? '' : 'ring-2 ring-alerta/50'">
+                <option value="">Escolha o motivo…</option>
+                <option v-for="(m, k) in MOTIVOS" :key="k" :value="k">{{ m.rotulo }}</option>
+              </select>
+              <p v-if="i.motivo" class="mt-1 text-xs text-tinta-corpo">
+                Confira agora: {{ MOTIVOS[i.motivo]?.documento }}
+              </p>
+              <input v-if="i.motivo && MOTIVOS[i.motivo]?.exigeNumero" v-model="i.documentoMeia"
+                     class="campo mt-1" :placeholder="`Nº da ${i.motivo === 'estudante' ? 'carteira estudantil' : 'ID Jovem'} (opcional)`">
             </div>
-            <span class="w-20 text-right font-semibold tabular-nums">
-              {{ reais(i.precoCents * i.quantidade) }}
-            </span>
           </li>
         </ul>
 
@@ -417,6 +514,19 @@ function imprimir() {
       </aside>
     </div>
 
+    <!-- celular: o carrinho fica ABAIXO do catálogo; esta barra mostra o total e leva até a
+         venda sem o operador rolar a tela a cada cliente (ADM-49) -->
+    <div v-if="turno && carrinho.length && !recibo"
+         class="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 bg-menu px-4 py-3 text-white shadow-lg lg:hidden">
+      <div class="min-w-0 flex-1">
+        <p class="text-xs font-semibold uppercase text-white/80">
+          {{ carrinho.reduce((s, i) => s + i.quantidade, 0) }} ingresso(s)
+        </p>
+        <p class="titulo text-xl font-semibold tabular-nums">{{ reais(totalCents) }}</p>
+      </div>
+      <a href="#venda" class="btn-primario min-h-[44px] px-4">Fechar venda</a>
+    </div>
+
     <!-- as fichas: só existem na impressão (ver FichasImpressas.vue) -->
     <FichasImpressas v-if="recibo && !recibo.cancelada" ref="fichas" :evento="cat?.evento?.nome ?? ''"
                      :pedido="recibo.pedido" :ingressos="recibo.ingressos" />
@@ -434,6 +544,10 @@ function imprimir() {
         <p v-if="recibo.repetida" class="faixa-aviso mt-3">
           Esta venda já tinha sido registrada — a conexão caiu antes da resposta chegar.
           Nada foi cobrado duas vezes: este é o recibo da venda que valeu.
+        </p>
+        <p v-if="recibo.divergente" class="faixa-erro mt-3">
+          Atenção: a venda que valeu foi de {{ reais(recibo.totalCents) }}, diferente do carrinho que
+          você montou agora. Confira os ingressos abaixo com o cliente antes de receber.
         </p>
 
         <p v-if="erro" class="faixa-erro mt-3">{{ erro }}</p>
