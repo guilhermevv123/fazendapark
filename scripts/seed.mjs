@@ -33,6 +33,40 @@ if (process.env.SEED_TESTE) carregar('.env.test', true)
 const ORG_ID = '652bd0d8-251c-45d9-9e80-39eb02dde202'
 const EVENTO_ID = '3cd875a0-e230-448a-892b-d4cc840b1948'
 
+/*
+ * A trava de produção (PROD-02, 27/09).
+ *
+ * Este script APAGA a organização `fazenda-park` e grava `dono@` e `portaria@`
+ * com a senha `diamond123` — e o repositório é público. É isso que a máquina
+ * local, a suíte e a bateria E2E precisam (todas entram com essa senha), e é
+ * exatamente o que a produção não pode ter: rodado lá por engano, o painel
+ * master abre pra quem ler o GitHub.
+ *
+ * Então ele recusa ANTES de conectar: com `NODE_ENV=production`, ou com o
+ * banco em qualquer lugar que não seja esta máquina (localhost, 127.0.0.1,
+ * ::1 ou socket local). Sem porta dos fundos por variável: quem precisa de
+ * dado num banco de fora cria pelo painel, com senha própria.
+ */
+function motivoPraRecusar() {
+  if (process.env.NODE_ENV === 'production') return 'NODE_ENV=production'
+  let url
+  try { url = new URL(String(process.env.DATABASE_URL ?? '')) } catch { return 'DATABASE_URL ausente ou ilegível' }
+  const LOCAL = new Set(['', 'localhost', '127.0.0.1', '::1', '[::1]'])
+  if (!LOCAL.has(url.hostname)) return `o banco está em "${url.hostname}", que não é esta máquina`
+  // `?host=` também escolhe servidor no pg: socket (começa com "/") é local, nome de máquina não
+  const host = url.searchParams.get('host')
+  if (host && !host.startsWith('/') && !LOCAL.has(host)) return `o banco está em "${host}", que não é esta máquina`
+  return null
+}
+const recusa = motivoPraRecusar()
+if (recusa) {
+  console.error(`seed: recuso rodar — ${recusa}.\n`
+    + '  Este script apaga a organização fazenda-park e grava dono@ e portaria@ com a senha\n'
+    + '  pública "diamond123": ele é só pra banco LOCAL (localhost). Em produção os acessos\n'
+    + '  nascem pelo painel ou pela carga inicial, com senhas próprias.')
+  process.exit(9)
+}
+
 const c = new pg.Client({ connectionString: process.env.DATABASE_URL })
 await c.connect()
 
