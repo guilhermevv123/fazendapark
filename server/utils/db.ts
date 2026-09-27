@@ -15,12 +15,27 @@ pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v))
 
 let pool: pg.Pool | null = null
 
+/**
+ * O fuso de TODA sessão do banco. Relatório, financeiro e dashboard cortam dia e mês no SQL
+ * (`date_trunc('day', paid_at)`, `::date`), e esse corte usa o fuso da SESSÃO, não o do Node.
+ * O Postgres desta máquina nasce em America/Bahia; o do EasyPanel (imagem oficial) nasce em UTC —
+ * lá a venda das 21h caía no dia seguinte e cada barra saía com o rótulo trocado, enquanto aqui
+ * tudo passava (auditoria de 27/09, REL-01/FIN-01). Fixar na conexão vale nos dois lugares.
+ */
+export const FUSO_DO_BANCO = process.env.FUSO_BANCO || 'America/Bahia'
+
+export function opcoesDaConexao(fuso = FUSO_DO_BANCO): string {
+  if (!/^[A-Za-z_]+(\/[A-Za-z_]+)*$/.test(fuso)) throw new Error(`FUSO_BANCO inválido: ${fuso}`)
+  return `-c TimeZone=${fuso}`
+}
+
 export function db(): pg.Pool {
   if (pool) return pool
   const connectionString = process.env.DATABASE_URL
   if (!connectionString) throw new Error('DATABASE_URL não configurada')
   pool = new pg.Pool({
     connectionString,
+    options: opcoesDaConexao(),
     max: Number(process.env.PG_POOL_MAX || 10),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
