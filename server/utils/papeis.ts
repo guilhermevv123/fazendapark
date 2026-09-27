@@ -63,10 +63,11 @@ export type Area =
   | 'equipe'      // quem tem acesso ao painel
   | 'organizacao' // cadastro e credencial de cobrança
   | 'clientes'    // a base de clientes: CPF, telefone, endereço, idade, Instagram
+  | 'agentes'     // o atendimento automático (Sofia): conversas, telefones e mensagens de cliente
 
 export const AREAS: Area[] = [
   'dinheiro', 'evento', 'evento_ver', 'venda', 'pdv', 'portaria', 'portaria_historico',
-  'equipe', 'organizacao', 'clientes',
+  'equipe', 'organizacao', 'clientes', 'agentes',
 ]
 
 export const PAPEIS: Papel[] = ['master', 'financeiro', 'operacao', 'portaria']
@@ -248,6 +249,10 @@ const AREA_DA_RAIZ: [string, Area][] = [
   ['/api/admin/relatorios', 'dinheiro'],
   // A base de clientes (lista, ficha, exportação): ver a nota em `PODE`.
   ['/api/admin/clientes', 'clientes'],
+  // O que a Sofia conversa no WhatsApp e no Instagram: telefone e mensagem de
+  // cliente, igual à base de clientes — nasce só do master. Quem mais precisar
+  // (um papel de atendimento, um dia) entra em `PODE` de propósito, no diff.
+  ['/api/admin/agentes', 'agentes'],
   ['/api/admin/eventos', 'evento_ver'],
   ['/api/admin/pedido', 'venda'],
   ['/api/admin/evento', 'evento'], // criar evento; o `/evento/<id>/...` é tratado acima
@@ -350,6 +355,7 @@ const AREA_DA_PAGINA_RAIZ: [string, Area | 'livre'][] = [
   ['/admin/reconciliacao', 'dinheiro'],
   ['/admin/relatorios', 'dinheiro'], // a mesma tranca da rota que a alimenta
   ['/admin/clientes', 'clientes'],
+  ['/admin/agentes', 'agentes'],
   // Suporte é "o que fazer quando algo dá errado no dia do evento", e ele é
   // uma parede de ATALHOS: Vendas, Histórico de leituras, Participantes,
   // Cortesias, Financeiro, Equipe, Configurações. Pra quem só abre o leitor
@@ -477,6 +483,7 @@ const NOME_DA_AREA: Record<Area, string> = {
   equipe: 'a equipe',
   organizacao: 'o cadastro e as credenciais de cobrança',
   clientes: 'a base de clientes (cadastro, telefone e CPF)',
+  agentes: 'as conversas do atendimento automático (Sofia)',
 }
 
 export type Decisao = { liberado: boolean; area: Area | null; motivo: string }

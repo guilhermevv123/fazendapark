@@ -190,6 +190,10 @@ const itensDoPainel = computed<Item[]>(() => eventoId.value
       { nome: 'Relatórios', icone: 'relatorio', para: '/admin/relatorios', filhos: [
         { nome: 'Visão geral', para: '/admin/relatorios' },
         { nome: 'Financeiro', para: '/admin/financeiro' },
+        // O que a Sofia (WhatsApp/Instagram) está conversando — mora aqui dentro
+        // pra manter os QUATRO assuntos de primeiro nível (pedido do dono, 22/09).
+        // Área `agentes`: só o master vê o item (e a rota).
+        { nome: 'Atendimento IA', para: '/admin/agentes' },
       ] },
 
       // Organização e Equipe entram aqui — a chave do Asaas (quando existir)
@@ -315,6 +319,7 @@ const NOME_DA_TELA: Record<string, string> = {
   relatorios: 'Relatórios', organizacoes: 'Organização', configuracoes: 'Configurações',
   reconciliacao: 'Reconciliação', sessoes: 'Sessões', transferencias: 'Transferências',
   validacao: 'Validação', historico: 'Histórico', promocionais: 'Promocionais',
+  agentes: 'Atendimento IA',
 }
 
 const trilha = computed(() => {
