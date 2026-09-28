@@ -149,11 +149,24 @@ export const COR_DO_CANAL: Record<string, string> = {
  * O período mora na URL (ADM-31): `?periodo=hoje|ontem|7d` ou `?de=&ate=`, e a aba em `?aba=`.
  * Em "Hoje" a página se atualiza sozinha a cada minuto e diz a hora da última leitura.
  */
+import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
+
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
 const router = useRouter()
 const id = route.params.id as string
+
+/**
+ * Os atalhos do painel (Sessões, Histórico, Abrir o leitor, os barrados) só pra quem abre a tela
+ * do outro lado: o Financeiro vê o painel e levava 403 em todos eles — botão que não funciona.
+ * Mesma régua do menu (`podeAbrirPagina`); papel desconhecido mostra e o servidor decide.
+ */
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+function podeAbrir(resto: string): boolean {
+  const p = eu.value?.usuario?.papel
+  return !ehPapel(p) || podeAbrirPagina(p, `/admin/evento/${id}${resto}`)
+}
 
 type Periodo = 'tudo' | 'hoje' | 'ontem' | '7d' | 'personalizado'
 const naUrl = (chave: string) => {
@@ -734,7 +747,8 @@ useHead({ title: 'Dashboard do evento' })
             <h2 class="titulo-bloco">Ocupação dos próximos dias</h2>
             <p class="apoio-bloco">pessoas já vendidas ou reservadas em cada dia, contra a capacidade</p>
           </div>
-          <NuxtLink :to="`/admin/evento/${id}/ingressos/sessoes`" class="btn-secundario">Sessões</NuxtLink>
+          <NuxtLink v-if="podeAbrir('/ingressos/sessoes')" :to="`/admin/evento/${id}/ingressos/sessoes`"
+                    class="btn-secundario" data-parte="atalho-sessoes">Sessões</NuxtLink>
         </header>
         <ul class="mt-4 grid gap-3 md:grid-cols-2">
           <li v-for="s in data.proximosDias" :key="s.id" class="rounded-xl bg-fundo-cinza p-3 ring-1 ring-inset ring-linha">
@@ -769,7 +783,8 @@ useHead({ title: 'Dashboard do evento' })
               <h2 class="titulo-bloco">Portaria hoje</h2>
               <p class="apoio-bloco">pessoas que entraram a cada 15 minutos, por portão</p>
             </div>
-            <NuxtLink :to="`/admin/evento/${id}/validacao/historico`" class="btn-secundario">Histórico</NuxtLink>
+            <NuxtLink v-if="podeAbrir('/validacao/historico')" :to="`/admin/evento/${id}/validacao/historico`"
+                      class="btn-secundario" data-parte="atalho-historico">Histórico</NuxtLink>
           </header>
           <div class="mt-3 flex flex-wrap gap-x-8 gap-y-2">
             <div>
@@ -782,8 +797,10 @@ useHead({ title: 'Dashboard do evento' })
               <p class="numero-kpi mt-1" :class="barrados ? 'text-alerta' : ''">{{ num(barrados) }}</p>
               <p class="text-xs text-tinta-suave">
                 <template v-for="(b, i) in portaria?.barradosHoje ?? []" :key="b.resultado"><template v-if="i"> · </template><NuxtLink
+                  v-if="podeAbrir('/validacao/historico')"
                   :to="`/admin/evento/${id}/validacao/historico?resultado=${b.resultado}`"
-                  class="underline">{{ MOTIVO_DA_RECUSA[b.resultado] ?? b.resultado }} {{ num(b.n) }}</NuxtLink></template>
+                  class="underline" data-parte="atalho-barrados">{{ MOTIVO_DA_RECUSA[b.resultado] ?? b.resultado }} {{ num(b.n) }}</NuxtLink><span
+                  v-else>{{ MOTIVO_DA_RECUSA[b.resultado] ?? b.resultado }} {{ num(b.n) }}</span></template>
                 <template v-if="!barrados">ninguém barrado</template>
               </p>
             </div>
@@ -812,7 +829,8 @@ useHead({ title: 'Dashboard do evento' })
           <div v-else class="mt-4 flex flex-col items-center gap-2 py-6 text-center">
             <IconeMenu nome="validacao" :tamanho="28" class="text-tinta-suave" />
             <p class="text-sm text-tinta-suave">Ninguém passou pela portaria hoje.</p>
-            <NuxtLink :to="`/admin/evento/${id}/validacao`" class="btn-secundario">Abrir o leitor</NuxtLink>
+            <NuxtLink v-if="podeAbrir('/validacao')" :to="`/admin/evento/${id}/validacao`"
+                      class="btn-secundario" data-parte="atalho-leitor">Abrir o leitor</NuxtLink>
           </div>
         </section>
 

@@ -396,3 +396,33 @@ describe('aba Público: o que o checkout pergunta aparece; o aviso fica só com 
     expect(aviso).toContain('gênero')
   })
 })
+
+describe('os atalhos do painel só pra quem abre a tela do outro lado (achado do E2E)', () => {
+  const montarComo = async (papel: string, dados: any = NOVO) => montarTela(await tela(), {
+    rota: { params: { id: EV }, path: `/admin/evento/${EV}/dashboard` },
+    respostas: { [`/api/admin/evento/${EV}/dashboard`]: dados, '/api/auth/eu': { usuario: { papel } } },
+  })
+  const SEM_NINGUEM = { ...NOVO, portaria: { ...NOVO.portaria, hoje: { pessoas: 0, passagens: 0 }, quartos: [] } }
+
+  it('Financeiro: sem Sessões, Histórico, barrados clicáveis nem Abrir o leitor — os quatro davam 403', async () => {
+    for (const dados of [NOVO, SEM_NINGUEM]) {
+      const w = await montarComo('financeiro', dados)
+      for (const a of ['atalho-sessoes', 'atalho-historico', 'atalho-barrados', 'atalho-leitor']) {
+        expect(w.find(`[data-parte="${a}"]`).exists(), `${a} apareceu pro Financeiro`).toBe(false)
+      }
+      // o número dos barrados continua, só não é link
+      if (dados === NOVO) expect(w.find('[data-parte="portaria-hoje"]').text()).toContain('Já tinha entrado 5')
+      limparTela()
+    }
+  })
+
+  it('Master: os atalhos todos', async () => {
+    const w = await montarComo('master')
+    for (const a of ['atalho-sessoes', 'atalho-historico', 'atalho-barrados']) {
+      expect(w.find(`[data-parte="${a}"]`).exists(), `${a} sumiu pro master`).toBe(true)
+    }
+    limparTela()
+    const vazio = await montarComo('master', SEM_NINGUEM)
+    expect(vazio.find('[data-parte="atalho-leitor"]').exists()).toBe(true)
+  })
+})
