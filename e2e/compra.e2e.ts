@@ -10,7 +10,7 @@
 import { expect, test } from '@playwright/test'
 import { hidratada, travaDeBase, vigiar } from './apoio'
 import {
-  SENHA_DO_CLIENTE, SLUG, abrirVitrine, botaoIrPagar, botaoPagar, cpfDeTeste, irParaPagamento, mais, menos, preencherDados,
+  SLUG, abrirVitrine, botaoIrPagar, botaoPagar, cpfDeTeste, irParaPagamento, mais, menos, preencherDados,
 } from './compra-apoio'
 
 travaDeBase()
@@ -183,29 +183,6 @@ test.describe('pagamento: dados do comprador', () => {
     expect(problemas.filter((p) => !p.startsWith('console'))).toEqual([])
   })
 
-  test('senha igual ao CPF é recusada no campo da senha', async ({ page }) => {
-    const cpf = cpfDeTeste()
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await preencherDados(page, { cpf, senha: cpf })
-    await botaoPagar(page).click()
-    await expect(page.getByText(/não pode ser o seu e-mail nem o seu CPF/)).toBeVisible()
-    await expect(page.locator('#senha')).toBeFocused()
-  })
-
-  test('"Mostrar" a senha troca o tipo do campo e "Ocultar" volta', async ({ page }) => {
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await page.locator('#senha').fill('uma-senha-qualquer')
-    await expect(page.locator('#senha')).toHaveAttribute('type', 'password')
-    await page.getByRole('button', { name: 'Mostrar' }).click()
-    await expect(page.locator('#senha')).toHaveAttribute('type', 'text')
-    await page.getByRole('button', { name: 'Ocultar' }).click()
-    await expect(page.locator('#senha')).toHaveAttribute('type', 'password')
-  })
-
   test('CEP: achou preenche o endereço; não existe avisa; serviço fora avisa — nenhum trava a compra', async ({ page }) => {
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
@@ -308,7 +285,7 @@ test.describe('cupom', () => {
 })
 
 test.describe('pagar e receber o ingresso', () => {
-  test('PIX: QR na tela, F5 não perde a cobrança nem guarda a senha, simular pagamento emite o ingresso', async ({ page, context }) => {
+  test('PIX: QR na tela, F5 não perde a cobrança, simular pagamento emite o ingresso', async ({ page, context }) => {
     const problemas = vigiar(page)
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await abrirVitrine(page)
@@ -333,9 +310,6 @@ test.describe('pagar e receber o ingresso', () => {
     const copiado = await page.evaluate(() => navigator.clipboard.readText())
     expect(copiado).toMatch(/^000201/) // BR Code começa assim
 
-    // a senha nunca pode estar no sessionStorage (qualquer script da página lê)
-    const guardado = await page.evaluate(() => JSON.stringify(Object.entries(sessionStorage)))
-    expect(guardado).not.toContain(SENHA_DO_CLIENTE)
 
     // F5 com o PIX na tela: a mesma cobrança volta, não a vitrine
     await page.reload()

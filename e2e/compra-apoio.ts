@@ -6,7 +6,6 @@ import { expect, type Page } from '@playwright/test'
 import { EVENTO_SEED, centavos, hidratada } from './apoio'
 
 export const SLUG = EVENTO_SEED.slug
-export const SENHA_DO_CLIENTE = 'Sol-e-piscina-2026'
 
 /** CPF sintético que passa no dígito verificador (o mesmo cálculo do checkout). */
 export function cpfDeTeste() {
@@ -45,7 +44,7 @@ export async function irParaPagamento(page: Page) {
   await expect(page.locator('#nome')).toBeVisible()
 }
 
-export interface Dados { nome?: string; email?: string; cpf?: string; nascimento?: string; senha?: string; cidade?: string; estado?: string }
+export interface Dados { nome?: string; email?: string; cpf?: string; nascimento?: string; cidade?: string; estado?: string }
 
 export async function preencherDados(page: Page, d: Dados = {}) {
   await page.locator('#nome').fill(d.nome ?? 'Cliente do Teste Ponta a Ponta')
@@ -55,7 +54,6 @@ export async function preencherDados(page: Page, d: Dados = {}) {
   await page.locator('#nascimento').fill(d.nascimento ?? '25/12/1990')
   await page.locator('#cidade').fill(d.cidade ?? 'Ubatã')
   await page.locator('#estado').selectOption(d.estado ?? 'BA')
-  await page.locator('#senha').fill(d.senha ?? SENHA_DO_CLIENTE)
 }
 
 export const botaoPagar = (page: Page) => page.getByRole('button', { name: /^Pagar com (PIX|cartão)$/ })

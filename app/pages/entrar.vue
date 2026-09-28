@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { destinoDoLogin } from '~/composables/destinoDoLogin'
 /**
  * Tela de login.
  *
@@ -32,10 +33,9 @@ async function entrar() {
       method: 'POST',
       body: { email: email.value.trim(), senha: senha.value },
     })
-    const destino = (route.query.de as string) || '/admin'
-    // Só aceita destino interno: `?de=https://outro.site` transformaria a
-    // tela de login num redirecionador aberto, prato feito pra phishing.
-    await navigateTo(destino.startsWith('/') && !destino.startsWith('//') ? destino : '/admin')
+    // Só destino desta casa (ver app/composables/destinoDoLogin.ts): o resto vai pro painel,
+    // sem erro — a sessão já existe neste ponto e "não foi possível entrar" seria mentira (B27).
+    await navigateTo(destinoDoLogin(route.query.de, useRequestURL().origin))
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível entrar.'
   } finally {

@@ -59,8 +59,10 @@ test.describe('tela de entrada', () => {
       await page.getByPlaceholder(/@/).fill(LOGINS.master)
       await page.getByLabel(/senha/i).fill(SENHA)
       await page.getByRole('button', { name: /^entrar$/i }).click()
-      await page.waitForTimeout(2000)
+      // cai no painel desta casa — e SEM "Não foi possível entrar." (B27: a sessão já existia)
+      await expect(page).toHaveURL(/\/admin/)
       expect(new URL(page.url()).host).toBe(new URL(test.info().project.use.baseURL!).host)
+      await expect(page.getByRole('alert')).toHaveCount(0)
     })
   }
 
