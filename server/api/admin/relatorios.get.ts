@@ -48,7 +48,7 @@
  * rótulo do dia anterior fora da Bahia (auditoria REL-01, a metade do navegador).
  */
 import { FUSO_DO_BANCO, q, q1 } from '../../utils/db'
-import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../utils/liquido'
+import { PAGANTE, PEDIDO_VIVO, SQL_LIQUIDO } from '../../utils/liquido'
 import { FAIXAS_ETARIAS, SQL_FAIXA } from '../../utils/cadastro'
 import { CANAL_CORTESIA } from '../../utils/emissao'
 import { papelPode, type Papel } from '../../utils/papeis'
@@ -102,6 +102,8 @@ const SQL_RESUMO = (onde: string) =>
           count(DISTINCT o.customer_id)::int AS clientes,
           COALESCE(SUM(oi.n),0)::int AS ingressos,
           COALESCE(SUM(oi.n) FILTER (WHERE o.channel = '${CANAL_CORTESIA}'),0)::int AS ingressos_cortesia,
+          count(*) FILTER (WHERE ${PAGANTE})::int AS pagantes,
+          COALESCE(SUM(oi.n) FILTER (WHERE ${PAGANTE}),0)::int AS ingressos_pagantes,
           MIN(o.paid_at) AS primeira, MAX(o.paid_at) AS ultima,
           to_char(MIN(o.paid_at), 'YYYY-MM-DD') AS primeiro_dia
      FROM orders o ${ITENS}
@@ -125,6 +127,10 @@ function montarResumo(resumo: any) {
   const ingressosCortesia = Number(resumo.ingressos_cortesia ?? 0)
   const pedidosVenda = pedidos - pedidosCortesia
   const ingressosVenda = ingressos - ingressosCortesia
+  // quem PAGOU alguma coisa (`PAGANTE`, a régua do painel e do relatório do evento): o ticket
+  // médio divide por eles — cortesia e venda de R$ 0 não puxam a média pra baixo
+  const pagantes = Number(resumo.pagantes ?? 0)
+  const ingressosPagantes = Number(resumo.ingressos_pagantes ?? 0)
   return {
     pedidos, ingressos,
     clientes: Number(resumo.clientes),
@@ -137,9 +143,11 @@ function montarResumo(resumo: any) {
     descontoCents: Number(resumo.desconto),
     estornadoNoLiquidoCents: Number(resumo.estornado),
     liquidoCents: Number(resumo.liquido),
-    // a MESMA régua e o MESMO nome do relatório do evento
-    ticketMedioPorPedidoCents: pedidos > 0 ? Math.round(cobrado / pedidos) : 0,
-    ticketMedioPorIngressoCents: ingressos > 0 ? Math.round(cobrado / ingressos) : 0,
+    // a MESMA régua e o MESMO nome do relatório do evento (quem pagou — ADM-12)
+    ticketMedioPorPedidoCents: pagantes > 0 ? Math.round(cobrado / pagantes) : 0,
+    ticketMedioPorIngressoCents: ingressosPagantes > 0 ? Math.round(cobrado / ingressosPagantes) : 0,
+    pedidosPagantes: pagantes,
+    ingressosPagantes,
     primeiraVenda: resumo.primeira, ultimaVenda: resumo.ultima,
 
     // ---- a decomposição (27/09): nenhum campo acima mudou de conta --------
@@ -148,7 +156,8 @@ function montarResumo(resumo: any) {
     // cortesia é o pedido de R$ 0,00 do canal `cortesia` (a mesma marca do borderô): ela não
     // é venda, e contada como pedido derrubava o ticket médio a cada convite (auditoria REL-06)
     pedidosCortesia, ingressosCortesia, pedidosVenda, ingressosVenda,
-    ticketMedioVendaCents: pedidosVenda > 0 ? Math.round(cobrado / pedidosVenda) : 0,
+    // o nome que a tela lê desde a REL-06 — agora o mesmo número de `ticketMedioPorPedidoCents`
+    ticketMedioVendaCents: pagantes > 0 ? Math.round(cobrado / pagantes) : 0,
   }
 }
 

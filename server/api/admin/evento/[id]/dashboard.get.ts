@@ -29,18 +29,9 @@
  * não de ingresso emitido: uma mesa de 4 é um ingresso e quatro pessoas.
  */
 import { q, q1 } from '../../../../utils/db'
-import { PEDIDO_VIVO, SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY } from '../../../../utils/liquido'
+import { PAGANTE, PEDIDO_VIVO, SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY } from '../../../../utils/liquido'
 import { retratoDoPublico, SQL_PUBLICO } from '../../../../utils/catraca'
 import { cotaDeMeias } from '../../../../utils/meia-entrada'
-
-/**
- * PEDIDO QUE PAGOU ALGUMA COISA — a população do ticket médio (ADM-12).
- *
- * Cortesia (`channel = 'cortesia'`) e venda que fechou em zero (lote grátis, cupom de 100%) são
- * pedido VIVO — contam em "pedidos" e ocupam lugar —, mas não trazem dinheiro: no denominador da
- * média, 40 cortesias transformavam R$ 100 por ingresso em R$ 20. Relatórios usa a mesma régua.
- */
-export const PAGANTE = `o.channel <> 'cortesia' AND o.total_cents > 0`
 
 /**
  * O FUNIL É O DO CHECKOUT DO SITE (ADM-28): só pedido online tem carrinho, PIX que expira e

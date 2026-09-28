@@ -208,10 +208,30 @@ describe('as contas que fecham (REL-02) e a cortesia à parte (REL-06)', () => {
     const { resumo: r } = await json('/api/admin/relatorios?periodo=30d')
     expect(r).toMatchObject({
       pedidos: 4, ingressos: 9, pedidosCortesia: 1, ingressosCortesia: 3, pedidosVenda: 3, ingressosVenda: 6,
+      pedidosPagantes: 3, ingressosPagantes: 6,
       ticketMedioVendaCents: Math.round(38_000 / 3),
-      // o campo antigo continua com a régua do relatório do evento (que conta a cortesia)
-      ticketMedioPorPedidoCents: 9_500,
+      // desde a F3 (ADM-12) o relatório do evento divide por quem PAGOU; a Visão geral acompanha
+      // (28/09) — antes ela contava a cortesia aqui e dava R$ 95,00 pro mesmo evento de R$ 126,67
+      ticketMedioPorPedidoCents: Math.round(38_000 / 3),
+      ticketMedioPorIngressoCents: Math.round(38_000 / 6),
     })
+  })
+
+  it('filtrada pelo evento, a Visão geral dá o MESMO ticket médio que o painel e o relatório dele', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const org = (await json(`/api/admin/relatorios?periodo=tudo&evento=${EV}`)).resumo
+    const rel = (await json(`/api/admin/evento/${EV}/relatorios`)).resumo
+    for (const k of ['ticketMedioPorPedidoCents', 'ticketMedioPorIngressoCents', 'pedidosPagantes']) {
+      expect(org[k], `Visão geral × relatório do evento: ${k}`).toBe(rel[k])
+    }
+    // o painel na MESMA janela que a Visão geral resolveu (o "Tudo" dele corta em agora, e o
+    // pedido E deste arquivo está pago hoje às 23h30 — no futuro de madrugada)
+    const vg = await json(`/api/admin/relatorios?periodo=30d&evento=${EV}`)
+    const painel = (await json(`/api/admin/evento/${EV}/dashboard?de=${vg.filtro.de}&ate=${vg.filtro.ate}`)).totais
+    for (const k of ['ticketMedioPorPedidoCents', 'ticketMedioPorIngressoCents', 'pedidosPagantes']) {
+      expect(vg.resumo[k], `Visão geral × painel do evento: ${k}`).toBe(painel[k])
+    }
+    expect(vg.resumo.pedidosPagantes, 'a janela ficou vazia: a comparação não provaria nada').toBeGreaterThan(0)
   })
 
   it('por tipo de ingresso: Inteira, Meia e "Sem tipo", sem a cortesia', async (ctx) => {

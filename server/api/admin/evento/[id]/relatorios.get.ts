@@ -71,9 +71,9 @@
  *   estornado em parte), o mesmo "finalizado" da rosca do painel.
  */
 import { q, q1 } from '../../../../utils/db'
-import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
+import { PAGANTE, PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
-import { CANAL_DO_FUNIL, fusoDoEvento, PAGANTE } from './dashboard.get'
+import { CANAL_DO_FUNIL, fusoDoEvento } from './dashboard.get'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')

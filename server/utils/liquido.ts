@@ -68,6 +68,17 @@ const VIVOS = `status IN ('pago','estornado_parcial')`
 export const PEDIDO_VIVO = (prefixo = '') => `${prefixo}${VIVOS}`
 
 /**
+ * PEDIDO QUE PAGOU ALGUMA COISA — a população do ticket médio (ADM-12, frota F3).
+ *
+ * Cortesia (`channel = 'cortesia'`) e venda que fechou em zero (lote grátis) são pedido VIVO —
+ * contam em "pedidos" e ocupam lugar —, mas não trazem dinheiro: no denominador da média, 40
+ * cortesias transformavam R$ 100 por ingresso em R$ 20. Mora aqui (e não no painel do evento)
+ * porque a Visão geral da organização divide pela MESMA régua — antes de 28/09 ela contava a
+ * cortesia e o "ticket médio" de uma tela não batia com o da outra pro mesmo evento.
+ */
+export const PAGANTE = `o.channel <> 'cortesia' AND o.total_cents > 0`
+
+/**
  * O que é do produtor, venha o dinheiro de onde vier. Serve pra relatório,
  * borderô e extrato — NÃO serve de teto pra saque.
  *
