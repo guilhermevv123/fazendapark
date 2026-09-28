@@ -15,7 +15,7 @@
  *    no número grande.
  */
 import { q, q1 } from '../../../../utils/db'
-import { PEDIDO_VIVO } from '../../../../utils/liquido'
+import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 
 const POR_PAGINA = 50
 
@@ -71,16 +71,25 @@ export default defineEventHandler(async (event) => {
 
   // Mesmos filtros, sem paginação: o rodapé fala do que está filtrado.
   //
-  // "Recebido" é o pedido VIVO (`PEDIDO_VIVO`), não só o 'pago': com
+  // O total é o pedido VIVO (`PEDIDO_VIVO`), não só o 'pago': com
   // `status = 'pago'`, um estorno parcial de R$ 20 tirava o pedido de R$ 850
   // inteiro do card — e o card de estornado, do lado, já mostra os R$ 20.
+  //
+  // AS RÉGUAS DO PAINEL, COM OS NOMES DO PAINEL (ADM-29). O card dizia "Recebido" com o cobrado
+  // bruto (antes da taxa da plataforma e da devolução) e "Ingressos pagos" com a cortesia dentro:
+  // mesmas perguntas do painel e do borderô, números diferentes. Agora: `cobrado` é o "Total de
+  // vendas" do painel, `liquido` é o `SQL_LIQUIDO` da casa, e `ingressos_vendidos` é o "pagos" do
+  // painel — item de pedido vivo fora do canal de cortesia (a venda de R$ 0 é venda e fica).
   const somas = await q1<any>(
     `SELECT count(*)::int AS pedidos,
-            COALESCE(SUM(o.total_cents) FILTER (WHERE ${PEDIDO_VIVO('o.')}),0)::bigint AS pago,
+            COALESCE(SUM(o.total_cents) FILTER (WHERE ${PEDIDO_VIVO('o.')}),0)::bigint AS cobrado,
+            ${SQL_LIQUIDO('o.')} AS liquido,
             COALESCE(SUM(o.total_cents) FILTER (WHERE o.status = 'aguardando_pagamento'),0)::bigint AS pendente,
             COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
             COALESCE(SUM((SELECT SUM(quantity) FROM order_items WHERE order_id = o.id))
-                       FILTER (WHERE ${PEDIDO_VIVO('o.')}),0)::int AS ingressos_pagos
+                       FILTER (WHERE ${PEDIDO_VIVO('o.')} AND o.channel <> 'cortesia'),0)::int AS ingressos_vendidos,
+            COALESCE(SUM((SELECT SUM(quantity) FROM order_items WHERE order_id = o.id))
+                       FILTER (WHERE ${PEDIDO_VIVO('o.')} AND o.channel = 'cortesia'),0)::int AS cortesias
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
       WHERE ${onde}`, par)
 
@@ -91,10 +100,12 @@ export default defineEventHandler(async (event) => {
     total: Number(somas.pedidos),
     totais: {
       pedidos: Number(somas.pedidos),
-      pagoCents: Number(somas.pago),
+      cobradoCents: Number(somas.cobrado),
+      liquidoCents: Number(somas.liquido),
       pendenteCents: Number(somas.pendente),
       estornadoCents: Number(somas.estornado),
-      ingressosPagos: Number(somas.ingressos_pagos),
+      ingressosVendidos: Number(somas.ingressos_vendidos),
+      cortesias: Number(somas.cortesias),
     },
     pedidos: linhas.map((l) => ({
       id: l.id, codigo: l.code, situacao: l.status, canal: l.channel,

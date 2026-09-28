@@ -95,3 +95,28 @@ describe('participantes — exportação e situação', () => {
     expect(w.text()).not.toMatch(/\bVALIDO\b|\bUSADO\b/)
   })
 })
+
+describe('vendas — os cards com os nomes e as réguas do painel (ADM-29)', () => {
+  const VENDAS = {
+    evento: { id: EV, nome: 'Evento' }, pagina: 1, porPagina: 50, total: 3,
+    totais: { pedidos: 3, cobradoCents: 200_00, liquidoCents: 180_00, pendenteCents: 0, estornadoCents: 0,
+              ingressosVendidos: 3, cortesias: 2 },
+    pedidos: [],
+  }
+  it('"Total de vendas" com o líquido embaixo, e "Ingressos vendidos" sem a cortesia', async () => {
+    const w = await montarTela(await import('../pages/admin/evento/[id]/vendas/index.vue'), {
+      rota: { params: { id: EV } },
+      respostas: { [`/api/admin/evento/${EV}/vendas`]: VENDAS },
+      stubs: { AbasSecao: true, ModalLateral: true },
+    })
+    const total = w.find('[data-parte="total-vendas"]').text().replace(/\s+/g, ' ')
+    expect(total, '"Recebido" com o bruto voltou').toContain('Total de vendas')
+    expect(total).toContain('R$ 200,00')
+    expect(total, 'o líquido do produtor não está no card').toContain('líquido do produtor R$ 180,00')
+    const ingressos = w.find('[data-parte="ingressos-vendidos"]').text().replace(/\s+/g, ' ')
+    expect(ingressos).toContain('Ingressos vendidos')
+    expect(ingressos).toContain('3')
+    expect(ingressos, 'a cortesia sumiu sem aviso').toContain('+ 2 de cortesia')
+    expect(w.text()).not.toContain('Recebido')
+  })
+})

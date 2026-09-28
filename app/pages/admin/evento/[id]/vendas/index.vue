@@ -188,17 +188,25 @@ useHead({ title: 'Vendas' })
 
     <!-- totais do filtro atual -->
     <div v-if="data" class="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <div class="card">
-        <p class="rotulo-kpi">Recebido</p>
-        <p class="numero-kpi mt-1 text-ok">{{ reais(data.totais.pagoCents) }}</p>
+      <!-- Os nomes e as réguas do painel (ADM-29): "Recebido" era o cobrado bruto, e "Ingressos
+           pagos" contava a cortesia. -->
+      <div class="card" data-parte="total-vendas">
+        <p class="rotulo-kpi">Total de vendas</p>
+        <p class="numero-kpi mt-1 text-ok">{{ reais(data.totais.cobradoCents) }}</p>
+        <p class="mt-1 text-sm text-tinta-suave">
+          líquido do produtor <strong class="text-tinta">{{ reais(data.totais.liquidoCents) }}</strong>
+        </p>
       </div>
       <div class="card">
         <p class="rotulo-kpi">Aguardando</p>
         <p class="numero-kpi mt-1 text-alerta">{{ reais(data.totais.pendenteCents) }}</p>
       </div>
-      <div class="card">
-        <p class="rotulo-kpi">Ingressos pagos</p>
-        <p class="numero-kpi mt-1">{{ data.totais.ingressosPagos }}</p>
+      <div class="card" data-parte="ingressos-vendidos">
+        <p class="rotulo-kpi">Ingressos vendidos</p>
+        <p class="numero-kpi mt-1">{{ data.totais.ingressosVendidos }}</p>
+        <p class="mt-1 text-sm text-tinta-suave">
+          sem cortesia<template v-if="data.totais.cortesias"> · + {{ data.totais.cortesias }} de cortesia</template>
+        </p>
       </div>
       <div class="card">
         <p class="rotulo-kpi">Pedidos</p>

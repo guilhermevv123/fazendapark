@@ -1119,8 +1119,8 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
    * voltar a somar o estorno total no total — ou a esconder o pedido morto
    * sem dizer — esta parte fica vermelha.
    */
-  it('as SETE telas do dinheiro dizem o MESMO em cada campo comparável', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('as SETE telas do dinheiro dizem o MESMO em cada campo comparável', async (ctx) => {
+    if (!noAr) ctx.skip()
     expect(cookie, 'login falhou — o teste ficaria verde à toa').toBeTruthy()
 
     const t = await asSeteTelas(EVENTO)
@@ -1151,9 +1151,11 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
       financeiroDoEvento: t.financeiroDoEvento.resumo.liquidoCents,
       financeiroDaOrg: t.org.liquidoCents,
       relatorios: t.relatorios.resumo.liquidoCents,
+      // a lista de vendas passou a mostrar o líquido no card (ADM-29): mesma régua, sexta tela
+      vendas: t.vendas.totais.liquidoCents,
     }
     expect(new Set(Object.values(liquido)).size,
-      `as cinco telas de líquido discordaram: ${JSON.stringify(liquido)}`).toBe(1)
+      `as telas de líquido discordaram: ${JSON.stringify(liquido)}`).toBe(1)
     expect(liquido.bordero, 'o líquido das cinco não é o somado à mão').toBe(LIQUIDO)
 
     // ---------------------------------------------------------------------
@@ -1226,10 +1228,20 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
       // o borderô não tem o campo: tem a quebra por forma, e as partes somam
       // o todo das outras duas
       borderoPorForma: t.bordero.formas.reduce((s: number, f: any) => s + f.totalCents, 0),
+      // o "Total de vendas" da lista de vendas (era "Recebido", ADM-29)
+      vendas: t.vendas.totais.cobradoCents,
     }
     expect(new Set(Object.values(cobrado)).size,
       `as telas discordaram do cobrado: ${JSON.stringify(cobrado)}`).toBe(1)
     expect(cobrado.relatorios, 'o cobrado das telas não é o somado à mão').toBe(COBRADO)
+
+    // INGRESSOS VENDIDOS (ADM-29): a lista de vendas contava a cortesia em "Ingressos pagos".
+    // A régua é a do painel — item de pedido vivo fora do canal de cortesia.
+    expect(t.vendas.totais.ingressosVendidos, 'vendas e painel discordam de quantos ingressos venderam')
+      .toBe(t.dashboard.totais.pagos)
+    expect(t.vendas.totais.cortesias).toBe(t.dashboard.totais.cortesiasEmitidas)
+    expect(t.dashboard.totais.cortesiasEmitidas,
+      'a fixture ficou fraca: sem cortesia, contá-la ou não daria no mesmo').toBeGreaterThan(0)
 
     // ---------------------------------------------------------------------
     // 5. CONTAGEM — duas perguntas, cada uma com o seu nome, e as duas iguais
