@@ -2423,13 +2423,14 @@ export function conferirConfiguracao(): EstadoDaConfiguracao {
   // PROD-03 — sem chave nenhuma, nenhum QR é gerado
   const chaves = estadoDasChavesDeIngresso()
   if (chaves.assinaCom === 'DT1') {
-    // A frase do chaveiro ("TICKET_KEYS não configurada…") convida a configurar
-    // já — e configurar antes da validação OFFLINE da portaria ler DT2 faz o
-    // celular do portão recusar ingresso bom sem rede. Aqui vai o aviso certo.
+    // A frase do chaveiro ("TICKET_KEYS não configurada…") não diz o que NÃO fazer. Até 28/09 este
+    // aviso mandava esperar a validação OFFLINE da portaria ler DT2; ela lê desde a F3 (521fe4d,
+    // `codigoDoQr` e a lista do tablet) — então o aviso diz que a troca está pronta, e como.
     problemas.push({ item: 'TICKET_KEYS', critico: false,
       frase: 'Os ingressos saem no formato DT1, assinados com NUXT_SESSION_SECRET: NÃO troque essa '
-        + 'variável (invalida todo QR vendido). A troca pra TICKET_KEYS (DT2, chave própria) espera a '
-        + 'validação offline da portaria ler o formato novo.' })
+        + 'variável (invalida todo QR vendido). A portaria, com e sem rede, já lê o formato novo '
+        + '(DT2, chave própria): pra ligar, ponha em TICKET_KEYS uma chave "k1:" + 32 bytes em base64 — '
+        + 'os DT1 já vendidos continuam entrando.' })
     for (const frase of chaves.problemas.filter((f) => !/^TICKET_KEYS não configurada/.test(f))) {
       problemas.push({ item: 'TICKET_KEYS', critico: false, frase })
     }

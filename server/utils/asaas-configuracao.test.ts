@@ -78,7 +78,7 @@ describe('conferirConfiguracao · o que falta em produção', () => {
     expect(c.problemas.some(critico(['TICKET_KEYS']))).toBe(true)
   })
 
-  it('PROD-03 · só o segredo da sessão: assina DT1 e AVISA não trocar — sem mandar configurar DT2 antes da portaria', () => {
+  it('PROD-03 · só o segredo da sessão: assina DT1, AVISA não trocar e diz que a portaria já lê o DT2', () => {
     producaoCompleta({ TICKET_KEYS: null })
     const c = conferirConfiguracao()
     expect(c.assinaQrCom).toBe('DT1')
@@ -88,6 +88,9 @@ describe('conferirConfiguracao · o que falta em produção', () => {
     expect(avisos[0]).toMatchObject({ critico: false })
     expect(avisos[0].frase).toMatch(/NÃO troque/)
     expect(avisos[0].frase).toMatch(/portaria/)
+    // a portaria lê DT2 desde 28/09 (validacao/index.vue › codigoDoQr): "espere" não volta
+    expect(avisos[0].frase).toMatch(/já lê o formato novo/)
+    expect(avisos[0].frase).not.toMatch(/espera/)
   })
 
   it('fora de produção, a falta de webhook e de SMTP não é problema', () => {
