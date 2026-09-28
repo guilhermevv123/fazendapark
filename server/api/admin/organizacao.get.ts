@@ -17,6 +17,11 @@
  */
 import { q1 } from '../../utils/db'
 import { ambienteDivergente, ambienteEfetivo } from '../../utils/asaas-ambiente'
+import { CofreFechado, finalDoSegredo } from '../../utils/cofre'
+
+function finalSemCofreFechado(guardado: string | null) {
+  try { return finalDoSegredo(guardado) } catch (e) { if (e instanceof CofreFechado) return null; throw e }
+}
 
 export default defineEventHandler(async (event) => {
   const orgId = (event.context as any).sessao?.orgId
@@ -27,7 +32,6 @@ export default defineEventHandler(async (event) => {
             o.asaas_api_key, o.asaas_api_key IS NOT NULL AS tem_chave,
             o.legal_name, o.address_line, o.address_district, o.address_city, o.address_state,
             o.address_zip, o.support_email, o.support_phone, o.privacy_contact,
-            right(COALESCE(o.asaas_api_key, ''), 6) AS chave_final,
             (SELECT count(*)::int FROM events WHERE org_id = o.id) AS eventos,
             (SELECT count(*)::int FROM users  WHERE org_id = o.id AND active) AS pessoas,
             (SELECT count(*)::int FROM customers WHERE org_id = o.id) AS clientes
@@ -40,7 +44,9 @@ export default defineEventHandler(async (event) => {
     // para onde a cobrança vai de fato — é este que o selo mostra
     ambienteEfetivo: ambienteEfetivo(o.asaas_api_key, o.asaas_env),
     ambienteDivergente: ambienteDivergente(o.asaas_api_key, o.asaas_env),
-    temChave: o.tem_chave, chaveFinal: o.tem_chave ? o.chave_final : null,
+    // os 6 últimos da chave ABERTA (no banco ela pode estar no cofre, e o fim do cifrado não diz
+    // qual chave é); cofre que não abre neste servidor: sem final, e a saúde acusa
+    temChave: o.tem_chave, chaveFinal: o.tem_chave ? finalSemCofreFechado(o.asaas_api_key) : null,
     eventos: o.eventos, pessoas: o.pessoas, clientes: o.clientes,
     criadoEm: o.created_at,
     // o que o site público mostra (rodapé, termos, privacidade, cancelamento) — PROD-08.

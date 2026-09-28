@@ -25,6 +25,7 @@ import { z } from 'zod'
 import { q1, tx } from '../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../utils/auditoria'
 import { recusaDeAmbiente, type AmbienteAsaas } from '../../utils/asaas-ambiente'
+import { guardarSegredo } from '../../utils/cofre'
 import { documentoDaEmpresaValido, somenteDigitos } from '../../../app/composables/dadosDaEmpresa'
 import { explicarErro } from './evento/index.post'
 
@@ -158,7 +159,8 @@ export default defineEventHandler(async (event) => {
   }
   // o VALOR da chave não entra no log de auditoria — só o fato da troca
   if (d.chaveAsaas !== undefined) {
-    por('asaas_api_key', d.chaveAsaas)
+    // vai pro banco pelo cofre (utils/cofre.ts): com COFRE_CHAVE no servidor, cifrada
+    por('asaas_api_key', guardarSegredo(d.chaveAsaas))
     antes.chaveAsaas = atual.tem_chave ? 'configurada' : 'ausente'
     log.chaveAsaas = d.chaveAsaas === null ? 'removida' : 'trocada'
   }

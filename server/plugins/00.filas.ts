@@ -63,6 +63,7 @@ import {
 import {
   INTERVALO_MS as INTERVALO_ESTORNO_MS, garantirWorkerDeEstorno,
 } from '../utils/cancelamento'
+import { arrumarCofre } from '../utils/cofre-banco'
 
 export default defineNitroPlugin((nitro) => {
   garantirWorker()
@@ -94,6 +95,14 @@ export default defineNitroPlugin((nitro) => {
   // alarme falso diário treina o operador a ignorar a tela inteira.
   void anunciarWorker(FILA_DE_ENVIO, envioLigado, INTERVALO_MS, true)
   void anunciarWorker(FILA_DE_ESTORNO, estornoLigado, INTERVALO_ESTORNO_MS, false)
+
+  // O cofre da chave do Asaas (utils/cofre-banco.ts): com COFRE_CHAVE no servidor, cifra o que
+  // ainda está em texto puro e recifra o que está numa chave antiga. Também sem `await` — e a
+  // falha só avisa: a venda segue com a chave como está (texto puro abre sem cofre).
+  void arrumarCofre().then((r) => {
+    if (r) console.log(`[cofre] ligado: ${r.cifradas} cifrada(s), ${r.recifradas} recifrada(s),`
+      + ` ${r.jaEstavam} já no cofre${r.ilegiveis ? `, ${r.ilegiveis} QUE ESTE SERVIDOR NÃO ABRE` : ''}`)
+  }).catch((e) => console.error('[cofre] não consegui arrumar as chaves:', e?.message ?? e))
 
   // Saída limpa tira ESTE processo da frota; morte, não.
   //

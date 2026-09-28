@@ -19,7 +19,7 @@ CREATE TABLE organizations (
   name          text NOT NULL,
   slug          text NOT NULL UNIQUE,
   document      text,                       -- CNPJ/CPF do produtor
-  asaas_api_key text,                       -- cifrada em repouso (ver recifra)
+  asaas_api_key text,                       -- cifrada pelo cofre com COFRE_CHAVE (server/utils/cofre.ts)
   asaas_env     text NOT NULL DEFAULT 'sandbox' CHECK (asaas_env IN ('sandbox','production')),
   asaas_wallet  text,                       -- carteira p/ split, se houver
   created_at    timestamptz NOT NULL DEFAULT now()

@@ -23,6 +23,7 @@ import { pendenciaDoEmail, transporteEscolhido } from './email'
 import { baseDoSite } from './envio'
 import { estadoDasChavesDeIngresso } from './ingresso'
 import { estadoDoFreio } from './sessao'
+import { abrirSegredo, CofreFechado } from './cofre'
 
 const PROD_URL = 'https://api.asaas.com/v3'
 const SANDBOX_URL = 'https://api-sandbox.asaas.com/v3'
@@ -34,7 +35,11 @@ export interface ConfigAsaas {
 }
 
 export function ambienteDaChave(apiKey?: string | null): 'production' | 'sandbox' | null {
-  const k = String(apiKey || '')
+  // A chave pode vir do cofre (`cofre:v1:…`, utils/cofre.ts): o prefixo que diz o ambiente está
+  // DENTRO dela. Cofre que não abre aqui vira "não sei" — quem cobra de verdade (`chamar`) é que
+  // acusa a falta da chave, alto; a vitrine e o selo não caem por causa disso.
+  let k = ''
+  try { k = String(abrirSegredo(apiKey) || '') } catch (e) { if (!(e instanceof CofreFechado)) throw e }
   if (k.includes('_prod_')) return 'production'
   if (k.includes('_hmlg_')) return 'sandbox'
   return null
@@ -56,10 +61,12 @@ async function chamar<T = any>(
   cfg: ConfigAsaas, metodo: string, caminho: string, corpo?: any,
 ): Promise<T> {
   if (!cfg.apiKey) throw new Error('Asaas sem api key configurada')
+  // quem chama passa a chave como está no banco; texto puro de antes do cofre passa igual
+  const chave = abrirSegredo(cfg.apiKey)!
   const res = await fetch(`${baseUrl(cfg)}${caminho}`, {
     method: metodo,
     headers: {
-      access_token: cfg.apiKey,
+      access_token: chave,
       'Content-Type': 'application/json',
       'User-Agent': 'diamond-tickets',
     },
@@ -178,7 +185,7 @@ export function recusaDeDadoDoComprador(e: unknown): { campo: string; recado: st
  * pra quem achar a URL). Vender assim é cobrar e não entregar: o PIX cai no
  * Asaas e o ingresso não sai. Então também não vende (`sem_webhook`).
  */
-export type MotivoSemPagamento = 'sem_chave' | 'chave_de_teste' | 'sem_webhook'
+export type MotivoSemPagamento = 'sem_chave' | 'chave_de_teste' | 'sem_webhook' | 'cofre_fechado'
 
 export const RECADO_SEM_PAGAMENTO =
   'As vendas online estão indisponíveis no momento. Tente mais tarde ou compre na bilheteria.'
@@ -188,6 +195,12 @@ export function pagamentoOnline(org: { asaas_api_key?: string | null; asaas_env?
   if (simulado.ligado()) return { ok: true }
   const fechado = (motivo: MotivoSemPagamento) => ({ ok: false as const, motivo, recado: RECADO_SEM_PAGAMENTO })
   if (!org.asaas_api_key) return fechado('sem_chave')
+  // chave no cofre sem a chave do cofre no servidor: não dá pra cobrar — diz isso (a saúde e o
+  // aviso do boot leem este motivo), em vez de oferecer um pagamento que vai dar 401
+  try { abrirSegredo(org.asaas_api_key) } catch (e) {
+    if (e instanceof CofreFechado) return fechado('cofre_fechado')
+    throw e
+  }
   const producao = process.env.NODE_ENV === 'production'
   const ambiente = ambienteDaChave(org.asaas_api_key) || org.asaas_env || 'sandbox'
   if (producao && ambiente !== 'production') return fechado('chave_de_teste')

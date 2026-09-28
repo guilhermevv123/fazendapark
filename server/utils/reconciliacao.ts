@@ -56,6 +56,7 @@ import { FUSO_DO_BANCO } from './db'
 import { hojeNoFuso, somarDiasNoCalendario } from '../../app/composables/painelPeriodo'
 import { instanteNoFuso } from '../../app/composables/fusoHorario'
 import { ambienteDaChave, reaisParaCentavos, traduzirStatus, type ConfigAsaas } from './asaas'
+import { abrirSegredo } from './cofre'
 
 /* ===================================================== o que é "tem dinheiro" */
 
@@ -911,7 +912,8 @@ export function buscadorDoAsaas(cfg: ConfigAsaas): Buscador {
   return async (caminho: string) => {
     const res = await fetch(`${base}${caminho}`, {
       headers: {
-        access_token: cfg.apiKey,
+        // a chave como está no banco: do cofre (utils/cofre.ts) ou texto puro de antes dele
+        access_token: abrirSegredo(cfg.apiKey)!,
         'Content-Type': 'application/json',
         'User-Agent': 'diamond-tickets',
       },

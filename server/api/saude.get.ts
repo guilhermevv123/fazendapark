@@ -31,6 +31,7 @@ import { q1 } from '../utils/db'
 import { PEDIDO_VIVO } from '../utils/liquido'
 import { conferirConfiguracao, eventosSemPagamentoOnline } from '../utils/asaas'
 import { emPortugues, FILA_DE_ENVIO, vereditoDaFila } from '../utils/envio'
+import { estadoDoCofre } from '../utils/cofre-banco'
 
 const CACHE_MS = 5_000
 let guardada: { ate: number; status: number; corpo: any } | null = null
@@ -195,6 +196,22 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
         + 'segurando ingresso. A varredura consulta o Asaas antes de soltar; confira no painel dele.' })
   }
 
+  // ------------------------------------------ o cofre da chave do Asaas
+  // Chave no cofre que este servidor não abre = organização sem como cobrar (a venda fecha com
+  // `cofre_fechado`): crítico. Chave em texto puro na produção = o risco que o cofre existe pra
+  // fechar (backup vazado leva a chave que estorna e transfere): aviso, até alguém ligar.
+  const cofre = await estadoDoCofre()
+  if (cofre.ilegiveis > 0) {
+    problemas.push({ item: 'cofre', critico: true,
+      frase: `${cofre.ilegiveis} chave(s) do Asaas estão no cofre com uma chave que este servidor não tem `
+        + '(COFRE_CHAVE / COFRE_CHAVES_ANTIGAS): essas organizações não conseguem cobrar.' })
+  }
+  if (config.producao && !cofre.ligado && cofre.emTextoPuro > 0) {
+    problemas.push({ item: 'cofre', critico: false,
+      frase: `${cofre.emTextoPuro} chave(s) do Asaas guardada(s) em texto puro no banco. Ligue o cofre: `
+        + 'COFRE_CHAVE (openssl rand -base64 32) no servidor e reinicie — o boot cifra sozinho.' })
+  }
+
   // ----------------------------------------------- venda online (PROD-06)
   const semPagamento = await eventosSemPagamentoOnline()
   for (const e of semPagamento) {
@@ -213,6 +230,7 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
       webhook,
       filaDeEnvio,
       pedidos,
+      cofre,
       vendaOnline: { eventosSemPagamento: semPagamento },
       config: config.itens,
       assinaQrCom: config.assinaQrCom,
