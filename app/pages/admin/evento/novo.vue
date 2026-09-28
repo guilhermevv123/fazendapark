@@ -944,7 +944,9 @@ useHead({ title: 'Criar evento' })
             </div>
             <div class="col-span-2 sm:col-span-1">
               <label class="rotulo sm:sr-only">Valor</label>
-              <CampoMoeda v-model="l.faceCents" :disabled="l.gratuito" :conferir-abaixo="CONFERIR_ABAIXO_CENTS" />
+              <!-- GER-02: o teto do preço é o do servidor (R$ 100.000,00) — o campo segura e diz -->
+              <CampoMoeda v-model="l.faceCents" :disabled="l.gratuito" :conferir-abaixo="CONFERIR_ABAIXO_CENTS"
+                          :maximo="100_000_00" />
               <!-- preço de cada tipo com desconto (a meia sai por metade) -->
               <p v-if="!l.gratuito && l.faceCents && l.tipos.some((x) => x.descontoBps)" class="mt-1 text-[12px] leading-snug text-tinta-suave">
                 <template v-for="(t, k) in l.tipos.filter((x) => x.descontoBps)" :key="t.nome">
