@@ -586,11 +586,14 @@ async function cobrarSimulado(
   const pix = dados.forma === 'pix'
     ? await simulado.pixSimulado(centavosParaReais(total.totalCents), pedido.code)
     : null
+  // o cartão do simulado também tem "fatura" (B08): sem ela o caminho do cartão
+  // não tinha como ser exercitado na máquina
+  const fatura = dados.forma === 'credito' ? simulado.faturaSimulada(pedido.code) : null
 
   await q(
-    `UPDATE orders SET asaas_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4
+    `UPDATE orders SET asaas_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4, invoice_url = $5
       WHERE id = $1`,
-    [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null])
+    [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null, fatura])
 
   return {
     ok: true,
@@ -608,7 +611,7 @@ async function cobrarSimulado(
       forma: dados.forma,
       pixPayload: pix?.payload ?? null,
       pixQrBase64: pix?.encodedImage ?? null,
-      linkFatura: null,
+      linkFatura: fatura,
     },
   }
 }

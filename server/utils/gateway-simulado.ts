@@ -38,6 +38,17 @@ export async function criarCobrancaSimulada(dados: {
 }
 
 /**
+ * A "fatura do cartão" do simulado (B08): no Asaas de verdade a cobrança no
+ * cartão devolve `invoiceUrl`, a página onde o comprador digita o cartão. Aqui
+ * é uma página de mentira da própria máquina (`server/api/dev/fatura/`), com um
+ * botão que confirma pela mesma emissão do webhook. Caminho RELATIVO: o banco
+ * nunca guarda o endereço do ambiente.
+ */
+export function faturaSimulada(codigoDoPedido: string): string {
+  return `/api/dev/fatura/${encodeURIComponent(codigoDoPedido)}`
+}
+
+/**
  * PIX falso com a cara do verdadeiro: payload no formato EMV (BR Code), com
  * os mesmos campos e o mesmo CRC16 do real. O app de banco vai recusar — a
  * chave não existe —, mas a tela, o copia-e-cola e o QR se comportam igual.
