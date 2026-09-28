@@ -332,3 +332,25 @@ describe('home · B23 e B31', () => {
     expect(descricao?.classes()).toContain('whitespace-pre-line')
   })
 })
+
+describe('home · vários eventos e ingresso grátis (dono, 28/09)', () => {
+  const DOIS = { eventos: [
+    { slug: 'zz-pago', nome: 'ZZ Pago', situacao: 'disponivel', cidade: 'Ubatã', estado: 'BA', inicio: '2026-10-04T12:00:00.000Z', aPartirDeCents: 3000 },
+    { slug: 'zz-gratis', nome: 'ZZ Grátis', situacao: 'disponivel', cidade: null, estado: null, inicio: '2026-11-20T12:00:00.000Z', aPartirDeCents: 0 },
+  ] }
+  it('todos os eventos no MESMO cartão, sem o destaque detalhado em cima', async () => {
+    G.useAsyncData = () => ({ data: ref(null), pending: ref(false), error: ref(null), refresh: async () => {} })
+    tela = await montarTela(await import('../pages/index.vue'), {
+      rota: { path: '/' }, respostas: { '/api/eventos-publicos': DOIS }, stubs: STUBS,
+    })
+    const cartoes = tela!.findAll('[data-parte="eventos-da-home"] > li')
+    expect(cartoes).toHaveLength(2)
+    expect(cartoes[0]!.text()).toContain('ZZ Pago')
+    expect(cartoes[0]!.text()).toContain('R$ 30,00')
+    // grátis diz "Grátis" — nunca "a partir de R$ 0,00"
+    expect(cartoes[1]!.text()).toContain('Grátis')
+    expect(tela!.text()).not.toContain('R$ 0,00')
+    // e o selo "Ingresso a partir de…" da capa saiu
+    expect(tela!.text()).not.toMatch(/Ingresso a partir de/)
+  })
+})

@@ -62,16 +62,13 @@ const SELO: Record<string, { texto: string; classe: string }> = {
 const selo = (s: string) => SELO[s] ?? SELO.em_breve!
 
 const vende = (s: string) => s === 'disponivel' || s === 'ultimas'
+/** Preço de vitrine: ingresso de graça diz "Grátis", não "R$ 0,00" (dono, 28/09). */
+const preco = (cents: number) => (Number(cents) === 0 ? 'Grátis' : reais(cents))
 
 const eventos = computed<any[]>(() => data.value?.eventos ?? [])
 /** Onde o comprador cai ao apertar "Comprar": o primeiro evento que ainda vende. */
 const destaque = computed(() => eventos.value.find((e) => vende(e.situacao)) ?? null)
 const irComprar = computed(() => (destaque.value ? `/e/${destaque.value.slug}` : '/#ingressos'))
-const aPartirDe = computed(() => {
-  const v = eventos.value.filter((e) => vende(e.situacao) && e.aPartirDeCents != null)
-    .map((e) => e.aPartirDeCents as number)
-  return v.length ? Math.min(...v) : null
-})
 const cidade = computed(() => {
   const e = destaque.value ?? eventos.value[0]
   return e?.cidade ? `${e.cidade}${e.estado ? `, ${e.estado}` : ''}` : 'Ubatã, BA'
@@ -82,8 +79,15 @@ const cidade = computed(() => {
  * segunda consulta, e falha sozinha: sem ela a home mostra a lista de eventos e
  * só perde os cartões de preço.
  */
+/**
+ * Mais de um evento no ar: todos entram no MESMO cartão, lado a lado (dono, 28/09: o destaque
+ * detalhado em cima e o resto em linha, embaixo, ficava incoerente). Com um só, a home abre os
+ * ingressos dele por dentro, como antes.
+ */
+const varios = computed(() => eventos.value.length > 1)
+
 const { data: detalhe } = await useAsyncData('home-destaque',
-  async () => (destaque.value
+  async () => (destaque.value && !varios.value
     ? await $fetch<any>(`/api/e/${destaque.value.slug}`).catch(() => null)
     : null),
   { watch: [destaque] })
@@ -300,15 +304,7 @@ useSeoMeta({
             </svg>
           </NuxtLink>
         </div>
-        <p v-if="aPartirDe !== null"
-           class="entra mt-6 inline-flex w-fit items-center gap-2.5 rounded-xl bg-white/10 px-3.5 py-2 text-sm text-ink-100 ring-1 ring-inset ring-white/15"
-           style="--atraso: 1000ms">
-          <span class="relative inline-flex size-2" aria-hidden="true">
-            <span class="absolute inline-flex size-full animate-ping rounded-full bg-sun-400 opacity-70 motion-reduce:animate-none" />
-            <span class="relative inline-flex size-2 rounded-full bg-sun-400" />
-          </span>
-          <span>Ingresso a partir de <span class="font-semibold text-white">{{ reais(aPartirDe) }}</span></span>
-        </p>
+        <!-- o selo "Ingresso a partir de…" da capa saiu (dono, 28/09): o preço mora nos cartões de ingresso -->
       </div>
 
       <!-- a linha d'água: duas ondas em velocidades e sentidos diferentes -->
@@ -370,7 +366,7 @@ useSeoMeta({
               Ingressos e preços
             </h2>
             <!-- B31: a descrição que o produtor escreveu em parágrafos sai em parágrafos -->
-            <p class="mt-3 max-w-2xl whitespace-pre-line text-base leading-7 text-ink-600">{{ detalhe?.evento?.descricao
+            <p class="mt-3 max-w-2xl whitespace-pre-line text-base leading-7 text-ink-600">{{ (!varios && detalhe?.evento?.descricao)
                 || 'Escolha seus ingressos e pague em poucos minutos.' }}</p>
           </div>
           <!-- sem "Escolher ingressos" aqui (dono, 23/09): a compra sai do
@@ -391,7 +387,7 @@ useSeoMeta({
           <!-- o evento em destaque: quando e onde, e os ingressos com preço. O nome
                e o selo "À VENDA" saíram (dono, 23/09) — o nome é o que o produtor
                digitou no painel, e na vitrine só atrapalhava. -->
-          <div v-if="destaque" class="mt-8">
+          <div v-if="destaque && !varios" class="mt-8">
             <dl class="flex flex-col gap-1 text-sm text-ink-600 sm:flex-row sm:flex-wrap sm:gap-x-6">
               <div v-if="quandoDestaque.inicio" class="flex gap-1.5">
                 <dt class="font-semibold text-ink-800">Início:</dt><dd>{{ quandoDestaque.inicio }}</dd>
@@ -418,7 +414,7 @@ useSeoMeta({
                     <!-- Combo não tem "Inteira/Meia": o valor é o do grupo todo. -->
                     <span class="text-ink-700">{{ v.nome || 'Valor do combo' }}</span>
                     <span class="titulo font-semibold tabular-nums text-ink-950"
-                          :class="v.esgotado ? 'text-ink-400 line-through' : ''">{{ reais(v.totalCents) }}</span>
+                          :class="v.esgotado ? 'text-ink-400 line-through' : (v.totalCents === 0 ? 'text-ok' : '')">{{ preco(v.totalCents) }}</span>
                   </li>
                 </ul>
                 <div class="mt-auto pt-5">
@@ -437,29 +433,36 @@ useSeoMeta({
             </ul>
           </div>
 
-          <!-- os demais eventos, sem rodeio: uma linha cada -->
-          <ul v-if="eventos.filter((e) => e !== destaque).length" data-revelar class="mt-8 space-y-3">
-            <li v-for="e in eventos.filter((x) => x !== destaque)" :key="e.slug">
-              <NuxtLink :to="`/e/${e.slug}`"
-                        class="card flex items-center justify-between gap-4 p-5 transition-colors hover:bg-fundo-cinza">
-                <span class="min-w-0">
-                  <span class="titulo block truncate text-lg font-semibold text-tinta">{{ e.nome }}</span>
-                  <!-- O separador só existe quando há os dois lados: evento sem
-                       cidade cadastrada renderizava "· 21/09/2026", com o ponto
-                       solto na frente da data. -->
-                  <span class="block text-sm text-tinta-suave">
-                    {{ [e.cidade, dataCurta(e.inicio)].filter(Boolean).join(' · ') }}
-                  </span>
+          <!-- mais de um evento: todos no mesmo cartão (o mesmo desenho dos cartões de ingresso).
+               O `<li>` sai sem atributo de propósito: `eventos-publicos.test.ts` fatia o HTML nele. -->
+          <ul v-if="varios" class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-parte="eventos-da-home">
+            <li v-for="e in eventos" :key="e.slug">
+              <NuxtLink :to="`/e/${e.slug}`" data-revelar
+                        class="group flex h-full flex-col rounded-3xl bg-white p-6 shadow-card ring-1 ring-ink-200/70 transition duration-300 hover:-translate-y-1.5 hover:shadow-pop hover:ring-pool-300">
+                <span class="flex items-start justify-between gap-3">
+                  <span class="titulo text-lg font-semibold leading-snug text-ink-900">{{ e.nome }}</span>
+                  <span class="shrink-0"><span :class="selo(e.situacao).classe">{{ selo(e.situacao).texto }}</span></span>
                 </span>
-                <span class="shrink-0 text-right">
-                  <span :class="selo(e.situacao).classe">{{ selo(e.situacao).texto }}</span>
-                  <!-- Preço só quando existe lote comprável: anunciar o valor de
-                       um lote que não vende é a isca que o comprador descobre na
-                       página seguinte. -->
-                  <span v-if="e.aPartirDeCents != null" class="mt-1 block text-sm text-tinta-suave">
-                    a partir de
-                    <strong class="font-semibold tabular-nums text-tinta">{{ reais(e.aPartirDeCents) }}</strong>
-                  </span>
+                <!-- O separador só existe quando há os dois lados: evento sem
+                     cidade cadastrada renderizava "· 21/09/2026", com o ponto
+                     solto na frente da data. -->
+                <span class="block text-sm text-tinta-suave">{{ [e.cidade, dataCurta(e.inicio)].filter(Boolean).join(' · ') }}</span>
+                <!-- Preço só quando existe lote comprável: anunciar o valor de
+                     um lote que não vende é a isca que o comprador descobre na
+                     página seguinte. Grátis diz "Grátis", nunca zero em reais. -->
+                <span v-if="e.aPartirDeCents === 0" class="mt-4 block">
+                  <strong class="titulo text-xl font-semibold text-ok">Grátis</strong>
+                </span>
+                <span v-else-if="e.aPartirDeCents != null" class="mt-4 block text-[15px] text-ink-700">
+                  a partir de <strong class="titulo text-xl font-semibold tabular-nums text-ink-950">{{ reais(e.aPartirDeCents) }}</strong>
+                </span>
+                <span v-if="vende(e.situacao)" class="mt-auto inline-flex items-center gap-1 pt-5 text-sm font-semibold text-pool-700 group-hover:text-pool-800">
+                  {{ e.aPartirDeCents === 0 ? 'Pegar ingresso' : 'Comprar' }}
+                  <svg class="size-4 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
                 </span>
               </NuxtLink>
             </li>
