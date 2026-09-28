@@ -68,14 +68,22 @@
 import { q, q1 } from '../../../../utils/db'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
+import { fusoDoEvento } from './dashboard.get'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
 
   const ev = await q1<any>(
-    `SELECT id, name, starts_at, ends_at, fee_bps, created_at
+    `SELECT id, name, starts_at, ends_at, fee_bps, created_at, timezone
        FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
+
+  // Dia, dia da semana e hora são do calendário DO EVENTO (ADM-10). Sem o
+  // `AT TIME ZONE`, `date_trunc`/`EXTRACT` cortam no fuso da SESSÃO do banco:
+  // com o Postgres em UTC (a imagem oficial), a venda das 22h caía no dia
+  // seguinte e a das 10h aparecia às 13h. O painel já cortava assim; agora as
+  // duas telas cortam no mesmo relógio. `$2` é o fuso nas quatro consultas.
+  const fuso = fusoDoEvento(ev.timezone)
 
   const [funil, porDia, porDiaSemana, porHoraDoDia, topCompradores,
          porPromoter, porCupom, porParcela, resumo, publico, devolvido] = await Promise.all([
@@ -102,7 +110,7 @@ export default defineEventHandler(async (event) => {
     // ser confundida com a devolução total do evento (que inclui o pedido
     // estornado por inteiro e não cabe numa curva de líquido).
     q<any>(
-      `SELECT date_trunc('day', paid_at) AS dia,
+      `SELECT to_char(paid_at AT TIME ZONE $2, 'YYYY-MM-DD') AS dia,
               count(*)::int AS pedidos,
               count(*) FILTER (WHERE status = 'estornado_parcial')::int AS com_estorno,
               COALESCE(SUM(total_cents),0)::bigint AS cobrado,
@@ -111,21 +119,21 @@ export default defineEventHandler(async (event) => {
               ${SQL_LIQUIDO()} AS liquido
          FROM orders
         WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1`, [id]),
+        GROUP BY 1 ORDER BY 1`, [id, fuso]),
 
     q<any>(
-      `SELECT EXTRACT(DOW FROM paid_at)::int AS dow, count(*)::int AS pedidos,
+      `SELECT EXTRACT(DOW FROM paid_at AT TIME ZONE $2)::int AS dow, count(*)::int AS pedidos,
               COALESCE(SUM(total_cents),0)::bigint AS cobrado,
               ${SQL_LIQUIDO()} AS liquido
          FROM orders
         WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1`, [id]),
+        GROUP BY 1 ORDER BY 1`, [id, fuso]),
 
     q<any>(
-      `SELECT EXTRACT(HOUR FROM paid_at)::int AS hora, count(*)::int AS pedidos
+      `SELECT EXTRACT(HOUR FROM paid_at AT TIME ZONE $2)::int AS hora, count(*)::int AS pedidos
          FROM orders
         WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1`, [id]),
+        GROUP BY 1 ORDER BY 1`, [id, fuso]),
 
     // Agrupa por cliente, não por pedido: quem comprou três vezes é UM
     // comprador de peso, e é isso que interessa pra base do próximo evento.
@@ -252,15 +260,19 @@ export default defineEventHandler(async (event) => {
   // Dias até o evento em que a venda aconteceu — responde "quando a venda
   // realmente acontece", que decide quando abrir o lote e quando anunciar.
   const antecedencia = await q<any>(
-    `SELECT GREATEST(0, (DATE($2) - DATE(paid_at)))::int AS dias, count(*)::int AS pedidos
+    `SELECT GREATEST(0, (($2::timestamptz AT TIME ZONE $3)::date
+                         - (paid_at AT TIME ZONE $3)::date))::int AS dias,
+            count(*)::int AS pedidos
        FROM orders
       WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-      GROUP BY 1 ORDER BY 1`, [id, ev.starts_at])
+      GROUP BY 1 ORDER BY 1`, [id, ev.starts_at, fuso])
 
   return {
     evento: {
       id: ev.id, nome: ev.name, comeca: ev.starts_at, termina: ev.ends_at,
       criadoEm: ev.created_at, taxaBps: ev.fee_bps,
+      // o relógio dos cortes por dia/semana/hora — a tela diz em que fuso lê
+      fuso,
     },
     resumo: {
       // `pedidos` é a população que as somas abaixo usam: pedido que virou

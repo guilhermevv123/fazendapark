@@ -62,6 +62,35 @@ function diaValido(texto: unknown): string | null {
   return Number.isNaN(new Date(`${dia}T12:00:00Z`).getTime()) ? null : dia
 }
 
+/** o fuso quando o do evento não existe ou está torto */
+export const FUSO_PADRAO = 'America/Bahia'
+
+/**
+ * O fuso do evento, conferido ANTES de entrar num `AT TIME ZONE` — texto torto na coluna
+ * derrubaria a rota inteira com 500.
+ *
+ * A conferência era contra `pg_timezone_names`, que lê o diretório de fusos inteiro a cada
+ * consulta: medido em 27/09, 100–200 ms por abertura do painel, e o painel se atualiza sozinho.
+ * O `Intl` do Node responde a mesma pergunta em microssegundos e ainda devolve o nome canônico.
+ *
+ * Mora aqui (e não num util novo) porque é deste arquivo que relatórios, extrato, pontos de venda
+ * e público importam — a mesma casa do `hojeNoFuso`, pra "que dia é" ter uma resposta só.
+ */
+export function fusoDoEvento(nome: unknown): string {
+  const f = String(nome ?? '').trim()
+  if (!/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+)*$/.test(f)) return FUSO_PADRAO
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: f }).resolvedOptions().timeZone || FUSO_PADRAO
+  } catch {
+    return FUSO_PADRAO
+  }
+}
+
+/** `'America/Bahia'` pronto pra colar no SQL — só com nome que passou por `fusoDoEvento` */
+export function fusoSql(fuso: string): string {
+  return `'${fusoDoEvento(fuso).replace(/'/g, "''")}'`
+}
+
 /** o dia de hoje no calendário do fuso, `AAAA-MM-DD` */
 export function hojeNoFuso(fuso: string, agora = new Date()): string {
   // en-CA escreve a data em ISO; `toISOString` cortaria em UTC
@@ -81,15 +110,13 @@ export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
   const { de, ate, periodo } = getQuery(event) as { de?: string; ate?: string; periodo?: string }
 
-  // O fuso é conferido contra a lista do próprio Postgres: um texto torto na
+  // O fuso é conferido antes de entrar no SQL (`fusoDoEvento`): um texto torto na
   // coluna faria o `AT TIME ZONE` estourar 500 no painel inteiro.
   const ev = await q1<any>(
-    `SELECT id, name, status, starts_at, fee_bps,
-            COALESCE((SELECT z.name FROM pg_timezone_names z WHERE z.name = events.timezone),
-                     'America/Bahia') AS fuso
+    `SELECT id, name, status, starts_at, fee_bps, timezone
        FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
-  const fuso: string = ev.fuso
+  const fuso: string = fusoDoEvento(ev.timezone)
 
   const hoje = hojeNoFuso(fuso)
   let diaDe = diaValido(de)
@@ -145,9 +172,12 @@ export default defineEventHandler(async (event) => {
       [id, janela.hoje_inicio]),
 
     // o dia da curva também é o do evento — senão a venda das 22h cai no
-    // ponto de amanhã quando o banco está em outro fuso
+    // ponto de amanhã quando o banco está em outro fuso. Sai como TEXTO
+    // `AAAA-MM-DD`: um `date` do Postgres vira `Date` do Node à meia-noite do
+    // fuso do SERVIDOR, e o navegador em outro fuso escrevia o dia anterior
+    // no eixo (ADM-10). Dia de calendário não tem hora nem fuso.
     q<any>(
-      `SELECT (o.paid_at AT TIME ZONE '${fuso.replace(/'/g, "''")}')::date AS dia,
+      `SELECT to_char(o.paid_at AT TIME ZONE ${fusoSql(fuso)}, 'YYYY-MM-DD') AS dia,
               COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
               ${SQL_LIQUIDO('o.')} AS liquido,
               COALESCE(SUM(oi.n),0)::int AS ingressos

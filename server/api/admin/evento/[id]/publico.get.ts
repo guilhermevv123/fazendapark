@@ -46,12 +46,15 @@ import { q, q1 } from '../../../../utils/db'
 import { DDD_UF, REGIAO_DDD } from '../../../../utils/ddd'
 import { PEDIDO_VIVO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
+import { fusoDoEvento } from './dashboard.get'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
 
-  const ev = await q1<any>(`SELECT id, org_id, name FROM events WHERE id = $1`, [id])
+  const ev = await q1<any>(`SELECT id, org_id, name, timezone FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
+  // a hora da compra é a do relógio DO EVENTO, a mesma de Relatórios (ADM-10)
+  const fuso = fusoDoEvento(ev.timezone)
 
   const [pessoas, porPessoa, origem, hora, topo, titulares, presenca] = await Promise.all([
     // novos × recorrentes, numa passada só
@@ -96,11 +99,11 @@ export default defineEventHandler(async (event) => {
         GROUP BY 1 ORDER BY 2 DESC`, [id]),
 
     q<any>(
-      `SELECT extract(hour FROM o.paid_at AT TIME ZONE 'America/Bahia')::int AS hora,
+      `SELECT extract(hour FROM o.paid_at AT TIME ZONE $2)::int AS hora,
               count(*)::int AS pedidos
          FROM orders o
         WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.paid_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1`, [id]),
+        GROUP BY 1 ORDER BY 1`, [id, fuso]),
 
     // O ingresso vem de subconsulta lateral, e não de um JOIN na mesma
     // consulta: com o JOIN, o pedido aparecia uma vez POR INGRESSO e

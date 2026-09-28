@@ -45,9 +45,12 @@ watch(params, (p) => {
 const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
   { style: 'currency', currency: 'BRL' })
 
-const dia = (d: string | null) => d
-  ? new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
-  : '—'
+/**
+ * O dia da tabela "por dia" chega como `AAAA-MM-DD` — dia de calendário do evento, sem hora.
+ * `new Date('2026-09-20')` é meia-noite UTC, 21h do dia 19 na Bahia: a linha saía com o dia
+ * ANTERIOR (ADM-10). `dataCurta` passa por `paraData`, que lê data pura como dia local.
+ */
+const dia = (d: string | null) => dataCurta(d)
 const horario = (d: string | null) => d
   ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit',
       hour: '2-digit', minute: '2-digit' })
