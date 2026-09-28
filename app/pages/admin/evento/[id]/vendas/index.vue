@@ -1,3 +1,18 @@
+<script lang="ts">
+import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
+
+/**
+ * O botão "Cancelar pedido" só pra quem pode cancelar (ADM-64): a MESMA grade que tranca a rota
+ * de cancelar no servidor (`decidirAcesso`, área `dinheiro`). Pra Operação o botão abria só o
+ * recado "é do financeiro ou do dono" — botão que não funciona. Papel desconhecido: mostra, e o
+ * servidor responde (como antes).
+ */
+export function podeCancelarPedido(papel: unknown, eventoId: string): boolean {
+  if (!ehPapel(papel)) return true
+  return decidirAcesso(papel, `/api/admin/evento/${eventoId}/cancelar`).liberado
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Vendas: a lista de pedidos, com a ficha completa num painel lateral.
@@ -28,6 +43,10 @@ watch(busca, (v) => {
 })
 watch([situacao, canal], () => { pagina.value = 1 })
 
+// o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+const podeCancelar = computed(() => podeCancelarPedido(eu.value?.usuario?.papel, id))
+
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/vendas`, {
     query: { busca: buscaDebounced, situacao, canal, pagina },
@@ -49,6 +68,9 @@ const SITUACOES: Record<string, { texto: string; classe: string }> = {
   em_analise:           { texto: 'EM ANÁLISE', classe: 'selo-alerta' },
   falhou:               { texto: 'FALHOU',    classe: 'selo-neutro' },
   rascunho:             { texto: 'RASCUNHO',  classe: 'selo-neutro' },
+  // Contestação (ADM-64): o pedido contestado não se filtrava, e é o que mais precisa ser achado
+  chargeback:           { texto: 'CHARGEBACK', classe: 'selo-erro' },
+  disputa:              { texto: 'EM DISPUTA', classe: 'selo-alerta' },
 }
 const CANAIS: Record<string, string> = {
   online: 'Online', bilheteria: 'Bilheteria', pdv_produtor: 'PDV',
@@ -334,8 +356,8 @@ useHead({ title: 'Vendas' })
                     @click="reenvio.aberto = !reenvio.aberto; reenvio.erro = ''; reenvio.resultado = ''">
               Reenviar ingresso
             </button>
-            <button v-if="ficha.pedido.situacao === 'pago' || ficha.pedido.situacao === 'estornado_parcial'"
-                    type="button" class="btn-erro"
+            <button v-if="podeCancelar && (ficha.pedido.situacao === 'pago' || ficha.pedido.situacao === 'estornado_parcial')"
+                    type="button" class="btn-erro" data-parte="cancelar-pedido"
                     @click="cancelamento.aberto = !cancelamento.aberto; cancelamento.erro = ''">
               {{ ficha.acoes.devolucaoPendente ? 'Tentar a devolução de novo' : 'Cancelar pedido' }}
             </button>

@@ -120,3 +120,44 @@ describe('vendas — os cards com os nomes e as réguas do painel (ADM-29)', () 
     expect(w.text()).not.toContain('Recebido')
   })
 })
+
+describe('vendas — filtro de contestação e "Cancelar pedido" só pra quem pode (ADM-64)', () => {
+  const VENDAS = {
+    evento: { id: EV, nome: 'Evento' }, pagina: 1, porPagina: 50, total: 0,
+    totais: { pedidos: 0, cobradoCents: 0, liquidoCents: 0, pendenteCents: 0, estornadoCents: 0,
+              ingressosVendidos: 0, cortesias: 0 },
+    pedidos: [],
+  }
+  const FICHA = {
+    pedido: { codigo: 'DT-1', situacao: 'pago', eventoNome: 'Evento', totalCents: 100_00, descontoCents: 0,
+              criadoEm: '2026-09-20T12:00:00Z', pagoEm: '2026-09-20T12:01:00Z', canceladoEm: null, estornadoEm: null },
+    cliente: { nome: 'Ana', email: 'ana@teste.invalido', documento: null, telefone: null },
+    itens: [], ingressos: [], gateway: [],
+    acoes: { reimprimir: false, reenviar: false, cancelar: false,
+             impedimento: 'Cancelar pedido é do financeiro ou do dono da conta.', devolucaoPendente: false,
+             aDevolverCents: 0, arrependimento: false, arrependimentoMotivo: '', passouPelaPlataforma: true },
+  }
+  const abrir = async (papel: string) => montarTela(await import('../pages/admin/evento/[id]/vendas/index.vue'), {
+    rota: { params: { id: EV }, query: { pedido: 'p1' } },
+    respostas: {
+      [`/api/admin/evento/${EV}/vendas`]: VENDAS,
+      '/api/admin/pedido/p1': FICHA,
+      '/api/auth/eu': { usuario: { papel } },
+    },
+    stubs: { AbasSecao: true, ModalLateral: { template: '<div><slot /><slot name="acoes" /></div>' } },
+  })
+
+  it('o filtro de situação acha chargeback e disputa', async () => {
+    const w = await abrir('master')
+    const opcoes = w.findAll('select option').map((o) => o.attributes('value'))
+    expect(opcoes, 'pedido contestado não se filtra').toEqual(expect.arrayContaining(['chargeback', 'disputa']))
+  })
+
+  it('Operação não vê o botão que só devolveria "é do financeiro"; o dono vê', async () => {
+    const op = await abrir('operacao')
+    expect(op.find('[data-parte="cancelar-pedido"]').exists(), 'botão que não funciona pra Operação').toBe(false)
+    limparTela()
+    const dono = await abrir('master')
+    expect(dono.find('[data-parte="cancelar-pedido"]').exists()).toBe(true)
+  })
+})
