@@ -12,7 +12,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
-import { limparTela, montarTela, navegacoes } from './.vitest-setup-dom'
+import { buscas, limparTela, montarTela, navegacoes } from './.vitest-setup-dom'
 
 vi.setConfig({ testTimeout: 30_000 })
 afterEach(() => { limparTela(); vi.useRealTimers() })
@@ -134,5 +134,32 @@ describe('Eventos — a faixa do dia', () => {
     expect(valor('pagos')).toBe('3')
     expect(valor('cortesias')).toBe('2')
     expect(tela.find('[data-parte="faixa-do-dia"]').text()).not.toMatch(/R\$/)
+  })
+})
+
+describe('a portaria a caminho do leitor', () => {
+  // login da portaria (28/09): a tela pedia a lista, levava 403 e só então perguntava quais leitores
+  // abrir — o 403 aparecia como erro vermelho no console de todo porteiro. Agora a MESMA régua da
+  // rota (`decidirAcesso`) decide antes; o servidor continua sendo quem tranca.
+  const pediuAListaLogo = () => buscas.find((b) => b.url === '/api/admin/eventos')?.opcoes?.immediate !== false
+
+  it('a portaria não pede a lista de eventos, e a tela segue pelo caminho do leitor', async () => {
+    const tela = await abrir({ papel: 'portaria', extra: { '/api/portaria/destino': { eventos: [] } } })
+    expect(pediuAListaLogo(), 'a portaria pediu a lista que a rota recusa').toBe(false)
+    expect(tela.text()).toContain('O seu acesso é o leitor de entrada')
+    expect(tela.text()).not.toContain('Nenhum evento aqui ainda')
+  })
+
+  it('master, financeiro e operação pedem a lista como sempre', async () => {
+    for (const papel of ['master', 'financeiro', 'operacao']) {
+      await abrir({ papel })
+      expect(pediuAListaLogo(), papel).toBe(true)
+      limparTela()
+    }
+  })
+
+  it('papel que a tela não conhece pede — e quem decide é o servidor', async () => {
+    await abrir({ papel: 'estagiario' })
+    expect(pediuAListaLogo()).toBe(true)
   })
 })

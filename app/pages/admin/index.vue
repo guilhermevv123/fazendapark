@@ -14,17 +14,18 @@
  *   · todo status do banco tem selo e, quando existe, filtro — cancelado, adiado e oculto não saem
  *     mais em texto cru, e o "pausado" (que o banco não tem) saiu (EVT-05).
  */
-import { ehPapel, papelPode, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
+import { decidirAcesso, ehPapel, papelPode, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
 import { primeiraTelaDoEvento } from '~/composables/menuDoEvento'
 import { variacao } from '~/composables/painelGrafico'
 import { rotuloDoPeriodo } from '~/composables/painelPeriodo'
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 import PainelKpi from '~/components/painel/Kpi.vue'
 
 definePageMeta({ layout: 'admin' })
 
-const route = useRoute()
-const { data: eventos, pending, error: falha, refresh } = await useFetch<any[]>('/api/admin/eventos')
-
+// a URL é a fonte da busca e da situação; `atual` é a última pedida enquanto a navegação anda
+// (consultaNaUrl.ts)
+const consulta = useConsultaNaUrl()
 // Mesma `key` do layout (`app/layouts/admin.vue`): o Nuxt reaproveita a
 // resposta em vez de bater em `/api/auth/eu` duas vezes por navegação.
 const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
@@ -32,6 +33,15 @@ const papel = computed<Papel | null>(() => {
   const p = eu.value?.usuario?.papel
   return ehPapel(p) ? p : null
 })
+/*
+ * Quem a régua da ROTA já recusa (a portaria) nem pede a lista: o pedido só voltaria 403, e no
+ * navegador todo 403 vira erro vermelho no console — medido no login da portaria (28/09), que
+ * passa por aqui a caminho do leitor. Não é palpite de papel: é `decidirAcesso`, a MESMA função
+ * que o servidor usa pra esta rota (`utils/papeis.ts`). Papel desconhecido pede, e o servidor decide.
+ */
+const alcancaLista = computed(() => !papel.value || decidirAcesso(papel.value, '/api/admin/eventos').liberado)
+const { data: eventos, pending, error: falha, refresh } = await useFetch<any[]>(
+  '/api/admin/eventos', { immediate: alcancaLista.value })
 /** quem vê o caixa — a MESMA régua da rota (`papelPode(papel, 'dinheiro')` em `eventos.get.ts`) */
 const veDinheiro = computed(() => !!papel.value && papelPode(papel.value, 'dinheiro'))
 
@@ -45,11 +55,12 @@ const veDinheiro = computed(() => !!papel.value && papelPode(papel.value, 'dinhe
  * portão via um painel que afirmava que a produtora não tem evento nenhum,
  * com o parque vendendo ingresso naquele momento.
  *
- * A régua é a RESPOSTA do servidor, não um palpite de papel no front: quem
- * decide o que este login alcança é `utils/papeis.ts`, e repetir a decisão
+ * A régua é a do servidor, não um palpite de papel no front: quem decide o que
+ * este login alcança é `utils/papeis.ts` — a mesma `decidirAcesso` antes de
+ * pedir (acima), e o 403 da rota se ainda assim ela recusar. Uma lista própria
  * aqui seria a segunda lista que um dia diverge da primeira.
  */
-const semAcesso = computed(() => (falha.value as any)?.statusCode === 403)
+const semAcesso = computed(() => !alcancaLista.value || (falha.value as any)?.statusCode === 403)
 
 /*
  * Quem não alcança a lista mas tem o leitor de entrada (a portaria) não pode
@@ -116,28 +127,32 @@ const cortesiasAVenda = computed(() => aVenda.value.reduce((s: number, e: any) =
 const SITUACOES = ['ativo', 'rascunho', 'encerrado', 'adiado', 'cancelado', 'oculto'] as const
 type Situacao = typeof SITUACOES[number]
 const filtro = computed<'todos' | Situacao>(() => {
-  const s = route.query.situacao
+  const s = consulta.atual.value.situacao
   return typeof s === 'string' && (SITUACOES as readonly string[]).includes(s) ? s as Situacao : 'todos'
 })
-const busca = ref(typeof route.query.busca === 'string' ? route.query.busca : '')
-watch(() => route.query.busca, (v) => {
-  const vindo = typeof v === 'string' ? v : ''
-  if (vindo !== busca.value) busca.value = vindo
+const buscaNaUrl = () => {
+  const v = consulta.atual.value.busca
+  return typeof v === 'string' ? v : ''
+}
+const busca = ref(buscaNaUrl())
+// aparada dos dois lados: a URL guarda "kids", a pessoa está digitando "kids " pra ir pra
+// próxima palavra — comparar cru apagava o espaço no meio da digitação
+watch(buscaNaUrl, (vindo) => {
+  if (vindo !== busca.value.trim()) busca.value = vindo
 })
 let esperaBusca: ReturnType<typeof setTimeout> | null = null
 function escreverNaUrl(mudanca: { situacao?: string; busca?: string }) {
-  const query: Record<string, string> = {}
   const situacao = mudanca.situacao ?? filtro.value
   const texto = (mudanca.busca ?? busca.value).trim()
-  if (situacao !== 'todos') query.situacao = situacao
-  if (texto) query.busca = texto.slice(0, 120)
-  return navigateTo({ path: route.path, query }, { replace: true })
+  return consulta.escrever({
+    situacao: situacao !== 'todos' ? situacao : null,
+    busca: texto.slice(0, 120),
+  })
 }
 watch(busca, (v) => {
   if (esperaBusca) clearTimeout(esperaBusca)
   esperaBusca = setTimeout(() => {
-    const naUrl = typeof route.query.busca === 'string' ? route.query.busca : ''
-    if (v.trim() !== naUrl) escreverNaUrl({ busca: v })
+    if (v.trim() !== buscaNaUrl()) escreverNaUrl({ busca: v })
   }, 300)
 })
 const escolherSituacao = (s: 'todos' | Situacao) => escreverNaUrl({ situacao: s })

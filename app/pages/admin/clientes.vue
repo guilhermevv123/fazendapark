@@ -17,22 +17,24 @@
  *   divulgação filtra por ele — a planilha exportada respeita o mesmo filtro.
  */
 import { baixarCsv } from '~/composables/baixarCsv'
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 import PainelFalha from '~/components/painel/Falha.vue'
 import PainelVazio from '~/components/painel/Vazio.vue'
 
 definePageMeta({ layout: 'admin' })
 
-const route = useRoute()
+// a URL é a fonte do recorte; `atual` é a última pedida enquanto a navegação anda (consultaNaUrl.ts)
+const consulta = useConsultaNaUrl()
 
 /**
  * O recorte é o que a URL diz — a cada troca, não só na montagem (REL-07). Antes cada filtro virava
  * um `ref` lido uma vez: clicar em "Clientes" no menu com uma busca ativa limpava a URL e a lista
- * continuava filtrada até o F5 (que mostrava outra coisa). Agora a tela lê `route.query`; mexer num
+ * continuava filtrada até o F5 (que mostrava outra coisa). Agora a tela lê a URL; mexer num
  * filtro ESCREVE na URL (`irPara`, com `replace`). Trocar filtro ou ordem volta pra página 1.
  */
 const texto = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 const url = computed(() => {
-  const q = route.query
+  const q = consulta.atual.value
   return {
     q: texto(q.q), uf: texto(q.uf), cidade: texto(q.cidade), faixa: texto(q.faixa),
     situacao: texto(q.situacao), novidades: q.novidades === '1', cadastro: q.cadastro === '1',
@@ -85,14 +87,14 @@ function irPara(m: Mudanca) {
   if (f.cadastro) query.cadastro = '1'
   if (f.ordem && f.ordem !== 'recentes') query.ordem = f.ordem
   if (f.pagina > 1) query.pagina = String(f.pagina)
-  return navigateTo({ path: '/admin/clientes', query }, { replace: true })
+  return consulta.escrever(query, '/admin/clientes')
 }
 
 const temFiltro = computed(() => Object.values(recorte.value).some(Boolean))
 /** zera o recorte; a ordem fica (é jeito de olhar, não filtro) */
 function limpar() {
   const query: Record<string, string> = url.value.ordem !== 'recentes' ? { ordem: url.value.ordem } : {}
-  return navigateTo({ path: '/admin/clientes', query }, { replace: true })
+  return consulta.escrever(query, '/admin/clientes')
 }
 
 const total = computed(() => data.value?.paginacao?.total ?? 0)

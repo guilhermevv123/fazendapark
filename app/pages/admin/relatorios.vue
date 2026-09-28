@@ -24,6 +24,7 @@
  * Sem nada na URL, abre em "30 dias" (proposta 10: "Tudo" como padrão abria a vida inteira).
  */
 import { baixarCsv } from '~/composables/baixarCsv'
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 import { centavosParaPlanilha } from '~/composables/painelPlanilha'
 import { ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
 import {
@@ -40,7 +41,8 @@ import PainelEsqueleto from '~/components/painel/Esqueleto.vue'
 
 definePageMeta({ layout: 'admin' })
 
-const route = useRoute()
+// a URL é a fonte do recorte; `atual` é a última pedida enquanto a navegação anda (consultaNaUrl.ts)
+const consulta = useConsultaNaUrl()
 const PADRAO: ChavePeriodo = '30d'
 
 /* ------------------------------------------------------------- o recorte */
@@ -53,7 +55,7 @@ const texto = (v: unknown) => (typeof v === 'string' && v ? v : null)
  * na mão, e aí vale o padrão, em vez de uma tela inteira de erro.
  */
 const filtro = computed(() => {
-  const q = route.query
+  const q = consulta.atual.value
   const de0 = texto(q.de)
   const ate0 = texto(q.ate)
   const aMao = !!(de0 || ate0) && !problemaNoPeriodo(de0, ate0)
@@ -99,14 +101,14 @@ function irPara(mudanca: Partial<{ evento: string | null; periodo: string | null
     query.periodo = f.periodo
   }
   // `replace`: mexer no filtro não empilha histórico — o Voltar sai da tela (matriz, caso 141)
-  return navigateTo({ path: route.path, query }, { replace: true })
+  return consulta.escrever(query)
 }
 const escolherPeriodo = (chave: string) => irPara({ periodo: chave, de: null, ate: null })
 const escolherDatas = (p: { de: string | null; ate: string | null }) => irPara({ periodo: null, de: p.de, ate: p.ate })
 const escolherEvento = (id: string) => irPara({ evento: id || null })
 
 const temFiltro = computed(() => !!filtro.value.evento || filtro.value.periodo !== PADRAO)
-function limpar() { return navigateTo({ path: route.path, query: {} }, { replace: true }) }
+function limpar() { return consulta.escrever({}) }
 
 /** o período que o SERVIDOR resolveu (é o que os números cobrem) */
 const resolvido = computed(() => ({ de: data.value?.filtro?.de ?? null, ate: data.value?.filtro?.ate ?? null }))

@@ -74,8 +74,15 @@ const paraTexto = (u: any) => String(typeof u === 'function' ? u() : u)
  * `.vue` desestruturam. `error` se chama `error` no Nuxt mesmo — as telas
  * renomeiam pra `falha` no destructuring quando querem português.
  */
+/**
+ * Toda `useFetch` que a tela montou, com as opções. Pra perguntar o que a tela pede LOGO DE CARA
+ * (`immediate`) — um pedido que o servidor sabidamente recusa vira erro vermelho no console.
+ */
+export const buscas: { url: string; opcoes: any }[] = []
+
 function useFetchDuble(url: any, _opcoes?: any) {
   const alvo = paraTexto(url)
+  buscas.push({ url: alvo, opcoes: _opcoes })
   const achou = acharResposta(alvo)
   return {
     data: ref(achou ?? null),
@@ -250,6 +257,7 @@ export async function montarTela(componente: any, opcoes: OpcoesDaTela = {}) {
   respostas = opcoes.respostas ?? {}
   navegacoes.length = 0
   chamadas.length = 0
+  buscas.length = 0
   Object.assign(rota, {
     path: opcoes.rota?.path ?? '/',
     fullPath: opcoes.rota?.path ?? '/',
@@ -297,4 +305,5 @@ export function limparTela() {
   respostas = {}
   navegacoes.length = 0
   chamadas.length = 0
+  buscas.length = 0
 }

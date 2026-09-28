@@ -27,15 +27,17 @@ definePageMeta({ layout: 'admin' })
 import PainelPeriodo from '~/components/painel/Periodo.vue'
 import PainelFalha from '~/components/painel/Falha.vue'
 import { ehChavePeriodo, type ChavePeriodo } from '~/composables/painelPeriodo'
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 
-const route = useRoute()
+// a URL é a fonte do recorte; `atual` é a última pedida enquanto a navegação anda (consultaNaUrl.ts)
+const consulta = useConsultaNaUrl()
 
 /* ------------------------------------------------------------- o recorte */
 
 /**
  * O recorte é o que a URL diz — SEMPRE, e não só na montagem (REL-07). Antes cada filtro virava um
  * `ref` lido uma vez: clicar em "Auditoria" no menu com um filtro ativo limpava a URL e deixava a
- * tela filtrada, e o F5 seguinte mostrava outra coisa. Agora a tela lê `route.query` a cada troca;
+ * tela filtrada, e o F5 seguinte mostrava outra coisa. Agora a tela lê a URL a cada troca;
  * mexer num filtro ESCREVE na URL (`irPara`, com `replace`: o Voltar sai da tela).
  *
  * O período fala o vocabulário de toda tela do painel (proposta 10 da auditoria): Hoje, 7 dias,
@@ -46,7 +48,7 @@ const route = useRoute()
  */
 const texto = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 const filtro = computed(() => {
-  const q = route.query
+  const q = consulta.atual.value
   const de = texto(q.de)
   const ate = texto(q.ate)
   return {
@@ -76,7 +78,7 @@ function irPara(m: Mudanca) {
     if (f.ate) query.ate = f.ate
   } else if (f.periodo && f.periodo !== 'tudo') query.periodo = f.periodo
   for (const k of ['pessoa', 'ato', 'entidade', 'busca'] as const) if (f[k]) query[k] = f[k]!
-  return navigateTo({ path: '/admin/auditoria', query }, { replace: true })
+  return consulta.escrever(query, '/admin/auditoria')
 }
 const escolherPeriodo = (chave: string) => irPara({ periodo: chave, de: '', ate: '' })
 const escolherDatas = (p: { de: string | null; ate: string | null }) => irPara({ periodo: null, de: p.de ?? '', ate: p.ate ?? '' })
@@ -85,7 +87,7 @@ const temFiltro = computed(() => {
   const f = filtro.value
   return !!(f.de || f.ate || f.pessoa || f.ato || f.entidade || f.busca) || f.periodo !== 'tudo'
 })
-const limpar = () => navigateTo({ path: '/admin/auditoria' }, { replace: true })
+const limpar = () => consulta.escrever({}, '/admin/auditoria')
 
 /** o período que a ROTA resolveu (o "Hoje" é o dia do parque, não o do navegador) */
 const resolvido = computed(() => ({ de: data.value?.filtros?.de || null, ate: data.value?.filtros?.ate || null }))

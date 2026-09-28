@@ -33,8 +33,10 @@ definePageMeta({ layout: 'admin' })
 import PainelFalha from '~/components/painel/Falha.vue'
 import PainelPeriodo from '~/components/painel/Periodo.vue'
 import { ehChavePeriodo, type ChavePeriodo } from '~/composables/painelPeriodo'
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 
-const route = useRoute()
+// a URL é a fonte do recorte; `atual` é a última pedida enquanto a navegação anda (consultaNaUrl.ts)
+const consulta = useConsultaNaUrl()
 
 /**
  * O recorte é o que a URL diz — a cada troca, não só na montagem (REL-07, o mesmo padrão da
@@ -45,7 +47,7 @@ const route = useRoute()
 const PADRAO: ChavePeriodo = 'mes'
 const texto = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 const filtro = computed(() => {
-  const q = route.query
+  const q = consulta.atual.value
   const de = texto(q.de)
   const ate = texto(q.ate)
   const chave = ehChavePeriodo(q.periodo) && q.periodo !== 'tudo' ? q.periodo : PADRAO
@@ -77,11 +79,11 @@ function irPara(m: Mudanca) {
     if (f.ate) query.ate = f.ate
   } else if (f.periodo && f.periodo !== PADRAO) query.periodo = f.periodo
   if (f.eventoId) query.eventoId = f.eventoId
-  return navigateTo({ path: '/admin/reconciliacao', query }, { replace: true })
+  return consulta.escrever(query, '/admin/reconciliacao')
 }
 const escolherPeriodo = (chave: string) => irPara({ periodo: chave, de: '', ate: '' })
 const escolherDatas = (p: { de: string | null; ate: string | null }) => irPara({ periodo: null, de: p.de ?? '', ate: p.ate ?? '' })
-const limpar = () => navigateTo({ path: '/admin/reconciliacao' }, { replace: true })
+const limpar = () => consulta.escrever({}, '/admin/reconciliacao')
 
 const brl = reais
 

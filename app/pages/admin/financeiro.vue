@@ -23,6 +23,7 @@
  * é o estado de agora; o período vale pro FLUXO (entrada, como entrou, transferências).
  */
 import { baixarCsv } from '~/composables/baixarCsv'
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 import { centavosParaPlanilha } from '~/composables/painelPlanilha'
 import { ehPapel, papelPode, type Papel } from '~~/server/utils/papeis'
 import { ehChavePeriodo, problemaNoPeriodo, rotuloDoPeriodo, type ChavePeriodo } from '~/composables/painelPeriodo'
@@ -37,7 +38,8 @@ import PainelEsqueleto from '~/components/painel/Esqueleto.vue'
 
 definePageMeta({ layout: 'admin' })
 
-const route = useRoute()
+// a URL é a fonte do recorte; `atual` é a última pedida enquanto a navegação anda (consultaNaUrl.ts)
+const consulta = useConsultaNaUrl()
 /**
  * O padrão desta tela é "Tudo" (a Visão geral abre em 30 dias): o saldo é acumulado por natureza,
  * e com o fluxo também desde o começo o total líquido, a soma das barras e "como entrou" falam da
@@ -49,7 +51,7 @@ const PADRAO: ChavePeriodo = 'tudo'
 
 const texto = (v: unknown) => (typeof v === 'string' && v ? v : null)
 const filtro = computed(() => {
-  const q = route.query
+  const q = consulta.atual.value
   const de0 = texto(q.de)
   const ate0 = texto(q.ate)
   const aMao = !!(de0 || ate0) && !problemaNoPeriodo(de0, ate0)
@@ -95,7 +97,7 @@ function irPara(mudanca: Partial<{ periodo: string | null; de: string | null; at
     query.periodo = f.periodo
   }
   if (f.pagina > 1) query.pagina = String(f.pagina)
-  return navigateTo({ path: route.path, query }, { replace: true })
+  return consulta.escrever(query)
 }
 const escolherPeriodo = (chave: string) => irPara({ periodo: chave, de: null, ate: null })
 const escolherDatas = (p: { de: string | null; ate: string | null }) => irPara({ periodo: null, de: p.de, ate: p.ate })

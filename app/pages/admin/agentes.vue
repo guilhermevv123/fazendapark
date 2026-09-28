@@ -17,27 +17,43 @@
 import {
   canalDoContato, contatoLegivel, rotuloDaIntencao, ROTULO_DO_CANAL, SENTIMENTO, SITUACAO_DO_RESUMO,
 } from '~~/server/utils/agentes-rotulos'
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 
 definePageMeta({ layout: 'admin' })
 useHead({ title: 'Atendimento IA' })
 
-const route = useRoute()
-const aba = ref(String(route.query.aba ?? 'conversas') === 'casos' ? 'casos' : 'conversas')
-const canal = ref(String(route.query.canal ?? ''))
-const recorte = ref(String(route.query.recorte ?? ''))
-const busca = ref(String(route.query.q ?? ''))
-const tipoCaso = ref(String(route.query.tipo ?? ''))
-const aberto = ref(String(route.query.contato ?? ''))
+// os refs são a fonte; a URL vai atrás. Canal + busca em sequência rápida perdia a busca da URL
+// (o `navigateTo` da segunda troca era engolido pelo middleware da primeira) — ver consultaNaUrl.ts
+const consulta = useConsultaNaUrl()
+const naAbertura = consulta.atual.value
+const aba = ref(String(naAbertura.aba ?? 'conversas') === 'casos' ? 'casos' : 'conversas')
+const canal = ref(String(naAbertura.canal ?? ''))
+const recorte = ref(String(naAbertura.recorte ?? ''))
+const busca = ref(String(naAbertura.q ?? ''))
+const tipoCaso = ref(String(naAbertura.tipo ?? ''))
+const aberto = ref(String(naAbertura.contato ?? ''))
 
 watch([aba, canal, recorte, busca, tipoCaso, aberto], () => {
-  const q: Record<string, string> = {}
-  if (aba.value !== 'conversas') q.aba = aba.value
-  if (canal.value) q.canal = canal.value
-  if (recorte.value) q.recorte = recorte.value
-  if (busca.value.trim()) q.q = busca.value.trim()
-  if (tipoCaso.value) q.tipo = tipoCaso.value
-  if (aberto.value) q.contato = aberto.value
-  navigateTo({ query: q }, { replace: true })
+  consulta.escrever({
+    aba: aba.value !== 'conversas' ? aba.value : null,
+    canal: canal.value,
+    recorte: recorte.value,
+    q: busca.value.trim(),
+    tipo: tipoCaso.value,
+    contato: aberto.value,
+  })
+})
+// e o caminho contrário: a URL mudou por fora (clique em "Atendimento IA" no menu, link colado) →
+// os filtros acompanham. A busca compara aparada: o espaço que a pessoa acabou de digitar fica.
+watch(consulta.atual, (q) => {
+  const texto = (v: unknown) => (typeof v === 'string' ? v : '')
+  const abaDaUrl = texto(q.aba) === 'casos' ? 'casos' : 'conversas'
+  if (aba.value !== abaDaUrl) aba.value = abaDaUrl
+  if (canal.value !== texto(q.canal)) canal.value = texto(q.canal)
+  if (recorte.value !== texto(q.recorte)) recorte.value = texto(q.recorte)
+  if (busca.value.trim() !== texto(q.q)) busca.value = texto(q.q)
+  if (tipoCaso.value !== texto(q.tipo)) tipoCaso.value = texto(q.tipo)
+  if (aberto.value !== texto(q.contato)) aberto.value = texto(q.contato)
 })
 
 const { data, pending, error: falha, refresh } = await useFetch<any>('/api/admin/agentes')
