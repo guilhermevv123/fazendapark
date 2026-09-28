@@ -304,3 +304,45 @@ describe('filtros na URL — F5 e link mantêm o recorte (ADM-31)', () => {
       .toEqual({ query: { busca: 'bia', status: 'aguardando' } })
   })
 })
+
+// ===========================================================================
+// A falha diz o motivo do servidor (matriz #8): vendas e extrato diziam só "não foi possível"
+// ===========================================================================
+import { ref } from 'vue'
+
+describe('a falha diz o motivo que o servidor mandou, não só "não foi possível"', () => {
+  /** monta com a rota principal da tela respondendo 403, como o `useFetch` de verdade entrega */
+  async function montarComRecusa(tela: any, fim: string, recado: string) {
+    const original = (globalThis as any).useFetch
+    vi.stubGlobal('useFetch', (url: any, op?: any) => {
+      const alvo = String(typeof url === 'function' ? url() : url)
+      if (!alvo.endsWith(fim)) return original(url, op)
+      const erro = Object.assign(new Error('[GET] 403'), { statusCode: 403, data: { statusCode: 403, statusMessage: recado } })
+      return { data: ref(null), pending: ref(false), error: ref(erro), status: ref('error'),
+               refresh: async () => {}, execute: async () => {} }
+    })
+    try {
+      return await montarTela(tela, {
+        rota: { params: { id: EV } }, respostas: {}, stubs: { AbasSecao: true, ModalLateral: true },
+      })
+    } finally { vi.unstubAllGlobals() }
+  }
+
+  it('vendas: a portaria que abre o link lê o recado do papel, não "confira a rede"', async () => {
+    const w = await montarComRecusa(await import('../pages/admin/evento/[id]/vendas/index.vue'),
+      `/api/admin/evento/${EV}/vendas`, 'Seu acesso (portaria) não inclui venda.')
+    const bloco = w.find('[data-parte="falha-vendas"]')
+    expect(bloco.exists(), 'a falha não apareceu').toBe(true)
+    expect(bloco.text()).toContain('Seu acesso (portaria) não inclui venda.')
+    expect(bloco.text()).toContain('Tentar de novo')
+  })
+
+  it('extrato: a Operação lê que o extrato é do dinheiro do evento', async () => {
+    const recado = 'Seu acesso é de Operação e não inclui o dinheiro do evento (saldo, transferência, borderô e extrato). Peça a um master da sua organização.'
+    const w = await montarComRecusa(await import('../pages/admin/evento/[id]/relatorios/extrato.vue'),
+      `/api/admin/evento/${EV}/extrato`, recado)
+    const bloco = w.find('[data-parte="falha-extrato"]')
+    expect(bloco.exists(), 'a falha não apareceu').toBe(true)
+    expect(bloco.text()).toContain(recado)
+  })
+})

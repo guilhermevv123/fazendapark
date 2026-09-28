@@ -232,7 +232,9 @@ useHead({ title: 'Extrato' })
       </div>
     </div>
 
-    <p v-if="falha" class="faixa-erro mt-4">Não consegui carregar o extrato.
+    <!-- com o motivo do servidor: o 403 da Operação diz que o extrato é do dinheiro do evento -->
+    <p v-if="falha" class="faixa-erro mt-4" data-parte="falha-extrato">Não consegui carregar o extrato.
+      {{ (falha as any)?.data?.statusMessage || (falha as any)?.data?.message || 'Confira a internet e tente de novo.' }}
       <button type="button" class="underline" @click="refresh()">Tentar de novo</button>
     </p>
 

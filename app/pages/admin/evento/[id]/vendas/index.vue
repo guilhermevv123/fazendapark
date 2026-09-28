@@ -191,6 +191,10 @@ function limparAcoes() {
 
 const paginas = computed(() => Math.max(1, Math.ceil((data.value?.total ?? 0) / (data.value?.porPagina ?? 50))))
 
+/** o motivo da falha em português, do servidor (403 do papel, 404) — senão, o que fazer */
+const motivoDaFalha = (f: any) =>
+  f?.data?.statusMessage || f?.data?.message || 'Confira a internet e tente de novo.'
+
 useHead({ title: 'Vendas' })
 </script>
 
@@ -255,8 +259,11 @@ useHead({ title: 'Vendas' })
       </div>
     </div>
 
-    <p v-if="falha" class="card text-erro ring-erro/50">
+    <!-- a falha diz o MOTIVO que o servidor mandou: pra portaria o 403 é "seu acesso não inclui
+         venda" — sem ele a tela dizia só "não foi possível", e quem lê acha que é a rede -->
+    <p v-if="falha" class="card text-erro ring-erro/50" data-parte="falha-vendas">
       Não foi possível carregar as vendas.
+      <span class="text-tinta-suave">{{ motivoDaFalha(falha) }}</span>
       <button type="button" class="ml-2 underline" @click="refresh()">Tentar de novo</button>
     </p>
 
