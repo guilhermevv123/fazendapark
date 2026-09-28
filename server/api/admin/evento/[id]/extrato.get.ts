@@ -80,9 +80,16 @@ export default defineEventHandler(async (event) => {
   // Todo estado em que o dinheiro CHEGOU a entrar. `chargeback` e `disputa`
   // ficam na lista de propósito: sumir com eles faz o extrato parar de bater
   // com o banco justamente no mês em que alguém contestou uma compra.
+  //
+  // E a venda de BALCÃO cancelada (ADM-61): o balcão cobra na hora (`paid_at`) e o cancelamento
+  // (`SQL_CANCELA_VENDA_PDV`, utils/caixa.ts) grava `cancelado` com `refunded_cents = total`
+  // — o operador tirou as notas da gaveta e devolveu. Ela sumia da história do extrato, e a
+  // devolução do extrato ficava menor que a das outras seis telas. O `paid_at` separa essa venda
+  // do carrinho online cancelado antes de pagar, que nunca mexeu em dinheiro.
   const cond: string[] = [
     `o.event_id = $1`,
-    `o.status IN ('pago','estornado','estornado_parcial','chargeback','disputa')`,
+    `(o.status IN ('pago','estornado','estornado_parcial','chargeback','disputa')
+      OR (o.status = 'cancelado' AND o.paid_at IS NOT NULL))`,
   ]
   const par: any[] = [id]
   const põe = (sql: string, v: any) => { par.push(v); cond.push(sql.replace('$?', `$${par.length}`)) }

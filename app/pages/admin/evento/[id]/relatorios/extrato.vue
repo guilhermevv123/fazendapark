@@ -68,10 +68,13 @@ const COR_DO_STATUS: Record<string, string> = {
   estornado_parcial: 'text-alerta',
   chargeback: 'text-erro',
   disputa: 'text-alerta',
+  cancelado: 'text-erro',
 }
 const STATUS_LEGIVEL: Record<string, string> = {
   pago: 'Pago', estornado: 'Estornado', estornado_parcial: 'Estorno parcial',
   chargeback: 'Chargeback', disputa: 'Em disputa',
+  // a venda de balcão desfeita no guichê, com o dinheiro devolvido na hora (ADM-61)
+  cancelado: 'Cancelada no balcão',
 }
 
 const temFiltro = computed(() =>
@@ -268,9 +271,10 @@ useHead({ title: 'Extrato' })
       </div>
 
       <!-- Fora dos totais, mas nunca fora da tela: estorno total (o dinheiro
-           voltou inteiro pro comprador) e contestação (chargeback/disputa, o
-           dinheiro está preso no banco). As outras telas também não somam
-           esses pedidos; aqui eles aparecem com nome e valor. -->
+           voltou inteiro pro comprador), venda cancelada no balcão (as notas
+           voltaram da gaveta) e contestação (chargeback/disputa, o dinheiro está
+           preso no banco). As outras telas também não somam esses pedidos; aqui
+           eles aparecem com nome e valor. -->
       <div v-if="data.foraDoTotal?.pedidos" class="card mt-3 ring-alerta/50"
            data-parte="fora-do-total">
         <p class="rotulo-kpi text-alerta">Fora dos totais acima</p>

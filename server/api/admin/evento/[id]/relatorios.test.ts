@@ -1292,7 +1292,8 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
               count(*)::int                           AS pedidos
          FROM orders
         WHERE event_id = $1
-          AND status IN ('estornado','chargeback','disputa')
+          AND (status IN ('estornado','chargeback','disputa')
+               OR (status = 'cancelado' AND paid_at IS NOT NULL))
         GROUP BY status`, [EVENTO])
     const fora = {
       pedidos: foraPorStatus.reduce((a: number, l: any) => a + l.pedidos, 0),
@@ -1995,23 +1996,25 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
    *   avisando que a exceção acabou — aí ela sai daqui e o extrato entra na
    *   igualdade das sete.
    */
-  it('a venda cancelada no guichê é devolução nas seis — e o extrato ainda não conta', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('a venda cancelada no guichê é devolução nas SETE — o extrato entrou na igualdade (ADM-61)', async (ctx) => {
+    if (!noAr) ctx.skip()
 
     const t = await asSeteTelas(EVENTO_GUICHE)
 
-    const asSeis = {
+    const asSete = {
       bordero: t.bordero.totais.estornadoCents,
       painel: t.dashboard.totais.estornadoCents,
       financeiroDoEvento: t.financeiroDoEvento.resumo.estornadoCents,
       financeiroDaOrg: t.org.estornadoCents,
       vendas: t.vendas.totais.estornadoCents,
       relatorios: t.relatorios.resumo.estornadoCents,
+      // era a exceção medida aqui (R$ 50,00 contra R$ 450,00): o extrato não listava `cancelado`
+      extrato: t.extrato.totais.estornadoCents,
     }
-    expect(new Set(Object.values(asSeis)).size,
-      `as seis telas discordaram da devolução: ${JSON.stringify(asSeis)}`).toBe(1)
-    expect(asSeis.relatorios,
-      'a devolução das seis não é a somada à mão — o cancelamento de balcão ' +
+    expect(new Set(Object.values(asSete)).size,
+      `as sete telas discordaram da devolução: ${JSON.stringify(asSete)}`).toBe(1)
+    expect(asSete.relatorios,
+      'a devolução das sete não é a somada à mão — o cancelamento de balcão ' +
       'devolveu dinheiro tanto quanto o estorno')
       .toBe(SEM_GUICHE_DEVOLVIDO + CANCELADA_NO_GUICHE)
 
@@ -2020,21 +2023,11 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
       'a fixture perdeu a venda cancelada e este caso virou uma cópia do de cima')
       .toBeGreaterThan(0)
 
-    // A FALTA DO EXTRATO, com número: é a devolução dos pedidos em status que
-    // ele não lista. Sai do banco, não de um literal.
-    const [foraDoExtrato] = await sql(
-      `SELECT COALESCE(SUM(refunded_cents),0)::bigint AS devolvido
-         FROM orders
-        WHERE event_id = $1
-          AND status NOT IN ('pago','estornado','estornado_parcial','chargeback','disputa')`,
-      [EVENTO_GUICHE])
-
-    expect(asSeis.relatorios - t.extrato.totais.estornadoCents,
-      'a diferença entre o extrato e as outras seis deixou de ser a devolução ' +
-      'dos status que o extrato não lista — ou o extrato foi consertado (e aí ' +
-      'este caso sai daqui e o extrato entra na igualdade das sete), ou nasceu ' +
-      'uma terceira régua de devolução')
-      .toBe(Number(foraDoExtrato.devolvido))
+    // e ela está NA HISTÓRIA do extrato, fora dos totais, com nome
+    const linha = t.extrato.linhas.find((l: any) => l.pedido === 'ZZ-CT-GUI-CANC')
+    expect(linha, 'a venda cancelada no balcão sumiu da história do extrato').toBeTruthy()
+    expect(linha.foraDoTotal).toBe(true)
+    expect(t.extrato.foraDoTotal.porStatus.map((f: any) => f.status)).toContain('cancelado')
   }, 30_000)
 })
 
