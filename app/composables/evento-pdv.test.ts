@@ -254,3 +254,64 @@ describe('ficha impressa na bobina de 80mm (ADM-60)', () => {
       'o @page da térmica ficou pro borderô imprimir em 80mm').toBe(false)
   })
 })
+
+// ===========================================================================
+// Abrir caixa com Enter, cancelar só o que o guichê cancela, carrinho no celular (ADM-49)
+// ===========================================================================
+describe('balcão — Enter no fundo, Cancelar coerente, carrinho no celular (ADM-49)', () => {
+  const PONTOS = {
+    pontos: [{ id: 'p1', nome: 'Guichê 1', local: null, ativo: true, formas: ['dinheiro'], turno: null,
+               hoje: { pedidos: 0, totalCents: 0 } }],
+    resumo: { brutoCents: 0, semPontoCents: 0, pedidos: 0, dinheiroCents: 0 },
+    turnos: [],
+  }
+
+  it('dois Enter no fundo de troco abrem o caixa UMA vez', async () => {
+    const w = await montarTela(await import('../pages/admin/evento/[id]/pdv/index.vue'), {
+      rota: { params: { id: EV } },
+      respostas: {
+        [`/api/admin/evento/${EV}/pdv`]: PONTOS,
+        [`/api/admin/evento/${EV}/pdv/turno`]: { turnoId: 't1' },
+      },
+      stubs: { AbasSecao: true, CampoMoeda },
+    })
+    await w.findAll('button').find((b) => b.text() === 'Abrir caixa')!.trigger('click')
+    const fundo = w.find('#fundo')
+    expect(fundo.exists(), 'o modal de abrir caixa não abriu').toBe(true)
+    fundo.trigger('keyup', { key: 'Enter' }); fundo.trigger('keyup', { key: 'Enter' })
+    await new Promise((r) => setTimeout(r, 0))
+    const aberturas = chamadas.filter((c) => c.url.endsWith('/pdv/turno') && c.opcoes?.method === 'POST')
+    expect(aberturas, 'dois Enter mandaram duas aberturas de caixa').toHaveLength(1)
+  })
+
+  it('"Cancelar" só na venda paga inteira; a devolvida em parte diz que é com o financeiro', async () => {
+    const venda = (campos: Record<string, any>) => ({
+      id: 'v', codigo: 'PDV-X', situacao: 'pago', totalCents: 10000, estornadoCents: 0, naGavetaCents: 10000,
+      forma: 'debito', em: '2026-10-10T13:00:00Z', comprador: 'Cliente', ingressos: 2,
+      recebidoCents: null, trocoCents: null, ...campos })
+    const w = await montarCaixa({ ...TURNO_CEGO, vendas: [
+      venda({ id: 'v1', codigo: 'PDV-PAGA' }),
+      venda({ id: 'v2', codigo: 'PDV-PARCIAL', situacao: 'estornado_parcial', estornadoCents: 2000, naGavetaCents: 8000 }),
+    ] })
+    const linhas = w.findAll('tbody tr').filter((l) => l.text().includes('PDV-'))
+    const paga = linhas.find((l) => l.text().includes('PDV-PAGA'))!
+    const parcial = linhas.find((l) => l.text().includes('PDV-PARCIAL'))!
+    expect(paga.find('[data-parte="cancelar-venda"]').exists()).toBe(true)
+    expect(parcial.find('[data-parte="cancelar-venda"]').exists(),
+      'o guichê oferece "Cancelar R$ 100,00" numa venda com R$ 20,00 já devolvidos (a rota recusa)').toBe(false)
+    expect(parcial.find('[data-parte="parcial-no-financeiro"]').text()).toContain('R$ 20,00')
+  })
+
+  it('no celular, com carrinho, a barra do rodapé leva à venda sem rolar a tela', async () => {
+    const { chaveDaVendaGuardada } = await tela()
+    sessionStorage.setItem(chaveDaVendaGuardada(EV, TURNO),
+      JSON.stringify({ chave: CHAVE, carrinho: [linhaDeMeia('idoso')], forma: 'debito' }))
+    const w = await montar()
+    const ir = w.findAll('a').find((a) => a.text().includes('Fechar venda'))
+    expect(ir?.attributes('href'), 'sem a barra, o operador rola o catálogo inteiro a cada cliente').toBe('#venda')
+    const barra = ir!.element.closest('div.fixed') as HTMLElement | null
+    expect(barra?.className, 'a barra tem de ser fixa no rodapé e sumir no computador').toMatch(/bottom-0.*lg:hidden|lg:hidden.*bottom-0/)
+    expect(barra?.textContent).toContain('R$ 20,00')
+    expect(w.find('#venda').exists(), 'o link aponta pra um carrinho que não existe').toBe(true)
+  })
+})

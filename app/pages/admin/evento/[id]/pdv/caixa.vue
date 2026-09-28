@@ -453,10 +453,18 @@ async function fechar() {
                               :disabled="reimprimindo === v.id" @click="reimprimir(v.id)">
                         {{ reimprimindo === v.id ? 'Preparando…' : 'Reimprimir fichas' }}
                       </button>
-                      <button v-if="aberto" type="button" class="ml-3 text-sm font-semibold text-erro underline"
-                              @click="abrirCancelamento(v.id)">
+                      <!-- o guichê só desfaz venda PAGA inteira (SQL_CANCELA_VENDA_PDV). Com devolução no
+                           meio, o botão oferecia "Cancelar R$ total" e a rota recusava: quem acerta o que
+                           sobrou é o financeiro (ADM-49) -->
+                      <button v-if="aberto && v.situacao === 'pago'" type="button"
+                              class="ml-3 text-sm font-semibold text-erro underline"
+                              data-parte="cancelar-venda" @click="abrirCancelamento(v.id)">
                         Cancelar
                       </button>
+                      <span v-else-if="aberto && v.situacao === 'estornado_parcial'"
+                            class="ml-3 text-xs text-tinta-suave" data-parte="parcial-no-financeiro">
+                        Devolvida em parte ({{ reais(v.estornadoCents) }}): o resto é com o financeiro
+                      </span>
                     </td>
                   </tr>
                   <!-- o motivo é obrigatório: é ele que vira o rastro -->

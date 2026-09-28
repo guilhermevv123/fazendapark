@@ -134,6 +134,10 @@ const fundoCents = ref(0)
 
 async function abrirCaixa() {
   const p = abrindo.value
+  // Enter no fundo de troco chama isto direto, sem passar pelo botão desabilitado: dois Enter
+  // mandavam duas aberturas (o servidor segura a segunda com 409, mas a tela piscava o erro
+  // "já tem caixa aberto" em cima da abertura que deu certo) — ADM-49
+  if (!p || salvando.value) return
   salvando.value = true; erroModal.value = ''
   try {
     const r: any = await $fetch(`/api/admin/evento/${id}/pdv/turno`, {
