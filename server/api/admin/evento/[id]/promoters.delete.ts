@@ -8,6 +8,7 @@
 import { z } from 'zod'
 import { q1 } from '../../../../utils/db'
 import { explicarErro } from '../index.post'
+import { TELA_VELHA } from './cupons.delete'
 
 /** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
 const ROTULOS: Record<string, string> = { id: 'Divulgador' }
@@ -17,7 +18,9 @@ const Entrada = z.object({ id: z.string().uuid() })
 export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
-  if (!p.success) throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS) })
+  if (!p.success) {
+    throw createError({ statusCode: 400, statusMessage: `${explicarErro(p.error, ROTULOS)} — ${TELA_VELHA}` })
+  }
 
   const pr = await q1<any>(
     `SELECT p.id, p.name,

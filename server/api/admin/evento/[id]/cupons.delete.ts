@@ -21,13 +21,22 @@
  */
 import { z } from 'zod'
 import { tx } from '../../../../utils/db'
+import { explicarErro } from '../index.post'
 
 const Entrada = z.object({ id: z.string().uuid() })
+
+/**
+ * O id não é digitado por ninguém: sem ele (ou torto), a tela está velha ou alguém chamou a rota
+ * na mão. A recusa diz o que houve E o que fazer — "Dados inválidos" não diz nenhum dos dois.
+ */
+export const TELA_VELHA = 'a tela está desatualizada: recarregue a página e tente de novo.'
 
 export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
-  if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Dados inválidos: o id do cupom' })
+  if (!p.success) {
+    throw createError({ statusCode: 400, statusMessage: `${explicarErro(p.error, { id: 'Cupom' })} — ${TELA_VELHA}` })
+  }
 
   return tx(async (c) => {
     const { rows: [cupom] } = await c.query(

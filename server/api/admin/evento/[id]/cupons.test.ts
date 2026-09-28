@@ -103,6 +103,17 @@ describe('apagar cupom (ADM-37)', () => {
 })
 
 describe('a recusa diz o campo (ADM-36)', () => {
+  it('apagar cupom ou divulgador com id torto: diz qual e o que fazer (recarregar), não "Dados inválidos"', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    for (const [rota, campo] of [['cupons', 'Cupom'], ['promoters', 'Divulgador']]) {
+      const r = await chamar(`/api/admin/evento/${EVENTO}/${rota}`, 'DELETE', { id: 'nao-e-uuid' })
+      expect(r.status).toBe(400)
+      expect(r.corpo.statusMessage, rota).toContain(campo)
+      expect(r.corpo.statusMessage, `${rota}: a recusa não diz o que fazer`).toContain('recarregue a página')
+      expect(r.corpo.statusMessage).not.toContain('Dados inválidos')
+    }
+  }, 120_000)
+
   it('cupom com desconto negativo: "Valor do desconto", não "Dados inválidos"', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const r = await chamar(`/api/admin/evento/${EVENTO}/cupons`, 'POST',
