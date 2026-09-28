@@ -42,6 +42,13 @@ import { SQL_PUBLICO } from '../../../../utils/catraca'
 export const PAGANTE = `o.channel <> 'cortesia' AND o.total_cents > 0`
 
 /**
+ * O FUNIL É O DO CHECKOUT DO SITE (ADM-28): só pedido online tem carrinho, PIX que expira e
+ * pagamento que falha. Balcão e cortesia entram direto como pagos. Relatórios usa a mesma régua.
+ * Sem prefixo de tabela: as duas consultas do funil leem `orders` sem apelido.
+ */
+export const CANAL_DO_FUNIL = `channel = 'online'`
+
+/**
  * `de` e `ate` chegam como DIA (`2026-09-21`), e dia é coisa de calendário —
  * do calendário DO EVENTO, não do servidor.
  *
@@ -221,6 +228,11 @@ export default defineEventHandler(async (event) => {
     // sobrar cai em `outros`, que é o balde que NÃO PODE ser esquecido quando
     // alguém acrescentar um status novo ao `CHECK`: a soma das partes volta a
     // fechar sozinha em vez de o pedido sumir em silêncio.
+    //
+    // SÓ O CHECKOUT DO SITE (ADM-28, `CANAL_DO_FUNIL`). Balcão e cortesia não têm carrinho: nascem
+    // pagos (ou são cancelados no guichê), e somados aqui faziam a conversão do site parecer 95%
+    // num dia de 100 vendas no balcão e 5 de 10 carrinhos online — e a venda de balcão cancelada
+    // entrava como "abandonada".
     q1<any>(
       `SELECT COUNT(*)::int AS criados,
               COUNT(*) FILTER (WHERE ${PEDIDO_VIVO()})::int AS finalizados,
@@ -230,7 +242,7 @@ export default defineEventHandler(async (event) => {
               COUNT(*) FILTER (WHERE status IN ('aguardando_pagamento','em_analise','rascunho'))::int
                 AS abertos,
               COUNT(*) FILTER (WHERE status IN ('chargeback','disputa'))::int AS contestados
-         FROM orders WHERE event_id = $1 AND created_at BETWEEN $2 AND $3`, p),
+         FROM orders WHERE event_id = $1 AND ${CANAL_DO_FUNIL} AND created_at BETWEEN $2 AND $3`, p),
 
     q<any>(
       `SELECT o.payment_method AS forma,

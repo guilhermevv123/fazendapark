@@ -71,3 +71,12 @@ describe('painel — devolução, líquido e pedidos pagos', () => {
     expect(w.find('[data-parte="devolvido"]').exists()).toBe(false)
   })
 })
+
+describe('a rosca é do checkout do site (ADM-28)', () => {
+  it('o título e a legenda dizem que balcão e cortesia não entram', async () => {
+    const w = await montar()
+    const card = w.find('[data-parte="funil-site"]').text().replace(/\s+/g, ' ')
+    expect(card).toContain('Checkout do site')
+    expect(card, 'a rosca não diz que é só do site').toContain('balcão e cortesia não entram')
+  })
+})

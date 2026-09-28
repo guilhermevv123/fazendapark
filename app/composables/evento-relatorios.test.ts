@@ -7,7 +7,7 @@
  * linha saía com o dia ANTERIOR. O fuso deste processo é fixado na Bahia aqui em cima: numa
  * máquina em UTC o defeito some e o teste passaria à toa.
  */
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 const TZ_ANTES = process.env.TZ
 process.env.TZ = 'America/Bahia'
@@ -46,5 +46,99 @@ describe('extrato — o dia da tabela "por dia"', () => {
     })
     const dias = w.findAll('tbody tr td:first-child').map((c) => c.text())
     expect(dias, 'data pura lida como UTC: cada linha saiu com o dia anterior').toEqual(['20/09/2026', '19/09/2026'])
+  })
+})
+
+// ===========================================================================
+// Relatórios › Visão geral — ADM-28 (conversão do site), ADM-30 (série sem buraco, 24 horas),
+// ADM-35 (CSV pelo baixarCsv) e ADM-48 (número com vírgula)
+// ===========================================================================
+const visaoGeral = () => import('../pages/admin/evento/[id]/relatorios/index.vue')
+
+const dia = (d: string, cobradoCents: number, pedidos = 1) => ({ dia: d, pedidos, pedidosComEstorno: 0,
+  cobradoCents, faceCents: cobradoCents, estornadoNoLiquidoCents: 0, liquidoCents: cobradoCents })
+
+const RELATORIOS = {
+  evento: { id: EV, nome: '=HYPERLINK("http://golpe";"clique")', comeca: '2026-10-18T12:00:00Z',
+            termina: '2026-10-19T02:00:00Z', criadoEm: '2026-08-01T12:00:00Z', taxaBps: 1000, fuso: 'America/Bahia' },
+  resumo: { pedidos: 4, ingressos: 6, ticketMedioCents: 15000, porIngressoCents: 10000, ingressosPorPedido: 1.5,
+            faceCents: 54000, taxaCents: 6000, descontoCents: 0, cobradoCents: 60000 },
+  funil: { criados: 10, finalizados: 5, pagos: 5, conversaoPct: 50, abandonoPct: 50, canal: 'online',
+           porStatus: [{ status: 'pago', n: 5 }, { status: 'expirado', n: 5 }] },
+  // três dias com venda num intervalo de DEZ: o gráfico tem que ter as dez barras
+  porDia: [dia('2026-09-10', 30000, 2), dia('2026-09-01', 10000), dia('2026-09-05', 20000)],
+  porDiaSemana: [{ dow: 2, pedidos: 1, cobradoCents: 10000, liquidoCents: 9000 }],
+  porHoraDoDia: [{ hora: 14, pedidos: 3 }, { hora: 20, pedidos: 1 }],
+  antecedencia: [], topCompradores: [], porPromoter: [], porCupom: [], porParcela: [],
+}
+
+async function abrirVisaoGeral() {
+  return montarTela(await visaoGeral(), {
+    rota: { params: { id: EV } },
+    respostas: { [`/api/admin/evento/${EV}/relatorios`]: RELATORIOS },
+    stubs: { AbasSecao: true },
+  })
+}
+
+describe('série por dia sem buraco, 24 horas e 7 dias (ADM-30)', () => {
+  it('serieDiaria preenche o dia sem venda com zero, em ordem, e ignora data torta', async () => {
+    const { serieDiaria } = await visaoGeral()
+    const vazio = (d: string) => ({ dia: d, n: 0 })
+    const s = serieDiaria([{ dia: '2026-09-03', n: 2 }, { dia: '2026-09-01', n: 1 }, { dia: 'lixo', n: 9 }], vazio)
+    expect(s).toEqual([{ dia: '2026-09-01', n: 1 }, { dia: '2026-09-02', n: 0 }, { dia: '2026-09-03', n: 2 }])
+    // virada de mês e de ano, e o horário de verão não pula nem repete dia
+    expect(serieDiaria([{ dia: '2026-12-31', n: 1 }, { dia: '2027-01-02', n: 1 }], vazio).map((d) => d.dia))
+      .toEqual(['2026-12-31', '2027-01-01', '2027-01-02'])
+    expect(serieDiaria([], vazio)).toEqual([])
+  })
+
+  it('vinteQuatroHoras e seteDias têm todas as posições', async () => {
+    const { vinteQuatroHoras, seteDias } = await visaoGeral()
+    const h = vinteQuatroHoras([{ hora: 14, pedidos: 3 }])
+    expect(h).toHaveLength(24)
+    expect(h[0]).toEqual({ hora: 0, pedidos: 0 })
+    expect(h[14].pedidos).toBe(3)
+    expect(seteDias([{ dow: 6, pedidos: 2 }]).map((d) => d.pedidos)).toEqual([0, 0, 0, 0, 0, 0, 2])
+  })
+
+  it('na tela: dez barras de dia (sete sem venda), 24 de hora, e o gráfico rola dentro do card', async () => {
+    const w = await abrirVisaoGeral()
+    expect(w.findAll('[data-parte="barra-dia"]'), 'o dia sem venda sumiu do gráfico').toHaveLength(10)
+    expect(w.find('[data-parte="dias-resumo"]').text().replace(/\s+/g, ' ')).toBe('10 dias · 3 com venda')
+    expect(w.findAll('[data-parte="barra-hora"]'), 'o gráfico de horas começou na 1ª hora com venda').toHaveLength(24)
+    expect(w.find('[data-parte="por-semana"]').findAll('.rounded-t')).toHaveLength(7)
+    expect(w.find('[data-parte="rolagem-dias"]').classes()).toContain('overflow-x-auto')
+  })
+})
+
+describe('conversão do site e número com vírgula (ADM-28, ADM-48)', () => {
+  it('o card diz que a conversão é do site, com os pedidos online', async () => {
+    const w = await abrirVisaoGeral()
+    const card = w.find('[data-parte="conversao"]').text().replace(/\s+/g, ' ')
+    expect(card).toContain('Conversão do site')
+    expect(card).toContain('50%')
+    expect(card).toContain('5 pagos de 10 pedidos online')
+    expect(w.text(), '1,5 ingresso por pedido escrito com ponto').toContain('1,5 ingressos cada')
+  })
+})
+
+describe('o CSV da visão geral sai pelo baixarCsv (ADM-35)', () => {
+  it('nome do evento com cara de fórmula vira texto, e o dia sem venda entra na planilha', async () => {
+    const w = await abrirVisaoGeral()
+    let blob: Blob | null = null
+    const criar = vi.spyOn(URL, 'createObjectURL').mockImplementation((b: any) => { blob = b; return 'blob:x' })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const clique = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      await w.findAll('button').find((b) => b.text().includes('Exportar'))!.trigger('click')
+      expect(criar).toHaveBeenCalledTimes(1)
+      const texto = await blob!.text()
+      expect(texto, 'o nome do evento entrou como fórmula no Excel').toContain(`"'=HYPERLINK(""http://golpe"";""clique"")"`)
+      expect(texto).toContain('"Ingressos por pedido";"1,5"')
+      expect(texto).toContain('"Conversão do site";"50%"')
+      expect(texto.split('\r\n').filter((l) => /^"\d{2}\/09\/2026"/.test(l)), 'dia sem venda fora da planilha').toHaveLength(10)
+    } finally {
+      criar.mockRestore(); clique.mockRestore()
+    }
   })
 })

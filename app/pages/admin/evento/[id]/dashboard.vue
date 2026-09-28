@@ -356,9 +356,12 @@ useHead({ title: 'Dashboard do evento' })
           </p>
         </section>
 
-        <section class="card">
-          <h2 class="rotulo-kpi">Finalizados × abandonados</h2>
-          <p class="mt-1 text-xs text-tinta-fraca">por data de criação do pedido</p>
+        <section class="card" data-parte="funil-site">
+          <h2 class="rotulo-kpi">Checkout do site</h2>
+          <!-- só o pedido online tem carrinho (ADM-28): balcão e cortesia nascem pagos -->
+          <p class="mt-1 text-xs text-tinta-fraca">
+            pedidos online, por data de criação · balcão e cortesia não entram
+          </p>
 
           <div v-if="rosca" class="mt-3 flex flex-col items-center">
             <svg viewBox="0 0 180 180" class="h-[180px] w-[180px]"

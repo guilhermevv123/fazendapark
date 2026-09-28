@@ -2039,8 +2039,8 @@ describe('o funil do painel não deixa pedido nenhum fora da conta', () => {
    * consulta já dizia que isso não podia acontecer — só que tinha sido
    * consertado apenas pro estorno PARCIAL.
    */
-  it('as partes do funil somam os pedidos criados, e batem com relatórios', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('as partes do funil somam os pedidos criados, e batem com relatórios', async (ctx) => {
+    if (!noAr) ctx.skip()
 
     const [dash, rel] = await Promise.all([
       json(`/api/admin/evento/${EVENTO}/dashboard`),
@@ -2049,9 +2049,9 @@ describe('o funil do painel não deixa pedido nenhum fora da conta', () => {
     const f = dash.funil
 
     // O total sai do BANCO, não de um literal que envelhece na primeira venda
-    // nova da fixture.
+    // nova da fixture. Só o pedido do SITE (ADM-28): balcão e cortesia não têm carrinho.
     const [linha] = await sql(
-      `SELECT count(*)::int AS n FROM orders WHERE event_id = $1`, [EVENTO])
+      `SELECT count(*)::int AS n FROM orders WHERE event_id = $1 AND channel = 'online'`, [EVENTO])
     expect(f.criados, 'o painel conta um número de pedidos criados que o banco não confirma')
       .toBe(Number(linha.n))
     expect(rel.funil.criados, 'o painel e relatórios discordam de quantos pedidos nasceram')
@@ -2081,6 +2081,59 @@ describe('o funil do painel não deixa pedido nenhum fora da conta', () => {
       'a fixture ficou fraca: sem pedido fora dos três baldes antigos, o ' +
       'denominador errado da rosca dava no mesmo')
       .not.toBe(f.criados)
+  }, 20_000)
+})
+
+describe('o funil e a conversão são do checkout do site (ADM-28)', () => {
+  /**
+   * O funil contava todo pedido do evento. Balcão e cortesia nascem pagos e não têm carrinho:
+   * num dia de 100 vendas no guichê e 5 de 10 carrinhos online a tela dizia 105 de 110
+   * "finalizados" (95%) — e a venda de balcão cancelada entrava em "abandonados". Nesta fixture:
+   * do site, 1 pago + 1 grátis + 1 estornado + 1 expirado; fora dele, 2 de balcão e 1 cortesia.
+   * "Finalizado" é o pedido vivo (`PEDIDO_VIVO`) nas duas telas: relatórios contava só `pago` e o
+   * painel também o estorno parcial — mesma pergunta, dois números.
+   */
+  it('painel e relatórios contam só o pedido online, e dizem a mesma conversão', async (ctx) => {
+    if (!noAr) ctx.skip()
+    // Só durante este caso: a venda de balcão CANCELADA no guichê (antes virava "abandonada" no
+    // funil do site) e um pedido do site com estorno PARCIAL (pagou: é "finalizado" nas duas telas).
+    const extras = [
+      await pedido({ codigo: 'ZZ-CT-BALCAO-CANC', canal: 'bilheteria', status: 'cancelado',
+                     pago: false, asaas: null, face: 10_000, feeComprador: 0, plataforma: 1_000 }),
+      await pedido({ codigo: 'ZZ-CT-SITE-PARCIAL', status: 'estornado_parcial',
+                     face: 10_000, feeComprador: 1_000, plataforma: 1_000, estornado: 500 }),
+    ]
+    let dash: any, rel: any, l: any
+    try {
+      [dash, rel] = await Promise.all([
+        json(`/api/admin/evento/${EVENTO}/dashboard`),
+        json(`/api/admin/evento/${EVENTO}/relatorios`),
+      ])
+      ;[l] = await sql(
+        `SELECT count(*) FILTER (WHERE channel = 'online')::int AS online,
+                count(*) FILTER (WHERE channel <> 'online')::int AS fora,
+                count(*) FILTER (WHERE channel = 'online' AND status IN ('pago','estornado_parcial'))::int AS vivos,
+                count(*) FILTER (WHERE channel = 'online'
+                                   AND status IN ('expirado','cancelado','falhou'))::int AS abandonados
+           FROM orders WHERE event_id = $1`, [EVENTO])
+    } finally {
+      await sql(`DELETE FROM orders WHERE id = ANY($1)`, [extras])
+    }
+    expect(l.fora, 'a fixture ficou fraca: sem venda fora do site, misturar não teria sintoma')
+      .toBeGreaterThan(0)
+
+    expect(dash.funil.criados, 'o funil do painel contou balcão e cortesia como carrinho do site')
+      .toBe(l.online)
+    expect(rel.funil.criados, 'o funil de relatórios contou balcão e cortesia').toBe(l.online)
+    expect(dash.funil.finalizados).toBe(l.vivos)
+    expect(rel.funil.finalizados, 'as duas telas discordam de quantos pedidos do site fecharam')
+      .toBe(dash.funil.finalizados)
+    expect(rel.funil.conversaoPct).toBe(Math.round((l.vivos / l.online) * 100))
+    expect(rel.funil.canal).toBe('online')
+    // e a venda de balcão cancelada no guichê não vira carrinho abandonado do site
+    expect(dash.funil.abandonados, 'venda de balcão cancelada contada como abandono do site')
+      .toBe(l.abandonados)
+    expect(rel.funil.cancelados ?? 0).toBe(0)
   }, 20_000)
 })
 

@@ -64,11 +64,16 @@
  * - **Conversão é pedido pago ÷ pedido criado.** Rascunho abandonado conta no
  *   denominador. Tirá-lo daria uma conversão de 100% todo mês, que é o mesmo
  *   que não medir.
+ *
+ * - **Conversão e funil são do CHECKOUT DO SITE** (ADM-28, `CANAL_DO_FUNIL`). Balcão e cortesia
+ *   não têm carrinho — nascem pagos —, e somados aqui davam 95% de conversão num dia de 100
+ *   vendas no guichê e 5 de 10 carrinhos online. "Pago" é o pedido vivo (`PEDIDO_VIVO`: pago ou
+ *   estornado em parte), o mesmo "finalizado" da rosca do painel.
  */
 import { q, q1 } from '../../../../utils/db'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
-import { fusoDoEvento, PAGANTE } from './dashboard.get'
+import { CANAL_DO_FUNIL, fusoDoEvento, PAGANTE } from './dashboard.get'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -93,9 +98,9 @@ export default defineEventHandler(async (event) => {
     // com dois pedidos esperando PIX na tela ao lado. Agrupando, status novo
     // aparece sozinho e as partes sempre somam o todo.
     q<any>(
-      `SELECT status, count(*)::int AS n
-         FROM orders WHERE event_id = $1 AND status <> 'rascunho'
-        GROUP BY 1 ORDER BY 2 DESC`, [id]),
+      `SELECT status, (${PEDIDO_VIVO()}) AS vivo, count(*)::int AS n
+         FROM orders WHERE event_id = $1 AND ${CANAL_DO_FUNIL} AND status <> 'rascunho'
+        GROUP BY 1, 2 ORDER BY 3 DESC`, [id]),
 
     // Curva por dia de PAGAMENTO. Usar created_at aqui jogaria a venda no dia
     // em que o PIX foi gerado, não no dia em que o dinheiro entrou.
@@ -265,6 +270,8 @@ export default defineEventHandler(async (event) => {
   const criados = Object.values(porStatus).reduce((s, n) => s + n, 0)
   const naoConcluiu = (porStatus.expirado ?? 0) + (porStatus.cancelado ?? 0)
                     + (porStatus.falhou ?? 0)
+  // o pedido VIVO do site, pela régua da casa (`PEDIDO_VIVO`): o estorno parcial também pagou
+  const finalizados = funil.filter((f: any) => f.vivo).reduce((s: number, f: any) => s + Number(f.n), 0)
 
   // Dias até o evento em que a venda aconteceu — responde "quando a venda
   // realmente acontece", que decide quando abrir o lote e quando anunciar.
@@ -340,7 +347,9 @@ export default defineEventHandler(async (event) => {
       expirados: porStatus.expirado ?? 0,
       cancelados: porStatus.cancelado ?? 0,
       estornados: (porStatus.estornado ?? 0) + (porStatus.estornado_parcial ?? 0),
-      conversaoPct: criados > 0 ? Math.round(((porStatus.pago ?? 0) / criados) * 100) : 0,
+      finalizados,
+      canal: 'online',
+      conversaoPct: criados > 0 ? Math.round((finalizados / criados) * 100) : 0,
       abandonoPct: criados > 0 ? Math.round((naoConcluiu / criados) * 100) : 0,
     },
     porDia: porDia.map((d) => ({
