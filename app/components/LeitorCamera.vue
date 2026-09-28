@@ -78,6 +78,14 @@ watch(() => props.veredito?.chave, (novo, antigo) => {
   apagar = setTimeout(() => { mostrando.value = false }, 2200)
 })
 const erro = ref('')
+/**
+ * O pedaço do leitor (jsQR) não baixou. Aí "Tentar de novo" não adianta: o navegador guarda a
+ * falha do `import()` e nem pede o arquivo outra vez — medido no Chrome, 1 pedido em 3
+ * tentativas, a última já com a rede de volta. Só recarregar a página busca de novo; a lista e
+ * a fila da portaria moram no aparelho e voltam junto.
+ */
+const semLeitor = ref(false)
+const recarregar = () => location.reload()
 const pronta = ref(false)
 /** `null` = o aparelho não tem lanterna; senão, ligada ou não */
 const lanterna = ref<boolean | null>(null)
@@ -86,11 +94,17 @@ let stream: MediaStream | null = null
 let encerrada = false
 let ultimo = { texto: '', visto: 0 }
 
+/** desliga a câmera (LED apagado) sem encerrar o componente — pra poder abrir de novo */
+function soltarCamera() {
+  stream?.getTracks().forEach((t) => t.stop())
+  stream = null
+  if (video.value) video.value.srcObject = null
+}
+
 function fechar() {
   encerrada = true
   clearTimeout(apagar)
-  stream?.getTracks().forEach((t) => t.stop())
-  stream = null
+  soltarCamera()
 }
 
 async function abrir() {
@@ -147,7 +161,13 @@ async function varrer() {
     try {
       jsQR = (await import('jsqr')).default
     } catch {
-      erro.value = 'Não deu pra carregar o leitor de câmera. Confira a rede e tente de novo.'
+      // Sem leitor a câmera não lê nada: ela desliga JÁ. Ficava acesa (LED e bateria) e o
+      // "Tentar de novo" abria outra por cima (ADM-59) — que também não lia, ver `semLeitor`.
+      soltarCamera()
+      pronta.value = false
+      semLeitor.value = true
+      erro.value = 'Não deu pra carregar o leitor de câmera (sem rede). Use o campo de código; '
+        + 'quando a rede voltar, recarregue a página.'
       return
     }
   }
@@ -213,7 +233,9 @@ onBeforeUnmount(fechar)
     </div>
     <p v-if="erro" class="faixa-erro mt-3" role="alert">
       {{ erro }}
-      <button type="button" class="font-semibold underline" @click="abrir">Tentar de novo</button>
+      <button v-if="semLeitor" type="button" class="font-semibold underline" data-parte="recarregar"
+              @click="recarregar">Recarregar a página</button>
+      <button v-else type="button" class="font-semibold underline" @click="abrir">Tentar de novo</button>
     </p>
     <p v-else-if="pronta" class="mt-2 text-center text-sm text-tinta-suave">
       Aponte o QR do ingresso para o quadro.
