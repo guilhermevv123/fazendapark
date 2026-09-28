@@ -64,18 +64,31 @@
  * - **Conversão é pedido pago ÷ pedido criado.** Rascunho abandonado conta no
  *   denominador. Tirá-lo daria uma conversão de 100% todo mês, que é o mesmo
  *   que não medir.
+ *
+ * - **Conversão e funil são do CHECKOUT DO SITE** (ADM-28, `CANAL_DO_FUNIL`). Balcão e cortesia
+ *   não têm carrinho — nascem pagos —, e somados aqui davam 95% de conversão num dia de 100
+ *   vendas no guichê e 5 de 10 carrinhos online. "Pago" é o pedido vivo (`PEDIDO_VIVO`: pago ou
+ *   estornado em parte), o mesmo "finalizado" da rosca do painel.
  */
 import { q, q1 } from '../../../../utils/db'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
+import { CANAL_DO_FUNIL, fusoDoEvento, PAGANTE } from './dashboard.get'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
 
   const ev = await q1<any>(
-    `SELECT id, name, starts_at, ends_at, fee_bps, created_at
+    `SELECT id, name, starts_at, ends_at, fee_bps, created_at, timezone
        FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
+
+  // Dia, dia da semana e hora são do calendário DO EVENTO (ADM-10). Sem o
+  // `AT TIME ZONE`, `date_trunc`/`EXTRACT` cortam no fuso da SESSÃO do banco:
+  // com o Postgres em UTC (a imagem oficial), a venda das 22h caía no dia
+  // seguinte e a das 10h aparecia às 13h. O painel já cortava assim; agora as
+  // duas telas cortam no mesmo relógio. `$2` é o fuso nas quatro consultas.
+  const fuso = fusoDoEvento(ev.timezone)
 
   const [funil, porDia, porDiaSemana, porHoraDoDia, topCompradores,
          porPromoter, porCupom, porParcela, resumo, publico, devolvido] = await Promise.all([
@@ -85,9 +98,9 @@ export default defineEventHandler(async (event) => {
     // com dois pedidos esperando PIX na tela ao lado. Agrupando, status novo
     // aparece sozinho e as partes sempre somam o todo.
     q<any>(
-      `SELECT status, count(*)::int AS n
-         FROM orders WHERE event_id = $1 AND status <> 'rascunho'
-        GROUP BY 1 ORDER BY 2 DESC`, [id]),
+      `SELECT status, (${PEDIDO_VIVO()}) AS vivo, count(*)::int AS n
+         FROM orders WHERE event_id = $1 AND ${CANAL_DO_FUNIL} AND status <> 'rascunho'
+        GROUP BY 1, 2 ORDER BY 3 DESC`, [id]),
 
     // Curva por dia de PAGAMENTO. Usar created_at aqui jogaria a venda no dia
     // em que o PIX foi gerado, não no dia em que o dinheiro entrou.
@@ -102,7 +115,7 @@ export default defineEventHandler(async (event) => {
     // ser confundida com a devolução total do evento (que inclui o pedido
     // estornado por inteiro e não cabe numa curva de líquido).
     q<any>(
-      `SELECT date_trunc('day', paid_at) AS dia,
+      `SELECT to_char(paid_at AT TIME ZONE $2, 'YYYY-MM-DD') AS dia,
               count(*)::int AS pedidos,
               count(*) FILTER (WHERE status = 'estornado_parcial')::int AS com_estorno,
               COALESCE(SUM(total_cents),0)::bigint AS cobrado,
@@ -111,21 +124,21 @@ export default defineEventHandler(async (event) => {
               ${SQL_LIQUIDO()} AS liquido
          FROM orders
         WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1`, [id]),
+        GROUP BY 1 ORDER BY 1`, [id, fuso]),
 
     q<any>(
-      `SELECT EXTRACT(DOW FROM paid_at)::int AS dow, count(*)::int AS pedidos,
+      `SELECT EXTRACT(DOW FROM paid_at AT TIME ZONE $2)::int AS dow, count(*)::int AS pedidos,
               COALESCE(SUM(total_cents),0)::bigint AS cobrado,
               ${SQL_LIQUIDO()} AS liquido
          FROM orders
         WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1`, [id]),
+        GROUP BY 1 ORDER BY 1`, [id, fuso]),
 
     q<any>(
-      `SELECT EXTRACT(HOUR FROM paid_at)::int AS hora, count(*)::int AS pedidos
+      `SELECT EXTRACT(HOUR FROM paid_at AT TIME ZONE $2)::int AS hora, count(*)::int AS pedidos
          FROM orders
         WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-        GROUP BY 1 ORDER BY 1`, [id]),
+        GROUP BY 1 ORDER BY 1`, [id, fuso]),
 
     // Agrupa por cliente, não por pedido: quem comprou três vezes é UM
     // comprador de peso, e é isso que interessa pra base do próximo evento.
@@ -154,7 +167,8 @@ export default defineEventHandler(async (event) => {
                              WHERE t.order_id = o.id AND t.status <> 'cancelado') tk ON true
         WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')}
         GROUP BY c.id, c.name, c.email
-        ORDER BY gasto DESC LIMIT 15`, [id]),
+        -- a mesma ordem da aba Público do painel (ADM-63), com o mesmo desempate
+        ORDER BY gasto DESC, ingressos DESC, c.name, c.id LIMIT 15`, [id]),
 
     q<any>(
       `SELECT p.id, p.name, p.code, p.commission_bps,
@@ -204,6 +218,8 @@ export default defineEventHandler(async (event) => {
               count(*) FILTER (WHERE o.status = 'pago')::int AS fechados,
               count(*) FILTER (WHERE o.status = 'estornado_parcial')::int AS com_estorno,
               COALESCE(SUM(oi.n),0)::int AS ingressos,
+              count(*) FILTER (WHERE ${PAGANTE})::int AS pagantes,
+              COALESCE(SUM(oi.n) FILTER (WHERE ${PAGANTE}),0)::int AS ingressos_pagantes,
               MIN(o.paid_at) AS primeira, MAX(o.paid_at) AS ultima
          FROM orders o
          LEFT JOIN LATERAL (SELECT SUM(quantity)::int AS n FROM order_items WHERE order_id = o.id) oi ON true
@@ -234,33 +250,56 @@ export default defineEventHandler(async (event) => {
 
   const pedidos = Number(resumo.pedidos)
   const ingressos = Number(resumo.ingressos)
+  const pagantes = Number(resumo.pagantes)
+  const ingressosPagantes = Number(resumo.ingressos_pagantes)
 
   // As duas réguas do ticket médio, calculadas UMA vez cada. Quem compra 6 de
-  // uma vez é um cliente, não seis — por isso "por pedido" divide pela mesma
-  // população que somou o cobrado; "por ingresso" responde a outra pergunta e
-  // é o número que o painel mostra com esse nome.
-  const ticketMedioPorPedido = pedidos > 0 ? Math.round(Number(resumo.cobrado) / pedidos) : 0
-  const ticketMedioPorIngresso = ingressos > 0
-    ? Math.round(Number(resumo.cobrado) / ingressos) : 0
+  // uma vez é um cliente, não seis — por isso "por pedido" divide por pedido;
+  // "por ingresso" responde a outra pergunta e é o número que o painel mostra
+  // com esse nome.
+  //
+  // A população é a de quem PAGOU (`PAGANTE`, ADM-12): cortesia e venda de
+  // R$ 0 não somam nada no cobrado e, no denominador, derrubavam a média —
+  // 10 pedidos de R$ 100 e 40 cortesias davam R$ 90,91 por pedido e R$ 20,00
+  // por ingresso. Mesma régua do painel.
+  const ticketMedioPorPedido = pagantes > 0 ? Math.round(Number(resumo.cobrado) / pagantes) : 0
+  const ticketMedioPorIngresso = ingressosPagantes > 0
+    ? Math.round(Number(resumo.cobrado) / ingressosPagantes) : 0
 
   const porStatus: Record<string, number> = {}
   for (const f of funil) porStatus[f.status] = Number(f.n)
   const criados = Object.values(porStatus).reduce((s, n) => s + n, 0)
   const naoConcluiu = (porStatus.expirado ?? 0) + (porStatus.cancelado ?? 0)
                     + (porStatus.falhou ?? 0)
+  // o pedido VIVO do site, pela régua da casa (`PEDIDO_VIVO`): o estorno parcial também pagou
+  const finalizados = funil.filter((f: any) => f.vivo).reduce((s: number, f: any) => s + Number(f.n), 0)
 
   // Dias até o evento em que a venda aconteceu — responde "quando a venda
   // realmente acontece", que decide quando abrir o lote e quando anunciar.
+  //
+  // A régua é o DIA DO INGRESSO (ADM-62): a sessão que o item do pedido carrega
+  // (`order_items.session_id`, o dia que o comprador escolheu — ou o único do lote). Contada contra
+  // o início do EVENTO, toda venda feita depois da 1ª data de um parque que abre todo fim de
+  // semana virava 0 dia ("últimos 3 dias"): o gráfico dizia que tudo vendeu na última hora.
+  // Pedido sem dia (lote sem sessão, passaporte) segue medido contra o início do evento.
   const antecedencia = await q<any>(
-    `SELECT GREATEST(0, (DATE($2) - DATE(paid_at)))::int AS dias, count(*)::int AS pedidos
-       FROM orders
-      WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
-      GROUP BY 1 ORDER BY 1`, [id, ev.starts_at])
+    `SELECT GREATEST(0, ((COALESCE(dia.inicio, $2::timestamptz) AT TIME ZONE $3)::date
+                         - (o.paid_at AT TIME ZONE $3)::date))::int AS dias,
+            count(*)::int AS pedidos
+       FROM orders o
+       LEFT JOIN LATERAL (
+         SELECT min(es.starts_at) AS inicio
+           FROM order_items oi JOIN event_sessions es ON es.id = oi.session_id
+          WHERE oi.order_id = o.id) dia ON true
+      WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.paid_at IS NOT NULL
+      GROUP BY 1 ORDER BY 1`, [id, ev.starts_at, fuso])
 
   return {
     evento: {
       id: ev.id, nome: ev.name, comeca: ev.starts_at, termina: ev.ends_at,
       criadoEm: ev.created_at, taxaBps: ev.fee_bps,
+      // o relógio dos cortes por dia/semana/hora — a tela diz em que fuso lê
+      fuso,
     },
     resumo: {
       // `pedidos` é a população que as somas abaixo usam: pedido que virou
@@ -295,7 +334,11 @@ export default defineEventHandler(async (event) => {
       // novos, estas duas linhas saem.
       ticketMedioCents: ticketMedioPorPedido,
       porIngressoCents: ticketMedioPorIngresso,
-      ingressosPorPedido: pedidos > 0 ? Math.round((ingressos / pedidos) * 100) / 100 : 0,
+      ingressosPorPedido: pagantes > 0 ? Math.round((ingressosPagantes / pagantes) * 100) / 100 : 0,
+      // a população da média, e o que ficou fora dela com nome
+      pedidosPagantes: pagantes,
+      ingressosPagantes,
+      pedidosSemCobranca: pedidos - pagantes,
       primeiraVenda: resumo.primeira, ultimaVenda: resumo.ultima,
     },
     // quem passou pela catraca — pessoa, não ingresso
@@ -315,7 +358,9 @@ export default defineEventHandler(async (event) => {
       expirados: porStatus.expirado ?? 0,
       cancelados: porStatus.cancelado ?? 0,
       estornados: (porStatus.estornado ?? 0) + (porStatus.estornado_parcial ?? 0),
-      conversaoPct: criados > 0 ? Math.round(((porStatus.pago ?? 0) / criados) * 100) : 0,
+      finalizados,
+      canal: 'online',
+      conversaoPct: criados > 0 ? Math.round((finalizados / criados) * 100) : 0,
       abandonoPct: criados > 0 ? Math.round((naoConcluiu / criados) * 100) : 0,
     },
     porDia: porDia.map((d) => ({

@@ -46,8 +46,8 @@ import {
 import { db, q, tx } from './db'
 import { montarQr } from './ingresso'
 import {
-  conferirRelogio, DOCUMENTO_GENERICO, MEIA_SEM_MOTIVO, meiaDoIngresso,
-  normalizarFila, retratoDoPublico, SQL_GRAVA_ENTRADA,
+  chaveDoCodigo, conferirRelogio, DOCUMENTO_GENERICO, MEIA_SEM_MOTIVO, meiaDoIngresso,
+  normalizarFila, novoSalDaLista, numeroParaALista, retratoDoPublico, SQL_GRAVA_ENTRADA,
 } from './catraca'
 import { emitirNaTransacao, EXIGENCIA_SEM_MOTIVO, exigenciaDeMeia } from './emissao'
 import { documentoExigido } from './meia-entrada'
@@ -891,10 +891,15 @@ describe('fila da portaria offline', () => {
     // 3. e a lista que desce pro tablet também — é no apagão que o operador
     //    mais precisa e menos tem a quem perguntar
     const lista = await sincronizar({ deviceId: 'TABLET-NORTE', fila: [], comLista: true })
-    const naLista = lista.corpo.lista?.ingressos?.find((i: any) => i.codigo === m)
+    const sal = lista.corpo.lista?.sal
+    const naLista = lista.corpo.lista?.ingressos?.find((i: any) => i.chave === chaveDoCodigo(sal, m))
     expect(naLista, 'o ingresso sumiu da lista baixada').toBeTruthy()
     expect(naLista.meia?.documento,
       'sem rede o operador volta a não saber qual papel pedir').toMatch(/Estudantil/i)
+    // ADM-25: na lista do tablet, o número do documento só com os 4 últimos — bastam pra bater
+    // com o papel na mão, e o número inteiro de cada meia do evento não mora no aparelho
+    expect(naLista.meia?.numero,
+      'o número inteiro do documento da meia desceu pro armazenamento do tablet').toBe('•••• 4120')
 
     // 4. ingresso inteira não ganha bloco de meia — senão a tela pede
     //    documento de todo mundo e o operador para de ler o aviso
@@ -903,6 +908,40 @@ describe('fila da portaria offline', () => {
     const ri = await ler(montarQr(inteira, EVENTO), 'PORTAO-MEIA')
     expect(ri.corpo.ingresso?.meia,
       'ingresso inteira apareceu como meia-entrada').toBeFalsy()
+  }, 30_000)
+
+  /**
+   * A lista que desce pro tablet não leva o código do ingresso em claro (ADM-25).
+   *
+   * Medido antes do conserto: `lista.ingressos[i].codigo` era o código inteiro de cada ingresso
+   * válido do evento, gravado no `localStorage` do aparelho da portaria. Quem pegasse o tablet
+   * levava a lista; e código DIGITADO entra sem assinatura nenhuma. Agora cada item leva
+   * `chave` = SHA-256(sal:CÓDIGO) cortada em 24 hexas, e o sal é novo a cada descida.
+   */
+  it('a lista do tablet não leva código em claro, e o sal muda a cada descida', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const codigo = cod('LIST-CLAR')
+    await semearIngresso(codigo)
+
+    const a = (await sincronizar({ deviceId: 'TABLET-NORTE', fila: [], comLista: true })).corpo.lista
+    const b = (await sincronizar({ deviceId: 'TABLET-NORTE', fila: [], comLista: true })).corpo.lista
+    expect(a?.ingressos?.length, 'a lista desceu vazia: nada abaixo prova nada').toBeGreaterThan(0)
+
+    expect(JSON.stringify(a), 'o código do ingresso desceu em claro pro armazenamento do tablet')
+      .not.toContain(codigo)
+    expect(a.ingressos.filter((i: any) => 'codigo' in i), 'item da lista com o código em claro')
+      .toHaveLength(0)
+    expect(a.ingressos.every((i: any) => /^[0-9a-f]{24}$/.test(i.chave)), 'item sem chave').toBe(true)
+    expect(a.sal).toMatch(/^[0-9a-f]{24}$/)
+
+    // o leitor acha o ingresso pela chave do que leu — é a mesma conta, dos dois lados
+    const achado = a.ingressos.find((i: any) => i.chave === chaveDoCodigo(a.sal, codigo))
+    expect(achado?.status, 'com o sal da lista, a chave do código não acha o ingresso').toBe('valido')
+
+    // sal novo a cada descida: a chave de uma lista não serve na outra
+    expect(b.sal).not.toBe(a.sal)
+    expect(b.ingressos.find((i: any) => i.chave === chaveDoCodigo(a.sal, codigo))).toBeUndefined()
+    expect(b.ingressos.find((i: any) => i.chave === chaveDoCodigo(b.sal, codigo))?.status).toBe('valido')
   }, 30_000)
 
   /**
@@ -956,7 +995,8 @@ describe('fila da portaria offline', () => {
     const lista = await sincronizar({ deviceId: 'TABLET-NORTE', fila: [], comLista: true })
     for (const [code, trecho] of [[velha, /carteira de estudante/i],
                                   [balcao, /supervisor/i]] as const) {
-      const naLista = lista.corpo.lista?.ingressos?.find((i: any) => i.codigo === code)
+      const naLista = lista.corpo.lista?.ingressos?.find(
+        (i: any) => i.chave === chaveDoCodigo(lista.corpo.lista.sal, code))
       expect(naLista, `${code} sumiu da lista baixada`).toBeTruthy()
       expect(naLista.meia?.documento,
         `sem rede, ${code} volta a não dizer qual papel pedir`).toMatch(trecho)
@@ -1183,6 +1223,29 @@ describe('meiaDoIngresso (sem banco)', () => {
  * erra: o operador com fila na frente lendo um ingresso que não diz qual papel
  * pedir é o sintoma, e a emissão é a causa.
  */
+describe('lista offline — o mínimo que desce pro tablet (sem banco, ADM-25)', () => {
+  it('o número do documento da meia desce com os 4 últimos, e o curto nem isso', () => {
+    expect(numeroParaALista('CIE 2026-44120')).toBe('•••• 4120')
+    expect(numeroParaALista('  529.982.247-25 ')).toBe('•••• 7-25')
+    expect(numeroParaALista('1234'), 'número de 4 caracteres desceu inteiro').toBe('••••')
+    expect(numeroParaALista(null)).toBeNull()
+    expect(numeroParaALista('')).toBeNull()
+  })
+
+  it('a chave ignora caixa e espaço (o operador digita de qualquer jeito) e depende do sal', () => {
+    const sal = 'a1b2c3d4e5f60718293a4b5c'
+    expect(chaveDoCodigo(sal, ' con-ab12-cd34 ')).toBe(chaveDoCodigo(sal, 'CON-AB12-CD34'))
+    expect(chaveDoCodigo(sal, 'CON-AB12-CD34')).toMatch(/^[0-9a-f]{24}$/)
+    expect(chaveDoCodigo('outro-sal', 'CON-AB12-CD34')).not.toBe(chaveDoCodigo(sal, 'CON-AB12-CD34'))
+  })
+
+  it('sal novo a cada descida', () => {
+    const sais = new Set(Array.from({ length: 20 }, () => novoSalDaLista()))
+    expect(sais.size).toBe(20)
+    for (const s of sais) expect(s).toMatch(/^[0-9a-f]{24}$/)
+  })
+})
+
 describe('exigenciaDeMeia (sem banco)', () => {
   it('o texto congelado na compra vence tudo — foi o que foi prometido', () => {
     expect(exigenciaDeMeia({

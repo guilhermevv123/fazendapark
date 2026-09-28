@@ -35,7 +35,7 @@ export default defineEventHandler(async (event) => {
       ORDER BY s.sort_order, l.sort_order, l.name`, [eventId])
 
   const tipos = await q<any>(
-    `SELECT t.id, t.lot_id, t.name, t.discount_bps, t.quantity, t.sold, t.requires_document
+    `SELECT t.id, t.lot_id, t.name, t.kind, t.discount_bps, t.quantity, t.sold, t.requires_document
        FROM ticket_types t
        JOIN lots l ON l.id = t.lot_id
        JOIN sectors s ON s.id = l.sector_id
@@ -77,6 +77,8 @@ export default defineEventHandler(async (event) => {
         return {
           id: t.id, nome: t.name, faceCents: face, balcaoCents: pt.totalCents,
           exigeDocumento: t.requires_document,
+          // 'meia' pede o MOTIVO na venda (estudante, idoso…) — o balcão pergunta na linha
+          especie: t.kind,
           // tipos compartilham o lote: o que o tipo ainda tem, até o que sobra no lote
           disponivel: Math.min(Number(t.quantity) - Number(t.sold), disponivel),
         }

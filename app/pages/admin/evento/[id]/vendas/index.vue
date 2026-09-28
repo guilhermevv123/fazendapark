@@ -1,3 +1,18 @@
+<script lang="ts">
+import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
+
+/**
+ * O botão "Cancelar pedido" só pra quem pode cancelar (ADM-64): a MESMA grade que tranca a rota
+ * de cancelar no servidor (`decidirAcesso`, área `dinheiro`). Pra Operação o botão abria só o
+ * recado "é do financeiro ou do dono" — botão que não funciona. Papel desconhecido: mostra, e o
+ * servidor responde (como antes).
+ */
+export function podeCancelarPedido(papel: unknown, eventoId: string): boolean {
+  if (!ehPapel(papel)) return true
+  return decidirAcesso(papel, `/api/admin/evento/${eventoId}/cancelar`).liberado
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Vendas: a lista de pedidos, com a ficha completa num painel lateral.
@@ -13,20 +28,40 @@ const route = useRoute()
 const router = useRouter()
 const id = route.params.id as string
 
-const busca = ref('')
-const situacao = ref('')
-const canal = ref('')
-const pagina = ref(1)
+// Busca, filtros e página na URL (ADM-31): F5 e o link mandado pra equipe mantêm o recorte, em
+// vez de voltar pra primeira página de tudo. `replace`, não `push` — filtrar não é navegar.
+const naUrl = (chave: string) => {
+  const v = route.query[chave]
+  return String((Array.isArray(v) ? v[0] : v) ?? '')
+}
+const busca = ref(naUrl('busca'))
+const situacao = ref(naUrl('situacao'))
+const canal = ref(naUrl('canal'))
+const pagina = ref(Math.max(1, Number.parseInt(naUrl('pagina'), 10) || 1))
 
 // debounce na busca: cada tecla disparando consulta é o jeito mais fácil de
 // transformar uma lista de 10 mil pedidos em travamento.
-const buscaDebounced = ref('')
+const buscaDebounced = ref(busca.value)
 let timer: any
 watch(busca, (v) => {
   clearTimeout(timer)
   timer = setTimeout(() => { buscaDebounced.value = v; pagina.value = 1 }, 300)
 })
 watch([situacao, canal], () => { pagina.value = 1 })
+watch([buscaDebounced, situacao, canal, pagina], () => {
+  const query: Record<string, string> = {}
+  if (buscaDebounced.value.trim()) query.busca = buscaDebounced.value.trim()
+  if (situacao.value) query.situacao = situacao.value
+  if (canal.value) query.canal = canal.value
+  if (pagina.value > 1) query.pagina = String(pagina.value)
+  // o link da ficha (`?pedido=`) continua valendo enquanto ela estiver aberta
+  if (route.query.pedido) query.pedido = String(route.query.pedido)
+  router.replace({ query })
+})
+
+// o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+const podeCancelar = computed(() => podeCancelarPedido(eu.value?.usuario?.papel, id))
 
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/vendas`, {
@@ -49,6 +84,9 @@ const SITUACOES: Record<string, { texto: string; classe: string }> = {
   em_analise:           { texto: 'EM ANÁLISE', classe: 'selo-alerta' },
   falhou:               { texto: 'FALHOU',    classe: 'selo-neutro' },
   rascunho:             { texto: 'RASCUNHO',  classe: 'selo-neutro' },
+  // Contestação (ADM-64): o pedido contestado não se filtrava, e é o que mais precisa ser achado
+  chargeback:           { texto: 'CHARGEBACK', classe: 'selo-erro' },
+  disputa:              { texto: 'EM DISPUTA', classe: 'selo-alerta' },
 }
 const CANAIS: Record<string, string> = {
   online: 'Online', bilheteria: 'Bilheteria', pdv_produtor: 'PDV',
@@ -153,6 +191,10 @@ function limparAcoes() {
 
 const paginas = computed(() => Math.max(1, Math.ceil((data.value?.total ?? 0) / (data.value?.porPagina ?? 50))))
 
+/** o motivo da falha em português, do servidor (403 do papel, 404) — senão, o que fazer */
+const motivoDaFalha = (f: any) =>
+  f?.data?.statusMessage || f?.data?.message || 'Confira a internet e tente de novo.'
+
 useHead({ title: 'Vendas' })
 </script>
 
@@ -188,17 +230,25 @@ useHead({ title: 'Vendas' })
 
     <!-- totais do filtro atual -->
     <div v-if="data" class="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <div class="card">
-        <p class="rotulo-kpi">Recebido</p>
-        <p class="numero-kpi mt-1 text-ok">{{ reais(data.totais.pagoCents) }}</p>
+      <!-- Os nomes e as réguas do painel (ADM-29): "Recebido" era o cobrado bruto, e "Ingressos
+           pagos" contava a cortesia. -->
+      <div class="card" data-parte="total-vendas">
+        <p class="rotulo-kpi">Total de vendas</p>
+        <p class="numero-kpi mt-1 text-ok">{{ reais(data.totais.cobradoCents) }}</p>
+        <p class="mt-1 text-sm text-tinta-suave">
+          líquido do produtor <strong class="text-tinta">{{ reais(data.totais.liquidoCents) }}</strong>
+        </p>
       </div>
       <div class="card">
         <p class="rotulo-kpi">Aguardando</p>
         <p class="numero-kpi mt-1 text-alerta">{{ reais(data.totais.pendenteCents) }}</p>
       </div>
-      <div class="card">
-        <p class="rotulo-kpi">Ingressos pagos</p>
-        <p class="numero-kpi mt-1">{{ data.totais.ingressosPagos }}</p>
+      <div class="card" data-parte="ingressos-vendidos">
+        <p class="rotulo-kpi">Ingressos vendidos</p>
+        <p class="numero-kpi mt-1">{{ data.totais.ingressosVendidos }}</p>
+        <p class="mt-1 text-sm text-tinta-suave">
+          sem cortesia<template v-if="data.totais.cortesias"> · + {{ data.totais.cortesias }} de cortesia</template>
+        </p>
       </div>
       <div class="card">
         <p class="rotulo-kpi">Pedidos</p>
@@ -209,8 +259,11 @@ useHead({ title: 'Vendas' })
       </div>
     </div>
 
-    <p v-if="falha" class="card border-erro text-erro">
+    <!-- a falha diz o MOTIVO que o servidor mandou: pra portaria o 403 é "seu acesso não inclui
+         venda" — sem ele a tela dizia só "não foi possível", e quem lê acha que é a rede -->
+    <p v-if="falha" class="card text-erro ring-erro/50" data-parte="falha-vendas">
       Não foi possível carregar as vendas.
+      <span class="text-tinta-suave">{{ motivoDaFalha(falha) }}</span>
       <button type="button" class="ml-2 underline" @click="refresh()">Tentar de novo</button>
     </p>
 
@@ -326,8 +379,8 @@ useHead({ title: 'Vendas' })
                     @click="reenvio.aberto = !reenvio.aberto; reenvio.erro = ''; reenvio.resultado = ''">
               Reenviar ingresso
             </button>
-            <button v-if="ficha.pedido.situacao === 'pago' || ficha.pedido.situacao === 'estornado_parcial'"
-                    type="button" class="btn-erro"
+            <button v-if="podeCancelar && (ficha.pedido.situacao === 'pago' || ficha.pedido.situacao === 'estornado_parcial')"
+                    type="button" class="btn-erro" data-parte="cancelar-pedido"
                     @click="cancelamento.aberto = !cancelamento.aberto; cancelamento.erro = ''">
               {{ ficha.acoes.devolucaoPendente ? 'Tentar a devolução de novo' : 'Cancelar pedido' }}
             </button>

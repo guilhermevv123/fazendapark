@@ -29,6 +29,11 @@
  */
 import { z } from 'zod'
 import { q, q1, tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria, type Autor } from '../../../../utils/auditoria'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { o: 'Ação', de: 'De', ate: 'Até', dias: 'Dias da semana', horarios: 'Horários', inicio: 'Início', fim: 'Fim', capacidade: 'Capacidade', titulo: 'Nome do dia', loteIds: 'Lotes', sessaoId: 'Dia', loteId: 'Lote', sessaoIds: 'Dias' }
 
 const DATA = /^\d{4}-\d{2}-\d{2}$/
 const HORA = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -79,7 +84,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
 
@@ -88,14 +93,16 @@ export default defineEventHandler(async (event) => {
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
   const fuso = ev.timezone || 'America/Bahia'
 
-  if (d.o === 'criar') return await criar(d, ev, fuso)
-  if (d.o === 'editar') return await editar(d, ev)
-  if (d.o === 'lotes') return await ligarLotes(d, ev)
-  return await apagar(d, ev)
+  // quem criou, mudou ou apagou o dia — carimbado por `registrarAuditoria` (ADM-26)
+  const autor = autorDaRequisicao(event)
+  if (d.o === 'criar') return await criar(d, ev, fuso, autor)
+  if (d.o === 'editar') return await editar(d, ev, autor)
+  if (d.o === 'lotes') return await ligarLotes(d, ev, autor)
+  return await apagar(d, ev, autor)
 })
 
 // ------------------------------------------------------------------ criar ---
-async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string) {
+async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string, autor: Autor) {
   if (d.ate < d.de) {
     throw createError({ statusCode: 422, statusMessage: 'A data final é anterior à inicial.' })
   }
@@ -139,9 +146,18 @@ async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string) {
     SELECT (g.d::date + h.inicio::time) AT TIME ZONE $1 AS inicio,
            ((g.d::date + CASE WHEN h.fim::time <= h.inicio::time THEN 1 ELSE 0 END)
              + h.fim::time) AT TIME ZONE $1 AS fim,
-           COALESCE($2::text,
-             (ARRAY['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo'])
-               [EXTRACT(ISODOW FROM g.d)::int] || ' ' || to_char(g.d, 'DD/MM')) AS titulo
+           -- O nome digitado vale como MODELO quando sai mais de uma data (ADM-39): era o mesmo
+           -- texto em todas ("Sábado 07/11" em oito sábados). Leva a data — e a hora, quando o dia
+           -- tem mais de um horário. Uma data só fica com o nome exato.
+           CASE
+             WHEN $2::text IS NULL THEN
+               (ARRAY['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo'])
+                 [EXTRACT(ISODOW FROM g.d)::int] || ' ' || to_char(g.d, 'DD/MM')
+             WHEN count(*) OVER () > 1 THEN
+               $2::text || ' · ' || to_char(g.d, 'DD/MM')
+                 || CASE WHEN cardinality($5::text[]) > 1 THEN ' ' || h.inicio ELSE '' END
+             ELSE $2::text
+           END AS titulo
       FROM generate_series($3::date, $4::date, interval '1 day') AS g(d)
       CROSS JOIN unnest($5::text[], $6::text[]) AS h(inicio, fim)
      WHERE EXTRACT(ISODOW FROM g.d)::int = ANY($7::int[])`
@@ -212,14 +228,14 @@ async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string) {
     vinculos = r.length
   }
 
-  await q(
-    `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-     VALUES ($1,'evento',$2,'sessoes_criadas',$3::jsonb)`,
-    [ev.org_id, ev.id, JSON.stringify({
+  await registrarAuditoria({
+    autor, entidade: 'evento', entidadeId: ev.id, acao: 'sessoes_criadas',
+    depois: {
       de: d.de, ate: d.ate, dias: d.dias, horarios: d.horarios,
       capacidade: d.capacidade ?? null, criadas: novas.length,
       repetidas: linhas.length - novas.length, vinculos,
-    })])
+    },
+  })
 
   return {
     ok: true,
@@ -236,7 +252,7 @@ async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string) {
 }
 
 // ----------------------------------------------------------------- editar ---
-async function editar(d: z.infer<typeof Editar>, ev: any) {
+async function editar(d: z.infer<typeof Editar>, ev: any, autor: Autor) {
   return await tx(async (c) => {
     // A trava vem ANTES da conta, e é a mesma linha que a venda segura.
     const { rows } = await c.query(
@@ -272,12 +288,11 @@ async function editar(d: z.infer<typeof Editar>, ev: any) {
       [d.sessaoId, d.titulo !== undefined, d.titulo ?? null,
        d.capacidade !== undefined, d.capacidade ?? null])
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, before, after)
-       VALUES ($1,'sessao',$2,'editada',$3::jsonb,$4::jsonb)`,
-      [ev.org_id, d.sessaoId,
-       JSON.stringify({ titulo: sessao.title, capacidade: sessao.capacity }),
-       JSON.stringify({ titulo: upd[0].title, capacidade: upd[0].capacity })])
+    await registrarAuditoria({
+      autor, entidade: 'sessao', entidadeId: d.sessaoId, acao: 'editada',
+      antes: { titulo: sessao.title, capacidade: sessao.capacity },
+      depois: { titulo: upd[0].title, capacidade: upd[0].capacity },
+    }, c)
 
     return {
       ok: true,
@@ -302,7 +317,7 @@ async function editar(d: z.infer<typeof Editar>, ev: any) {
  * ligação é o único papel que diz que aquele ingresso vale naquele sábado.
  * Tirar deixaria o comprador com um ingresso de dia nenhum.
  */
-async function ligarLotes(d: z.infer<typeof Lotes>, ev: any) {
+async function ligarLotes(d: z.infer<typeof Lotes>, ev: any, autor: Autor) {
   const porSessao = !!d.sessaoId
   if (porSessao === !!d.loteId) {
     throw createError({
@@ -383,19 +398,17 @@ async function ligarLotes(d: z.infer<typeof Lotes>, ev: any) {
       ligados = r.rowCount ?? 0
     }
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'sessao',$2,'lotes_do_dia',$3::jsonb)`,
-      [ev.org_id, porSessao ? d.sessaoId : d.loteId,
-       JSON.stringify({ porSessao, lotes: loteIds, sessoes: sessaoIds,
-                        ligados, desligados: removidos.length })])
+    await registrarAuditoria({
+      autor, entidade: 'sessao', entidadeId: (porSessao ? d.sessaoId : d.loteId) ?? null, acao: 'lotes_do_dia',
+      depois: { porSessao, lotes: loteIds, sessoes: sessaoIds, ligados, desligados: removidos.length },
+    }, c)
 
     return { ok: true, ligados, desligados: removidos.length }
   })
 }
 
 // ----------------------------------------------------------------- apagar ---
-async function apagar(d: z.infer<typeof Apagar>, ev: any) {
+async function apagar(d: z.infer<typeof Apagar>, ev: any, autor: Autor) {
   const s = await q1<any>(
     `SELECT es.id, es.title,
             sessao_ocupacao(es.id) AS ocupadas,
@@ -428,10 +441,9 @@ async function apagar(d: z.infer<typeof Apagar>, ev: any) {
   }
 
   await q(`DELETE FROM event_sessions WHERE id = $1`, [d.sessaoId])
-  await q(
-    `INSERT INTO audit_log (org_id, entity, entity_id, action, before)
-     VALUES ($1,'sessao',$2,'apagada',$3::jsonb)`,
-    [ev.org_id, d.sessaoId, JSON.stringify({ titulo: s.title })])
+  await registrarAuditoria({
+    autor, entidade: 'sessao', entidadeId: d.sessaoId, acao: 'apagada', antes: { titulo: s.title },
+  })
 
   return { ok: true }
 }

@@ -1,3 +1,17 @@
+<script lang="ts">
+/**
+ * O tamanho da página da ficha na térmica de 80mm (ADM-60).
+ *
+ * Era `size: 80mm auto` — e `auto` não é altura: a regra aceita duas medidas OU a palavra `auto`,
+ * não as duas misturadas. O Chrome jogava a declaração fora (medido: o CSS lido de volta vira
+ * `@page { margin: 0px; }`) e a ficha saía em Carta, 215,9 × 279,4 mm. Com duas medidas o PDF sai
+ * 80 × 110 mm. 110mm cabe a ficha inteira (QR de 54mm, marca, evento em duas linhas, código,
+ * setor, lote e rodapé: medido 102,6mm com o CSS do painel) com folga, uma ficha por página; mais
+ * alto é bobina jogada fora a cada ficha.
+ */
+export const PAGINA_DA_FICHA = '80mm 110mm'
+</script>
+
 <script setup lang="ts">
 /**
  * As fichas do balcão: uma por ingresso, impressas na hora da venda.
@@ -45,7 +59,7 @@ async function imprimir() {
     ? null
     : new Promise((ok) => { i.onload = i.onerror = () => ok(null) })))
   const estilo = document.createElement('style')
-  estilo.textContent = '@page { size: 80mm auto; margin: 0 }'
+  estilo.textContent = `@page { size: ${PAGINA_DA_FICHA}; margin: 0 }`
   document.head.appendChild(estilo)
   document.documentElement.classList.add('imprimindo-fichas')
   const fim = () => {

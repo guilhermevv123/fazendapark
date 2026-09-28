@@ -34,6 +34,11 @@ import {
 
 const PAGINA = 50
 
+/** passou na porta pelo menos uma vez — pelo livro de passagens, como `SQL_PUBLICO` conta */
+const ENTROU = `EXISTS (SELECT 1 FROM entries e WHERE e.ticket_id = t.id)`
+/** mudou de titular por transferência concluída */
+const TRANSFERIDO = `EXISTS (SELECT 1 FROM ticket_transfers tr WHERE tr.ticket_id = t.id AND tr.status = 'concluido')`
+
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
   const { busca, status, setor, pagina } = getQuery(event) as Record<string, string>
@@ -60,7 +65,14 @@ export default defineEventHandler(async (event) => {
                 OR t.holder_email ILIKE ${like} OR c.name ILIKE ${like}
                 OR c.email ILIKE ${like} OR o.code ILIKE ${like}${porDigitos})`)
   }
-  if (status) { par.push(status); onde.push(`t.status = $${par.length}`) }
+  // A situação do FILTRO, com a régua de cada palavra (ADM-45):
+  // - "Já entrou" é o LIVRO de passagens (`entries`), a régua da portaria — o passaporte de
+  //   vários dias segue `valido` até o último dia e entrou mesmo assim;
+  // - "Transferido" é transferência CONCLUÍDA: nenhum código grava `status = 'transferido'`
+  //   (a transferência só troca o titular), e o filtro nunca casava com nada.
+  if (status === 'usado') onde.push(ENTROU)
+  else if (status === 'transferido') onde.push(TRANSFERIDO)
+  else if (status) { par.push(status); onde.push(`t.status = $${par.length}`) }
   if (setor) { par.push(setor); onde.push(`t.sector_id = $${par.length}`) }
 
   const filtro = onde.join(' AND ')
@@ -91,7 +103,7 @@ export default defineEventHandler(async (event) => {
   // o rodapé passa a contradizer as linhas de cima.
   const t = await q1<any>(
     `SELECT count(*)::int AS total,
-            count(*) FILTER (WHERE t.status = 'usado')::int AS entraram,
+            count(*) FILTER (WHERE ${ENTROU})::int AS entraram,
             count(*) FILTER (WHERE ${SQL_E_CORTESIA('t')})::int AS cortesias,
             count(*) FILTER (WHERE ${SQL_E_CORTESIA('t')}
                                AND t.status = 'cancelado')::int AS cortesias_canceladas,

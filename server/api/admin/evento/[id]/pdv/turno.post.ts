@@ -12,6 +12,7 @@
  */
 import { z } from 'zod'
 import { q1 } from '../../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../../utils/auditoria'
 
 const Entrada = z.object({
   pontoId: z.string().uuid(),
@@ -49,11 +50,10 @@ export default defineEventHandler(async (event) => {
        RETURNING id, opened_at`,
       [ponto.org_id, eventId, ponto.id, sessao.usuarioId, p.data.fundoCents])
 
-    await q1(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'turno',$2,'aberto',$3::jsonb) RETURNING id`,
-      [ponto.org_id, turno.id,
-       JSON.stringify({ ponto: ponto.name, fundoCents: p.data.fundoCents, por: sessao.nome })])
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event), entidade: 'turno', entidadeId: turno.id, acao: 'aberto',
+      depois: { ponto: ponto.name, fundoCents: p.data.fundoCents, por: sessao.nome },
+    })
 
     return { ok: true, turnoId: turno.id, abriuEm: turno.opened_at, ponto: ponto.name }
   } catch (e: any) {

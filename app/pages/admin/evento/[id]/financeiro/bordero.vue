@@ -1,3 +1,70 @@
+<script lang="ts">
+/** Uma linha da conta do "Resultado": o sinal é da CONTA, não da cor. */
+export interface LinhaDoResultado {
+  chave: string
+  rotulo: string
+  sinal: '' | '+' | '−' | '='
+  cents: number
+}
+
+/**
+ * A conta do borderô, linha a linha, fechando no líquido NA PRÓPRIA TELA (ADM-13).
+ *
+ * O líquido é `SQL_LIQUIDO` = Σ(total − plataforma − devolvido) dos pedidos vivos, e o banco
+ * garante `total = face + taxa − desconto` (CHECK `total_fecha`). Então, com os campos que a rota
+ * já devolve (todos pela mesma régua de pedido vivo):
+ *
+ *     face + taxa paga pelo comprador − descontos − plataforma − estornos parciais = líquido
+ *
+ * A tela antiga mostrava "Face − Descontos − Estornado" ao lado do líquido: o "Estornado" era TODA
+ * devolução (inclusive a do pedido estornado por inteiro, cuja face já nem está na face vendida)
+ * e a fatia da plataforma não aparecia — o documento que vai pro produtor tinha uma subtração que
+ * não batia com o número ao lado. O estorno total agora é linha À PARTE, fora da conta.
+ *
+ * `diferencaCents` ≠ 0 quer dizer que a rota e a conta divergiram: a tela avisa em vez de esconder.
+ */
+export function linhasDoResultado(t: any): { linhas: LinhaDoResultado[]; estornoTotalCents: number; diferencaCents: number } {
+  const n = (v: unknown) => Number(v ?? 0) || 0
+  const linhas: LinhaDoResultado[] = [
+    { chave: 'face', rotulo: 'Face vendida', sinal: '', cents: n(t.faceCents) },
+    { chave: 'taxa', rotulo: 'Taxa de serviço paga pelo comprador', sinal: '+', cents: n(t.taxaCents) },
+    { chave: 'desconto', rotulo: 'Descontos dados (cupons)', sinal: '−', cents: n(t.descontoCents) },
+    { chave: 'plataforma', rotulo: 'Parte da plataforma', sinal: '−', cents: n(t.plataformaCents) },
+    { chave: 'parcial', rotulo: 'Estornos parciais (devolvidos de pedidos que seguem valendo)', sinal: '−', cents: n(t.estornadoNoLiquidoCents) },
+  ]
+  const conta = linhas.reduce((s, l) => s + (l.sinal === '−' ? -l.cents : l.cents), 0)
+  const liquido = n(t.liquidoCents)
+  linhas.push({ chave: 'liquido', rotulo: 'Líquido da produção', sinal: '=', cents: liquido })
+  return {
+    linhas,
+    estornoTotalCents: Math.max(0, n(t.estornadoCents) - n(t.estornadoNoLiquidoCents)),
+    diferencaCents: liquido - conta,
+  }
+}
+
+/**
+ * Imprimir SÓ a folha (ADM-47). `window.print()` puro levava o menu lateral, o topo e as abas do
+ * painel pro papel. O layout é de outra frente, então a folha se isola sozinha: na hora de
+ * imprimir, cada irmão no caminho da folha até o `<body>` ganha `.fora-da-impressao` (some no
+ * papel) e cada ancestral ganha `.caminho-da-impressao` (perde a margem da lateral); a função
+ * devolvida desfaz tudo (chamada no `afterprint`).
+ */
+export function isolarParaImpressao(folha: Element | null): () => void {
+  const marcados: [Element, string][] = []
+  let no: Element | null = folha
+  while (no && no.parentElement && no !== document.body) {
+    const pai: Element = no.parentElement
+    for (const irmao of Array.from(pai.children)) {
+      if (irmao !== no) { irmao.classList.add('fora-da-impressao'); marcados.push([irmao, 'fora-da-impressao']) }
+    }
+    pai.classList.add('caminho-da-impressao')
+    marcados.push([pai, 'caminho-da-impressao'])
+    no = pai
+  }
+  return () => { for (const [e, c] of marcados) e.classList.remove(c) }
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Financeiro › Borderô.
@@ -18,7 +85,10 @@ const id = route.params.id as string
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   `/api/admin/evento/${id}/bordero`)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+// `reais` é o de `composables/formato.ts` (espaço normal, conta inteira) — a cópia local com
+// `toLocaleString` escrevia o dinheiro com espaço fino (ADM-48).
+
+const resultado = computed(() => data.value ? linhasDoResultado(data.value.totais) : null)
 
 const ROTULO_CANAL: Record<string, string> = {
   online: 'Site', bilheteria: 'Bilheteria', pdv_produtor: 'PDV da produção',
@@ -35,33 +105,45 @@ const temCortesia = computed(() =>
 
 // `window` não existe no escopo do template do Vue — chamar `window.print()`
 // direto no @click renderiza sem erro e não faz nada ao clicar.
-const imprimir = () => window.print()
+const folha = ref<HTMLElement | null>(null)
+function imprimir() {
+  const desfazer = isolarParaImpressao(folha.value)
+  const aoTerminar = () => { desfazer(); window.removeEventListener('afterprint', aoTerminar) }
+  window.addEventListener('afterprint', aoTerminar)
+  window.print()
+}
 
+/**
+ * CSV pelo `baixarCsv` da casa (ADM-35): nome de setor/lote é texto digitado, e a cópia à mão
+ * daqui não neutralizava fórmula (`=HYPERLINK(...)` virava link no Excel de quem confere). Leva
+ * também a conta do Resultado, que é o que o contador pede junto da tabela.
+ */
 function exportar() {
-  const cab = ['Setor', 'Lote', 'Valor unitário', 'Estoque', 'Vendidos', 'Cortesias',
-               'Face', 'Taxa']
-  const linhas = (data.value?.lotes ?? []).map((l: any) => [
-    l.setor, l.lote, (l.faceUnitCents / 100).toFixed(2).replace('.', ','),
-    l.estoque, l.vendidos, l.cortesias,
-    (l.faceCents / 100).toFixed(2).replace('.', ','),
-    (l.taxaCents / 100).toFixed(2).replace('.', ','),
+  if (!data.value) return
+  const linhas: (string | number)[][] = (data.value.lotes ?? []).map((l: any) => [
+    l.setor, l.lote, reais(l.faceUnitCents), l.estoque, l.vendidos, l.cortesias,
+    reais(l.faceCents), reais(l.taxaCents),
   ])
-  const csv = [cab, ...linhas]
-    .map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';'))
-    .join('\r\n')
-  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `bordero-${data.value.evento.slug}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  if (resultado.value) {
+    // o sinal vai no VALOR ("-R$ 50,00"), não no rótulo: rótulo começando com "=" ou "+" seria
+    // lido como fórmula e ganharia o apóstrofo do `celulaCsv`
+    linhas.push([], ['Resultado'])
+    for (const r of resultado.value.linhas) {
+      linhas.push([r.rotulo, '', r.sinal === '−' ? `-${reais(r.cents)}` : reais(r.cents)])
+    }
+    if (resultado.value.estornoTotalCents) {
+      linhas.push(['Devolvido em pedidos estornados por inteiro (fora da conta)', '', reais(resultado.value.estornoTotalCents)])
+    }
+  }
+  baixarCsv(`bordero-${data.value.evento.slug}`,
+    ['Setor', 'Lote', 'Valor unitário', 'Estoque', 'Vendidos', 'Cortesias', 'Face', 'Taxa'], linhas)
 }
 
 useHead({ title: 'Borderô' })
 </script>
 
 <template>
-  <div v-if="data">
+  <div v-if="data" ref="folha" class="folha-bordero">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Borderô</h1>
@@ -69,7 +151,7 @@ useHead({ title: 'Borderô' })
           Fechamento de {{ data.evento.nome }} — o que saiu, por onde, e quanto sobra.
         </p>
       </div>
-      <div class="flex gap-2">
+      <div class="flex gap-2 print:hidden">
         <button type="button" class="btn-secundario" @click="exportar">
           <IconeMenu nome="exportar" :tamanho="18" /> Exportar
         </button>
@@ -77,33 +159,37 @@ useHead({ title: 'Borderô' })
       </div>
     </div>
 
-    <AbasSecao :evento-id="id" />
+    <div class="print:hidden">
+      <AbasSecao :evento-id="id" />
+    </div>
 
     <!-- ====================================================== o resultado -->
     <section class="card mt-5">
       <h2 class="rotulo-kpi">Resultado</h2>
-      <dl class="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <dt class="text-xs text-tinta-fraca">Face vendida</dt>
-          <dd class="numero-kpi">{{ reais(data.totais.faceCents) }}</dd>
-        </div>
-        <div>
-          <dt class="text-xs text-tinta-fraca">Descontos dados</dt>
-          <dd class="numero-kpi" :class="data.totais.descontoCents && 'text-alerta'">
-            −{{ reais(data.totais.descontoCents) }}
+      <!-- A conta fecha AQUI: cada linha com o sinal da conta, o líquido embaixo (ADM-13). -->
+      <dl v-if="resultado" class="mt-3 max-w-2xl text-sm" data-parte="resultado">
+        <div v-for="r in resultado.linhas" :key="r.chave" :data-linha="r.chave"
+             class="flex items-baseline justify-between gap-4 py-1.5"
+             :class="r.sinal === '=' ? 'mt-1 border-t border-linha pt-2.5' : ''">
+          <dt class="flex" :class="r.sinal === '=' ? 'font-semibold text-tinta' : 'text-tinta-suave'">
+            <span class="w-4 shrink-0 tabular-nums text-tinta-fraca">{{ r.sinal }}</span><span>{{ r.rotulo }}</span>
+          </dt>
+          <!-- o valor não quebra ("R$" numa linha e "393,65" na outra, medido em 390 px) -->
+          <dd class="shrink-0 whitespace-nowrap tabular-nums" :class="r.sinal === '=' ? 'numero-kpi text-ok' : 'text-tinta'">
+            {{ reais(r.cents) }}
           </dd>
-        </div>
-        <div>
-          <dt class="text-xs text-tinta-fraca">Estornado</dt>
-          <dd class="numero-kpi" :class="data.totais.estornadoCents && 'text-erro'">
-            −{{ reais(data.totais.estornadoCents) }}
-          </dd>
-        </div>
-        <div>
-          <dt class="text-xs text-tinta-fraca">Líquido da produção</dt>
-          <dd class="numero-kpi text-ok">{{ reais(data.totais.liquidoCents) }}</dd>
         </div>
       </dl>
+      <p v-if="resultado?.estornoTotalCents" class="mt-2 max-w-2xl text-sm text-tinta-suave"
+         data-parte="estorno-total">
+        Devolvido em pedidos estornados <strong class="text-tinta">por inteiro</strong>:
+        {{ reais(resultado.estornoTotalCents) }} — fora desta conta: a venda deles já não entra na face
+        vendida. No total, {{ reais(data.totais.estornadoCents) }} voltaram ao comprador.
+      </p>
+      <p v-if="resultado?.diferencaCents" class="faixa-erro mt-3" data-parte="conta-nao-fecha">
+        A conta acima não fecha com o líquido: diferença de {{ reais(resultado.diferencaCents) }}.
+        Avise o suporte antes de usar este borderô.
+      </p>
 
       <hr class="my-4 border-linha">
 
@@ -130,7 +216,7 @@ useHead({ title: 'Borderô' })
         <div class="flex justify-between">
           <dt class="text-tinta-suave">Liberação</dt>
           <dd class="text-tinta" :class="data.evento.liberado ? 'text-ok' : 'text-alerta'">
-            {{ data.evento.liberado ? 'liberado' : new Date(data.evento.liberaEm).toLocaleDateString('pt-BR') }}
+            {{ data.evento.liberado ? 'liberado' : dataCurta(data.evento.liberaEm) }}
           </dd>
         </div>
       </dl>
@@ -301,3 +387,13 @@ useHead({ title: 'Borderô' })
     <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
   </div>
 </template>
+
+<style>
+/* A folha do borderô no papel, sem o painel em volta (ADM-47) — ver `isolarParaImpressao`. */
+@media print {
+  .fora-da-impressao { display: none !important; }
+  .caminho-da-impressao { margin: 0 !important; padding: 0 !important; max-width: none !important;
+                          box-shadow: none !important; background: #fff !important; }
+  .folha-bordero .card { box-shadow: none; break-inside: avoid; }
+}
+</style>

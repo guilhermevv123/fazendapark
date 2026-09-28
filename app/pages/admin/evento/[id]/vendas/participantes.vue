@@ -165,6 +165,14 @@ const linhas = computed<any[]>(() =>
 // "Entrou" é discussão no balcão.
 const quando = dataHora
 
+/**
+ * A situação com as palavras do FILTRO da tela, com acento (ADM-44): era `status.toUpperCase()`
+ * e a lista dizia "VALIDO" e "USADO" onde o filtro diz "Válido" e "Já entrou".
+ */
+const SITUACAO: Record<string, string> = {
+  valido: 'Válido', usado: 'Já entrou', cancelado: 'Cancelado', transferido: 'Transferido',
+}
+
 function exportar() {
   // "Entrada gratuita" sai do MESMO lugar que o selo da tela: planilha que
   // discorda da tela sobre o mesmo ingresso é a discussão de sempre.
@@ -172,20 +180,14 @@ function exportar() {
                'Situação', 'Entrada gratuita', 'Entrou em', 'Pedido', 'Comprador']
   const corpo = linhas.value.map((p: any) => [
     p.codigo, p.nome ?? '', p.documento ?? '', p.email ?? '',
-    p.setor, p.lote, p.tipo ?? '', p.status,
+    p.setor, p.lote, p.tipo ?? '', SITUACAO[p.status] ?? p.status,
     p.gratuidade?.texto ?? '',
     dataHoraSegundo(p.entrouEm, ''),
     p.pedido ?? '', p.comprador ?? '',
   ])
-  const csv = [cab, ...corpo]
-    .map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';'))
-    .join('\r\n')
-  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `participantes-${id.slice(0, 8)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  // `baixarCsv` da casa (ADM-14): nome do portador e do comprador são digitados no checkout
+  // PÚBLICO, e um "=HYPERLINK(...)" ia cru pro Excel de quem confere a lista
+  baixarCsv(`participantes-${id.slice(0, 8)}`, cab, corpo)
 }
 
 useHead({ title: 'Participantes' })
@@ -344,7 +346,7 @@ useHead({ title: 'Participantes' })
               <template v-else>—</template>
             </td>
             <td class="px-3 py-3">
-              <span :class="SELO[p.status] ?? 'selo-neutro'">{{ p.status.toUpperCase() }}</span>
+              <span :class="SELO[p.status] ?? 'selo-neutro'">{{ (SITUACAO[p.status] ?? p.status).toUpperCase() }}</span>
             </td>
             <td class="px-3 py-3 text-right">
               <button type="button" class="px-2 text-sm disabled:opacity-30"

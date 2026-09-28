@@ -30,6 +30,14 @@
  */
 import { q, q1 } from '../../../../utils/db'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
+import { fusoDoEvento, fusoSql } from './dashboard.get'
+
+/** `AAAA-MM-DD` que existe no calendário — `?de=ontem` ou `2026-02-31` virava 500 no `::date` */
+function diaExiste(d: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false
+  const t = new Date(`${d}T12:00:00Z`)
+  return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === d
+}
 
 const CANAL_LEGIVEL: Record<string, string> = {
   online: 'Site',
@@ -45,14 +53,26 @@ export default defineEventHandler(async (event) => {
 
   const de = query.de ? String(query.de) : null
   const ate = query.ate ? String(query.ate) : null
+  for (const d of [de, ate]) {
+    if (d !== null && !diaExiste(d)) {
+      throw createError({ statusCode: 400, statusMessage: 'Data do período inválida (use AAAA-MM-DD).' })
+    }
+  }
   const canal = query.canal ? String(query.canal) : ''
   const ponto = query.ponto ? String(query.ponto) : ''
   const forma = query.forma ? String(query.forma) : ''
   const limite = Math.min(Number(query.limite ?? 300), 2000)
 
   const ev = await q1<any>(
-    `SELECT id, name, fee_bps, fee_mode_online, fee_mode_pos FROM events WHERE id = $1`, [id])
+    `SELECT id, name, fee_bps, fee_mode_online, fee_mode_pos, timezone FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
+
+  // O dia do filtro e do "por dia" é o do calendário DO EVENTO (ADM-10). `$x::date`
+  // comparado com `paid_at` vira meia-noite no fuso da SESSÃO do banco: com o
+  // Postgres em UTC, o atalho "Hoje" ia das 21h de ontem às 21h de hoje. Vai
+  // como literal (o nome já passou por `fusoDoEvento`) porque as consultas abaixo
+  // dividem a mesma lista de parâmetros e nem todas usam o fuso.
+  const fuso = fusoSql(fusoDoEvento(ev.timezone))
 
   // Os filtros viram uma condição só, montada uma vez e reaproveitada por
   // todas as consultas. Montar duas vezes é como o total do rodapé passa a
@@ -60,17 +80,24 @@ export default defineEventHandler(async (event) => {
   // Todo estado em que o dinheiro CHEGOU a entrar. `chargeback` e `disputa`
   // ficam na lista de propósito: sumir com eles faz o extrato parar de bater
   // com o banco justamente no mês em que alguém contestou uma compra.
+  //
+  // E a venda de BALCÃO cancelada (ADM-61): o balcão cobra na hora (`paid_at`) e o cancelamento
+  // (`SQL_CANCELA_VENDA_PDV`, utils/caixa.ts) grava `cancelado` com `refunded_cents = total`
+  // — o operador tirou as notas da gaveta e devolveu. Ela sumia da história do extrato, e a
+  // devolução do extrato ficava menor que a das outras seis telas. O `paid_at` separa essa venda
+  // do carrinho online cancelado antes de pagar, que nunca mexeu em dinheiro.
   const cond: string[] = [
     `o.event_id = $1`,
-    `o.status IN ('pago','estornado','estornado_parcial','chargeback','disputa')`,
+    `(o.status IN ('pago','estornado','estornado_parcial','chargeback','disputa')
+      OR (o.status = 'cancelado' AND o.paid_at IS NOT NULL))`,
   ]
   const par: any[] = [id]
   const põe = (sql: string, v: any) => { par.push(v); cond.push(sql.replace('$?', `$${par.length}`)) }
 
-  if (de) põe(`o.paid_at >= $?::date`, de)
+  if (de) põe(`o.paid_at >= (($?::date)::timestamp AT TIME ZONE ${fuso})`, de)
   // `< data + 1 dia` em vez de `<= data`: com `<=`, tudo que foi pago depois
   // da meia-noite do último dia fica de fora e o mês fecha faltando um dia.
-  if (ate) põe(`o.paid_at < ($?::date + interval '1 day')`, ate)
+  if (ate) põe(`o.paid_at < (($?::date + 1)::timestamp AT TIME ZONE ${fuso})`, ate)
   if (canal) põe(`o.channel = $?`, canal)
   if (ponto) põe(`o.pos_terminal_id = $?::uuid`, ponto)
   if (forma) põe(`o.payment_method = $?`, forma)
@@ -136,7 +163,7 @@ export default defineEventHandler(async (event) => {
          FROM orders o WHERE ${ondeVivo} GROUP BY 1 ORDER BY 3 DESC`, par),
 
     q<any>(
-      `SELECT date_trunc('day', o.paid_at) AS dia, count(*)::int AS pedidos,
+      `SELECT to_char(o.paid_at AT TIME ZONE ${fuso}, 'YYYY-MM-DD') AS dia, count(*)::int AS pedidos,
               COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
               COALESCE(SUM(o.face_cents),0)::bigint AS face,
               COALESCE(SUM(o.platform_cents),0)::bigint AS taxa,

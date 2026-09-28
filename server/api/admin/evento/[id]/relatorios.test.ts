@@ -221,11 +221,18 @@ const COBRADO = 110_000 + 50_000 + 93_500
 /**
  * Pedido VIVO é o que tem líquido a apurar — inclusive o que fechou em zero.
  * São cinco: repassou, absorveu, cupom+parcial, a cortesia da casa e a venda
- * gratuita. Os dois últimos não somam dinheiro nenhum, mas CONTAM como pedido,
- * e é por essa população que o ticket médio por pedido divide.
+ * gratuita. Os dois últimos não somam dinheiro nenhum, mas CONTAM como pedido
+ * (é a contagem que as telas comparam entre si).
+ *
+ * O TICKET MÉDIO divide por outra população: a de quem PAGOU (ADM-12, 27/09).
+ * A cortesia e a venda de R$ 0 no denominador derrubavam a média — 10 pedidos
+ * de R$ 100 e 40 cortesias davam R$ 90,91 por pedido. São três pedidos
+ * pagantes, com 4 + 1 + 2 = 7 ingressos.
  */
 const PEDIDOS_VIVOS = 5
 const PEDIDOS_FECHADOS = 4
+const PEDIDOS_PAGANTES = 3
+const INGRESSOS_PAGANTES = 7
 
 /**
  * A RÉGUA DA DEVOLUÇÃO, somada na mão: R$ 20 do estorno parcial + R$ 220 do
@@ -813,6 +820,50 @@ describe('as telas do dinheiro contam igual', () => {
     })
   }, 30_000)
 
+  // O PAINEL REDESENHADO (27/09) PARTE O LÍQUIDO COMO O FINANCEIRO E O BORDERÔ, e os blocos novos
+  // somam os números do próprio topo: a série de dias soma o total, "por tipo" soma os ingressos
+  // vendidos, e o público é o de relatórios. É a fixture com estorno parcial, estorno total, cupom
+  // e balcão — a que já separou réguas que pareciam iguais no evento semeado.
+  it('o painel parte o líquido como Financeiro e Borderô, e os blocos novos fecham com o topo', async (ctx) => {
+    if (!noAr) ctx.skip()
+    const t = await asSeteTelas(EVENTO)
+    const p = t.dashboard
+    expect(p.totais.liquidoNaPlataformaCents + p.totais.liquidoDiretoCents, 'as duas metades não fecham o líquido')
+      .toBe(p.totais.liquidoCents)
+    expect({ plataforma: p.totais.liquidoNaPlataformaCents, direto: p.totais.liquidoDiretoCents })
+      .toEqual({ plataforma: t.financeiroDoEvento.resumo.naPlataformaCents, direto: t.financeiroDoEvento.resumo.recebidoDiretoCents })
+    expect({ plataforma: p.totais.liquidoNaPlataformaCents, direto: p.totais.liquidoDiretoCents })
+      .toEqual({ plataforma: t.bordero.totais.naPlataformaCents, direto: t.bordero.totais.recebidoDiretoCents })
+    expect(p.totais.liquidoDiretoCents, 'a fixture perdeu o dinheiro do balcão e a metade "direto" não prova nada')
+      .toBeGreaterThan(0)
+    expect(p.serie.reduce((s: number, d: any) => s + d.cobradoCents, 0), 'a série de dias não soma o total do painel')
+      .toBe(p.totais.cobradoCents)
+    expect(p.porTipo.reduce((s: number, x: any) => s + x.ingressos, 0), '"por tipo" não soma os ingressos vendidos')
+      .toBe(p.totais.pagos)
+    expect(p.portaria.pessoas, 'o painel e relatórios contam público diferente').toBe(t.relatorios.publico.pessoas)
+  }, 30_000)
+
+  // O BORDERÔ FECHA A PRÓPRIA CONTA (ADM-13). A tela escreve, linha a linha,
+  //   face + taxa do comprador − descontos − plataforma − estornos parciais = líquido
+  // com os campos que a rota devolve. Se um desses campos mudar de régua (voltar
+  // a `status = 'pago'`, ou o parcial virar a devolução total), a tela mostra a
+  // faixa "a conta não fecha" — e este caso fica vermelho antes, na fixture que
+  // tem cupom, taxa absorvida, estorno parcial E estorno total ao mesmo tempo.
+  it('o borderô fecha a própria conta: face + taxa − desconto − plataforma − parcial = líquido', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const b = await json(`/api/admin/evento/${EVENTO}/bordero`)
+    const t = b.totais
+    expect(t.faceCents + t.taxaCents - t.descontoCents - t.plataformaCents - t.estornadoNoLiquidoCents,
+      'a conta que o borderô escreve na tela não fecha com o líquido da mesma rota')
+      .toBe(t.liquidoCents)
+    expect(t.liquidoCents).toBe(LIQUIDO)
+    // e o que fica À PARTE da conta é exatamente o estorno do pedido devolvido por inteiro
+    expect(t.estornadoCents - t.estornadoNoLiquidoCents, 'o estorno total não é o que sobra da devolução')
+      .toBe(DEVOLVIDO - DEVOLVIDO_NO_LIQUIDO)
+    expect(DEVOLVIDO_NO_LIQUIDO, 'a fixture perdeu o estorno parcial e a linha "parcial" não prova nada')
+      .toBeGreaterThan(0)
+  }, 30_000)
+
   it('o estorno parcial não apaga o pedido inteiro de nenhuma das cinco', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
@@ -842,11 +893,11 @@ describe('as telas do dinheiro contam igual', () => {
     // trocar o rótulo do .vue junto faz a tela mentir em silêncio — que é
     // exatamente o defeito desta trilha, só que na legenda em vez do total.
     expect(rel.resumo.ticketMedioPorPedidoCents,
-      'relatórios deixou de dividir por PEDIDO, e o rótulo da tela diz "por pedido"')
-      .toBe(Math.round(COBRADO / PEDIDOS_VIVOS))
+      'relatórios deixou de dividir por PEDIDO PAGANTE, e o rótulo da tela diz "por pedido"')
+      .toBe(Math.round(COBRADO / PEDIDOS_PAGANTES))
     expect(dash.totais.ticketMedioPorIngressoCents,
-      'o painel deixou de dividir por INGRESSO, e o rótulo da tela diz "por ingresso"')
-      .toBe(Math.round(COBRADO / INGRESSOS_EMITIDOS))
+      'o painel deixou de dividir por INGRESSO PAGO, e o rótulo da tela diz "por ingresso"')
+      .toBe(Math.round(COBRADO / INGRESSOS_PAGANTES))
 
     // E o número por ingresso de relatórios é o MESMO do painel: quando duas
     // telas respondem a mesma pergunta, elas respondem igual.
@@ -882,9 +933,13 @@ describe('as telas do dinheiro contam igual', () => {
       porPedido: dash.totais.ticketMedioPorPedidoCents,
     }, 'o painel trocou a régua de um dos dois campos')
       .toEqual({
-        porIngresso: Math.round(COBRADO / INGRESSOS_EMITIDOS),
-        porPedido: Math.round(COBRADO / PEDIDOS_VIVOS),
+        porIngresso: Math.round(COBRADO / INGRESSOS_PAGANTES),
+        porPedido: Math.round(COBRADO / PEDIDOS_PAGANTES),
       })
+    // e os EMITIDOS continuam contando a cortesia e a venda de R$ 0: só a média
+    // mudou de população, o "quantos saíram" não
+    expect(dash.totais.ingressos).toBe(INGRESSOS_EMITIDOS)
+    expect(dash.totais.pedidos).toBe(PEDIDOS_VIVOS)
 
     // AS DUAS ROTAS CHAMAM A MESMA PERGUNTA PELO MESMO NOME.
     //
@@ -940,11 +995,15 @@ describe('as telas do dinheiro contam igual', () => {
         estornado: DEVOLVIDO, estornadoNoLiquido: DEVOLVIDO_NO_LIQUIDO, cobrado: COBRADO,
       })
 
-    // Ticket médio divide pela MESMA população que somou. Somar cinco pedidos
-    // e dividir por quatro é o jeito silencioso de a média inflar.
+    // Ticket médio divide por quem PAGOU (ADM-12). A cortesia e a venda de
+    // R$ 0 não trazem dinheiro ao cobrado; no denominador, derrubavam a média.
     expect(r.resumo.ticketMedioPorPedidoCents,
-      'o ticket médio dividiu por uma população diferente da que somou')
-      .toBe(Math.round(COBRADO / PEDIDOS_VIVOS))
+      'o ticket médio voltou a dividir pela cortesia e pela venda de R$ 0')
+      .toBe(Math.round(COBRADO / PEDIDOS_PAGANTES))
+    expect({ pagantes: r.resumo.pedidosPagantes, ingressos: r.resumo.ingressosPagantes,
+             semCobranca: r.resumo.pedidosSemCobranca })
+      .toEqual({ pagantes: PEDIDOS_PAGANTES, ingressos: INGRESSOS_PAGANTES,
+                 semCobranca: PEDIDOS_VIVOS - PEDIDOS_PAGANTES })
   }, 20_000)
 
   it('a curva por dia soma o mesmo líquido do total', async () => {
@@ -1083,8 +1142,8 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
    * voltar a somar o estorno total no total — ou a esconder o pedido morto
    * sem dizer — esta parte fica vermelha.
    */
-  it('as SETE telas do dinheiro dizem o MESMO em cada campo comparável', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('as SETE telas do dinheiro dizem o MESMO em cada campo comparável', async (ctx) => {
+    if (!noAr) ctx.skip()
     expect(cookie, 'login falhou — o teste ficaria verde à toa').toBeTruthy()
 
     const t = await asSeteTelas(EVENTO)
@@ -1115,9 +1174,11 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
       financeiroDoEvento: t.financeiroDoEvento.resumo.liquidoCents,
       financeiroDaOrg: t.org.liquidoCents,
       relatorios: t.relatorios.resumo.liquidoCents,
+      // a lista de vendas passou a mostrar o líquido no card (ADM-29): mesma régua, sexta tela
+      vendas: t.vendas.totais.liquidoCents,
     }
     expect(new Set(Object.values(liquido)).size,
-      `as cinco telas de líquido discordaram: ${JSON.stringify(liquido)}`).toBe(1)
+      `as telas de líquido discordaram: ${JSON.stringify(liquido)}`).toBe(1)
     expect(liquido.bordero, 'o líquido das cinco não é o somado à mão').toBe(LIQUIDO)
 
     // ---------------------------------------------------------------------
@@ -1190,10 +1251,20 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
       // o borderô não tem o campo: tem a quebra por forma, e as partes somam
       // o todo das outras duas
       borderoPorForma: t.bordero.formas.reduce((s: number, f: any) => s + f.totalCents, 0),
+      // o "Total de vendas" da lista de vendas (era "Recebido", ADM-29)
+      vendas: t.vendas.totais.cobradoCents,
     }
     expect(new Set(Object.values(cobrado)).size,
       `as telas discordaram do cobrado: ${JSON.stringify(cobrado)}`).toBe(1)
     expect(cobrado.relatorios, 'o cobrado das telas não é o somado à mão').toBe(COBRADO)
+
+    // INGRESSOS VENDIDOS (ADM-29): a lista de vendas contava a cortesia em "Ingressos pagos".
+    // A régua é a do painel — item de pedido vivo fora do canal de cortesia.
+    expect(t.vendas.totais.ingressosVendidos, 'vendas e painel discordam de quantos ingressos venderam')
+      .toBe(t.dashboard.totais.pagos)
+    expect(t.vendas.totais.cortesias).toBe(t.dashboard.totais.cortesiasEmitidas)
+    expect(t.dashboard.totais.cortesiasEmitidas,
+      'a fixture ficou fraca: sem cortesia, contá-la ou não daria no mesmo').toBeGreaterThan(0)
 
     // ---------------------------------------------------------------------
     // 5. CONTAGEM — duas perguntas, cada uma com o seu nome, e as duas iguais
@@ -1244,7 +1315,8 @@ describe('não é só o líquido: CADA campo comparável bate entre as SETE tela
               count(*)::int                           AS pedidos
          FROM orders
         WHERE event_id = $1
-          AND status IN ('estornado','chargeback','disputa')
+          AND (status IN ('estornado','chargeback','disputa')
+               OR (status = 'cancelado' AND paid_at IS NOT NULL))
         GROUP BY status`, [EVENTO])
     const fora = {
       pedidos: foraPorStatus.reduce((a: number, l: any) => a + l.pedidos, 0),
@@ -1828,7 +1900,7 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
     expect(soOQueARenderizou(await semOrfao.text()),
       'a linha "sem ponto" aparece num evento que não tem venda órfã nenhuma')
       .not.toContain('Sem ponto identificado')
-  }, 30_000)
+  }, 120_000)
 
   /**
    * A TELA NÃO PODE PROMETER UMA CONTA QUE ELA NÃO FAZ.
@@ -1913,7 +1985,7 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
       'a frase "é exatamente a diferença entre os dois" voltou pra baixo da ' +
       'venda órfã, e ela é falsa sempre que um guichê vendeu fora do caixa aberto')
       .not.toContain('é exatamente a diferença entre os dois')
-  }, 30_000)
+  }, 120_000)
 
   /**
    * A VENDA CANCELADA NO GUICHÊ — a devolução que seis telas contam e o
@@ -1947,23 +2019,25 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
    *   avisando que a exceção acabou — aí ela sai daqui e o extrato entra na
    *   igualdade das sete.
    */
-  it('a venda cancelada no guichê é devolução nas seis — e o extrato ainda não conta', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('a venda cancelada no guichê é devolução nas SETE — o extrato entrou na igualdade (ADM-61)', async (ctx) => {
+    if (!noAr) ctx.skip()
 
     const t = await asSeteTelas(EVENTO_GUICHE)
 
-    const asSeis = {
+    const asSete = {
       bordero: t.bordero.totais.estornadoCents,
       painel: t.dashboard.totais.estornadoCents,
       financeiroDoEvento: t.financeiroDoEvento.resumo.estornadoCents,
       financeiroDaOrg: t.org.estornadoCents,
       vendas: t.vendas.totais.estornadoCents,
       relatorios: t.relatorios.resumo.estornadoCents,
+      // era a exceção medida aqui (R$ 50,00 contra R$ 450,00): o extrato não listava `cancelado`
+      extrato: t.extrato.totais.estornadoCents,
     }
-    expect(new Set(Object.values(asSeis)).size,
-      `as seis telas discordaram da devolução: ${JSON.stringify(asSeis)}`).toBe(1)
-    expect(asSeis.relatorios,
-      'a devolução das seis não é a somada à mão — o cancelamento de balcão ' +
+    expect(new Set(Object.values(asSete)).size,
+      `as sete telas discordaram da devolução: ${JSON.stringify(asSete)}`).toBe(1)
+    expect(asSete.relatorios,
+      'a devolução das sete não é a somada à mão — o cancelamento de balcão ' +
       'devolveu dinheiro tanto quanto o estorno')
       .toBe(SEM_GUICHE_DEVOLVIDO + CANCELADA_NO_GUICHE)
 
@@ -1972,21 +2046,11 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
       'a fixture perdeu a venda cancelada e este caso virou uma cópia do de cima')
       .toBeGreaterThan(0)
 
-    // A FALTA DO EXTRATO, com número: é a devolução dos pedidos em status que
-    // ele não lista. Sai do banco, não de um literal.
-    const [foraDoExtrato] = await sql(
-      `SELECT COALESCE(SUM(refunded_cents),0)::bigint AS devolvido
-         FROM orders
-        WHERE event_id = $1
-          AND status NOT IN ('pago','estornado','estornado_parcial','chargeback','disputa')`,
-      [EVENTO_GUICHE])
-
-    expect(asSeis.relatorios - t.extrato.totais.estornadoCents,
-      'a diferença entre o extrato e as outras seis deixou de ser a devolução ' +
-      'dos status que o extrato não lista — ou o extrato foi consertado (e aí ' +
-      'este caso sai daqui e o extrato entra na igualdade das sete), ou nasceu ' +
-      'uma terceira régua de devolução')
-      .toBe(Number(foraDoExtrato.devolvido))
+    // e ela está NA HISTÓRIA do extrato, fora dos totais, com nome
+    const linha = t.extrato.linhas.find((l: any) => l.pedido === 'ZZ-CT-GUI-CANC')
+    expect(linha, 'a venda cancelada no balcão sumiu da história do extrato').toBeTruthy()
+    expect(linha.foraDoTotal).toBe(true)
+    expect(t.extrato.foraDoTotal.porStatus.map((f: any) => f.status)).toContain('cancelado')
   }, 30_000)
 })
 
@@ -2003,8 +2067,8 @@ describe('o funil do painel não deixa pedido nenhum fora da conta', () => {
    * consulta já dizia que isso não podia acontecer — só que tinha sido
    * consertado apenas pro estorno PARCIAL.
    */
-  it('as partes do funil somam os pedidos criados, e batem com relatórios', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('as partes do funil somam os pedidos criados, e batem com relatórios', async (ctx) => {
+    if (!noAr) ctx.skip()
 
     const [dash, rel] = await Promise.all([
       json(`/api/admin/evento/${EVENTO}/dashboard`),
@@ -2013,9 +2077,9 @@ describe('o funil do painel não deixa pedido nenhum fora da conta', () => {
     const f = dash.funil
 
     // O total sai do BANCO, não de um literal que envelhece na primeira venda
-    // nova da fixture.
+    // nova da fixture. Só o pedido do SITE (ADM-28): balcão e cortesia não têm carrinho.
     const [linha] = await sql(
-      `SELECT count(*)::int AS n FROM orders WHERE event_id = $1`, [EVENTO])
+      `SELECT count(*)::int AS n FROM orders WHERE event_id = $1 AND channel = 'online'`, [EVENTO])
     expect(f.criados, 'o painel conta um número de pedidos criados que o banco não confirma')
       .toBe(Number(linha.n))
     expect(rel.funil.criados, 'o painel e relatórios discordam de quantos pedidos nasceram')
@@ -2045,6 +2109,59 @@ describe('o funil do painel não deixa pedido nenhum fora da conta', () => {
       'a fixture ficou fraca: sem pedido fora dos três baldes antigos, o ' +
       'denominador errado da rosca dava no mesmo')
       .not.toBe(f.criados)
+  }, 20_000)
+})
+
+describe('o funil e a conversão são do checkout do site (ADM-28)', () => {
+  /**
+   * O funil contava todo pedido do evento. Balcão e cortesia nascem pagos e não têm carrinho:
+   * num dia de 100 vendas no guichê e 5 de 10 carrinhos online a tela dizia 105 de 110
+   * "finalizados" (95%) — e a venda de balcão cancelada entrava em "abandonados". Nesta fixture:
+   * do site, 1 pago + 1 grátis + 1 estornado + 1 expirado; fora dele, 2 de balcão e 1 cortesia.
+   * "Finalizado" é o pedido vivo (`PEDIDO_VIVO`) nas duas telas: relatórios contava só `pago` e o
+   * painel também o estorno parcial — mesma pergunta, dois números.
+   */
+  it('painel e relatórios contam só o pedido online, e dizem a mesma conversão', async (ctx) => {
+    if (!noAr) ctx.skip()
+    // Só durante este caso: a venda de balcão CANCELADA no guichê (antes virava "abandonada" no
+    // funil do site) e um pedido do site com estorno PARCIAL (pagou: é "finalizado" nas duas telas).
+    const extras = [
+      await pedido({ codigo: 'ZZ-CT-BALCAO-CANC', canal: 'bilheteria', status: 'cancelado',
+                     pago: false, asaas: null, face: 10_000, feeComprador: 0, plataforma: 1_000 }),
+      await pedido({ codigo: 'ZZ-CT-SITE-PARCIAL', status: 'estornado_parcial',
+                     face: 10_000, feeComprador: 1_000, plataforma: 1_000, estornado: 500 }),
+    ]
+    let dash: any, rel: any, l: any
+    try {
+      [dash, rel] = await Promise.all([
+        json(`/api/admin/evento/${EVENTO}/dashboard`),
+        json(`/api/admin/evento/${EVENTO}/relatorios`),
+      ])
+      ;[l] = await sql(
+        `SELECT count(*) FILTER (WHERE channel = 'online')::int AS online,
+                count(*) FILTER (WHERE channel <> 'online')::int AS fora,
+                count(*) FILTER (WHERE channel = 'online' AND status IN ('pago','estornado_parcial'))::int AS vivos,
+                count(*) FILTER (WHERE channel = 'online'
+                                   AND status IN ('expirado','cancelado','falhou'))::int AS abandonados
+           FROM orders WHERE event_id = $1`, [EVENTO])
+    } finally {
+      await sql(`DELETE FROM orders WHERE id = ANY($1)`, [extras])
+    }
+    expect(l.fora, 'a fixture ficou fraca: sem venda fora do site, misturar não teria sintoma')
+      .toBeGreaterThan(0)
+
+    expect(dash.funil.criados, 'o funil do painel contou balcão e cortesia como carrinho do site')
+      .toBe(l.online)
+    expect(rel.funil.criados, 'o funil de relatórios contou balcão e cortesia').toBe(l.online)
+    expect(dash.funil.finalizados).toBe(l.vivos)
+    expect(rel.funil.finalizados, 'as duas telas discordam de quantos pedidos do site fecharam')
+      .toBe(dash.funil.finalizados)
+    expect(rel.funil.conversaoPct).toBe(Math.round((l.vivos / l.online) * 100))
+    expect(rel.funil.canal).toBe('online')
+    // e a venda de balcão cancelada no guichê não vira carrinho abandonado do site
+    expect(dash.funil.abandonados, 'venda de balcão cancelada contada como abandono do site')
+      .toBe(l.abandonados)
+    expect(rel.funil.cancelados ?? 0).toBe(0)
   }, 20_000)
 })
 

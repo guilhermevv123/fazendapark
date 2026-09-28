@@ -42,12 +42,14 @@ watch(params, (p) => {
     { replace: true })
 })
 
-const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
-  { style: 'currency', currency: 'BRL' })
+// `reais` é o de app/composables/formato.ts (ADM-48): uma escrita de dinheiro só no projeto
 
-const dia = (d: string | null) => d
-  ? new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
-  : '—'
+/**
+ * O dia da tabela "por dia" chega como `AAAA-MM-DD` — dia de calendário do evento, sem hora.
+ * `new Date('2026-09-20')` é meia-noite UTC, 21h do dia 19 na Bahia: a linha saía com o dia
+ * ANTERIOR (ADM-10). `dataCurta` passa por `paraData`, que lê data pura como dia local.
+ */
+const dia = (d: string | null) => dataCurta(d)
 const horario = (d: string | null) => d
   ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit',
       hour: '2-digit', minute: '2-digit' })
@@ -66,10 +68,13 @@ const COR_DO_STATUS: Record<string, string> = {
   estornado_parcial: 'text-alerta',
   chargeback: 'text-erro',
   disputa: 'text-alerta',
+  cancelado: 'text-erro',
 }
 const STATUS_LEGIVEL: Record<string, string> = {
   pago: 'Pago', estornado: 'Estornado', estornado_parcial: 'Estorno parcial',
   chargeback: 'Chargeback', disputa: 'Em disputa',
+  // a venda de balcão desfeita no guichê, com o dinheiro devolvido na hora (ADM-61)
+  cancelado: 'Cancelada no balcão',
 }
 
 const temFiltro = computed(() =>
@@ -147,8 +152,8 @@ function exportar() {
       l.canal, l.ponto ?? '', l.operador ?? '', formaLegivel(l.forma),
       l.parcelas, l.comprador ?? '', l.email ?? '', l.documento ?? '',
       l.promoter ?? '', l.cupom ?? '', l.ingressos,
-      brl(l.faceCents), brl(l.taxaCompradorCents), brl(l.taxaPlataformaCents),
-      brl(l.descontoCents), brl(l.totalCents), brl(l.estornadoCents),
+      reais(l.faceCents), reais(l.taxaCompradorCents), reais(l.taxaPlataformaCents),
+      reais(l.descontoCents), reais(l.totalCents), reais(l.estornadoCents),
     ]))
 }
 
@@ -227,7 +232,9 @@ useHead({ title: 'Extrato' })
       </div>
     </div>
 
-    <p v-if="falha" class="faixa-erro mt-4">Não consegui carregar o extrato.
+    <!-- com o motivo do servidor: o 403 da Operação diz que o extrato é do dinheiro do evento -->
+    <p v-if="falha" class="faixa-erro mt-4" data-parte="falha-extrato">Não consegui carregar o extrato.
+      {{ (falha as any)?.data?.statusMessage || (falha as any)?.data?.message || 'Confira a internet e tente de novo.' }}
       <button type="button" class="underline" @click="refresh()">Tentar de novo</button>
     </p>
 
@@ -236,51 +243,52 @@ useHead({ title: 'Extrato' })
       <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div class="card">
           <p class="rotulo-kpi">Cobrado do comprador</p>
-          <p class="numero-kpi mt-1">{{ brl(data.totais.cobradoCents) }}</p>
+          <p class="numero-kpi mt-1">{{ reais(data.totais.cobradoCents) }}</p>
           <p class="mt-1 text-xs text-tinta-fraca">
             {{ data.totais.pedidos }} pedidos · {{ data.totais.ingressos }} ingressos
           </p>
         </div>
         <div class="card">
           <p class="rotulo-kpi">Face dos ingressos</p>
-          <p class="numero-kpi mt-1">{{ brl(data.totais.faceCents) }}</p>
+          <p class="numero-kpi mt-1">{{ reais(data.totais.faceCents) }}</p>
           <p class="mt-1 text-xs text-tinta-fraca">
-            desconto aplicado {{ brl(data.totais.descontoCents) }}
+            desconto aplicado {{ reais(data.totais.descontoCents) }}
           </p>
         </div>
         <div class="card">
           <p class="rotulo-kpi">Taxa da plataforma</p>
-          <p class="numero-kpi mt-1">{{ brl(data.totais.taxaPlataformaCents) }}</p>
+          <p class="numero-kpi mt-1">{{ reais(data.totais.taxaPlataformaCents) }}</p>
           <p class="mt-1 text-xs text-tinta-fraca">
             {{ (data.evento.feeBps / 100).toLocaleString('pt-BR') }}% sobre a face
           </p>
         </div>
         <div class="card">
           <p class="rotulo-kpi">Líquido do produtor</p>
-          <p class="numero-kpi mt-1">{{ brl(liquido) }}</p>
+          <p class="numero-kpi mt-1">{{ reais(liquido) }}</p>
           <p v-if="data.totais.estornadoNoLiquidoCents" class="mt-1 text-xs text-erro">
-            já sem {{ brl(data.totais.estornadoNoLiquidoCents) }} de estornos parciais
+            já sem {{ reais(data.totais.estornadoNoLiquidoCents) }} de estornos parciais
           </p>
           <p v-else class="mt-1 text-xs text-tinta-fraca">nenhum estorno no período</p>
         </div>
       </div>
 
       <!-- Fora dos totais, mas nunca fora da tela: estorno total (o dinheiro
-           voltou inteiro pro comprador) e contestação (chargeback/disputa, o
-           dinheiro está preso no banco). As outras telas também não somam
-           esses pedidos; aqui eles aparecem com nome e valor. -->
-      <div v-if="data.foraDoTotal?.pedidos" class="card mt-3 border-alerta/50"
+           voltou inteiro pro comprador), venda cancelada no balcão (as notas
+           voltaram da gaveta) e contestação (chargeback/disputa, o dinheiro está
+           preso no banco). As outras telas também não somam esses pedidos; aqui
+           eles aparecem com nome e valor. -->
+      <div v-if="data.foraDoTotal?.pedidos" class="card mt-3 ring-alerta/50"
            data-parte="fora-do-total">
         <p class="rotulo-kpi text-alerta">Fora dos totais acima</p>
         <p class="mt-1 text-sm text-tinta-corpo">
           {{ data.foraDoTotal.pedidos }}
           {{ data.foraDoTotal.pedidos === 1 ? 'pedido' : 'pedidos' }} com
-          {{ brl(data.foraDoTotal.cobradoCents) }} cobrados que não contam como venda:
+          {{ reais(data.foraDoTotal.cobradoCents) }} cobrados que não contam como venda:
           <template v-for="(f, i) in data.foraDoTotal.porStatus" :key="f.status">
             <template v-if="i">; </template>
             <strong>{{ STATUS_LEGIVEL[f.status] ?? f.status }}</strong>
-            {{ f.pedidos }} ({{ brl(f.cobradoCents) }}<template v-if="f.estornadoCents">,
-              {{ brl(f.estornadoCents) }} devolvidos</template>)
+            {{ f.pedidos }} ({{ reais(f.cobradoCents) }}<template v-if="f.estornadoCents">,
+              {{ reais(f.estornadoCents) }} devolvidos</template>)
           </template>.
           Eles continuam na lista abaixo, marcados.
         </p>
@@ -299,7 +307,7 @@ useHead({ title: 'Extrato' })
                class="border-b border-linha px-4 py-3 last:border-0">
             <div class="flex items-baseline justify-between gap-2">
               <span class="font-medium text-tinta">{{ c.nome }}</span>
-              <span class="tabular-nums text-tinta">{{ brl(c.cobradoCents) }}</span>
+              <span class="tabular-nums text-tinta">{{ reais(c.cobradoCents) }}</span>
             </div>
             <p class="mt-0.5 text-xs text-tinta-fraca">
               {{ c.pedidos }} pedidos · {{ c.ingressos }} ingressos
@@ -309,7 +317,7 @@ useHead({ title: 'Extrato' })
               </template>
             </p>
             <p v-if="c.cobradoCents" class="mt-0.5 text-xs text-tinta-suave">
-              líquido {{ brl(c.liquidoCents) }}
+              líquido {{ reais(c.liquidoCents) }}
             </p>
           </div>
         </div>
@@ -327,7 +335,7 @@ useHead({ title: 'Extrato' })
               <span class="font-medium" :class="p.semPonto ? 'text-tinta-suave' : 'text-tinta'">
                 {{ p.ponto }}
               </span>
-              <span class="tabular-nums text-tinta">{{ brl(p.cobradoCents) }}</span>
+              <span class="tabular-nums text-tinta">{{ reais(p.cobradoCents) }}</span>
             </div>
             <p class="mt-0.5 text-xs text-tinta-fraca">
               <template v-if="p.operador">{{ p.operador }} · </template>
@@ -337,7 +345,7 @@ useHead({ title: 'Extrato' })
               venda de balcão anterior ao cadastro dos guichês
             </p>
             <p v-else class="mt-0.5 text-xs text-tinta-suave">
-              em dinheiro {{ brl(p.dinheiroCents) }}
+              em dinheiro {{ reais(p.dinheiroCents) }}
             </p>
           </div>
         </div>
@@ -355,7 +363,7 @@ useHead({ title: 'Extrato' })
               <p class="font-medium text-tinta">{{ formaLegivel(f.forma) }}</p>
               <p class="text-xs text-tinta-fraca">{{ f.pedidos }} pedidos</p>
             </div>
-            <span class="tabular-nums text-tinta">{{ brl(f.cobradoCents) }}</span>
+            <span class="tabular-nums text-tinta">{{ reais(f.cobradoCents) }}</span>
           </div>
         </div>
       </div>
@@ -382,9 +390,9 @@ useHead({ title: 'Extrato' })
                 <td class="px-4 py-2.5 text-tinta">{{ dia(d.dia) }}</td>
                 <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">{{ d.pedidos }}</td>
                 <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">{{ d.ingressos }}</td>
-                <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">{{ brl(d.faceCents) }}</td>
-                <td class="px-3 py-2.5 text-right tabular-nums text-tinta-fraca">{{ brl(d.taxaCents) }}</td>
-                <td class="px-4 py-2.5 text-right font-medium tabular-nums text-tinta">{{ brl(d.cobradoCents) }}</td>
+                <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">{{ reais(d.faceCents) }}</td>
+                <td class="px-3 py-2.5 text-right tabular-nums text-tinta-fraca">{{ reais(d.taxaCents) }}</td>
+                <td class="px-4 py-2.5 text-right font-medium tabular-nums text-tinta">{{ reais(d.cobradoCents) }}</td>
               </tr>
             </tbody>
           </table>
@@ -427,7 +435,7 @@ useHead({ title: 'Extrato' })
                           class="font-medium text-acao hover:underline">{{ l.pedido }}</NuxtLink>
                 <p class="text-xs" :class="COR_DO_STATUS[l.status] ?? 'text-tinta-fraca'">
                   {{ STATUS_LEGIVEL[l.status] ?? l.status }}
-                  <template v-if="l.estornadoCents"> · {{ brl(l.estornadoCents) }}</template>
+                  <template v-if="l.estornadoCents"> · {{ reais(l.estornadoCents) }}</template>
                   <template v-if="l.foraDoTotal"> · fora dos totais</template>
                 </p>
               </td>
@@ -450,16 +458,16 @@ useHead({ title: 'Extrato' })
                 <p class="text-tinta-suave">{{ formaLegivel(l.forma) }}</p>
                 <p v-if="l.parcelas > 1" class="text-xs text-tinta-fraca">{{ l.parcelas }}×</p>
                 <p v-else-if="l.trocoCents" class="text-xs text-tinta-fraca">
-                  troco {{ brl(l.trocoCents) }}
+                  troco {{ reais(l.trocoCents) }}
                 </p>
               </td>
               <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">{{ l.ingressos }}</td>
-              <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">{{ brl(l.faceCents) }}</td>
+              <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">{{ reais(l.faceCents) }}</td>
               <td class="px-3 py-3 text-right tabular-nums text-tinta-fraca">
-                {{ brl(l.taxaPlataformaCents) }}
+                {{ reais(l.taxaPlataformaCents) }}
               </td>
               <td class="px-4 py-3 text-right font-medium tabular-nums text-tinta">
-                {{ brl(l.totalCents) }}
+                {{ reais(l.totalCents) }}
               </td>
             </tr>
           </tbody>
@@ -472,13 +480,13 @@ useHead({ title: 'Extrato' })
                 {{ somaDe(linhasNoTotal, 'ingressos') }}
               </td>
               <td class="px-3 py-3 text-right tabular-nums text-tinta">
-                {{ brl(somaDe(linhasNoTotal, 'faceCents')) }}
+                {{ reais(somaDe(linhasNoTotal, 'faceCents')) }}
               </td>
               <td class="px-3 py-3 text-right tabular-nums text-tinta">
-                {{ brl(somaDe(linhasNoTotal, 'taxaPlataformaCents')) }}
+                {{ reais(somaDe(linhasNoTotal, 'taxaPlataformaCents')) }}
               </td>
               <td class="px-4 py-3 text-right tabular-nums text-tinta">
-                {{ brl(somaDe(linhasNoTotal, 'totalCents')) }}
+                {{ reais(somaDe(linhasNoTotal, 'totalCents')) }}
               </td>
             </tr>
             <tr v-if="linhasForaDoTotal.length" class="text-sm text-tinta-suave">
@@ -490,13 +498,13 @@ useHead({ title: 'Extrato' })
                 {{ somaDe(linhasForaDoTotal, 'ingressos') }}
               </td>
               <td class="px-3 py-2 text-right tabular-nums">
-                {{ brl(somaDe(linhasForaDoTotal, 'faceCents')) }}
+                {{ reais(somaDe(linhasForaDoTotal, 'faceCents')) }}
               </td>
               <td class="px-3 py-2 text-right tabular-nums">
-                {{ brl(somaDe(linhasForaDoTotal, 'taxaPlataformaCents')) }}
+                {{ reais(somaDe(linhasForaDoTotal, 'taxaPlataformaCents')) }}
               </td>
               <td class="px-4 py-2 text-right tabular-nums">
-                {{ brl(somaDe(linhasForaDoTotal, 'totalCents')) }}
+                {{ reais(somaDe(linhasForaDoTotal, 'totalCents')) }}
               </td>
             </tr>
           </tfoot>

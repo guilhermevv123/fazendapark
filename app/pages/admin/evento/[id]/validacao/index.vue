@@ -6,6 +6,21 @@
  * exatamente estas linhas, não uma cópia.
  */
 
+import { diaLocal } from '~/composables/formato'
+import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
+
+/**
+ * Este papel pode ler o log de leituras (`/checkins`)? A MESMA grade que tranca a rota no servidor
+ * (`decidirAcesso`, do middleware 03). A portaria não tem `portaria_historico`: pedir mesmo assim
+ * dava 403 no console ao abrir o leitor e de novo a cada entrada liberada — uma ida à rede do
+ * portão jogada fora por pessoa que passa. Papel ainda desconhecido (aparelho reaberto sem rede)
+ * pede como antes: quem pode não fica sem o log por falta de uma resposta.
+ */
+export function pedeOLogDeLeituras(papel: unknown, eventoId: string): boolean {
+  if (!ehPapel(papel)) return true
+  return decidirAcesso(papel, `/api/admin/evento/${eventoId}/checkins`).liberado
+}
+
 /** o que a portaria pede quando o ingresso é meia — ver o comentário no setup */
 export type Meia = { motivo: string | null; rotulo: string; documento: string; numero: string | null }
 
@@ -28,10 +43,96 @@ export type Resposta = {
   }
   /** `nao_lido` por sessão vencida: a tela oferece o link de entrar de novo */
   entrarDeNovo?: boolean
+  /** o código veio DIGITADO, sem a assinatura do QR — a tela pede pra conferir o documento */
+  digitado?: boolean
 }
 
 /** o mesmo mínimo do servidor (`qr: z.string().min(4)` em `/api/checkin`) */
 export const MINIMO_DO_CODIGO = 4
+
+/**
+ * Separa o código do QR assinado; o resto é código digitado à mão.
+ *
+ * Os dois formatos que existem (ver `lerQr` em server/utils/ingresso.ts):
+ *   DT2:<kid>:<evento>:<código>:<assinatura>   ← o que a casa passa a emitir (chave com nome)
+ *   DT1:<evento>:<código>:<assinatura>         ← o que já foi vendido
+ * Sem o DT2 aqui, todo ingresso novo lido SEM REDE caía como "código digitado" com o QR inteiro
+ * no lugar do código — "fora da lista, chame o supervisor" na fila inteira do apagão.
+ */
+export function codigoDoQr(bruto: string): { codigo: string; eventoDoQr: string | null; digitado: boolean } {
+  const partes = bruto.trim().split(':')
+  if (partes.length === 5 && partes[0] === 'DT2') {
+    return { codigo: partes[3], eventoDoQr: partes[2], digitado: false }
+  }
+  if (partes.length === 4 && partes[0] === 'DT1') {
+    return { codigo: partes[2], eventoDoQr: partes[1], digitado: false }
+  }
+  return { codigo: bruto.trim().toUpperCase(), eventoDoQr: null, digitado: true }
+}
+
+/* ---------------------------------------------------------- a chave da lista offline
+ * A lista que desce pro tablet NÃO traz o código do ingresso em claro (ADM-25). Quem pegasse o
+ * aparelho levava do localStorage a lista inteira de códigos válidos, e código digitado entra
+ * sem assinatura. Cada item traz `chave` = SHA-256(sal da lista + ":" + código), cortada em 96
+ * bits; o sal é novo a cada descida e mora junto da lista. O leitor calcula a chave do que leu e
+ * procura — a decisão continua local, sem rede, e custa microssegundos.
+ *
+ * É SHA-256 escrito à mão, síncrono, e não `crypto.subtle`: o tablet do parque roda em http na
+ * LAN, onde o `crypto.subtle` não existe (é o mesmo motivo do `novoId`). O servidor calcula a
+ * mesma chave com `node:crypto` (`chaveDoCodigo` em server/utils/catraca.ts) — o teste confere
+ * que as duas batem.
+ *
+ * Não é cofre: com o sal no aparelho, força bruta nos ~10¹² códigos possíveis é viável pra quem
+ * tem GPU. Tira o código do alcance de quem só abre o armazenamento do navegador.
+ */
+const K_SHA256 = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]
+const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n))
+
+/** SHA-256 de um texto (UTF-8), em hexadecimal */
+export function sha256Hex(texto: string): string {
+  const dados = new TextEncoder().encode(texto)
+  const blocos = Math.ceil((dados.length + 9) / 64)
+  const m = new Uint8Array(blocos * 64)
+  m.set(dados)
+  m[dados.length] = 0x80
+  const dv = new DataView(m.buffer)
+  const bits = dados.length * 8
+  dv.setUint32(m.length - 8, Math.floor(bits / 0x1_0000_0000))
+  dv.setUint32(m.length - 4, bits >>> 0)
+  const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+  const w = new Uint32Array(64)
+  for (let off = 0; off < m.length; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4)
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3)
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10)
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0
+    }
+    let [a, b, c, d, e, f, g, hh] = h
+    for (let i = 0; i < 64; i++) {
+      const t1 = (hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K_SHA256[i] + w[i]) >>> 0
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0
+      hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0
+    }
+    h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0
+    h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0
+  }
+  return h.map((x) => x.toString(16).padStart(8, '0')).join('')
+}
+
+/** a chave de um código na lista offline — a MESMA conta de `chaveDoCodigo` do servidor */
+export function chaveDoCodigo(sal: string, codigo: string): string {
+  return sha256Hex(`${sal}:${codigo.trim().toUpperCase()}`).slice(0, 24)
+}
 
 /**
  * Lista baixada há mais que isto é "antiga": ao voltar a rede, desce de novo.
@@ -124,15 +225,76 @@ export function respostaForaDaLista(listaEm: string | null): Resposta {
              + '— chame o supervisor.' }
 }
 
-/** o título grande do veredito — o MESMO no cartão e em cima da câmera */
+/**
+ * O título grande do veredito — o MESMO no cartão e em cima da câmera.
+ *
+ * A consulta boa diz "VÁLIDO — NÃO ENTROU" (ADM-03): era "VÁLIDO", no mesmo verde e com o
+ * mesmo bipe do PODE ENTRAR, e com o "Só conferir" esquecido ligado o portão deixava a fila
+ * passar sem queimar ingresso nenhum — o mesmo QR entrava quantas vezes fosse lido.
+ */
 export function tituloDoVeredito(r: Resposta): string {
   if (r.resultado === 'nao_lido') return 'NÃO LIDO — TENTE DE NOVO'
   if (r.resultado === 'fora_da_lista') return 'CHAME O SUPERVISOR'
   if (r.consulta) {
-    if (r.ok) return 'VÁLIDO'
+    if (r.ok) return 'VÁLIDO — NÃO ENTROU'
     return r.resultado === 'fora_da_sessao' ? 'AINDA NÃO' : 'BARRADO'
   }
   return r.ok ? 'PODE ENTRAR' : 'BARRADO'
+}
+
+/** a cor da CONSULTA boa: roxo da marca, nunca o verde de quem entrou (ADM-03) */
+export const CLASSE_CONSULTA = 'bg-grape-600 text-white'
+
+/** a cor do cartão (e da faixa da câmera) pra ESTA resposta */
+export function classeDoVeredito(r: Resposta): string {
+  if (r.consulta && r.ok) return CLASSE_CONSULTA
+  return CLASSE[r.resultado] ?? 'bg-erro text-white'
+}
+
+/**
+ * Passaporte de vários dias SEM REDE (ADM-04) — a mesma régua da porta online, com o que desce
+ * na lista: quantos dias cobre, quais dias já usou (no fuso do parque) e em quais dias vale.
+ * `null` = pode entrar. O dia de hoje é o do relógio do aparelho — o tablet está no parque.
+ */
+export type PassaporteLocal = {
+  diasCobertos?: number; diasUsados?: string[]
+  sessoes?: { inicio: string; fim: string | null }[]
+  /** os dias em que ESTE aparelho já deixou passar, sem rede */
+  diasAqui?: string[]
+}
+export function decisaoDoPassaporte(t: PassaporteLocal, agora = new Date()): Resposta | null {
+  const cobre = Number(t.diasCobertos ?? 1)
+  if (t.sessoes?.length) {
+    const n = agora.getTime()
+    const aberta = t.sessoes.some((s) => {
+      const abre = new Date(s.inicio).getTime() - 2 * 3600_000
+      const fecha = new Date(s.fim ?? s.inicio).getTime() + 2 * 3600_000
+      return n >= abre && n <= fecha
+    })
+    if (!aberta) {
+      return { local: true, ok: false, resultado: 'fora_da_sessao',
+               mensagem: 'Este passaporte não vale neste dia/horário' }
+    }
+  }
+  const usados = new Set([...(t.diasUsados ?? []), ...(t.diasAqui ?? [])])
+  if (usados.has(diaLocal(agora))) {
+    return { local: true, ok: false, resultado: 'ja_usado', mensagem: 'Este passaporte já entrou hoje' }
+  }
+  if (usados.size >= cobre) {
+    return { local: true, ok: false, resultado: 'ja_usado',
+             mensagem: `Este passaporte já usou os ${cobre} dias que cobre` }
+  }
+  return null
+}
+
+/**
+ * A lista baixada envelhece mesmo COM rede (ADM-06): só descia na montagem e no botão, e o
+ * ingresso cancelado às 11h entrava às 14h quando o 4G caía, pela foto das 8h. Com rede, a
+ * lista é conferida a cada minuto e desce de novo quando passa de `LISTA_VELHA_MS`.
+ */
+export const CONFERIR_LISTA_A_CADA_MS = 60_000
+export function precisaRenovarLista(online: boolean, listaEm: string | null, agora = Date.now()): boolean {
+  return online && listaVelha(listaEm, agora)
 }
 
 /**
@@ -152,6 +314,7 @@ export const CLASSE: Record<string, string> = {
 
 /** a bolinha do histórico da tela, com a mesma régua de cor */
 export function corDoPonto(r: Resposta): string {
+  if (r.consulta && r.ok) return 'bg-grape-600'
   if (r.ok) return 'bg-ok'
   if (r.resultado === 'nao_lido') return 'bg-tinta-suave'
   if (r.resultado === 'fora_da_lista' || r.resultado === 'ja_usado'
@@ -224,19 +387,29 @@ const modoCamera = ref(false)
 const ultima = ref<Resposta | null>(null)
 const historico = ref<(Resposta & { codigo: string; quando: Date })[]>([])
 
-const { data, refresh } = await useFetch<any>(`/api/admin/evento/${id}/checkins`)
+// o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+const veLog = computed(() => pedeOLogDeLeituras(eu.value?.usuario?.papel, id))
+const { data, refresh: recarregarLog } = await useFetch<any>(`/api/admin/evento/${id}/checkins`,
+  { immediate: veLog.value })
+/** repinta o log de leituras — só pra quem pode lê-lo (ver `pedeOLogDeLeituras`) */
+function refresh() {
+  if (veLog.value) void recarregarLog()
+}
 
 /* ----------------------------------------------------------- estado offline */
 
 type IngressoLocal = {
-  codigo: string; status: string; titular: string | null
+  /** a chave do código (ADM-25); lista guardada por versão anterior traz `codigo` em claro */
+  chave?: string; codigo?: string
+  status: string; titular: string | null
   setor: string; lote: string; tipo: string | null; pessoas: number
   /** a meia desce com a lista: é no apagão que o operador mais precisa dela */
   meia?: Meia | null
   sessaoInicio: string | null; sessaoFim: string | null
   /** marcado por ESTE aparelho enquanto estava sem rede */
   usadoAqui?: { em: string; gate: string | null }
-}
+} & PassaporteLocal
 type Passagem = { id: string; qr: string; gate: string | null; em: string; offline: boolean }
 
 const CHAVE_LISTA = `dt_portaria_lista_${id}`
@@ -245,6 +418,8 @@ const CHAVE_APARELHO = 'dt_portaria_aparelho'
 
 const lista = ref<IngressoLocal[]>([])
 const listaEm = ref<string | null>(null)
+/** o sal da lista baixada — sem ele, a lista é de uma versão antiga, com o código em claro */
+const salDaLista = ref<string | null>(null)
 const fila = ref<Passagem[]>([])
 const aparelho = ref('')
 const online = ref(true)
@@ -295,15 +470,18 @@ const listaTruncada = ref(false)
 /** A lista e a marca de corte viajam juntas pro localStorage — ver acima. */
 function guardarLista() {
   guardar(CHAVE_LISTA, {
-    em: listaEm.value, truncada: listaTruncada.value, ingressos: lista.value,
+    em: listaEm.value, truncada: listaTruncada.value, sal: salDaLista.value, ingressos: lista.value,
   })
 }
 
 const mapa = computed(() => {
   const m = new Map<string, IngressoLocal>()
-  for (const i of lista.value) m.set(i.codigo, i)
+  for (const i of lista.value) m.set(i.chave ?? i.codigo ?? '', i)
   return m
 })
+/** onde procurar um código na lista deste aparelho */
+const chaveLocal = (codigo: string, sal: string | null = salDaLista.value) =>
+  sal ? chaveDoCodigo(sal, codigo) : codigo.trim().toUpperCase()
 
 /**
  * Quantas meias deste evento vão chegar na porta sem dizer por quê.
@@ -383,10 +561,11 @@ onMounted(async () => {
   }
 
   const guardada = recuperar<
-    { em: string; truncada?: boolean; ingressos: IngressoLocal[] } | null>(CHAVE_LISTA, null)
+    { em: string; truncada?: boolean; sal?: string | null; ingressos: IngressoLocal[] } | null>(CHAVE_LISTA, null)
   if (guardada) {
     lista.value = guardada.ingressos
     listaEm.value = guardada.em
+    salDaLista.value = guardada.sal ?? null
     // Lista guardada por uma versão anterior não tem a marca: fica `false`,
     // que é o que a tela já fazia. A próxima descida da lista corrige.
     listaTruncada.value = Boolean(guardada.truncada)
@@ -411,6 +590,20 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('online', aoVoltarRede)
   clearInterval(timerDeReconexao)
+  clearInterval(timerDaLista)
+})
+
+/**
+ * Com rede, a lista do aparelho não pode envelhecer (ADM-06): a cada minuto confere a idade e,
+ * passada de `LISTA_VELHA_MS`, desce de novo — em segundo plano, sem segurar leitura nenhuma.
+ */
+let timerDaLista: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  timerDaLista = setInterval(() => {
+    if (precisaRenovarLista(online.value, listaEm.value) && !sincronizando.value) {
+      void sincronizar({ comLista: true })
+    }
+  }, CONFERIR_LISTA_A_CADA_MS)
 })
 
 /** lista vazia OU antiga desce de novo junto com a volta da rede */
@@ -478,14 +671,6 @@ async function registrarWorker() {
 
 /* ------------------------------------------------------------------ leitura */
 
-/** separa o código do QR assinado; o resto é código digitado à mão */
-function codigoDoQr(bruto: string): { codigo: string; eventoDoQr: string | null } {
-  const partes = bruto.trim().split(':')
-  if (partes.length === 4 && partes[0] === 'DT1') {
-    return { codigo: partes[2], eventoDoQr: partes[1] }
-  }
-  return { codigo: bruto.trim().toUpperCase(), eventoDoQr: null }
-}
 
 /**
  * A decisão sem servidor. Confere contra a lista baixada — que é uma prova
@@ -494,7 +679,8 @@ function codigoDoQr(bruto: string): { codigo: string; eventoDoQr: string | null 
  * o QR não sai do servidor, então conferir assinatura aqui seria impossível
  * de qualquer jeito.
  */
-function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
+function validarLocal(bruto: string, idPassagem: string = novoId(),
+                      consultar: boolean = apenasConsultar.value): Resposta {
   const { codigo: cod, eventoDoQr } = codigoDoQr(bruto)
   const base = { local: true, ok: false }
 
@@ -512,17 +698,26 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
                + 'Chame o supervisor.' }
   }
 
-  const t = mapa.value.get(cod)
+  const t = mapa.value.get(chaveLocal(cod))
   // Fora da lista baixada não é prova de fraude: pode ser venda de depois da
   // descida, ou código de outro evento digitado à mão. Âmbar e supervisor.
   if (!t) return respostaForaDaLista(listaEm.value)
   if (t.status === 'cancelado') {
     return { ...base, resultado: 'cancelado', mensagem: 'Ingresso cancelado' }
   }
-  if (t.status === 'usado' || t.usadoAqui) {
+  // Passaporte de vários dias: `usadoAqui` é de UM dia, não do ingresso (ADM-04)
+  const passaporte = Number(t.diasCobertos ?? 1) > 1
+  if (t.status === 'usado' || (t.usadoAqui && !passaporte)) {
     return { ...base, resultado: 'ja_usado', mensagem: 'Este ingresso já entrou',
              titular: t.titular, entrouEm: t.usadoAqui?.em ?? null,
              portao: t.usadoAqui?.gate ?? null }
+  }
+  if (passaporte) {
+    const barrado = decisaoDoPassaporte(t)
+    if (barrado && !consultar) {
+      return { ...barrado, titular: t.titular, entrouEm: t.usadoAqui?.em ?? null,
+               portao: t.usadoAqui?.gate ?? null }
+    }
   }
   let foraDaSessao = false
   if (t.sessaoInicio) {
@@ -543,7 +738,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   // os dados do ingresso, e diz se o horário ainda não chegou. As duas portas
   // precisam responder igual — offline, a pergunta "o que este cliente precisa
   // trazer?" é a única que o operador ainda consegue resolver sozinho.
-  if (apenasConsultar.value) {
+  if (consultar) {
     return { local: true, ok: !foraDaSessao,
              resultado: foraDaSessao ? 'fora_da_sessao' : 'ok',
              mensagem: foraDaSessao
@@ -562,6 +757,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId()): Resposta {
   // conflito em vez de escondê-lo.
   const em = new Date().toISOString()
   t.usadoAqui = { em, gate: gate.value || null }
+  if (passaporte) t.diasAqui = [...new Set([...(t.diasAqui ?? []), diaLocal(new Date(em))])]
   fila.value = [...fila.value, { id: idPassagem, qr: bruto.trim(), gate: gate.value || null,
                                  em, offline: true }]
   guardar(CHAVE_FILA, fila.value)
@@ -588,6 +784,10 @@ async function ler() {
     return
   }
   lendo.value = true
+  // "Só conferir" vale UMA leitura (ADM-03): ficava ligado entre leituras e o portão seguia
+  // respondendo VÁLIDO sem queimar ingresso — o mesmo QR entrava de novo, inclusive passado
+  // pela grade pra outra pessoa. A escolha é lida AGORA e desligada no fim desta leitura.
+  const consultar = apenasConsultar.value
   /**
    * UM id por passagem FÍSICA, criado antes de saber se vai ter rede.
    *
@@ -607,7 +807,7 @@ async function ler() {
   const idPassagem = novoId()
   try {
     if (!online.value) {
-      ultima.value = validarLocal(c, idPassagem)
+      ultima.value = validarLocal(c, idPassagem, consultar)
       // "Tentar de novo na próxima leitura" SEM segurar a fila: a decisão
       // desta pessoa já saiu pela lista, e a volta ao servidor corre por
       // fora. Se a rede voltou, a próxima leitura já vai online — e esta
@@ -618,7 +818,7 @@ async function ler() {
         ultima.value = await $fetch<Resposta>('/api/checkin', {
           method: 'POST',
           body: { qr: c, eventId: id, gate: gate.value || undefined,
-                  apenasConsultar: apenasConsultar.value,
+                  apenasConsultar: consultar,
                   entradaId: idPassagem, deviceId: aparelho.value },
         })
         // O retrato do público vem DENTRO da resposta da porta (o mesmo
@@ -642,15 +842,20 @@ async function ler() {
           // MESMO id da tentativa online: o servidor pode ter gravado antes de
           // a resposta se perder, e é o id que decide se isto é a mesma pessoa
           // ou uma segunda.
-          ultima.value = validarLocal(c, idPassagem)
+          ultima.value = validarLocal(c, idPassagem, consultar)
         }
       }
     }
     if (ultima.value) {
+      // Código digitado não tem a assinatura do QR (ADM-25): quem sabe um código de cabeça — ou o
+      // leu de uma lista — entra por ele. A porta não trava (a câmera pode ter quebrado e a fila
+      // anda), mas o veredito pede pra conferir o documento de quem está passando.
+      ultima.value = { ...ultima.value, digitado: codigoDoQr(c).digitado }
       historico.value.unshift({ ...ultima.value, codigo: c, quando: new Date() })
       historico.value = historico.value.slice(0, 12)
     }
   } finally {
+    if (consultar) apenasConsultar.value = false
     codigo.value = ''
     lendo.value = false
     // nextTick: o input só volta a existir depois do repintar
@@ -681,14 +886,18 @@ function destravarSom() {
   try { som ??= new AudioContext(); void som.resume() } catch { /* sem áudio: sobram a cor e a vibração */ }
 }
 
-/** Com a câmera o operador olha pro QR, não pra tela: o veredito precisa ser ouvido e sentido. */
-function avisar(ok: boolean) {
-  navigator.vibrate?.(ok ? 60 : [140, 70, 140])
+/**
+ * Com a câmera o operador olha pro QR, não pra tela: o veredito precisa ser ouvido e sentido.
+ * A consulta tem o seu som (dois toques curtos, tom do meio): o bipe agudo do PODE ENTRAR numa
+ * consulta dizia "entrou" sem ninguém ter entrado (ADM-03).
+ */
+function avisar(ok: boolean, consulta = false) {
+  navigator.vibrate?.(consulta ? [40, 60, 40] : ok ? 60 : [140, 70, 140])
   if (!som) return
   try {
     const osc = som.createOscillator()
     const ganho = som.createGain()
-    osc.frequency.value = ok ? 880 : 220
+    osc.frequency.value = consulta ? 520 : ok ? 880 : 220
     ganho.gain.value = 0.15
     osc.connect(ganho)
     ganho.connect(som.destination)
@@ -702,7 +911,7 @@ const leituraN = ref(0)
 watch(ultima, (r) => {
   if (!r) return
   leituraN.value++
-  if (modoCamera.value) avisar(r.ok)
+  if (modoCamera.value) avisar(r.ok, !!r.consulta)
 })
 
 /** O veredito em cima da própria imagem da câmera — o mesmo texto e a mesma cor do cartão grande. */
@@ -713,7 +922,7 @@ const vereditoCamera = computed(() => {
     chave: leituraN.value,
     titulo: tituloDoVeredito(r),
     detalhe: [r.ingresso?.titular ?? r.titular, r.mensagem].filter(Boolean).join(' · '),
-    classe: CLASSE[r.resultado] ?? 'bg-erro text-white',
+    classe: classeDoVeredito(r),
   }
 })
 
@@ -799,11 +1008,21 @@ async function sincronizar({ comLista = false } = {}) {
         // A lista nova não pode apagar o que este aparelho marcou e ainda não
         // sincronizou: sem isto, baixar a lista no meio do apagão devolveria ao
         // estado "válido" um ingresso que já passou por aqui.
-        const pendentes = new Set(fila.value.map((p) => codigoDoQr(p.qr).codigo))
-        lista.value = r.lista.ingressos.map((i: IngressoLocal) =>
-          pendentes.has(i.codigo)
-            ? { ...i, usadoAqui: mapa.value.get(i.codigo)?.usadoAqui }
-            : i)
+        //
+        // A lista nova vem com OUTRO sal: a marca de cada passagem pendente é achada na lista
+        // velha pela chave velha e levada pra chave nova (os dias do passaporte vão junto).
+        const salNovo: string | null = r.lista.sal ?? null
+        const marcas = new Map<string, Pick<IngressoLocal, 'usadoAqui' | 'diasAqui'>>()
+        for (const pend of fila.value) {
+          const cod = codigoDoQr(pend.qr).codigo
+          const velho = mapa.value.get(chaveLocal(cod))
+          if (velho) marcas.set(chaveLocal(cod, salNovo), { usadoAqui: velho.usadoAqui, diasAqui: velho.diasAqui })
+        }
+        lista.value = r.lista.ingressos.map((i: IngressoLocal) => {
+          const marca = marcas.get(i.chave ?? i.codigo ?? '')
+          return marca ? { ...i, ...marca } : i
+        })
+        salDaLista.value = salNovo
         listaEm.value = r.lista.geradaEm
 
         // O servidor corta a lista em 20 mil e MARCA o corte. Sem ler essa
@@ -861,8 +1080,15 @@ useHead({ title: 'Leitor de entrada' })
 </script>
 
 <template>
-  <div>
-    <div class="flex flex-wrap items-start justify-between gap-3 py-5">
+  <!--
+    NO CELULAR, O CAMPO E O VEREDITO VÊM PRIMEIRO (ADM-24). Em 375 px, KPIs, faixas de aviso, fila
+    e sincronização vinham antes do campo: o operador rolava a cada leitura e o foco escapava.
+    Abaixo de `lg` a página vira coluna e cabeçalho, abas, leitura e veredito levam
+    `max-lg:order-first` (ficam na ordem do HTML entre si, acima de todo o resto); o estado da rede
+    aparece numa linha curta dentro do cartão de leitura. No computador nada muda de lugar.
+  -->
+  <div class="max-lg:flex max-lg:flex-col" data-parte="leitor-pagina">
+    <div class="flex flex-wrap items-start justify-between gap-3 py-5 max-lg:order-first max-lg:py-3">
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Leitor de entrada</h1>
         <p class="mt-1 text-tinta-suave">
@@ -874,7 +1100,9 @@ useHead({ title: 'Leitor de entrada' })
            hesitar -->
     </div>
 
-    <AbasSecao :evento-id="id" />
+    <div class="max-lg:order-first">
+      <AbasSecao :evento-id="id" />
+    </div>
 
     <!-- Faixa de estado da rede. Fica no topo e é a primeira coisa que o
          operador vê: trabalhar offline sem saber que está offline é como o
@@ -936,7 +1164,7 @@ useHead({ title: 'Leitor de entrada' })
          porque o estrago é silencioso: a passagem entra do mesmo jeito (a
          pessoa passou), mas com a hora do servidor — e o operador precisa
          saber qual tablet acertar antes que a noite inteira vá embora assim. -->
-    <div v-if="avisoRelogio" class="card mt-3 border-alerta bg-alerta-claro">
+    <div v-if="avisoRelogio" class="card mt-3 bg-alerta-claro ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         Relógio errado em {{ avisoRelogio.passagens }} passagem(ns)
         <template v-if="avisoRelogio.dispositivo">
@@ -956,7 +1184,7 @@ useHead({ title: 'Leitor de entrada' })
          porque a saída certa para o ingresso antigo NÃO é inventar um motivo
          — backfill chutado vira rastro falso, que é pior que rastro faltando.
          Então conta-se quantos ficaram sem e mostra-se o número. -->
-    <div v-if="meiasDoEvento.semMotivo" class="card mt-3 border-alerta bg-alerta-claro">
+    <div v-if="meiasDoEvento.semMotivo" class="card mt-3 bg-alerta-claro ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         {{ meiasDoEvento.semMotivo }} de {{ meiasDoEvento.total }}
         meia(s)-entrada(s) deste evento sem motivo registrado
@@ -1057,7 +1285,14 @@ useHead({ title: 'Leitor de entrada' })
       </div>
     </div>
 
-    <div class="card mt-4">
+    <div class="card mt-4 max-lg:order-first" data-parte="cartao-leitura">
+      <!-- a rede em uma linha, só no celular: o cartão grande de estado desceu pra baixo do veredito -->
+      <p class="mb-3 flex items-center gap-2 text-sm font-semibold lg:hidden"
+         :class="online ? 'text-ok' : 'text-alerta'" data-parte="rede-curta">
+        <span class="h-2.5 w-2.5 shrink-0 rounded-full" :class="online ? 'bg-ok' : 'bg-alerta'" />
+        {{ online ? 'Conectado' : 'Sem rede — validando pela lista do aparelho' }}
+        <span v-if="fila.length" class="font-normal text-alerta">· {{ fila.length }} na fila</span>
+      </p>
       <div class="mb-4 inline-flex rounded-xl bg-ink-100 p-1" role="group" aria-label="Modo de leitura">
         <button type="button" class="rounded-lg px-4 py-2 text-sm font-semibold"
                 :class="!modoCamera ? 'bg-white text-tinta shadow-card' : 'text-tinta-suave'"
@@ -1092,14 +1327,22 @@ useHead({ title: 'Leitor de entrada' })
          data-parte="aviso-codigo">
         {{ avisoCodigo }}
       </p>
-      <label class="mt-3 flex items-center gap-2 text-sm text-tinta-suave">
-        <input v-model="apenasConsultar" type="checkbox" class="h-4 w-4 accent-acao">
-        Só conferir (não marca entrada)
+      <!-- "Só conferir" vale UMA leitura e desliga sozinho (ADM-03). Ligado, a faixa roxa diz
+           com todas as letras que ninguém está entrando — o verde fica só pra quem entra. -->
+      <label class="mt-3 flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl px-3 text-sm font-semibold"
+             :class="apenasConsultar ? 'bg-grape-600 text-white' : 'bg-fundo-cinza text-tinta-suave'"
+             data-parte="so-conferir">
+        <input v-model="apenasConsultar" type="checkbox" class="h-5 w-5 accent-grape-600">
+        Só conferir a próxima leitura (não marca entrada)
       </label>
+      <p v-if="apenasConsultar" class="mt-2 rounded-xl bg-grape-50 px-3 py-2 text-sm font-semibold text-grape-700"
+         role="status" data-parte="modo-consulta">
+        MODO CONSULTA — a próxima leitura NÃO deixa ninguém entrar. Desliga sozinho depois dela.
+      </p>
     </div>
 
-    <div v-if="ultima" class="mt-4 rounded-card px-6 py-8 text-center entra-resposta"
-         :class="CLASSE[ultima.resultado] ?? 'bg-erro text-white'">
+    <div v-if="ultima" class="mt-4 rounded-card px-6 py-8 text-center entra-resposta max-lg:order-first"
+         :class="classeDoVeredito(ultima)" data-parte="cartao-veredito">
       <!-- "Só conferir" agora responde mesmo fora do horário da sessão (o
            cliente que chega cedo é quem ainda dá tempo de mandar buscar o
            documento em casa). Então o veredito da consulta deixa de ser
@@ -1114,6 +1357,14 @@ useHead({ title: 'Leitor de entrada' })
         {{ tituloDoVeredito(ultima) }}
       </p>
       <p class="mt-2 text-lg opacity-95">{{ ultima.mensagem }}</p>
+      <!-- Código digitado não tem a assinatura do QR (ADM-25): a porta não trava, mas pede o
+           documento de quem passa. Logo abaixo do título: no celular, o resto do cartão fica
+           abaixo da dobra. -->
+      <p v-if="ultima.digitado && ultima.ok && !ultima.consulta"
+         class="mx-auto mt-3 max-w-md rounded-xl bg-white/20 px-3 py-2 text-lg font-semibold"
+         data-parte="codigo-digitado">
+        Digitado à mão: confira o documento
+      </p>
       <p v-if="ultima.entrarDeNovo" class="mt-3">
         <a :href="`/entrar?de=${encodeURIComponent(`/admin/evento/${id}/validacao`)}`"
            class="inline-block rounded-xl bg-white px-4 py-2 font-semibold text-tinta">
@@ -1156,8 +1407,10 @@ useHead({ title: 'Leitor de entrada' })
           {{ ultima.ingresso.meia.documento }}
         </p>
         <template v-if="ultima.ingresso.meia.numero">
-          <p class="titulo mt-3 text-base font-semibold text-tinta-rotulo">
-            Número declarado na compra — confira se bate
+          <!-- sem rede, a lista do aparelho só tem o final do número (ADM-25) -->
+          <p class="titulo mt-3 text-base font-semibold text-tinta-rotulo" data-parte="meia-numero-rotulo">
+            {{ ultima.ingresso.meia.numero.startsWith('••••') ? 'Final do número declarado na compra'
+              : 'Número declarado na compra' }} — confira se bate
           </p>
           <p class="font-mono text-xl font-semibold tracking-wide text-tinta">
             {{ ultima.ingresso.meia.numero }}
@@ -1205,7 +1458,7 @@ useHead({ title: 'Leitor de entrada' })
       </p>
     </div>
 
-    <div v-if="conflitos.length" class="card mt-4 border-alerta">
+    <div v-if="conflitos.length" class="card mt-4 ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         {{ conflitos.length }} ingresso(s) entraram mais de uma vez
       </p>

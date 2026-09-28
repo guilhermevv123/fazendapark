@@ -151,6 +151,19 @@ describe('validação (roda com ou sem bucket configurado)', () => {
     expect(campoErrado.status).toBe(400)
   })
 
+  // ADM-53: `campo in objeto` aceitava chave do protótipo — a coluna virava o texto de uma função,
+  // o SQL quebrava, e a resposta era 500 em vez do 400 com recado
+  it('campo com nome de chave do protótipo (toString, constructor): 400, não 500', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    for (const campo of ['toString', 'constructor', '__proto__']) {
+      const r = await subir(EV, 'master', { campo, arquivo: { bytes: PNG_VALIDO, tipo: 'image/png', nome: 'a.png' } })
+      expect(r.status, `enviar com campo=${campo}`).toBe(400)
+      const apagar = await fetch(`${BASE}/api/admin/evento/${EV}/imagem?campo=${campo}`, {
+        method: 'DELETE', headers: { cookie: cookies.master ?? '', origin: BASE } })
+      expect(apagar.status, `remover com campo=${campo}`).toBe(400)
+    }
+  })
+
   it('nenhum arquivo enviado: 400', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const r = await subir(EV, 'master', { campo: 'banner' })

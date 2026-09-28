@@ -21,10 +21,14 @@ import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { q, q1, tx } from '../utils/db'
 import {
-  meiaDoIngresso, retratoDoPublico, SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA,
-  SQL_PRIMEIRA_ENTRADA, SQL_PUBLICO,
+  ehPassaporte, meiaDoIngresso, mensagemDoPassaporte, passarPassaporte, retratoDoPublico,
+  SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA, SQL_PRIMEIRA_ENTRADA, SQL_PUBLICO, SQL_ULTIMA_ENTRADA,
 } from '../utils/catraca'
 import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingresso'
+import { explicarErro } from './admin/evento/index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { qr: 'Código lido', eventId: 'Evento', gate: 'Portão', apenasConsultar: 'Só conferir', entradaId: 'Passagem', deviceId: 'Aparelho' }
 
 const Entrada = z.object({
   qr: z.string().min(4).max(200),
@@ -45,7 +49,7 @@ const Entrada = z.object({
 
 export default defineEventHandler(async (event) => {
   const p = Entrada.safeParse(await readBody(event))
-  if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Dados inválidos' })
+  if (!p.success) throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS) })
   const { qr, eventId, gate, apenasConsultar, entradaId, deviceId } = p.data
 
   // Quem leu. O middleware já exigiu sessão nesta rota, então o operador
@@ -147,6 +151,7 @@ export default defineEventHandler(async (event) => {
     `SELECT t.id, t.status, t.event_id, t.holder_name, t.checked_in_at,
             t.half_reason, t.half_document, t.half_document_required,
             s.name AS setor, l.name AS lote, tt.name AS tipo, tt.kind AS especie,
+            s.sessions_covered,
             es.starts_at AS sessao_inicio, es.ends_at AS sessao_fim
        FROM tickets t
        JOIN sectors s ON s.id = t.sector_id
@@ -211,6 +216,29 @@ export default defineEventHandler(async (event) => {
 
   if (foraDaSessao) return registrar('fora_da_sessao', ingresso.id, codigo)
 
+  // ---- passaporte de vários dias: uma entrada por dia de uso (ADM-04) -----
+  // O `UPDATE … SET status = 'usado'` de baixo queimava o passaporte de 3 dias na 1ª leitura e
+  // o leitor dizia JÁ USADO no dia 2. Só setor com `sessions_covered > 1` vem por aqui; o
+  // ingresso de um dia segue exatamente o caminho de sempre, sem consulta a mais.
+  if (ehPassaporte(ingresso.sessions_covered)) {
+    const pp = await tx((c) => passarPassaporte(c, {
+      ticketId: ingresso.id, orgId: orgDaSessao, operador, entradaId: entradaId ?? randomUUID(),
+      gate: gate ?? null, deviceId: deviceId ?? null, novoId: randomUUID,
+    }))
+    const mensagem = mensagemDoPassaporte(pp)
+    if (pp.resultado === 'fora_da_sessao') {
+      return { ...(await registrar('fora_da_sessao', ingresso.id, codigo)), mensagem }
+    }
+    if (pp.resultado === 'ja_usado') {
+      const r = await registrar('ja_usado', ingresso.id, codigo)
+      // "já entrou HOJE": a passagem que responde é a mais recente, não a do 1º dia
+      return { ...r, mensagem, ...(await ondeEntrou(ingresso, SQL_ULTIMA_ENTRADA)), titular: ingresso.holder_name }
+    }
+    const r = await registrar('ok', ingresso.id, codigo)
+    return { ...r, mensagem, ingresso: dadosDoIngresso(ingresso), pessoas: pp.pessoas,
+             passaporte: { dia: pp.dia, dias: pp.dias } }
+  }
+
   // ---- a trava: só um UPDATE consegue virar 'usado' -----------------------
   // A instrução mora em utils/catraca.ts pra que o teste rode exatamente
   // esta, e não uma cópia que envelhece sozinha.
@@ -264,8 +292,8 @@ function dadosDoIngresso(i: any) {
  * hora, o operador responde em dois segundos e a fila volta a andar. Cai pro
  * `checked_in_at` do ingresso quando a passagem é anterior ao livro.
  */
-async function ondeEntrou(i: any) {
-  const e = await q1<any>(SQL_PRIMEIRA_ENTRADA, [i.id])
+async function ondeEntrou(i: any, sql = SQL_PRIMEIRA_ENTRADA) {
+  const e = await q1<any>(sql, [i.id])
   return {
     entrouEm: e?.entered_at ?? i.checked_in_at,
     portao: e?.gate ?? null,

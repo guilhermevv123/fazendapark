@@ -9,9 +9,18 @@
 import { z } from 'zod'
 import { q1 } from '../../../../utils/db'
 import { explicarErro } from '../index.post'
+import { cupomDeGracaSemLimite, RECUSA_DE_GRACA_SEM_LIMITE } from './cupons.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = {
+  id: 'Cupom', campos: 'Cupom', valor: 'Valor do desconto', maxUsos: 'Limite de usos', maxPorCliente: 'Limite por pessoa',
+  comecaEm: 'Começa em', terminaEm: 'Termina em', loteIds: 'Lotes', ativo: 'Ativo',
+}
 
 const Entrada = z.object({
   id: z.string().uuid(),
+  /** ver `cupomDeGracaSemLimite` em cupons.post.ts */
+  semLimiteConfirmado: z.boolean().default(false),
   campos: z.object({
     valor: z.number().int().positive().optional(),
     maxUsos: z.number().int().min(1).max(1_000_000).nullish(),
@@ -32,9 +41,9 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error), data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
-  const { id, campos } = p.data
+  const { id, campos, semLimiteConfirmado } = p.data
 
   const atual = await q1<any>(
     `SELECT * FROM promo_codes WHERE id = $1 AND event_id = $2`, [id, eventoId])
@@ -69,6 +78,19 @@ export default defineEventHandler(async (event) => {
     if (Number(n.n) !== new Set(campos.loteIds).size) {
       throw createError({ statusCode: 422, statusMessage: 'Há lote que não é deste evento na restrição' })
     }
+  }
+
+  // O cupom de 100% sem limite (ver cupons.post.ts) não nasce por edição descuidada: subir o
+  // desconto pra 100%, apagar o limite ou religar um cupom assim pede a confirmação. DESLIGAR
+  // nunca é barrado — é o conserto de quem achou o cupom vazado.
+  const mexeNoRisco = campos.valor !== undefined || campos.maxUsos !== undefined || campos.ativo === true
+  const fica = {
+    valor: campos.valor ?? Number(atual.value),
+    maxUsos: campos.maxUsos !== undefined ? campos.maxUsos : atual.max_uses,
+    ativo: campos.ativo ?? atual.active,
+  }
+  if (mexeNoRisco && fica.ativo && cupomDeGracaSemLimite(atual.kind, fica.valor, fica.maxUsos) && !semLimiteConfirmado) {
+    throw createError({ statusCode: 422, statusMessage: RECUSA_DE_GRACA_SEM_LIMITE, data: { motivo: 'gratis_sem_limite' } })
   }
 
   const pares = Object.entries(campos).filter(([k, v]) => k in COLUNAS && v !== undefined)

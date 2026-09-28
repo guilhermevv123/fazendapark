@@ -311,13 +311,13 @@ describe('bilheteria física', () => {
     const turno = await abrirCaixa(await novoPonto('ZZ MEIA'), 0)
 
     const sem = await vender({
-      turnoId: turno, itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 1 }],
+      turnoId: turno, itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 1, meia: { motivo: 'estudante' } }],
       forma: 'dinheiro',
     })
     expect(sem.status, 'vendeu meia sem documento — a portaria barra no portão').toBe(422)
 
     const com = await vender({
-      turnoId: turno, itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 1 }],
+      turnoId: turno, itens: [{ lotId: LOTE, ticketTypeId: MEIA, quantidade: 1, meia: { motivo: 'estudante' } }],
       forma: 'dinheiro',
       comprador: { nome: 'Estudante Teste', documento: '86946240871' },
     })

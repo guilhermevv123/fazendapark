@@ -740,3 +740,46 @@ describe('cortesia — o borderô continua fechando', () => {
     expect(canal.ingressos).toBe(2)
   }, 30_000)
 })
+
+// ---------------------------------------------------------------------------
+// 27/09 — cortesia em evento que já acabou (ADM-22) e cortesia "de meia" (ADM-54)
+// ---------------------------------------------------------------------------
+describe('cortesia — evento fechado e meia-entrada', () => {
+  it('evento cancelado ou encerrado não recebe cortesia (e rascunho continua recebendo)', async (ctx) => {
+    if (!noAr) ctx.skip()
+    await limparCortesias()
+    try {
+      for (const status of ['cancelado', 'encerrado']) {
+        await sql(`UPDATE events SET status = $2 WHERE id = $1`, [EVENTO, status])
+        const r = await emitir(1)
+        expect(r.status, `emitiu cortesia num evento ${status} — ${r.mensagem}`).toBe(409)
+        expect(r.mensagem).toContain(status === 'cancelado' ? 'cancelado' : 'encerrado')
+        expect(await cortesiasVivas()).toBe(0)
+      }
+      await sql(`UPDATE events SET status = 'rascunho' WHERE id = $1`, [EVENTO])
+      const ok = await emitir(1)
+      expect(ok.status, `lista de imprensa antes de publicar foi recusada — ${ok.mensagem}`).toBe(200)
+    } finally {
+      await sql(`UPDATE events SET status = 'ativo' WHERE id = $1`, [EVENTO])
+      await limparCortesias()
+    }
+  }, 60_000)
+
+  it('cortesia não sai como meia-entrada', async (ctx) => {
+    if (!noAr) ctx.skip()
+    await limparCortesias()
+    const MEIA = '0000e017-0000-4000-8000-00000000000b'
+    await sql(`INSERT INTO ticket_types (id, lot_id, name, quantity, discount_bps, requires_document)
+               VALUES ($1,$2,'ZZ Meia Cortesia',10,5000,true) ON CONFLICT (id) DO NOTHING`, [MEIA, LOTE])
+    try {
+      const r = await emitir(1, { tipoId: MEIA })
+      expect(r.status, `emitiu cortesia de meia — ${r.mensagem}`).toBe(422)
+      expect(r.mensagem).toContain('meia-entrada')
+      expect(await cortesiasVivas()).toBe(0)
+    } finally {
+      // com a trava arrancada a cortesia de meia nasce: o pedido dela sai antes do tipo
+      await limparCortesias()
+      await sql(`DELETE FROM ticket_types WHERE id = $1`, [MEIA])
+    }
+  }, 60_000)
+})

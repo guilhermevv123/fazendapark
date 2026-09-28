@@ -1,3 +1,22 @@
+<script lang="ts">
+/** as leituras desta tela, exportadas pra teste (`app/composables/evento-relatorios.test.ts`) */
+
+/**
+ * A cor do giro (ADM-46): lote esgotando é BOA notícia. A escala estava invertida — 90% vendido
+ * em vermelho de erro, como se fosse problema, e o lote parado em verde.
+ */
+export function corDoGiro(giroPct: number): string {
+  if (giroPct >= 90) return 'bg-ok'
+  if (giroPct >= 60) return 'bg-acao'
+  return 'bg-linha-forte'
+}
+
+/** o lote que mais rendeu — nenhum, quando nada vendeu (o "campeão" de R$ 0,00 era o 1º da lista) */
+export function loteCampeao<T extends { faceCents: number }>(linhas: T[]): T | null {
+  return [...linhas].filter((x) => x.faceCents > 0).sort((a, b) => b.faceCents - a.faceCents)[0] ?? null
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Vendas por lote — quanto cada lote girou e quanto pesou no bolo.
@@ -19,8 +38,7 @@ const id = route.params.id as string
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   `/api/admin/evento/${id}/bordero`)
 
-const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
-  { style: 'currency', currency: 'BRL' })
+// `reais` é o de app/composables/formato.ts (ADM-48): uma escrita de dinheiro só no projeto
 
 /**
  * Percentual que não mente quando é pequeno.
@@ -64,8 +82,7 @@ const totais = computed(() => {
 })
 
 /** o lote que puxou a receita, e o que não saiu do lugar */
-const campeao = computed(() =>
-  [...linhas.value].sort((a, b) => b.faceCents - a.faceCents)[0] ?? null)
+const campeao = computed(() => loteCampeao(linhas.value))
 const parado = computed(() => {
   const vivos = linhas.value.filter((x: any) => x.estoque > 0)
   return [...vivos].sort((a, b) => a.giroPct - b.giroPct)[0] ?? null
@@ -77,9 +94,9 @@ function exportar() {
     ['Setor', 'Lote', 'Face unitária', 'Estoque', 'Vendidos', 'Cortesias',
      'Saiu', 'Sobra', 'Giro %', 'Face', 'Taxa', 'Peso na receita %'],
     linhas.value.map((x: any) => [
-      x.setor, x.lote, brl(x.faceUnitCents), x.estoque, x.vendidos,
+      x.setor, x.lote, reais(x.faceUnitCents), x.estoque, x.vendidos,
       x.cortesias, x.saiu, x.sobra, `${x.giroPct}%`,
-      brl(x.faceCents), brl(x.taxaCents), `${x.pesoPct}%`,
+      reais(x.faceCents), reais(x.taxaCents), `${x.pesoPct}%`,
     ]))
 }
 
@@ -113,14 +130,15 @@ useHead({ title: 'Vendas por lote' })
       </div>
       <div class="card">
         <p class="rotulo-kpi">Face vendida</p>
-        <p class="numero-kpi mt-1">{{ brl(totais.face) }}</p>
-        <p class="mt-1 text-xs text-tinta-fraca">taxa arrecadada {{ brl(totais.taxa) }}</p>
+        <p class="numero-kpi mt-1">{{ reais(totais.face) }}</p>
+        <p class="mt-1 text-xs text-tinta-fraca">taxa arrecadada {{ reais(totais.taxa) }}</p>
       </div>
-      <div class="card">
+      <div class="card" data-parte="campeao">
         <p class="rotulo-kpi">Lote que mais rendeu</p>
         <p class="titulo mt-1 text-lg font-semibold text-tinta">{{ campeao?.setor ?? '—' }}</p>
         <p class="mt-1 text-xs text-tinta-fraca">
           <template v-if="campeao">{{ campeao.lote }} · {{ fmtPct(campeao.pesoPct) }} da receita</template>
+          <template v-else>nenhum lote vendeu ainda</template>
         </p>
       </div>
       <div class="card">
@@ -156,7 +174,7 @@ useHead({ title: 'Vendas por lote' })
               <p class="font-medium text-tinta">{{ l.setor }}</p>
               <p class="text-xs text-tinta-fraca">{{ l.lote }}</p>
             </td>
-            <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">{{ brl(l.faceUnitCents) }}</td>
+            <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">{{ reais(l.faceUnitCents) }}</td>
             <td class="px-3 py-3 text-right tabular-nums text-tinta">{{ l.vendidos }}</td>
             <td class="px-3 py-3 text-right tabular-nums"
                 :class="l.cortesias ? 'text-tinta-suave' : 'text-tinta-fraca'">{{ l.cortesias }}</td>
@@ -166,18 +184,18 @@ useHead({ title: 'Vendas por lote' })
             <td class="px-3 py-3">
               <div class="flex items-center gap-2">
                 <div class="h-1.5 w-20 rounded-full bg-fundo-cinza">
-                  <div class="h-1.5 rounded-full"
-                       :class="l.giroPct >= 90 ? 'bg-erro' : l.giroPct >= 60 ? 'bg-alerta' : 'bg-ok'"
-                       :style="{ width: `${Math.max(Math.min(l.giroPct, 100), 1.5)}%` }" />
+                  <div class="h-1.5 rounded-full" :class="corDoGiro(l.giroPct)" data-parte="giro"
+                       :style="{ width: `${l.giroPct ? Math.max(Math.min(l.giroPct, 100), 1.5) : 0}%` }" />
                 </div>
                 <span class="text-xs tabular-nums text-tinta-fraca">{{ fmtPct(l.giroPct) }}</span>
               </div>
             </td>
-            <td class="px-3 py-3 text-right font-medium tabular-nums text-tinta">{{ brl(l.faceCents) }}</td>
+            <td class="px-3 py-3 text-right font-medium tabular-nums text-tinta">{{ reais(l.faceCents) }}</td>
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
                 <div class="h-1.5 w-16 rounded-full bg-fundo-cinza">
-                  <div class="h-1.5 rounded-full bg-acao" :style="{ width: `${Math.max(l.pesoPct, 1.5)}%` }" />
+                  <div class="h-1.5 rounded-full bg-acao" data-parte="peso"
+                       :style="{ width: `${l.pesoPct ? Math.max(l.pesoPct, 1.5) : 0}%` }" />
                 </div>
                 <span class="text-xs tabular-nums text-tinta-fraca">{{ fmtPct(l.pesoPct) }}</span>
               </div>
@@ -196,7 +214,7 @@ useHead({ title: 'Vendas por lote' })
               {{ (totais.estoque - totais.saiu).toLocaleString('pt-BR') }}
             </td>
             <td />
-            <td class="px-3 py-3 text-right tabular-nums text-tinta">{{ brl(totais.face) }}</td>
+            <td class="px-3 py-3 text-right tabular-nums text-tinta">{{ reais(totais.face) }}</td>
             <td />
           </tr>
         </tfoot>

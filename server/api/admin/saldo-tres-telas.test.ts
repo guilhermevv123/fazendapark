@@ -49,6 +49,8 @@ async function saldos() {
   const fin = await get(`/api/admin/evento/${EVENTO}/financeiro`)
   const bor = await get(`/api/admin/evento/${EVENTO}/bordero`)
   const org = await get('/api/admin/financeiro')
+  // o painel do evento (redesenho de 27/09) mostra o LÍQUIDO partido nas mesmas duas metades
+  const painel = await get(`/api/admin/evento/${EVENTO}/dashboard`)
   const linhaOrg = org.eventos.find((e: any) => e.id === EVENTO)
   return {
     evento: fin.resumo.retidoCents + fin.resumo.disponivelCents,
@@ -60,6 +62,10 @@ async function saldos() {
     diretoOrganizacao: linhaOrg.recebidoDiretoCents,
     diretoBordero: bor.totais.recebidoDiretoCents,
     emCursoBordero: bor.totais.emCursoCents,
+    naPlataformaFinanceiro: fin.resumo.naPlataformaCents,
+    naPlataformaBordero: bor.totais.naPlataformaCents,
+    naPlataformaPainel: painel.totais.liquidoNaPlataformaCents,
+    diretoPainel: painel.totais.liquidoDiretoCents,
   }
 }
 
@@ -129,8 +135,12 @@ describe('saldo a receber: um número só nas três telas', () => {
     expect(s.bordero).toBe(84_000)
     expect(s.eventoDisponivel).toBe(84_000)
     expect(s.organizacaoDisponivel).toBe(84_000)
-    for (const d of [s.diretoEvento, s.diretoOrganizacao, s.diretoBordero]) {
+    for (const d of [s.diretoEvento, s.diretoOrganizacao, s.diretoBordero, s.diretoPainel]) {
       expect(d, 'o recebido direto sumiu de uma das telas').toBe(13_500)
+    }
+    // a metade "na plataforma" do líquido: a mesma no Financeiro, no Borderô e no painel
+    for (const n of [s.naPlataformaFinanceiro, s.naPlataformaBordero, s.naPlataformaPainel]) {
+      expect(n, 'o painel partiu o líquido com outra régua').toBe(84_000)
     }
   }, 30_000)
 
@@ -148,8 +158,11 @@ describe('saldo a receber: um número só nas três telas', () => {
     expect(s.organizacao, 'organização ofereceu de novo os R$ 135 da gaveta').toBe(0)
     expect(s.bordero, 'borderô ignorou o saque em curso e somou o balcão').toBe(0)
     expect(s.emCursoBordero).toBe(34_000)
-    for (const d of [s.diretoEvento, s.diretoOrganizacao, s.diretoBordero]) {
+    for (const d of [s.diretoEvento, s.diretoOrganizacao, s.diretoBordero, s.diretoPainel]) {
       expect(d).toBe(13_500)
     }
+    // o painel mostra LÍQUIDO, não saldo: o saque não tira dinheiro da venda que aconteceu
+    expect(s.naPlataformaPainel, 'o painel descontou o saque do líquido').toBe(84_000)
+    expect(s.naPlataformaPainel).toBe(s.naPlataformaFinanceiro)
   }, 30_000)
 })

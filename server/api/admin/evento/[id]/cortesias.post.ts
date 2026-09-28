@@ -78,10 +78,22 @@ import {
  * vermelho pelos dois lados.
  */
 const SQL_TRAVA_EVENTO_CORTESIA = `
-  SELECT id, org_id, name, courtesy_quota
+  SELECT id, org_id, name, courtesy_quota, status
     FROM events
    WHERE id = $1
    FOR UPDATE`
+
+/**
+ * Evento que já acabou não recebe cortesia (ADM-22). O cancelamento varre e mata todos os
+ * ingressos; uma cortesia emitida DEPOIS nascia `valido` num evento cancelado — a pessoa
+ * aparecia no portão de um evento que não existe mais. Mesmo espírito do balcão
+ * (`pdv/venda.post.ts` exige evento ativo); rascunho, oculto e adiado continuam emitindo:
+ * lista de imprensa antes de publicar e convidado de evento remarcado são o caso normal.
+ */
+const FECHADO_PRA_CORTESIA: Record<string, string> = {
+  cancelado: 'Este evento foi cancelado: não dá pra emitir cortesia.',
+  encerrado: 'Este evento já foi encerrado: não dá pra emitir cortesia.',
+}
 
 /**
  * O que conta contra a cota — e o que NÃO conta.
@@ -328,6 +340,9 @@ async function emitir(eventoId: string, d: z.infer<typeof Emissao>, autor: Autor
     const { rows: eventos } = await c.query(SQL_TRAVA_EVENTO_CORTESIA, [eventoId])
     const ev = eventos[0]
     if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
+    if (FECHADO_PRA_CORTESIA[ev.status]) {
+      throw createError({ statusCode: 409, statusMessage: FECHADO_PRA_CORTESIA[ev.status] })
+    }
 
     // ---- 2. trava do lote (a mesma que tira o estoque) ----------------------
     const { rows: lotes } = await c.query(
@@ -375,8 +390,16 @@ async function emitir(eventoId: string, d: z.infer<typeof Emissao>, autor: Autor
 
     if (d.tipoId) {
       const { rows } = await c.query(
-        `SELECT id FROM ticket_types WHERE id = $1 AND lot_id = $2`, [d.tipoId, d.loteId])
+        `SELECT id, name, kind FROM ticket_types WHERE id = $1 AND lot_id = $2`, [d.tipoId, d.loteId])
       if (!rows[0]) throw createError({ statusCode: 422, statusMessage: 'Tipo não é deste lote' })
+      // Cortesia não é meia-entrada (ADM-54): o ingresso de meia pede documento na portaria, e a
+      // cortesia nascia sem motivo nem exigência carimbados — um papel que o portão não sabe ler.
+      if (rows[0].kind === 'meia') {
+        throw createError({
+          statusCode: 422,
+          statusMessage: `"${rows[0].name}" é meia-entrada: cortesia sai como inteira. Escolha outro tipo ou nenhum.`,
+        })
+      }
     }
 
     // ---- 5. baixa de estoque ------------------------------------------------

@@ -11,9 +11,14 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import {
   gerarToken, mesmoEmail, RECUSA, venceEm,
 } from '../../../../utils/transferencia'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { ingressoId: 'Ingresso', codigo: 'Código', paraNome: 'Nome de quem recebe', paraEmail: 'E-mail de quem recebe', paraDocumento: 'Documento de quem recebe', paraTelefone: 'Telefone de quem recebe' }
 
 const Entrada = z.object({
   ingressoId: z.string().uuid().optional(),
@@ -31,7 +36,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
   const sessao = (event.context as any).sessao
@@ -59,7 +64,11 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 422, statusMessage: RECUSA.mesma_pessoa })
   }
 
+  const autor = autorDaRequisicao(event)
   return await tx(async (c) => {
+    // Duplo envio (ADM-55): os dois pedidos passam pela conferência de "pendentes" acima ao mesmo
+    // tempo, e o segundo INSERT batia no índice `transferencia_pendente_unica` — 500. É a mesma
+    // recusa de quem já tem transferência aguardando, e é ela que volta.
     const { rows } = await c.query(
       `INSERT INTO ticket_transfers
          (org_id, event_id, ticket_id, de_nome, de_email, de_documento,
@@ -71,14 +80,17 @@ export default defineEventHandler(async (event) => {
        ingresso.holder_name, ingresso.holder_email, ingresso.holder_document,
        d.paraNome.trim(), d.paraEmail.trim().toLowerCase(),
        d.paraDocumento ?? null, d.paraTelefone ?? null,
-       gerarToken(), sessao?.usuarioId ?? null, venceEm()])
+       gerarToken(), sessao?.usuarioId ?? null, venceEm()]).catch((e: any) => {
+      if (e?.code === '23505' && String(e?.constraint ?? '').includes('transferencia_pendente_unica')) {
+        throw createError({ statusCode: 409, statusMessage: RECUSA.pendente })
+      }
+      throw e
+    })
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'ingresso',$2,'transferencia_enviada',$3::jsonb)`,
-      [ev.org_id, ingresso.id, JSON.stringify({
-        de: ingresso.holder_email, para: d.paraEmail, codigo: ingresso.code,
-      })])
+    await registrarAuditoria({
+      autor, entidade: 'ingresso', entidadeId: ingresso.id, acao: 'transferencia_enviada',
+      depois: { de: ingresso.holder_email, para: d.paraEmail, codigo: ingresso.code },
+    }, c)
 
     return {
       ok: true,

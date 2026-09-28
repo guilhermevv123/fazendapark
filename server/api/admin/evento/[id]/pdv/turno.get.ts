@@ -7,6 +7,17 @@
  *
  * O `esperado` sai daqui mas a tela de fechamento não mostra antes da
  * contagem — ver o alvo antes de contar transforma a conferência em cópia.
+ *
+ * ## Conferência CEGA de verdade (ADM-07, 27/09)
+ *
+ * A promessa de cima valia só pra tela: a resposta trazia `esperadoCents` e as quatro
+ * parcelas (fundo, vendas em dinheiro, suprimentos, sangrias) com o caixa aberto — quem
+ * conta abria o DevTools, ou somava as parcelas na própria tela, e digitava o alvo.
+ * Agora, com o caixa ABERTO e quem pergunta não sendo master, a contagem vem sem o
+ * dinheiro da gaveta (`cega: true`): sem esperado, sem as parcelas, sem a linha de
+ * dinheiro por forma. Cartão/pix, vendas e ingressos continuam (não estão na gaveta).
+ * Depois de fechado, tudo aparece — é o que o gerente lê. O master (dono, gerente)
+ * continua vendo: é ele quem confere a conferência.
  */
 import { q, q1, tx } from '../../../../../utils/db'
 import {
@@ -33,7 +44,9 @@ export default defineEventHandler(async (event) => {
   // entre no meio das consultas muda o número da próxima atualização da tela,
   // e tudo bem — o número que vale pra conferência é o que o FECHAMENTO
   // congela, e lá a linha do turno está travada.
-  const contagem = await tx((c) => contarTurno(c, turnoId))
+  const completa = await tx((c) => contarTurno(c, turnoId))
+  const cega = turno.status === 'aberto' && (event.context as any).papel !== 'master'
+  const contagem = cega ? contagemCega(completa) : { ...completa, cega: false }
 
   const movimentos = await q<any>(
     `SELECT m.id, m.kind, m.amount_cents, m.reason, m.at, u.name AS por
@@ -117,3 +130,23 @@ export default defineEventHandler(async (event) => {
     })),
   }
 })
+
+/**
+ * A contagem do caixa ABERTO, sem nada que dê pra somar até o esperado da gaveta: o que é
+ * dinheiro vira `null` (não zero — zero seria um número que mente), e a linha de dinheiro
+ * sai da lista por forma. O que não passa pela gaveta (cartão/pix) fica.
+ */
+function contagemCega(c: Awaited<ReturnType<typeof contarTurno>>) {
+  return {
+    ...c,
+    cega: true,
+    esperadoCents: null,
+    aberturaCents: null,
+    dinheiroCents: null,
+    sangriaCents: null,
+    suprimentoCents: null,
+    devolvidoDinheiroCents: null,
+    porForma: c.porForma.filter((f) => f.forma !== 'dinheiro'),
+    cancelamentos: c.cancelamentos.map((k) => (k.saiuDaGaveta ? { ...k, totalCents: null } : k)),
+  }
+}

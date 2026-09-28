@@ -16,20 +16,35 @@
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id as string
 
-const resultado = ref('')
-const gate = ref('')
-const busca = ref('')
-const pagina = ref(1)
+// Filtros e página na URL (ADM-31): o link "as recusas do portão 2" mandado pro supervisor abre
+// no mesmo recorte, e o F5 não volta pra primeira página de tudo. `replace`, não `push`.
+const naUrl = (chave: string) => {
+  const v = route.query[chave]
+  return String((Array.isArray(v) ? v[0] : v) ?? '')
+}
+const resultado = ref(naUrl('resultado'))
+const gate = ref(naUrl('portao'))
+const busca = ref(naUrl('busca'))
+const pagina = ref(Math.max(1, Number.parseInt(naUrl('pagina'), 10) || 1))
 
-const buscaDebounce = ref('')
+const buscaDebounce = ref(busca.value)
 let timer: any
 watch(busca, (v) => {
   clearTimeout(timer)
   timer = setTimeout(() => { buscaDebounce.value = v; pagina.value = 1 }, 300)
 })
 watch([resultado, gate], () => { pagina.value = 1 })
+watch([resultado, gate, buscaDebounce, pagina], () => {
+  const query: Record<string, string> = {}
+  if (resultado.value) query.resultado = resultado.value
+  if (gate.value) query.portao = gate.value
+  if (buscaDebounce.value.trim()) query.busca = buscaDebounce.value.trim()
+  if (pagina.value > 1) query.pagina = String(pagina.value)
+  router.replace({ query })
+})
 
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/checkins`,
@@ -87,22 +102,19 @@ const pico = computed(() => {
   return h.reduce((m: number, x: any) => Math.max(m, x.n), 0)
 })
 
+/**
+ * CSV pelo `baixarCsv` da casa (ADM-14). O "código lido" é o texto que o leitor recebeu — do QR
+ * ou digitado —, e a leitura inválida é gravada como veio: `=HYPERLINK("http://…";"clique")`
+ * saía cru no arquivo e virava fórmula ativa no computador de quem confere. `celulaCsv` põe o
+ * apóstrofo na frente de `= + - @`.
+ */
 function exportar() {
-  const cab = ['Quando', 'Código lido', 'Resultado', 'Motivo', 'Portão', 'Operador',
-               'Titular', 'Setor', 'Lote']
-  const linhas = (data.value?.leituras ?? []).map((l: any) => [
-    new Date(l.quando).toLocaleString('pt-BR'), l.codigo, l.resultado, l.motivo,
-    l.gate ?? '', l.operador ?? '', l.titular ?? '', l.setor ?? '', l.lote ?? '',
-  ])
-  const csv = [cab, ...linhas]
-    .map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';'))
-    .join('\r\n')
-  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `leituras-${id.slice(0, 8)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  baixarCsv(`leituras-${id.slice(0, 8)}`,
+    ['Quando', 'Código lido', 'Resultado', 'Motivo', 'Portão', 'Operador', 'Titular', 'Setor', 'Lote'],
+    (data.value?.leituras ?? []).map((l: any) => [
+      dataHoraSegundo(l.quando, ''), l.codigo, l.resultado, l.motivo,
+      l.gate ?? '', l.operador ?? '', l.titular ?? '', l.setor ?? '', l.lote ?? '',
+    ]))
 }
 
 useHead({ title: 'Histórico de leituras' })
@@ -178,7 +190,7 @@ useHead({ title: 'Histórico de leituras' })
     <!-- Entradas repetidas: o que a portaria offline produz e nenhuma outra
          tela mostra. Fica ANTES do gráfico de propósito — é a coisa que alguém
          precisa agir sobre hoje, não amanhã. -->
-    <div v-if="conflitos.length" class="card mt-4 border-alerta bg-alerta-claro">
+    <div v-if="conflitos.length" class="card mt-4 bg-alerta-claro ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         {{ conflitos.length }} ingresso(s) entraram mais de uma vez
       </p>

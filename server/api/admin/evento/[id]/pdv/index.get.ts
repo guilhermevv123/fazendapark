@@ -8,6 +8,7 @@
  */
 import { q } from '../../../../../utils/db'
 import { PEDIDO_VIVO } from '../../../../../utils/liquido'
+import { fusoDoEvento } from '../dashboard.get'
 
 /**
  * O QUE PASSOU POR ESTE CAIXA — a mesma conta de `contarTurno`
@@ -44,6 +45,12 @@ const CANAIS_DE_BALCAO = `o.channel IN ('bilheteria','pdv_produtor','pdv_tickete
 export default defineEventHandler(async (event) => {
   const eventId = getRouterParam(event, 'id')!
 
+  // O "Hoje" do cartão de cada ponto começa à meia-noite DO EVENTO (ADM-10).
+  // `date_trunc('day', now())` corta no fuso da SESSÃO do banco: com o
+  // Postgres em UTC, o "Hoje" do balcão zerava às 21h, no meio da noite de venda.
+  const [ev] = await q<any>(`SELECT timezone FROM events WHERE id = $1`, [eventId])
+  const fuso = fusoDoEvento(ev?.timezone)
+
   const pontos = await q<any>(
     `SELECT p.id, p.name, p.location, p.kind, p.payment_methods, p.active, p.created_at,
             t.id                  AS turno_id,
@@ -68,9 +75,9 @@ export default defineEventHandler(async (event) => {
                 COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado_hoje
            FROM orders o
           WHERE o.pos_terminal_id = p.id AND ${PEDIDO_VIVO('o.')}
-            AND o.paid_at >= date_trunc('day', now())) d ON true
+            AND o.paid_at >= (date_trunc('day', now() AT TIME ZONE $2) AT TIME ZONE $2)) d ON true
       WHERE p.event_id = $1
-      ORDER BY p.active DESC, p.name`, [eventId])
+      ORDER BY p.active DESC, p.name`, [eventId, fuso])
 
   // Turnos fechados recentes: é onde a diferença de caixa aparece, e é o que
   // o gerente confere no dia seguinte.

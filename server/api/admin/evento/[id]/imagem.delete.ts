@@ -19,7 +19,9 @@ type Campo = keyof typeof CAMPO_PARA_COLUNA
 export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const campoBruto = String(getQuery(event).campo ?? '')
-  if (!(campoBruto in CAMPO_PARA_COLUNA)) {
+  // `Object.hasOwn`, não `in` (ADM-53): `'toString' in {…}` é true — a coluna virava o texto de
+  // uma função, o SQL quebrava e a resposta era 500 em vez de 400.
+  if (!Object.hasOwn(CAMPO_PARA_COLUNA, campoBruto)) {
     throw createError({ statusCode: 400, statusMessage: 'Campo inválido: use "banner" ou "thumb".' })
   }
   const campo = campoBruto as Campo
