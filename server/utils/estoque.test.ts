@@ -143,6 +143,21 @@ describe('portas de venda', () => {
     await tx((c) => reservar(c, [{ lotId: lot, quantidade: 3 }]))
     expect(await saldo(lot)).toMatchObject({ reserved: 3 })
   })
+  it('B32 · o mínimo é do LOTE: 2 inteiras + 2 meias num lote de mínimo 4 compram', async () => {
+    const lot = await novoLote({ min_per_order: 4, max_per_order: 10 })
+    const [inteira, meia] = [
+      (await q1<any>(`INSERT INTO ticket_types (lot_id, name, quantity) VALUES ($1,'Inteira',10) RETURNING id`, [lot]))!.id,
+      (await q1<any>(`INSERT INTO ticket_types (lot_id, name, quantity) VALUES ($1,'Meia',10) RETURNING id`, [lot]))!.id,
+    ]
+    await tx((c) => reservar(c, [
+      { lotId: lot, ticketTypeId: inteira, quantidade: 2 },
+      { lotId: lot, ticketTypeId: meia, quantidade: 2 },
+    ]))
+    expect(await saldo(lot)).toMatchObject({ reserved: 4 })
+    // sozinha, a linha de 2 continua abaixo do mínimo do lote
+    await expect(tx((c) => reservar(c, [{ lotId: lot, ticketTypeId: inteira, quantidade: 2 }])))
+      .rejects.toThrow(/Mínimo de 4/)
+  })
   it('recusa quando o evento não está ativo', async () => {
     const lot = await novoLote()
     await q(`UPDATE events SET status = 'encerrado' WHERE id = $1`, [eventId])

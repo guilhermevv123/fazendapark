@@ -16,28 +16,44 @@
  */
 import { MOTIVOS, CHAVES_DE_MOTIVO } from '~~/server/utils/meia-entrada'
 import {
-  ajustarQuantidade, chaveDaLinha, impedimentoDaLinha, minimoDaLinha,
-  pedeDeclaracaoDeMeia, pendenciasDoCarrinho, tetoDaLinha, totaisDoCarrinho,
-  VERSAO_DO_CARRINHO, type DeclaracaoDeMeia, type LinhaDoPedido,
+  ajustarQuantidade, carrinhoParaGuardar, chaveDaLinha, codigoDePromoter, dataNoFuso,
+  enderecoDoLocal, falhaDaConsulta, impedimentoDaLinha, minimoDaLinha, pedeDeclaracaoDeMeia,
+  pendenciasDoCarrinho, restaurarCarrinho, tetoDaLinha, totaisDoCarrinho,
+  type DeclaracaoDeMeia, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
 
 const route = useRoute()
-const { data, error } = await useFetch<any>(`/api/e/${route.params.slug}`)
+const slug = String(route.params.slug ?? '')
+// B22: o parâmetro vai CODIFICADO. Cru, `/e/..%2Fadmin%2Fclientes` virava
+// `/api/e/../admin/clientes` no SSR — que resolve pra `/api/admin/clientes`,
+// com o cookie de quem abriu o link.
+const { data, error, refresh } = await useFetch<any>(`/api/e/${encodeURIComponent(slug)}`)
 
 /**
- * `reais` e `paraData` vêm de `app/composables/formato.ts`. A cópia local que
- * existia aqui usava `toLocaleString('pt-BR', { style: 'currency' })`, que
- * separa o `R$` com espaço FINO (U+00A0) — duas strings idênticas na tela que
- * não são iguais na comparação. Uma formatação só, pro painel e pra vitrine.
+ * B10: só o 404 é "este evento não existe" — e aí a resposta HTTP também é
+ * 404 (`app/error.vue` escreve a página). Banco fora do ar, tempo esgotado ou
+ * 500 é "a bilheteria não respondeu": dizer "Evento não encontrado" pra quem
+ * tem o link certo manda a pessoa embora.
  */
-const quandoPorExtenso = (v: any) => {
-  const d = paraData(v)
-  return d
-    ? d.toLocaleString('pt-BR', {
-        day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
-      })
-    : '—'
+const falha = computed(() => falhaDaConsulta(error.value))
+if (falha.value === 'nao_encontrado') {
+  throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado', fatal: true })
 }
+const tentando = ref(false)
+async function tentarDeNovo() {
+  tentando.value = true
+  try { await refresh() } finally { tentando.value = false }
+}
+
+/**
+ * B24: a data no FUSO DO EVENTO (`evento.fuso`), não no do navegador. O SSR
+ * escrevia na hora do servidor e o celular de quem estava em outro fuso
+ * reescrevia na dele — a hidratação trocava o texto e o horário saía errado.
+ */
+const quandoPorExtenso = (v: any) => dataNoFuso(v, data.value?.evento?.fuso)
+
+/** B07: o link do promoter (`?promoter=CODE`) — a venda que veio por ele é dele. */
+const promoter = ref<string | null>(codigoDePromoter(route.query.promoter))
 
 /* ------------------------------------------------------------- carrinho --- */
 /** quantidade por linha, com a chave `loteId|tipoId` */
@@ -62,9 +78,23 @@ const quantidade = (lote: any, v: any) => quantidades.value[chaveDaLinha(lote.id
 const pedeMeia = (v: any): boolean =>
   typeof v?.ehMeia === 'boolean' ? v.ehMeia : pedeDeclaracaoDeMeia(v)
 
+/**
+ * Quantos das OUTRAS opções deste lote já estão no carrinho (B32): o mínimo
+ * por compra é do lote, pela soma — com 2 meias, as inteiras de um lote de
+ * mínimo 4 começam em 2.
+ */
+function outrasDoLote(lote: any, v: any): number {
+  let n = 0
+  for (const x of lote?.variacoes ?? []) {
+    if ((x.tipoId ?? null) === (v?.tipoId ?? null)) continue
+    n += quantidades.value[chaveDaLinha(lote.id, x.tipoId)] ?? 0
+  }
+  return n
+}
+
 function ajustar(lote: any, v: any, delta: number) {
   const k = chaveDaLinha(lote.id, v.tipoId)
-  const novo = ajustarQuantidade(quantidades.value[k] ?? 0, delta, lote, v)
+  const novo = ajustarQuantidade(quantidades.value[k] ?? 0, delta, lote, v, outrasDoLote(lote, v))
   if (novo === 0) {
     delete quantidades.value[k]
     delete declaracoes.value[k]
@@ -110,6 +140,8 @@ const linhas = computed<LinhaDoPedido[]>(() => {
           unitTotalCents: v.totalCents,
           pedeMeia: pedeMeia(v),
           declaracao: declaracoes.value[k] ?? null,
+          minDoLote: minimoDaLinha(lote),
+          lote: lote.nome,
         })
       }
     }
@@ -142,8 +174,25 @@ const pendencias = computed(() => {
   }
   return saida
 })
+/**
+ * PROD-06: o evento está à venda, mas não há como cobrar online agora (sem
+ * chave do Asaas, chave de teste em produção, webhook sem token). A vitrine
+ * diz isso ANTES do formulário — era um 503 no último clique, com CPF e
+ * endereço já digitados. Pedido que fecha em zero não passa por gateway.
+ */
+const semPagamentoOnline = computed(() =>
+  !!data.value?.evento?.vendasAbertas && data.value?.evento?.pagamentoOnline?.disponivel === false)
+const bloqueioDePagamento = computed(() => semPagamentoOnline.value && totais.value.total > 0
+  ? String(data.value?.evento?.pagamentoOnline?.recado
+      || 'As vendas online estão indisponíveis no momento. Tente mais tarde ou compre na bilheteria.')
+  : '')
 const podePagar = computed(() =>
-  totais.value.n > 0 && !pendencias.value.length && data.value?.evento?.vendasAbertas)
+  totais.value.n > 0 && !pendencias.value.length && !!data.value?.evento?.vendasAbertas
+  && !bloqueioDePagamento.value)
+
+/** B30: evento publicado sem nenhum lote na vitrine — "em breve", não uma lista vazia. */
+const temLotes = computed(() =>
+  (data.value?.setores ?? []).some((s: any) => (s?.lotes ?? []).length > 0))
 
 /**
  * A situação vem pronta do servidor (ver server/api/e/[slug].get.ts). A tela
@@ -195,7 +244,7 @@ function observacaoDaLinha(lote: any, v: any): string {
   const min = minimoDaLinha(lote)
   const teto = tetoDaLinha(lote, v)
   const porque = porQueOTetoCaiu(lote, v)
-  const impedimento = impedimentoDaLinha(lote, v)
+  const impedimento = impedimentoDaLinha(lote, v, outrasDoLote(lote, v))
 
   if (impedimento) {
     if (!porque) return impedimento
@@ -203,21 +252,67 @@ function observacaoDaLinha(lote: any, v: any): string {
       ? `${porque}, e o mínimo desta compra é ${min} — não dá para levar este agora`
       : porque
   }
+  // B32: com mais de uma opção no lote, o mínimo é pela SOMA delas — e a
+  // frase diz, senão "mínimo de 4" parece valer pra cada linha.
+  const minimo = min > 1
+    ? `Mínimo de ${min} por compra${(lote?.variacoes?.length ?? 0) > 1 ? ', somando as opções deste lote' : ''}`
+    : ''
   // Os dois recados juntos quando os dois valem: o "+" pula de 0 pro mínimo e
   // para no teto, e o comprador precisa das duas pontas pra entender o salto.
-  if (porque) return min > 1 ? `Mínimo de ${min} por compra. ${porque}` : porque
-  return min > 1 ? `Mínimo de ${min} por compra` : ''
+  if (porque) return minimo ? `${minimo}. ${porque}` : porque
+  return minimo
 }
+
+/* ------------------------------------------ o carrinho guardado (B19) --- */
+/**
+ * O carrinho mora no `sessionStorage` (`dt:carrinho`) a cada mudança, não só
+ * no clique: F5 e o "← Voltar" do pagamento zeravam a seleção. A gravação de
+ * cada mudança deixa o número do documento da meia de fora (dado pessoal não
+ * precisa sobreviver ao F5); o clique de "Ir para pagamento" grava inteiro,
+ * com o carimbo `criadoEm` que o pagamento usa pra saber que este carrinho é
+ * mais novo que um pedido pendente da mesma aba (B13).
+ */
+const CHAVE_CARRINHO = 'dt:carrinho'
+let restaurado = false
+
+function lerGuardado(): any {
+  try { return JSON.parse(sessionStorage.getItem(CHAVE_CARRINHO) || 'null') } catch { return null }
+}
+
+onMounted(async () => {
+  const salvo = lerGuardado()
+  if (salvo && data.value) {
+    const r = restaurarCarrinho(salvo, slug, data.value.setores)
+    quantidades.value = r.quantidades
+    declaracoes.value = r.declaracoes
+    if (!promoter.value && salvo.slug === slug) promoter.value = codigoDePromoter(salvo.promoter)
+  }
+  // a própria restauração não regrava (senão ela apagaria o documento que o
+  // clique tinha guardado); só o que a pessoa mexer depois
+  await nextTick()
+  restaurado = true
+})
+
+watch([quantidades, declaracoes], () => {
+  if (!restaurado) return
+  try {
+    if (!linhas.value.length) {
+      // esvaziou: some o DESTE evento — o de outro evento não é assunto daqui
+      if (lerGuardado()?.slug === slug) sessionStorage.removeItem(CHAVE_CARRINHO)
+      return
+    }
+    sessionStorage.setItem(CHAVE_CARRINHO, JSON.stringify(
+      carrinhoParaGuardar(slug, linhas.value, promoter.value, { comDocumento: false })))
+  } catch { /* sem armazenamento (aba anônima cheia): o carrinho só não sobrevive ao F5 */ }
+}, { deep: true })
 
 function irParaPagamento() {
   if (!podePagar.value) return
-  sessionStorage.setItem('dt:carrinho', JSON.stringify({
-    versao: VERSAO_DO_CARRINHO,
-    slug: route.params.slug,
-    linhas: linhas.value,
-    totais: totais.value,
+  sessionStorage.setItem(CHAVE_CARRINHO, JSON.stringify({
+    ...carrinhoParaGuardar(slug, linhas.value, promoter.value, { comDocumento: true }),
+    criadoEm: Date.now(),
   }))
-  navigateTo(`/e/${route.params.slug}/pagamento`)
+  navigateTo(`/e/${encodeURIComponent(slug)}/pagamento`)
 }
 
 useHead(() => ({
@@ -226,9 +321,34 @@ useHead(() => ({
 </script>
 
 <template>
-  <div v-if="error" class="mx-auto max-w-2xl px-4 py-24 text-center">
-    <p class="titulo text-2xl font-semibold text-tinta">Evento não encontrado</p>
-    <p class="mt-2 text-tinta-suave">Confira o link ou fale com quem te mandou.</p>
+  <!-- B10: "não encontrado" só quando é isso. Na primeira carga o 404 já saiu
+       como página de erro (HTTP 404); aqui chega o "Tentar de novo" que voltou
+       404 e, principalmente, a bilheteria fora do ar. -->
+  <div v-if="falha" class="min-h-screen">
+    <CabecalhoPublico />
+    <main class="mx-auto max-w-2xl px-4 py-16">
+      <div class="card py-10 text-center" role="alert">
+        <template v-if="falha === 'nao_encontrado'">
+          <p class="titulo text-2xl font-semibold text-tinta">Evento não encontrado</p>
+          <p class="mt-2 text-tinta-suave">Confira o link ou fale com quem te mandou.</p>
+          <NuxtLink to="/" class="btn-primario mt-6 px-5">
+            Ver os eventos à venda
+          </NuxtLink>
+        </template>
+        <template v-else>
+          <p class="titulo text-2xl font-semibold text-tinta">A bilheteria não respondeu agora</p>
+          <p class="mt-2 text-tinta-suave">
+            {{ falha === 'freio'
+                 ? 'Muitas consultas seguidas deste aparelho. Espere um minuto e tente de novo.'
+                 : 'O evento continua lá — quem não respondeu foi o nosso sistema. Tente de novo em alguns instantes.' }}
+          </p>
+          <button type="button" class="btn-primario mt-6 px-5" :disabled="tentando"
+                  @click="tentarDeNovo">
+            {{ tentando ? 'Tentando…' : 'Tentar de novo' }}
+          </button>
+        </template>
+      </div>
+    </main>
   </div>
 
   <div v-else-if="data" class="min-h-screen pb-44 lg:pb-16">
@@ -278,8 +398,9 @@ useHead(() => ({
                 <dt class="w-20 shrink-0 text-sm font-medium text-tinta-fraca">Onde</dt>
                 <dd class="min-w-0">
                   <span class="font-medium text-tinta">{{ data.evento.local.nome }}</span><br>
-                  <span class="text-tinta-suave">
-                    {{ data.evento.local.endereco }} — {{ data.evento.local.cidade }}/{{ data.evento.local.estado }}
+                  <!-- B31: sem logradouro, só "Cidade/UF" — nada de travessão solto -->
+                  <span v-if="enderecoDoLocal(data.evento.local)" class="text-tinta-suave">
+                    {{ enderecoDoLocal(data.evento.local) }}
                   </span>
                 </dd>
               </div>
@@ -302,8 +423,40 @@ useHead(() => ({
         </div>
       </section>
 
+      <!-- PROD-06: à venda, mas sem como cobrar online agora. Dito aqui, antes de
+           qualquer formulário — era um 503 no último clique. -->
+      <p v-if="semPagamentoOnline" class="faixa-aviso mt-4" role="status">
+        <span class="block font-semibold text-tinta">Venda online indisponível agora</span>
+        <span class="mt-1 block">
+          {{ data.evento.pagamentoOnline.recado
+               || 'As vendas online estão indisponíveis no momento. Tente mais tarde ou compre na bilheteria.' }}
+        </span>
+      </p>
+
+      <!-- B30: evento sem lote na vitrine — "em breve", com saída -->
+      <section v-if="!temLotes" class="card mt-6 flex flex-col items-center py-10 text-center">
+        <span class="grid size-14 place-items-center rounded-2xl bg-pool-50 text-pool-700" aria-hidden="true">
+          <IconeMenu nome="ingresso" :tamanho="28" />
+        </span>
+        <h2 class="titulo mt-4 text-xl font-semibold text-tinta">Ingressos em breve</h2>
+        <p class="mt-2 max-w-md text-tinta-suave">
+          Os {{ (data.evento.substantivo || 'ingressos').toLowerCase() }} deste evento ainda não foram
+          colocados à venda. Volte mais tarde — ou veja os outros eventos.
+        </p>
+        <NuxtLink to="/" class="btn-primario mt-6 px-5">
+          Ver outros eventos
+        </NuxtLink>
+      </section>
+      <!-- a descrição não depende de haver lote: sem ela o "em breve" não diz do que se trata -->
+      <div v-if="!temLotes && data.evento.descricao" class="card mt-6">
+        <h2 class="titulo text-base font-semibold text-tinta">Sobre o evento</h2>
+        <p class="mt-2 whitespace-pre-line leading-relaxed text-tinta-corpo">
+          {{ data.evento.descricao }}
+        </p>
+      </div>
+
       <!-- =================================================== seleção ----- -->
-      <section class="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
+      <section v-else class="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
         <div class="min-w-0">
           <h2 class="titulo text-lg font-semibold text-tinta">
             Escolha seus {{ data.evento.substantivo.toLowerCase() }}
@@ -382,7 +535,7 @@ useHead(() => ({
                             class="grid size-10 place-items-center rounded-full bg-pool-700 text-lg leading-none
                                    text-white ring-1 ring-inset ring-pool-700 transition-colors hover:bg-pool-800
                                    disabled:cursor-not-allowed disabled:opacity-40"
-                            :disabled="!!impedimentoDaLinha(lote, v)
+                            :disabled="!!impedimentoDaLinha(lote, v, outrasDoLote(lote, v))
                                        || quantidade(lote, v) >= tetoDaLinha(lote, v)"
                             :aria-label="`Adicionar um ${v.nome ?? lote.nome}`"
                             @click="ajustar(lote, v, 1)">+</button>
@@ -484,11 +637,13 @@ useHead(() => ({
               <span class="block font-semibold text-tinta">Falta preencher para continuar:</span>
               <span v-for="p in pendencias" :key="p" class="mt-1 block">{{ p }}</span>
             </p>
+            <p v-else-if="bloqueioDePagamento && totais.n" class="faixa-aviso mt-4">{{ bloqueioDePagamento }}</p>
 
             <button type="button" class="btn-cta mt-4 w-full py-3"
                     :disabled="!podePagar"
                     @click="irParaPagamento">
-              {{ data.evento.vendasAbertas ? 'Ir para pagamento' : 'Vendas fechadas' }}
+              {{ !data.evento.vendasAbertas ? 'Vendas fechadas'
+                 : bloqueioDePagamento ? 'Venda online indisponível' : 'Ir para pagamento' }}
             </button>
           </div>
         </aside>
@@ -499,7 +654,9 @@ useHead(() => ({
     <div v-if="totais.n"
          class="fixed inset-x-0 bottom-0 z-20 border-t border-ink-200/70 bg-white/95 p-4 shadow-[0_-8px_24px_-12px_rgb(30_26_46/0.18)] backdrop-blur lg:hidden">
       <div class="mx-auto max-w-5xl">
-        <p v-if="pendencias.length" class="faixa-aviso mb-3">{{ pendencias[0] }}</p>
+        <p v-if="pendencias.length || bloqueioDePagamento" class="faixa-aviso mb-3">
+          {{ pendencias[0] || bloqueioDePagamento }}
+        </p>
         <div class="flex items-center gap-4">
           <div class="min-w-0 flex-1">
             <p class="text-xs text-tinta-fraca">

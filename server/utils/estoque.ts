@@ -147,6 +147,13 @@ export async function reservar(
   // mesmos dois lotes em ordens opostas travam uma na outra pra sempre.
   const ordenados = [...itens].sort((a, b) => a.lotId.localeCompare(b.lotId))
 
+  // B32: o MÍNIMO é do lote, e vale pela soma das linhas dele (2 inteiras + 2
+  // meias num lote de mínimo 4 compram). Era conferido linha a linha, e a
+  // compra de 2 + 2 era recusada com "Mínimo de 4 por compra". O máximo segue
+  // por linha, como sempre foi.
+  const somaDoLote = new Map<string, number>()
+  for (const i of itens) somaDoLote.set(i.lotId, (somaDoLote.get(i.lotId) ?? 0) + Number(i.quantidade))
+
   for (const item of ordenados) {
     if (!Number.isInteger(item.quantidade) || item.quantidade <= 0) {
       throw new Error('quantidade precisa ser inteiro positivo')
@@ -177,7 +184,7 @@ export async function reservar(
       if (!lote.channels.includes(opts.canal)) {
         throw new LoteIndisponivel(item.lotId, 'Lote não é vendido por este canal')
       }
-      if (item.quantidade < lote.min_per_order) {
+      if ((somaDoLote.get(item.lotId) ?? item.quantidade) < lote.min_per_order) {
         throw new LoteIndisponivel(item.lotId, `Mínimo de ${lote.min_per_order} por compra`)
       }
       if (item.quantidade > lote.max_per_order) {
