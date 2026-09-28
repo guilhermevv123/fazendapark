@@ -13,6 +13,12 @@
  * pela operação no assistente, linhas de auditoria (exportação de clientes, criação do evento) e
  * uma conferência registrada na Reconciliação. Os dados da empresa preenchidos no caso do site
  * são apagados no fim do próprio caso. Nenhum saque é enviado, nenhum papel é trocado.
+ *
+ * Rodada de 28/09 (a "lista de um tudo" da matriz): menu da conta, três pontos, busca estranha,
+ * vazio com "Mostrar todos", assistente no celular e pela URL do financeiro, Voltar do navegador,
+ * "atualizando…", Financeiro por evento, edição pendente em Dados e cobrança (menu e fechar a aba),
+ * Salvar no pé do celular, paginação e ficha de Clientes, relógio das Filas e a varredura de 375 px.
+ * Nenhum desses grava nada: a edição pendente nunca é salva e o assistente do celular não publica.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { BASE, EVENTO_SEED, LOGINS, SENHA, centavos, entrarPeloFormulario, hidratada, sessao, travaDeBase, unico, vigiar } from './apoio'
@@ -154,6 +160,29 @@ test.describe('menu por papel (layout)', () => {
       await expect(painel).toHaveCount(0)
       expect((await api(page, '/api/auth/eu')).usuario?.email).toBe(LOGINS.master)
     })
+
+    test('menu da conta: nome, e-mail e o acesso; fecha no Esc e no clique fora — e o topo sem sino, com o Suporte', async ({ page }) => {
+      await abrir(page, '/admin')
+      const eu = await api(page, '/api/auth/eu')
+      const botao = page.getByRole('button', { name: 'Menu da sua conta' })
+      const conta = page.locator('[role="menu"]').filter({ hasText: 'Trocar senha' })
+      await botao.click()
+      await expect(conta).toBeVisible()
+      await expect(conta).toContainText(eu.usuario.nome)
+      await expect(conta).toContainText(LOGINS.master)
+      await expect(conta).toContainText(`acesso: ${eu.usuario.papelRotulo}`)
+      await page.keyboard.press('Escape')
+      await expect(conta).toHaveCount(0)
+      await botao.click()
+      await expect(conta).toBeVisible()
+      await page.mouse.click(900, 650) // fora do menu: o véu pega o clique
+      await expect(conta).toHaveCount(0)
+      await expect(botao).toHaveAttribute('aria-expanded', 'false')
+      // o sino saiu em 22/09 (era botão sem ação nenhuma); o Suporte fica, pra quem abre a tela
+      const topo = page.locator('header[data-parte="topo"]')
+      await expect(topo.locator('[aria-label*="otifica" i], [aria-label*="sino" i]')).toHaveCount(0)
+      await expect(topo.locator('a[href="/admin/suporte"]')).toHaveCount(1)
+    })
   })
 
   test.describe('financeiro', () => {
@@ -167,6 +196,26 @@ test.describe('menu por papel (layout)', () => {
       await expect(trilha(page).getByRole('link')).toHaveCount(0) // na Visão geral, o próprio assunto é a tela
       await abrir(page, '/admin/financeiro')
       await expect(trilha(page).getByRole('link', { name: 'RELATÓRIOS' })).toHaveAttribute('href', '/admin/relatorios')
+      await expect(page.locator('header[data-parte="topo"] a[href="/admin/suporte"]')).toHaveCount(1)
+      // dentro do evento, EVENTOS é link (a lista ele abre)
+      await abrir(page, `/admin/evento/${EVENTO_SEED.id}/dashboard`)
+      await expect(trilha(page).getByRole('link', { name: 'EVENTOS' })).toHaveAttribute('href', '/admin')
+    })
+
+    test('três pontos do evento: só Dashboard e Relatórios (as telas que ele abre)', async ({ page }) => {
+      await abrir(page, '/admin')
+      await page.getByRole('button', { name: 'Mais ações deste evento' }).first().click()
+      const itens = (await page.locator('li[data-evento] [role="menu"] [role="menuitem"]').allInnerTexts()).map((t) => t.trim())
+      expect(itens.sort()).toEqual(['Dashboard', 'Relatórios'])
+    })
+
+    test('matriz "Financeiro pela URL": abrir Criar evento mostra a recusa na entrada, sem passo pra preencher', async ({ page }) => {
+      await abrir(page, '/admin/evento/novo')
+      const aviso = page.locator('[data-parte="sem-acesso-criar"]')
+      await expect(aviso).toContainText('Criar evento não é do seu acesso')
+      await expect(aviso).toContainText('Seu acesso é de Financeiro')
+      await expect(page.locator('#nome')).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Prosseguir' })).toHaveCount(0)
     })
   })
 
@@ -180,6 +229,11 @@ test.describe('menu por papel (layout)', () => {
       await expect(page.locator('[data-parte="faixa-do-dia"]')).toBeVisible()
       await expect(page.locator('[data-parte="faixa-do-dia"]')).not.toContainText('R$')
       await expect(kpi(page, 'liquido-30')).toHaveCount(0)
+      await expect(page.locator('header[data-parte="topo"] a[href="/admin/suporte"]')).toHaveCount(1)
+      await page.getByRole('button', { name: 'Mais ações deste evento' }).first().click()
+      const itens = (await page.locator('li[data-evento] [role="menu"] [role="menuitem"]').allInnerTexts()).map((t) => t.trim())
+      expect(itens.sort()).toEqual(['Configurações', 'Validação e acessos'])
+      await page.keyboard.press('Escape')
       // e a rota não manda o caixa pra ela
       const eventos = await api(page, '/api/admin/eventos')
       expect(eventos.length).toBeGreaterThan(0)
@@ -202,6 +256,14 @@ test.describe('menu por papel (layout)', () => {
     test('portaria: no painel o menu diz o porquê; no leitor, sem "Voltar aos eventos" e sem EVENTOS como link (ADM-56)', async ({ page }) => {
       await abrir(page, '/admin')
       await expect(menu(page)).toContainText('Seu acesso é só o leitor de entrada')
+      // o que a tela oferece segue a rota do leitor: vários → um botão por evento; nenhum → a frase
+      const destino = await api(page, '/api/portaria/destino')
+      if (destino.eventos.length > 1) {
+        for (const e of destino.eventos) await expect(page.locator(`a[href="/admin/evento/${e.id}/validacao"]`).first()).toBeVisible()
+      } else if (!destino.eventos.length) {
+        await expect(page.getByText('Nenhum evento com leitor aberto agora')).toBeVisible()
+      }
+      await expect(page.getByText('Nenhum evento aqui ainda')).toHaveCount(0)
       await abrir(page, `/admin/evento/${EVENTO_SEED.id}/validacao`)
       expect(await nomesDoMenu(page)).toEqual(['Validação e acessos', 'Leitor de entrada'])
       await expect(page.getByText('Voltar aos eventos')).toHaveCount(0)
@@ -210,7 +272,7 @@ test.describe('menu por papel (layout)', () => {
     })
   })
 
-  test('Sair (caminho feliz): vai pro /entrar e o /admin volta pro login com o ?de=', async ({ browser }) => {
+  test('Sair (caminho feliz): vai pro /entrar, o /admin volta pro login com o ?de= — e entrar de novo devolve à tela', async ({ browser }) => {
     // sessão NOVA: sair com a sessão guardada derrubaria os outros casos
     const ctx = await browser.newContext({ baseURL: BASE })
     const page = await ctx.newPage()
@@ -223,6 +285,11 @@ test.describe('menu por papel (layout)', () => {
       await expect(page).toHaveURL(/\/entrar/, { timeout: 30_000 })
       await page.goto('/admin/financeiro')
       await expect(page).toHaveURL(/\/entrar\?de=%2Fadmin%2Ffinanceiro|\/entrar\?de=\/admin\/financeiro/)
+      await hidratada(page)
+      await page.getByPlaceholder(/@/).fill(LOGINS.master)
+      await page.getByLabel(/senha/i).fill(SENHA)
+      await page.getByRole('button', { name: /^entrar$/i }).click()
+      await expect(page).toHaveURL(/\/admin\/financeiro$/, { timeout: 30_000 })
     } finally {
       await ctx.close()
     }
@@ -298,6 +365,50 @@ test.describe('Eventos (/admin)', () => {
   })
 })
 
+test.describe('Eventos — busca estranha, vazio e três pontos', () => {
+  test.use({ storageState: sessao('master') })
+
+  test('busca com emoji, <script> e texto enorme: nada executa, nada acha; "Mostrar todos" limpa busca e situação', async ({ page }) => {
+    await abrir(page, '/admin?situacao=encerrado')
+    await page.evaluate(() => { (window as any).__injetado = false })
+    const lixo = `🎢🌊 <img src=x onerror="window.__injetado=true"> <script>window.__injetado=true</script> ${'z'.repeat(520)}`
+    await page.locator('[data-parte="busca"]').fill(lixo)
+    await expect(page.getByText('Nenhum evento com este filtro')).toBeVisible()
+    await expect(page).toHaveURL(/busca=/)
+    expect(await page.evaluate(() => (window as any).__injetado)).toBe(false)
+    await expect(page.locator('main img[src="x"]')).toHaveCount(0)
+    await page.locator('[data-acao="mostrar-todos"]').click()
+    await expect(page).toHaveURL(/\/admin$/)
+    await expect(page.locator('[data-parte="busca"]')).toHaveValue('')
+    await expect(page.locator('[data-situacao="todos"]')).toHaveAttribute('aria-pressed', 'true')
+    expect(await page.locator('li[data-evento]').count()).toBeGreaterThan(1)
+  })
+
+  test('três pontos: os quatro atalhos do master, um menu aberto por vez, fecha no Esc e no clique fora', async ({ page }) => {
+    await abrir(page, '/admin')
+    const pontos = page.getByRole('button', { name: 'Mais ações deste evento' })
+    expect(await pontos.count()).toBeGreaterThan(1)
+    const aberto = page.locator('li[data-evento] [role="menu"]')
+    await pontos.nth(0).click()
+    await expect(aberto).toHaveCount(1)
+    const itens = (await aberto.getByRole('menuitem').allInnerTexts()).map((t) => t.trim())
+    expect(itens.sort()).toEqual(['Configurações', 'Dashboard', 'Relatórios', 'Validação e acessos'])
+    // um aberto por vez: com um menu aberto, um véu cobre a TELA INTEIRA — o próximo clique, em
+    // qualquer lugar fora do menu, fecha este em vez de abrir outro
+    const veu = (await page.locator('li[data-evento] div.fixed.inset-0[aria-hidden="true"]').boundingBox())!
+    expect([veu.x, veu.y, veu.width, veu.height]).toEqual([0, 0, 1366, 860])
+    await page.mouse.click(700, 40) // fora do menu, no alto da tela
+    await expect(aberto).toHaveCount(0)
+    await pontos.nth(1).click()
+    await expect(aberto).toHaveCount(1)
+    await expect(pontos.nth(1)).toHaveAttribute('aria-expanded', 'true')
+    await expect(pontos.nth(0)).toHaveAttribute('aria-expanded', 'false')
+    await page.keyboard.press('Escape')
+    await expect(aberto).toHaveCount(0)
+    await expect(page).toHaveURL(/\/admin$/)
+  })
+})
+
 /* ================================================== criar evento (operação, EVT-01/03/…) */
 
 test.describe('Criar evento pela operação', () => {
@@ -333,6 +444,42 @@ test.describe('Criar evento pela operação', () => {
     expect(lista.find((e: any) => e.id === id)?.estado).toBe('AM')
     const publico = await (await page.request.get(`/api/e/${resumo.slug}`)).json()
     expect(publico.evento.classificacao, 'EVT-14: sem mexer, nasce Livre').toBe(0)
+  })
+})
+
+test.describe('Criar evento no celular (375 px)', () => {
+  test.use({ storageState: sessao('master'), viewport: { width: 375, height: 812 }, hasTouch: true })
+  test('"Passo X de 5", nada vaza da tela e a barra roxa não cobre o último campo — no passo 1 e no 4', async ({ page }) => {
+    await abrir(page, '/admin/evento/novo')
+    // mede com o passo PARADO: ao avançar, o bloco entra deslizando pela direita (~0,3 s) e,
+    // durante o deslize, passa uns pixels da tela — o que se mede aqui é o desenho do passo
+    const medir = () => page.evaluate(async () => {
+      const finitas = document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+      await Promise.all(finitas.map((a) => a.finished.catch(() => {})))
+      window.scrollTo(0, document.documentElement.scrollHeight)
+      const barra = [...document.querySelectorAll<HTMLElement>('div.fixed')].find((d) => d.textContent?.includes('Prosseguir'))!
+      const campos = [...document.querySelectorAll<HTMLElement>('input:not([type="hidden"]):not([type="file"]), textarea, select')]
+        .filter((e) => e.getBoundingClientRect().height > 0)
+      return {
+        largura: document.documentElement.scrollWidth,
+        topoDaBarra: barra.getBoundingClientRect().top,
+        fimDoUltimoCampo: Math.max(...campos.map((c) => c.getBoundingClientRect().bottom)),
+      }
+    })
+    await expect(page.getByText('Passo 1 de 5')).toBeVisible()
+    let m = await medir()
+    expect(m.largura).toBeLessThanOrEqual(375)
+    expect(m.fimDoUltimoCampo, 'a barra fixa cobre o último campo do passo 1').toBeLessThanOrEqual(m.topoDaBarra)
+    await page.locator('#nome').fill(unico('ZZE2E celular'))
+    await page.locator('#cid').fill('Ubatã')
+    await page.locator('#sval').fill('(73) 99999-0000')
+    const prosseguir = page.getByRole('button', { name: 'Prosseguir' })
+    await prosseguir.click(); await prosseguir.click(); await prosseguir.click() // → 4
+    await expect(page.getByText('Passo 4 de 5')).toBeVisible()
+    m = await medir()
+    expect(m.largura, 'a tabela de preços do passo 4 vaza no celular').toBeLessThanOrEqual(375)
+    expect(m.fimDoUltimoCampo, 'a barra fixa cobre o último campo do passo 4').toBeLessThanOrEqual(m.topoDaBarra)
+    // não publica nada: o caso sai com o rascunho no navegador desta sessão de teste, só
   })
 })
 
@@ -401,6 +548,51 @@ test.describe('Visão geral (/admin/relatorios)', () => {
   })
 })
 
+test.describe('Visão geral — histórico e o link do evento', () => {
+  test.use({ storageState: sessao('master') })
+
+  test('mexer no período não empilha histórico: o Voltar do navegador sai da tela (replace, de propósito)', async ({ page }) => {
+    await abrir(page, '/admin/financeiro')
+    await abrirGrupos(page)
+    await menu(page).getByRole('link', { name: 'Visão geral', exact: true }).click()
+    await expect(page).toHaveURL(/\/admin\/relatorios$/)
+    await hidratada(page)
+    await page.mouse.move(900, 500) // tira o mouse da lateral: o trilho aberto cobre os chips
+    await page.waitForTimeout(500) // o trilho recolhe 200 ms depois que o mouse sai
+    await page.getByRole('group', { name: 'Período' }).getByRole('button', { name: '7 dias' }).click()
+    await expect(page).toHaveURL(/periodo=7d/)
+    await page.getByRole('group', { name: 'Período' }).getByRole('button', { name: 'Tudo' }).click()
+    await expect(page).toHaveURL(/periodo=tudo/)
+    await page.goBack()
+    await expect(page).toHaveURL(/\/admin\/financeiro$/)
+  })
+
+  test('REL-09: trocar o período com a rota lenta mostra "atualizando…" até o número novo chegar', async ({ page }) => {
+    await abrir(page, '/admin/relatorios')
+    await page.route('**/api/admin/relatorios?**', async (rota) => {
+      await new Promise((r) => setTimeout(r, 2_500))
+      await rota.continue()
+    })
+    await page.getByRole('group', { name: 'Período' }).getByRole('button', { name: '7 dias' }).click()
+    const periodo = page.locator('[data-parte="periodo-resolvido"]')
+    await expect(periodo).toContainText('atualizando…')
+    await expect(periodo).not.toContainText('atualizando…', { timeout: 20_000 })
+    await page.unroute('**/api/admin/relatorios?**')
+    const r = await api(page, '/api/admin/relatorios?periodo=7d')
+    expect(centavos(await kpi(page, 'cobrado').innerText())).toBe(r.resumo.cobradoCents)
+  })
+
+  test('"Por evento" abre os Relatórios daquele evento', async ({ page }) => {
+    await abrir(page, '/admin/relatorios?periodo=tudo')
+    const link = page.locator('main a[href^="/admin/evento/"][href$="/relatorios"]').first()
+    const destino = await link.getAttribute('href')
+    await link.click()
+    await expect(page).toHaveURL(new RegExp(`${destino}$`))
+    await hidratada(page)
+    await expect(page.locator('h1')).toBeVisible()
+  })
+})
+
 test.describe('Visão geral pro financeiro (REL-04, REL-05)', () => {
   test.use({ storageState: sessao('financeiro') })
   test('sem "Ver os clientes" (porta que ele não abre) e com os e-mails do topo mascarados', async ({ page }) => {
@@ -456,6 +648,31 @@ test.describe('Financeiro (/admin/financeiro)', () => {
   })
 })
 
+test.describe('Financeiro — por evento', () => {
+  test.use({ storageState: sessao('master') })
+  test('"libera em dd/mm/aaaa" ou "liberado" como a rota diz; "Abrir" leva ao financeiro do evento com o MESMO líquido', async ({ page }) => {
+    await abrir(page, '/admin/financeiro')
+    const f = await api(page, '/api/admin/financeiro')
+    const linhas = page.locator('tr[data-parte="linha-evento"]')
+    const n = await linhas.count()
+    expect(n, 'nenhum evento com movimento na base de E2E').toBeGreaterThan(0)
+    for (let i = 0; i < n; i++) {
+      const linha = linhas.nth(i)
+      const nome = (await linha.locator('td').first().locator('p').first().innerText()).trim()
+      const e = f.eventos.find((x: any) => x.nome === nome)
+      expect(e, `a linha "${nome}" não é um evento da rota`).toBeTruthy()
+      if (e.liberado) await expect(linha.locator('td').first()).toContainText('liberado')
+      else await expect(linha.locator('td').first()).toContainText(/libera em \d{2}\/\d{2}\/\d{4}/)
+      expect(centavos(await linha.locator('td').nth(1).innerText())).toBe(e.liquidoCents)
+    }
+    await linhas.first().locator('[data-acao="abrir-evento"]').click()
+    await expect(page).toHaveURL(/\/admin\/evento\/[0-9a-f-]{36}\/financeiro/)
+    const id = page.url().match(/evento\/([0-9a-f-]{36})\//)![1]!
+    const doEvento = await api(page, `/api/admin/evento/${id}/financeiro`)
+    expect(doEvento.resumo.liquidoCents).toBe(f.eventos.find((x: any) => x.id === id).liquidoCents)
+  })
+})
+
 /* ========================================================== Dados e cobrança + o site */
 
 test.describe('Dados e cobrança e o site (PROD-08, CFG-01, CFG-02, ORG-01)', () => {
@@ -484,13 +701,19 @@ test.describe('Dados e cobrança e o site (PROD-08, CFG-01, CFG-02, ORG-01)', ()
     try {
       await abrir(page, '/admin/configuracoes')
       await expect(page.locator('[data-parte="a-preencher"]').first()).toBeVisible()
+      await expect(page.locator('[data-acao="salvar"]'), 'Salvar aceso sem nada mudado').toBeDisabled()
       await page.locator('#cfg-razao').fill(RAZAO)
+      await expect(page.locator('[data-acao="salvar"]')).toBeEnabled()
       await page.locator('[data-parte="campo-documento"]').fill('12ABC34501DE35')
       await page.locator('#cfg-linha').fill('Rodovia de Teste E2E, km 1')
       await page.locator('#cfg-cidade').fill('Ubatã')
       await page.locator('#cfg-uf').fill('BA')
       await page.locator('#cfg-email').fill('atendimento@e2e.teste.invalido')
       await page.locator('[data-acao="salvar"]').click()
+      const salvo = page.getByRole('status').filter({ hasText: 'Salvo.' })
+      await expect(salvo).toBeVisible()
+      await expect(salvo, '"Salvo." não sumiu sozinho').toBeHidden({ timeout: 6_000 })
+      await expect(page.locator('[data-acao="salvar"]')).toBeDisabled()
       await expect.poll(async () => (await api(page, '/api/admin/organizacao')).razaoSocial).toBe(RAZAO)
 
       await abrir(page, '/termos')
@@ -513,6 +736,48 @@ test.describe('Dados e cobrança e o site (PROD-08, CFG-01, CFG-02, ORG-01)', ()
     await abrir(page, '/termos')
     await expect(page.locator('[data-parte="rodape-publico"]')).not.toContainText(RAZAO)
     await expect(page.locator('[data-parte="rodape-publico"]')).not.toContainText(/a preencher/i)
+  })
+})
+
+test.describe('Dados e cobrança — edição pendente', () => {
+  test.use({ storageState: sessao('master') })
+  test('com alteração não salva, o menu do painel pergunta antes de sair (Cancelar fica) e fechar a aba também', async ({ page }) => {
+    await abrir(page, '/admin/configuracoes')
+    const antes = await api(page, '/api/admin/organizacao')
+    await expect(page.locator('[data-parte="barra-salvar"]')).toHaveCount(0)
+    await page.locator('#cfg-razao').click()
+    await page.locator('#cfg-razao').fill('ZZ E2E edição pendente')
+    await expect(page.locator('[data-parte="barra-salvar"]')).toBeVisible()
+    await abrirGrupos(page)
+    let pergunta = ''
+    page.once('dialog', (d) => { pergunta = `${d.type()}: ${d.message()}`; void d.dismiss() })
+    await menu(page).getByRole('link', { name: 'Equipe', exact: true }).click()
+    await expect.poll(() => pergunta).toContain('confirm: Tem alteração não salva')
+    await expect(page).toHaveURL(/\/admin\/configuracoes$/)
+    await expect(page.locator('#cfg-razao')).toHaveValue('ZZ E2E edição pendente')
+    expect((await api(page, '/api/admin/organizacao')).razaoSocial, 'gravou sem o Salvar').toBe(antes.razaoSocial)
+    // fechar a aba (e o F5) passa pelo beforeunload: o navegador pergunta
+    const dialogo = page.waitForEvent('dialog')
+    await page.close({ runBeforeUnload: true })
+    const d = await dialogo
+    expect(d.type()).toBe('beforeunload')
+    await d.accept()
+  })
+})
+
+test.describe('Dados e cobrança no celular (390 px)', () => {
+  test.use({ storageState: sessao('master'), viewport: { width: 390, height: 844 }, hasTouch: true })
+  test('com alteração pendente, o Salvar acompanha no pé da tela — sem voltar ao topo', async ({ page }) => {
+    await abrir(page, '/admin/configuracoes')
+    await page.locator('#cfg-razao').fill('ZZ E2E celular')
+    await page.locator('#cfg-carteira').scrollIntoViewIfNeeded()
+    const topo = (await page.locator('[data-acao="salvar"]').boundingBox())!
+    expect(topo.y + topo.height, 'o caso não rolou: o Salvar do topo ainda está à vista').toBeLessThan(0)
+    const pe = (await page.locator('[data-acao="salvar-rodape"]').boundingBox())!
+    expect(pe.y).toBeGreaterThanOrEqual(0)
+    expect(pe.y + pe.height).toBeLessThanOrEqual(844)
+    await expect(page.locator('[data-acao="salvar-rodape"]')).toBeEnabled()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   })
 })
 
@@ -588,6 +853,54 @@ test.describe('Clientes', () => {
     await page.locator('[data-parte="busca"]').press('Enter')
     await expect(page).toHaveURL(/q=/)
     await expect(page.locator('[data-parte="vazio"]')).toContainText('Nenhum cliente com esses filtros')
+    await expect(page.getByRole('button', { name: /^Exportar 0/ }), 'exportar zero clientes').toBeDisabled()
+  })
+
+  test('paginação: "1–N de N" e os dois botões apagados nas pontas', async ({ page }) => {
+    await abrir(page, '/admin/clientes')
+    const r = await api(page, '/api/admin/clientes')
+    const { total, porPagina } = r.paginacao
+    const ate = Math.min(total, porPagina)
+    await expect(page.getByText(new RegExp(`1–${ate.toLocaleString('pt-BR')}\\s+de ${total.toLocaleString('pt-BR')}`))).toBeVisible()
+    await expect(page.locator('[data-acao="anterior"]')).toBeDisabled()
+    if (total <= porPagina) await expect(page.locator('[data-acao="proxima"]')).toBeDisabled()
+    else {
+      await page.locator('[data-acao="proxima"]').click()
+      await expect(page).toHaveURL(/pagina=2/)
+      await page.reload(); await hidratada(page)
+      await expect(page.locator('[data-acao="anterior"]')).toBeEnabled()
+    }
+  })
+
+  test('a ficha: CPF inteiro, WhatsApp só com número de 10/11 dígitos (nova aba), fecha no Esc, no X e no véu', async ({ page }) => {
+    await abrir(page, '/admin/clientes')
+    const lista = await api(page, '/api/admin/clientes?porPagina=100')
+    const alvo = lista.itens.find((c: any) => c.cpf) ?? lista.itens[0]
+    const linha = page.locator('tbody tr', { hasText: alvo.email }).first()
+    const painel = page.locator('[data-parte="modal-lateral"]')
+    await linha.click()
+    await expect(painel).toBeVisible()
+    const ficha = await api(page, `/api/admin/clientes/${alvo.id}`)
+    const cpf = String(ficha.cpf ?? '').replace(/\D/g, '')
+    if (cpf.length === 11) await expect(painel).toContainText(`${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`)
+    const zap = painel.getByRole('link', { name: 'WhatsApp' })
+    const digitos = String(ficha.telefone ?? '').replace(/\D/g, '')
+    if (digitos.length === 10 || digitos.length === 11) {
+      await expect(zap).toHaveAttribute('href', `https://wa.me/55${digitos}`)
+      await expect(zap).toHaveAttribute('target', '_blank')
+    } else {
+      await expect(zap).toHaveCount(0)
+    }
+    await page.keyboard.press('Escape')
+    await expect(painel).toHaveCount(0)
+    await linha.click()
+    await expect(painel).toBeVisible()
+    await painel.getByLabel('Fechar', { exact: true }).click()
+    await expect(painel).toHaveCount(0)
+    await linha.click()
+    await expect(painel).toBeVisible()
+    await page.mouse.click(20, 400) // o véu, à esquerda do painel
+    await expect(painel).toHaveCount(0)
   })
 
   test('CLI-04: exportar pelo botão baixa a planilha e deixa a linha na Auditoria', async ({ page }) => {
@@ -676,4 +989,70 @@ test.describe('Filas', () => {
     await botao.first().click()
     await expect(page.getByText(/devolução|Fila varrida|Não havia/i).first()).toBeVisible()
   })
+
+  test('atualiza sozinha a cada 15 s com a aba à vista — e para com a aba escondida', async ({ page }) => {
+    test.setTimeout(150_000)
+    let pedidos = 0
+    let recargas = 0
+    const ehFilas = (u: string) => new URL(u).pathname === '/api/admin/filas'
+    page.on('request', (r) => { if (ehFilas(r.url())) pedidos++ })
+    page.on('load', () => { recargas++ })
+    await abrir(page, '/admin/filas')
+    // à vista: o próximo pedido chega sozinho (o relógio é de 15 s; 20 s de folga pro nuxt dev)
+    await page.waitForRequest((r) => ehFilas(r.url()), { timeout: 20_000 })
+    const esconder = () => page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await esconder()
+    let antes = { pedidos, recargas }
+    await page.waitForTimeout(16_500)
+    if (recargas !== antes.recargas) {
+      // o `nuxt dev` recarregou a página no meio (reotimização de dependência): documento novo,
+      // aba "à vista" de novo — esconde outra vez e mede de novo
+      await hidratada(page)
+      await esconder()
+      antes = { pedidos, recargas }
+      await page.waitForTimeout(16_500)
+    }
+    expect(pedidos - antes.pedidos, 'atualizou com a aba escondida').toBe(0)
+  })
+})
+
+/* ================================================================= celular (375 px) */
+
+test.describe('celular 375 px — nada vaza da tela', () => {
+  test.use({ storageState: sessao('master'), viewport: { width: 375, height: 812 }, hasTouch: true })
+  for (const rota of ['/admin', '/admin/relatorios?periodo=tudo', '/admin/financeiro', '/admin/clientes', '/admin/configuracoes',
+    '/admin/organizacoes', '/admin/equipe', '/admin/auditoria', '/admin/reconciliacao', '/admin/filas', '/admin/suporte']) {
+    test(`${rota}: a página não rola de lado; tabela larga rola dentro do cartão; botão da tabela com alvo ≥ 40 px`, async ({ page }) => {
+      await abrir(page, rota)
+      const r = await page.evaluate(() => {
+        const tabelas = [...document.querySelectorAll('main table')].filter((t) => t.getBoundingClientRect().width > 0)
+        const soltas = tabelas.filter((t) => {
+          if (t.getBoundingClientRect().right <= innerWidth + 1) return false
+          for (let p = t.parentElement; p; p = p.parentElement) {
+            const o = getComputedStyle(p).overflowX
+            if (o === 'auto' || o === 'scroll') return false
+          }
+          return true
+        }).length
+        const baixos = [...document.querySelectorAll<HTMLElement>('main table button, main table a.btn-secundario, main table select')]
+          .filter((b) => { const x = b.getBoundingClientRect(); return x.height > 0 && x.height < 40 }).length
+        return { largura: document.documentElement.scrollWidth, soltas, baixos }
+      })
+      expect(r.largura, 'a página rola de lado').toBeLessThanOrEqual(375)
+      expect(r.soltas, 'tabela larga fora de um cartão que rola').toBe(0)
+      expect(r.baixos, 'botão de tabela com alvo menor que 40 px').toBe(0)
+      if (rota === '/admin') {
+        // busca na largura toda, chips rolam de lado, três pontos com alvo ≥ 40 px
+        const busca = (await page.locator('[data-parte="busca"]').boundingBox())!
+        expect(busca.width).toBeGreaterThanOrEqual(375 - 2 * 16 - 2)
+        const chips = page.getByRole('group', { name: 'Situação' })
+        expect(await chips.evaluate((el) => getComputedStyle(el).overflowX)).toBe('auto')
+        const pontos = (await page.getByRole('button', { name: 'Mais ações deste evento' }).first().boundingBox())!
+        expect(Math.min(pontos.width, pontos.height)).toBeGreaterThanOrEqual(40)
+      }
+    })
+  }
 })
