@@ -222,3 +222,35 @@ describe('conferência de caixa — a tela', () => {
     expect(fechar().attributes('disabled'), 'o caixa B veio com a contagem do A').toBeDefined()
   })
 })
+
+// ===========================================================================
+// A ficha da térmica: o @page que o navegador aceita (ADM-60)
+// ===========================================================================
+describe('ficha impressa na bobina de 80mm (ADM-60)', () => {
+  it('o tamanho da página tem duas medidas — "80mm auto" o Chrome joga fora e imprime em Carta', async () => {
+    const { PAGINA_DA_FICHA } = await import('../components/FichasImpressas.vue')
+    expect(PAGINA_DA_FICHA, 'altura "auto" não é valor de size').toMatch(/^80mm \d+(\.\d+)?mm$/)
+  })
+
+  it('imprimir põe o @page com esse tamanho e tira depois', async () => {
+    const { mount } = await import('@vue/test-utils')
+    const Fichas = (await import('../components/FichasImpressas.vue')).default
+    const w = mount(Fichas, { props: { evento: 'Evento', pedido: 'DT-1', ingressos: [] }, attachTo: document.body })
+    const estilos: string[] = []
+    const antes = window.print
+    ;(window as any).print = () => {
+      estilos.push(...[...document.head.querySelectorAll('style')].map((s) => s.textContent ?? ''))
+    }
+    try {
+      await (w.vm as any).imprimir()
+      expect(estilos.some((e) => /@page \{ size: 80mm \d+mm; margin: 0 \}/.test(e)),
+        `o @page da ficha não entrou (ou entrou inválido): ${JSON.stringify(estilos)}`).toBe(true)
+    } finally {
+      ;(window as any).print = antes
+      window.dispatchEvent(new Event('afterprint'))
+      w.unmount()
+    }
+    expect([...document.head.querySelectorAll('style')].some((s) => (s.textContent ?? '').includes('@page')),
+      'o @page da térmica ficou pro borderô imprimir em 80mm').toBe(false)
+  })
+})
