@@ -290,7 +290,8 @@ const linkWhats = computed(() => canalAberto.value === 'whatsapp' ? `https://wa.
           <p v-if="data?.avisoSaude" class="text-xs text-alerta">{{ data.avisoSaude }}</p>
           <ul v-else class="flex flex-wrap gap-2">
             <li v-for="f in fluxos" :key="f.id">
-              <span :class="f.ativo ? (f.erros_24h ? 'selo-alerta' : 'selo-ok') : (fluxosDeAtendimento.includes(f.nome) ? 'selo-erro' : 'selo-neutro')"
+              <span class="max-w-full whitespace-normal text-left [overflow-wrap:anywhere]"
+                    :class="f.ativo ? (f.erros_24h ? 'selo-alerta' : 'selo-ok') : (fluxosDeAtendimento.includes(f.nome) ? 'selo-erro' : 'selo-neutro')"
                     :title="f.erros_24h ? `${f.erros_24h} erro(s) nas últimas 24h` : (f.ativo ? 'ligado' : 'desligado')">
                 <span class="size-1.5 rounded-full" :class="f.ativo ? 'bg-success-600' : 'bg-ink-400'" aria-hidden="true" />
                 {{ f.nome }}{{ f.ativo ? '' : ' · desligado' }}{{ f.erros_24h ? ` · ${f.erros_24h} erro(s)` : '' }}

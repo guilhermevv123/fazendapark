@@ -132,7 +132,7 @@ useHead({ title: 'Transferências' })
           O dinheiro das vendas saindo para a conta da produção.
         </p>
       </div>
-      <div class="flex gap-2">
+      <div class="flex flex-wrap gap-2">
         <button type="button" class="btn-secundario" @click="exportar">
           <IconeMenu nome="exportar" :tamanho="18" /> Exportar lista
         </button>

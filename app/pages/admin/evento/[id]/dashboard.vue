@@ -455,13 +455,13 @@ useHead({ title: 'Dashboard do evento' })
                 :class="periodo === p[0] ? 'chip-ativo' : 'chip'" @click="escolher(p[0])">
           {{ p[1] }}
         </button>
-        <div class="flex items-center gap-2">
+        <div class="flex w-full items-center gap-2 sm:w-auto">
           <label class="sr-only" for="painel-de">De</label>
-          <input id="painel-de" v-model="de" type="date" class="campo min-h-[40px] w-[9.25rem] px-3 py-1.5"
+          <input id="painel-de" v-model="de" type="date" class="campo min-h-[40px] min-w-0 flex-1 px-3 py-1.5 sm:w-[9.25rem] sm:flex-none"
                  :class="periodo === 'personalizado' ? 'ring-2 ring-acao' : ''" aria-label="De">
           <span class="text-sm text-tinta-suave">até</span>
           <label class="sr-only" for="painel-ate">Até</label>
-          <input id="painel-ate" v-model="ate" type="date" class="campo min-h-[40px] w-[9.25rem] px-3 py-1.5"
+          <input id="painel-ate" v-model="ate" type="date" class="campo min-h-[40px] min-w-0 flex-1 px-3 py-1.5 sm:w-[9.25rem] sm:flex-none"
                  :class="periodo === 'personalizado' ? 'ring-2 ring-acao' : ''" aria-label="Até">
         </div>
       </div>

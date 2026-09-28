@@ -273,7 +273,7 @@ useHead({ title: 'Filas' })
             </div>
           </dl>
 
-          <p v-if="f.ultimoErro" class="mt-3 text-xs text-tinta-suave">
+          <p v-if="f.ultimoErro" class="mt-3 text-xs text-tinta-suave [overflow-wrap:anywhere]">
             <span class="font-semibold">Último erro:</span> {{ f.ultimoErro }}
           </p>
 
@@ -340,7 +340,7 @@ useHead({ title: 'Filas' })
               </div>
               <div class="col-span-2 sm:col-span-3">
                 <dt class="rotulo mb-0">Desde que subiu</dt>
-                <dd class="text-sm text-tinta-corpo">
+                <dd class="text-sm text-tinta-corpo [overflow-wrap:anywhere]">
                   {{ f.trabalhador.feitosDesdeOBoot.toLocaleString('pt-BR') }} entregue(s),
                   {{ f.trabalhador.falhosDesdeOBoot.toLocaleString('pt-BR') }} com falha
                   <template v-if="f.trabalhador.ultimoErro">

@@ -287,7 +287,7 @@ useHead({ title: 'Sessões e datas' })
       <div v-if="lotes.length" class="mt-4">
         <span class="rotulo">Já deixar estes ingressos à venda nesses dias</span>
         <div class="flex flex-wrap gap-2">
-          <button v-for="l in lotes" :key="l.id" type="button"
+          <button v-for="l in lotes" :key="l.id" type="button" class="max-w-full whitespace-normal text-left [overflow-wrap:anywhere]"
                   :class="novo.loteIds.includes(l.id) ? 'chip-ativo' : 'chip'"
                   @click="alternarLote(l.id)">
             {{ l.setor }} · {{ l.nome }}
@@ -383,7 +383,7 @@ useHead({ title: 'Sessões e datas' })
       <div class="flex flex-wrap items-center gap-2 border-t border-linha px-4 py-3">
         <span class="rotulo mb-0">Vendendo neste dia</span>
         <span v-for="l in s.lotes" :key="l.id"
-              class="selo-neutro" :title="l.vinculo === 'setor'
+              class="selo-neutro max-w-full whitespace-normal text-left [overflow-wrap:anywhere]" :title="l.vinculo === 'setor'
                 ? 'herdado do setor (modelo antigo)' : 'escolhido nesta tela'">
           {{ l.setor }} · {{ l.nome }}
           <template v-if="l.vinculo === 'setor'"> (setor)</template>

@@ -540,6 +540,7 @@ useHead({ title: 'Reconciliação' })
           o tamanho do que esta conferência não olhou.
         </p>
       </div>
+      <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <tbody>
           <tr v-for="n in data.naoConferidos" :key="n.pedidoId"
@@ -555,6 +556,7 @@ useHead({ title: 'Reconciliação' })
           </tr>
         </tbody>
       </table>
+      </div>
       <p v-if="data.totais.naoConferidos > data.naoConferidos.length"
          class="border-t border-linha px-4 py-3 text-xs text-tinta-fraca">
         Mostrando {{ data.naoConferidos.length }} de {{ data.totais.naoConferidos }}.
