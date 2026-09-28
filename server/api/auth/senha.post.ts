@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { q1, tx } from '../../utils/db'
 import { mutacaoDeOutroSite } from '../../utils/caminho'
 import { autorDaRequisicao, registrarAuditoria } from '../../utils/auditoria'
-import { exigir, ipDaRequisicao, registrarTentativa, travadoPorTentativas } from '../../utils/sessao'
+import { exigir, origemDaRequisicao, registrarTentativa, travadoPorTentativas } from '../../utils/sessao'
 
 const MINIMO = 8
 
@@ -58,8 +58,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const email = sessao.email.trim().toLowerCase()
-  const ip = ipDaRequisicao(event)
-  const travado = await travadoPorTentativas(email, ip)
+  // Atrás de proxy sem `CONFIAR_PROXY` o IP é o do proxy, igual pra todos: os
+  // baldes por IP não contam (ver `travadoPorTentativas`).
+  const { ip, proxySemConfianca } = origemDaRequisicao(event)
+  const travado = await travadoPorTentativas(email, ip, { ipConfiavel: !proxySemConfianca })
   if (travado) throw createError({ statusCode: 429, statusMessage: travado })
 
   const u = await q1<{ password_hash: string }>(

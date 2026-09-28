@@ -55,7 +55,7 @@
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { q } from '../../utils/db'
-import { abrirSessao, ipDaRequisicao, registrarTentativa, travadoPorTentativas } from '../../utils/sessao'
+import { abrirSessao, origemDaRequisicao, registrarTentativa, travadoPorTentativas } from '../../utils/sessao'
 
 const Entrada = z.object({
   email: z.string().email().max(200),
@@ -76,9 +76,12 @@ export default defineEventHandler(async (event) => {
   if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Informe e-mail e senha' })
 
   const email = p.data.email.trim().toLowerCase()
-  const ip = ipDaRequisicao(event)
+  // Atrás do proxy do EasyPanel sem `CONFIAR_PROXY`, o IP é o do proxy — o
+  // mesmo pra todo mundo. Contar os baldes por IP aí trancaria a equipe
+  // inteira (portaria incluída) por causa dos erros de qualquer um (B05).
+  const { ip, proxySemConfianca } = origemDaRequisicao(event)
 
-  const travado = await travadoPorTentativas(email, ip)
+  const travado = await travadoPorTentativas(email, ip, { ipConfiavel: !proxySemConfianca })
   if (travado) throw createError({ statusCode: 429, statusMessage: travado })
 
   /*
