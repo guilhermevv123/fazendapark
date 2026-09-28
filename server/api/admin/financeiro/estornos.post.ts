@@ -117,7 +117,7 @@ export default defineEventHandler(async (event) => {
   // R$ 550,00 de uma produtora vizinha** (pedido dela para 'estornado') e
   // devolveu na resposta o id do pedido e o valor dela. Dinheiro de terceiro
   // saindo por um clique de quem não é dono dele, e sem auditoria nenhuma
-  // (este ramo não registra autor).
+  // (este ramo não registrava autor — ver AUD-03 abaixo).
   //
   // A cerca é a seleção daqui; a reserva continua sendo a atômica de sempre
   // (`SQL_RESERVA_ESTORNO`, por id), que é quem impede dois trabalhadores de
@@ -126,20 +126,31 @@ export default defineEventHandler(async (event) => {
   // automática faz — 'na_fila' com a espera cumprida, mais o resgate do que
   // ficou preso — e **não** alcança 'falhou': essa linha é por id, com gente
   // olhando, senão erro permanente vira laço contra o gateway.
-  const daCasa = await q<{ id: string }>(
-    `SELECT id FROM refund_jobs
+  const daCasa = await q<{ id: string; status: string; attempts: number; last_error: string | null }>(
+    `SELECT id, status, attempts, last_error FROM refund_jobs
       WHERE org_id = $1
         AND ( (status = 'na_fila' AND available_at <= now())
            OR (status = 'estornando' AND claimed_at < now() - interval '5 minutes') )
       ORDER BY available_at
       LIMIT $2`, [orgId, p.data.limite ?? 20])
 
-  const feitos: Awaited<ReturnType<typeof processarUmEstorno>>[] = []
+  // AUD-03: cada devolução que o empurrão fez sair ganha a linha dela na auditoria, com QUEM
+  // apertou — dinheiro que sai da conta por um clique não pode ficar sem autor. (O trabalhador de
+  // fundo, que não tem dono, continua sem autor: ali quem manda é o processo.)
+  const autor = autorDaRequisicao(event)
+  const feitos: NonNullable<Awaited<ReturnType<typeof processarUmEstorno>>>[] = []
   for (const linha of daCasa) {
     const r = await processarUmEstorno(`fila:${orgId.slice(0, 8)}`, linha.id)
-    if (r) feitos.push(r)
+    if (!r) continue
+    feitos.push(r)
+    await registrarAuditoria({
+      autor,
+      entidade: 'estorno', entidadeId: r.id, acao: 'empurrar_fila',
+      antes: { status: linha.status, tentativas: linha.attempts, erro: linha.last_error },
+      depois: { status: r.status, valorCents: r.valorCents, erro: r.erro ?? null },
+    }).catch(() => { /* auditoria não pode derrubar a devolução */ })
   }
-  const ruins = feitos.filter((f) => !f!.ok)
+  const ruins = feitos.filter((f) => !f.ok)
   return {
     ok: true,
     processados: feitos.length,

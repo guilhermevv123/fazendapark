@@ -8,9 +8,11 @@
  *
  *   · 401 → "sua sessão terminou" + Entrar de novo (volta pra esta tela depois: `?de=`);
  *   · 403 → a frase do servidor (que diz o papel e o que pedir) + Voltar aos eventos, SEM retry;
+ *   · 400/422 (o pedido está errado — data torta colada no link) → a frase + Limpar o filtro, quando a
+ *     tela passa `limpar`: repetir o mesmo pedido errado daria o mesmo erro;
  *   · o resto → a frase + Tentar de novo.
  */
-const props = defineProps<{ falha: any; oQue: string; tentar?: () => unknown }>()
+const props = defineProps<{ falha: any; oQue: string; tentar?: () => unknown; limpar?: () => unknown }>()
 const route = useRoute()
 
 const status = computed(() => Number(props.falha?.statusCode ?? props.falha?.status ?? props.falha?.data?.statusCode ?? 0))
@@ -41,6 +43,8 @@ const paraEntrar = computed(() => `/entrar?de=${encodeURIComponent(route.fullPat
     </div>
     <NuxtLink v-if="status === 401" :to="paraEntrar" class="btn-primario shrink-0" data-acao="entrar-de-novo">Entrar de novo</NuxtLink>
     <NuxtLink v-else-if="status === 403" to="/admin" class="btn-secundario shrink-0">Voltar aos eventos</NuxtLink>
+    <button v-else-if="limpar && (status === 400 || status === 422)" type="button" class="btn-secundario shrink-0"
+            data-acao="limpar-filtro" @click="limpar()">Limpar o filtro</button>
     <button v-else-if="tentar" type="button" class="btn-secundario shrink-0" data-acao="tentar-de-novo" @click="tentar()">Tentar de novo</button>
   </div>
 </template>

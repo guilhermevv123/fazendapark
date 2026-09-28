@@ -24,79 +24,71 @@
  */
 definePageMeta({ layout: 'admin' })
 
+import PainelPeriodo from '~/components/painel/Periodo.vue'
+import PainelFalha from '~/components/painel/Falha.vue'
+import { ehChavePeriodo, type ChavePeriodo } from '~/composables/painelPeriodo'
+
 const route = useRoute()
 
-/** o recorte vive na URL: filtro que some ao atualizar não serve pra conferência */
-const de = ref(String(route.query.de ?? ''))
-const ate = ref(String(route.query.ate ?? ''))
-const pessoa = ref(String(route.query.pessoa ?? ''))
-const ato = ref(String(route.query.ato ?? ''))
-const entidade = ref(String(route.query.entidade ?? ''))
-const busca = ref(String(route.query.busca ?? ''))
+/* ------------------------------------------------------------- o recorte */
 
-const params = computed(() => ({
-  de: de.value || undefined, ate: ate.value || undefined,
-  pessoa: pessoa.value || undefined, ato: ato.value || undefined,
-  entidade: entidade.value || undefined, busca: busca.value || undefined,
-}))
+/**
+ * O recorte é o que a URL diz — SEMPRE, e não só na montagem (REL-07). Antes cada filtro virava um
+ * `ref` lido uma vez: clicar em "Auditoria" no menu com um filtro ativo limpava a URL e deixava a
+ * tela filtrada, e o F5 seguinte mostrava outra coisa. Agora a tela lê `route.query` a cada troca;
+ * mexer num filtro ESCREVE na URL (`irPara`, com `replace`: o Voltar sai da tela).
+ *
+ * O período fala o vocabulário de toda tela do painel (proposta 10 da auditoria): Hoje, 7 dias,
+ * 30 dias, Este mês, Mês passado, Este ano, Tudo — `?periodo=` resolvido no calendário do PARQUE
+ * pela rota; datas à mão (`?de=&ate=`) ganham do atalho. Sem nada na URL: Tudo. Data torta colada
+ * no link vai pra rota do jeito que veio: o 400 volta com a frase, e a saída oferecida é limpar o
+ * filtro (repetir o pedido daria o mesmo erro).
+ */
+const texto = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+const filtro = computed(() => {
+  const q = route.query
+  const de = texto(q.de)
+  const ate = texto(q.ate)
+  return {
+    de, ate,
+    periodo: (de || ate ? null : (ehChavePeriodo(q.periodo) ? q.periodo : 'tudo')) as ChavePeriodo | null,
+    pessoa: texto(q.pessoa), ato: texto(q.ato), entidade: texto(q.entidade), busca: texto(q.busca),
+  }
+})
+
+const params = computed(() => {
+  const f = filtro.value
+  const p: Record<string, string> = {}
+  if (f.periodo && f.periodo !== 'tudo') p.periodo = f.periodo
+  for (const k of ['de', 'ate', 'pessoa', 'ato', 'entidade', 'busca'] as const) if (f[k]) p[k] = f[k]
+  return p
+})
 
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   '/api/admin/auditoria', { query: params })
 
-watch(params, (p) => {
-  navigateTo({ query: Object.fromEntries(Object.entries(p).filter(([, v]) => v)) },
-    { replace: true })
+type Mudanca = Partial<{ periodo: string | null; de: string; ate: string; pessoa: string; ato: string; entidade: string; busca: string }>
+function irPara(m: Mudanca) {
+  const f = { ...filtro.value, ...m }
+  const query: Record<string, string> = {}
+  if (f.de || f.ate) {
+    if (f.de) query.de = f.de
+    if (f.ate) query.ate = f.ate
+  } else if (f.periodo && f.periodo !== 'tudo') query.periodo = f.periodo
+  for (const k of ['pessoa', 'ato', 'entidade', 'busca'] as const) if (f[k]) query[k] = f[k]!
+  return navigateTo({ path: '/admin/auditoria', query }, { replace: true })
+}
+const escolherPeriodo = (chave: string) => irPara({ periodo: chave, de: '', ate: '' })
+const escolherDatas = (p: { de: string | null; ate: string | null }) => irPara({ periodo: null, de: p.de ?? '', ate: p.ate ?? '' })
+
+const temFiltro = computed(() => {
+  const f = filtro.value
+  return !!(f.de || f.ate || f.pessoa || f.ato || f.entidade || f.busca) || f.periodo !== 'tudo'
 })
+const limpar = () => navigateTo({ path: '/admin/auditoria' }, { replace: true })
 
-const recusado = computed(() => (falha.value as any)?.statusCode === 403)
-const motivoDaFalha = computed(() =>
-  (falha.value as any)?.data?.statusMessage
-  ?? (falha.value as any)?.statusMessage
-  ?? 'Não consegui carregar a auditoria.')
-
-const temFiltro = computed(() =>
-  !!(de.value || ate.value || pessoa.value || ato.value || entidade.value || busca.value))
-
-function limpar() {
-  de.value = ''; ate.value = ''; pessoa.value = ''
-  ato.value = ''; entidade.value = ''; busca.value = ''
-}
-
-/* ------------------------------------------------------------ período */
-
-/**
- * A régua de período sai de `diaLocal` / `diaLocalMais` / `primeiroDiaDoMes`
- * (`app/composables/formato.ts`), não de conta de data feita aqui.
- *
- * `toISOString` fica de fora de propósito: ele converte pra UTC antes de
- * cortar, e às 21h de Brasília "hoje" já virou amanhã — o atalho traria o dia
- * errado justo no horário em que a bilheteria trabalha. Esta tela tinha um
- * `isoLocal` próprio que acertava isso; a cópia saiu porque tela com fórmula
- * de data própria é como as outras cinco começaram a errar.
- */
-const ATALHOS = { hoje: 'Hoje', ontem: 'Ontem', semana: '7 dias', mes: 'Este mês', tudo: 'Tudo' } as const
-type Atalho = keyof typeof ATALHOS
-
-function faixaDo(qual: Atalho): [string, string] {
-  if (qual === 'tudo') return ['', '']
-  if (qual === 'hoje') return [diaLocal(), diaLocal()]
-  if (qual === 'ontem') return [diaLocalMais(-1), diaLocalMais(-1)]
-  if (qual === 'semana') return [diaLocalMais(-6), diaLocal()]
-  return [primeiroDiaDoMes(), diaLocal()]
-}
-
-function periodo(qual: Atalho) {
-  const [d, a] = faixaDo(qual)
-  de.value = d; ate.value = a
-}
-
-const atalhoAtivo = computed<Atalho | null>(() => {
-  for (const k of Object.keys(ATALHOS) as Atalho[]) {
-    const [d, a] = faixaDo(k)
-    if (d === de.value && a === ate.value) return k
-  }
-  return null
-})
+/** o período que a ROTA resolveu (o "Hoje" é o dia do parque, não o do navegador) */
+const resolvido = computed(() => ({ de: data.value?.filtros?.de || null, ate: data.value?.filtros?.ate || null }))
 
 /* ------------------------------------------------------- como cada coisa lê */
 
@@ -119,6 +111,7 @@ const ENTIDADE_LEGIVEL: Record<string, string> = {
   lote: 'Lote', tipo: 'Tipo de ingresso', setor: 'Setor', sector: 'Setor',
   evento: 'Evento', event: 'Evento', payout: 'Transferência', turno: 'Turno de caixa',
   organizacao: 'Organização', usuario: 'Pessoa da equipe', clientes: 'Base de clientes',
+  estorno: 'Devolução',
 }
 const entidadeLegivel = (e: string) => ENTIDADE_LEGIVEL[e] ?? e
 
@@ -134,12 +127,15 @@ const ACAO_LEGIVEL: Record<string, string> = {
   transferencia_permissao: 'permissão de transferência',
   mapa_gerado: 'mapa de assentos gerado',
   exportado: 'lista exportada',
+  // AUD-03: os dois botões que mandam dinheiro voltar ao comprador
+  tentar_de_novo: 'devolução tentada de novo', empurrar_fila: 'devolução pela fila (Empurrar a fila)',
 }
 const acaoLegivel = (a: string) => ACAO_LEGIVEL[a] ?? a.replace(/_/g, ' ')
 
 /** ato que mexe em dinheiro ou tira alguém de dentro pede leitura, não só listagem */
 const ACAO_GRAVE = new Set([
   'apagado', 'falhou', 'cortesia_cancelada', 'transferencia_cancelada', 'sangria', 'solicitada',
+  'tentar_de_novo', 'empurrar_fila',
 ])
 
 /**
@@ -258,7 +254,7 @@ const cru = (l: any) => JSON.stringify({ antes: l.antes, depois: l.depois }, nul
 
 function exportar() {
   baixarCsv(
-    `auditoria${de.value ? `-${de.value}` : ''}${ate.value ? `-a-${ate.value}` : ''}`,
+    `auditoria${resolvido.value.de ? `-${resolvido.value.de}` : ''}${resolvido.value.ate ? `-a-${resolvido.value.ate}` : ''}`,
     ['Quando', 'Quem', 'E-mail', 'IP', 'O que', 'Id', 'Ato', 'Antes', 'Depois'],
     (data.value?.linhas ?? []).map((l: any) => [
       quandoLegivel(l.quando),
@@ -300,20 +296,15 @@ useHead({ title: 'Auditoria' })
       </button>
     </div>
 
-    <!-- recorte -->
-    <div class="card">
-      <div class="flex flex-wrap items-end gap-3">
-        <label class="block">
-          <span class="rotulo">De</span>
-          <input v-model="de" type="date" class="campo w-40">
-        </label>
-        <label class="block">
-          <span class="rotulo">Até</span>
-          <input v-model="ate" type="date" class="campo w-40">
-        </label>
+    <!-- recorte: tudo mora na URL (REL-07); o período no vocabulário de todo o painel -->
+    <div class="card grid gap-4">
+      <PainelPeriodo :periodo="filtro.periodo" :de="resolvido.de" :ate="resolvido.ate" :carregando="pending"
+                     @escolher="escolherPeriodo" @datas="escolherDatas" />
+      <div class="grid gap-3 border-t border-linha pt-3 sm:flex sm:flex-wrap sm:items-end">
         <label class="block">
           <span class="rotulo">Pessoa</span>
-          <select v-model="pessoa" class="campo w-56">
+          <select class="campo w-full sm:w-56" data-parte="filtro-pessoa" :value="filtro.pessoa"
+                  @change="irPara({ pessoa: ($event.target as HTMLSelectElement).value })">
             <option value="">Qualquer pessoa</option>
             <option v-for="x in data?.opcoes?.pessoas ?? []" :key="x.id" :value="x.id">
               {{ x.nome }} ({{ x.atos }})
@@ -323,7 +314,8 @@ useHead({ title: 'Auditoria' })
         </label>
         <label class="block">
           <span class="rotulo">Ato</span>
-          <select v-model="ato" class="campo w-56">
+          <select class="campo w-full sm:w-56" data-parte="filtro-ato" :value="filtro.ato"
+                  @change="irPara({ ato: ($event.target as HTMLSelectElement).value })">
             <option value="">Todos os atos</option>
             <option v-for="x in opcoesAtos" :key="x.valor" :value="x.valor">
               {{ x.rotulo }} ({{ x.atos }})
@@ -332,7 +324,8 @@ useHead({ title: 'Auditoria' })
         </label>
         <label class="block">
           <span class="rotulo">O que</span>
-          <select v-model="entidade" class="campo w-48">
+          <select class="campo w-full sm:w-48" data-parte="filtro-entidade" :value="filtro.entidade"
+                  @change="irPara({ entidade: ($event.target as HTMLSelectElement).value })">
             <option value="">Tudo</option>
             <option v-for="x in opcoesEntidades" :key="x.valor" :value="x.valor">
               {{ x.rotulo }} ({{ x.atos }})
@@ -341,30 +334,18 @@ useHead({ title: 'Auditoria' })
         </label>
         <label class="block">
           <span class="rotulo">Código ou id</span>
-          <input v-model.lazy="busca" type="search" class="campo w-56"
-                 placeholder="ex.: DT-4K9XQ2">
+          <!-- vai pra URL no Enter (ou ao sair do campo), não a cada letra -->
+          <input type="search" class="campo w-full sm:w-56" data-parte="busca" :value="filtro.busca"
+                 placeholder="ex.: DT-4K9XQ2"
+                 @change="irPara({ busca: ($event.target as HTMLInputElement).value.trim() })">
         </label>
-        <button v-if="temFiltro" type="button" class="btn-secundario" @click="limpar">
+        <button v-if="temFiltro" type="button" class="btn-secundario min-h-[40px]" data-acao="limpar" @click="limpar">
           Limpar filtros
         </button>
       </div>
-
-      <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-linha pt-3">
-        <span class="text-xs text-tinta-fraca">Período:</span>
-        <button v-for="(rotulo, chave) in ATALHOS" :key="chave" type="button"
-                :class="atalhoAtivo === chave ? 'chip-ativo' : 'chip'"
-                @click="periodo(chave)">
-          {{ rotulo }}
-        </button>
-      </div>
     </div>
 
-    <div v-if="falha" class="faixa-erro mt-4">
-      {{ motivoDaFalha }}
-      <button v-if="!recusado" type="button" class="underline" @click="refresh()">
-        Tentar de novo
-      </button>
-    </div>
+    <PainelFalha v-if="falha" :falha="falha" o-que="a auditoria" :tentar="refresh" :limpar="limpar" />
 
     <template v-if="data">
       <!-- o tamanho do recorte, e o tamanho do que ele não sabe -->
