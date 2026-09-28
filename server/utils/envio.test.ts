@@ -369,6 +369,20 @@ describe('a reserva da fila', () => {
 /* ============================================ 3. o e-mail que sai */
 
 describe('o e-mail de confirmação', () => {
+  it('matriz 37 · nome com <script>, acento e emoji sai como TEXTO no e-mail', () => {
+    // trava: o `escapar(...)` do nome do comprador e do titular no HTML (utils/email.ts)
+    const nome = 'Zé Ñandú <script>alert(1)</script> 😀'
+    const m = montarConfirmacao({ pedido: 'PED-ZZ37', compradorNome: nome, compradorEmail: 'a@b.com.br',
+      eventoNome: 'ZZ <b>Festa</b>', totalCents: 3300, linkIngressos: null,
+      ingressos: [{ id: 't-37', codigo: 'ZZ-0037', titular: nome, tipo: 'Inteira' }] })
+    expect(m.html, 'o nome virou tag no HTML do e-mail').not.toContain('<script>')
+    expect(m.html).not.toContain('<b>Festa</b>')
+    expect(m.html).toContain('Zé Ñandú &lt;script&gt;alert(1)&lt;/script&gt; 😀, seu')
+    expect(m.html).toContain('Titular: Zé Ñandú &lt;script&gt;alert(1)&lt;/script&gt; 😀')
+    // o texto puro leva o nome como a pessoa escreveu (texto puro não interpreta tag)
+    expect(m.texto).toContain(nome)
+  })
+
   it('leva o QR ANEXADO, não um link de imagem que o Gmail bloqueia', async () => {
     const p = await pedidoPendente(2)
     await pagar(p.id)

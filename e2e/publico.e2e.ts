@@ -15,7 +15,7 @@
  *   E2E_BASE=http://127.0.0.1:3121 npx playwright test e2e/publico.e2e.ts
  */
 import { expect, test, type APIRequestContext, type Browser, type Page } from '@playwright/test'
-import { BASE, EVENTO_SEED, hidratada, sessao, travaDeBase } from './apoio'
+import { BASE, EVENTO_SEED, LOGINS, SENHA, hidratada, sessao, travaDeBase } from './apoio'
 
 const SLUG = EVENTO_SEED.slug
 const EVENTO_ID = EVENTO_SEED.id
@@ -23,6 +23,41 @@ const EVENTO_ID = EVENTO_SEED.id
 test.beforeAll(() => travaDeBase(BASE))
 
 /* ------------------------------------------------------------------ apoio */
+
+/**
+ * A página terminou de hidratar DE VEZ. O `__vue_app__` (o `hidratada` da casa) existe assim que o
+ * Vue monta, mas página com `await useFetch` hidrata depois, dentro do <Suspense> — e um clique num
+ * NuxtLink antes disso é navegação de DOCUMENTO (quem responde é o servidor), não do navegador. Foi
+ * o que derrubou a "bilheteria fora do ar" numa rodada (27/09): o clique virou SSR e a consulta que
+ * o caso derruba nunca saiu do navegador. `$nuxt.isHydrating` só vira false quando a raiz resolve.
+ */
+async function pronta(page: Page, timeout = 120_000) {
+  await hidratada(page, timeout)
+  await page.waitForFunction(
+    () => (document.querySelector('#__nuxt') as any)?.__vue_app__?.$nuxt?.isHydrating === false, null, { timeout })
+}
+
+/**
+ * A resposta de uma rota MEXIDA no navegador — pra pôr na tela um estado que o banco semeado não
+ * tem (vendas fechadas, lote que ainda vai abrir, variação esgotada, evento em cada situação) sem
+ * mexer no evento que os outros casos compram. Só pega a consulta que sai do NAVEGADOR: por isso
+ * esses casos chegam na tela clicando, nunca com `goto` (no SSR quem pergunta é o servidor). O que a
+ * ROTA decide sobre esses estados é da suíte vitest (`eventos-publicos.test.ts`, `e/slug.test.ts`);
+ * aqui é a TELA, com o CSS de verdade.
+ */
+async function comResposta(page: Page, padrao: string, mexer: (j: any) => any) {
+  await page.route(padrao, async (rota) => {
+    const r = await rota.fetch()
+    await rota.fulfill({ response: r, json: mexer(await r.json()) })
+  })
+}
+
+/** 375×812 com toque — o "celular 375px" da matriz. */
+const celular = (browser: Browser) => browser.newContext({
+  viewport: { width: 375, height: 812 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+  locale: 'pt-BR', timezoneId: 'America/Bahia',
+})
+const larguraDaPagina = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth)
 
 /** CPF sintético que passa no dígito verificador. */
 function cpf(): string {
@@ -121,6 +156,9 @@ function noFusoDoParque(iso: string) {
 const cor = (page: Page, seletor: string, prop: 'color' | 'backgroundColor' = 'backgroundColor') =>
   page.locator(seletor).first().evaluate((el, p) => getComputedStyle(el)[p as any], prop)
 
+/** 300 → "R$ 3,00" (sem milhar: os valores destes casos não passam de R$ 999). */
+const emReais = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`
+
 /** Preenche o formulário do pagamento como a pessoa preenche (sem CEP: o ViaCEP é externo). */
 async function preencherComprador(page: Page, extra: { email?: string } = {}) {
   await page.locator('#nome').fill('Maria E2E Pública')
@@ -135,12 +173,13 @@ async function preencherComprador(page: Page, extra: { email?: string } = {}) {
 /** Da vitrine até a tela de pagamento com `n` inteiras de sábado. */
 async function irAoPagamento(page: Page, n = 1, caminho = `/e/${SLUG}`) {
   await page.goto(caminho)
-  await hidratada(page)
+  await pronta(page)
   const mais = page.getByRole('button', { name: 'Adicionar um Inteira' }).first()
   for (let i = 0; i < n; i++) await mais.click()
-  await page.getByRole('button', { name: 'Ir para pagamento' }).click()
+  // no computador é o botão do resumo; no celular, o "Pagar" da barra de baixo
+  await page.getByRole('button', { name: /^(Ir para pagamento|Pagar)$/ }).filter({ visible: true }).first().click()
   await expect(page).toHaveURL(new RegExp(`/e/${SLUG}/pagamento`))
-  await hidratada(page)
+  await pronta(page)
   await expect(page.getByRole('heading', { name: 'Finalizar compra' })).toBeVisible()
 }
 
@@ -182,7 +221,7 @@ test.describe('erro e caminho codificado', () => {
     expect(await page.content()).not.toMatch(/"clientes"\s*:/)
     // e pela navegação do NAVEGADOR (quem normaliza o `..` é o fetch do navegador, com o cookie)
     await page.goto('/')
-    await hidratada(page)
+    await pronta(page)
     await page.evaluate(() => (document.querySelector('#__nuxt') as any).__vue_app__.config.globalProperties.$router
       .push('/e/..%2Fadmin%2Fclientes'))
     await expect(page.getByText('Evento não encontrado').first()).toBeVisible()
@@ -204,7 +243,7 @@ test.describe('erro e caminho codificado', () => {
 test.describe('vitrine', () => {
   test('matriz 16 · B10 — a bilheteria fora do ar: "não respondeu", com Tentar de novo (nunca "não encontrado")', async ({ page }) => {
     await page.goto('/')
-    await hidratada(page)
+    await pronta(page)
     // a navegação SEGUINTE é do navegador (NuxtLink), e é essa consulta que cai
     await page.route('**/api/e/**', (rota) => rota.fulfill({ status: 500, contentType: 'application/json',
       body: JSON.stringify({ statusCode: 500, statusMessage: 'banco fora do ar' }) }))
@@ -223,7 +262,7 @@ test.describe('vitrine', () => {
     const page = await ctx.newPage()
     const problemas = vigia(page)
     await page.goto(`/e/${SLUG}`)
-    await hidratada(page)
+    await pronta(page)
     await page.waitForTimeout(500)
     await expect(page.locator('dl').first()).toContainText(esperado)
     expect(problemas, 'hidratação trocou o texto (ou erro no console)').toEqual([])
@@ -232,21 +271,21 @@ test.describe('vitrine', () => {
 
   test('matriz 27 · B19 — F5 com 2 ingressos: a seleção volta, sem dado pessoal guardado', async ({ page }) => {
     await page.goto(`/e/${SLUG}`)
-    await hidratada(page)
+    await pronta(page)
     const mais = page.getByRole('button', { name: 'Adicionar um Inteira' }).first()
     await mais.click(); await mais.click()
     const total = await page.locator('aside').getByText(/^R\$/).last().textContent()
     await page.reload()
-    await hidratada(page)
+    await pronta(page)
     await expect(page.locator('aside')).toContainText('2×')
     await expect(page.locator('aside')).toContainText(total!.trim())
     const guardado = await page.evaluate(() => sessionStorage.getItem('dt:carrinho'))
     expect(guardado).not.toMatch(/"documento":"[^"]+"/)
   })
 
-  test('matriz 21/22 · meia-entrada: sem motivo trava; só Estudante e Jovem pedem número; "Leve na entrada"', async ({ page }) => {
+  test('matriz 21/22/23/19 · meia-entrada: sem motivo trava; só Estudante e Jovem pedem número; o número tem de 3 a 40; "Leve na entrada"; zerar tira a declaração', async ({ page }) => {
     await page.goto(`/e/${SLUG}`)
-    await hidratada(page)
+    await pronta(page)
     await page.getByRole('button', { name: 'Adicionar um Meia-entrada' }).first().click()
     const pagar = page.getByRole('button', { name: 'Ir para pagamento' })
     await expect(pagar).toBeDisabled()
@@ -263,8 +302,29 @@ test.describe('vitrine', () => {
     expect(pedemNumero.map((x) => x.toLowerCase()).join(' | ')).toMatch(/estudante/)
     expect(pedemNumero).toHaveLength(2)
     await motivo.selectOption({ label: pedemNumero[0] })
-    await page.getByLabel('Número do documento').first().fill('CARTEIRINHA-E2E-1')
+    // matriz 23: vazio trava; 2 caracteres trava AQUI (a porta recusa menos de 3); 41+ é cortado
+    const numero = page.getByLabel('Número do documento').first()
+    await expect(pagar).toBeDisabled()
+    await numero.fill('AB')
+    await expect(page.locator('aside')).toContainText('pelo menos 3 caracteres')
+    await expect(pagar, '2 caracteres passavam da vitrine e morriam num 400 no pagamento').toBeDisabled()
+    // trocar pra um motivo SEM número esconde o campo — e o que sobrou nele não trava nada
+    await motivo.selectOption({ label: opcoes.find((o) => !pedemNumero.includes(o))! })
+    await expect(page.getByLabel('Número do documento')).toHaveCount(0)
+    await expect(pagar, 'o número escondido travou a compra').toBeEnabled()
+    await motivo.selectOption({ label: pedemNumero[0] })
+    await expect(numero).toHaveValue('AB')
+    await expect(pagar).toBeDisabled()
+    await numero.fill('X'.repeat(45))
+    await expect(numero).toHaveValue('X'.repeat(40))
+    await numero.fill('<b>CART-E2E-1</b>')
     await expect(pagar).toBeEnabled()
+    await numero.fill('CARTEIRINHA-E2E-1')
+    await expect(pagar).toBeEnabled()
+    // matriz 19: o "−" até zero tira a linha — e a declaração vai junto
+    await page.getByRole('button', { name: 'Remover um Meia-entrada' }).first().click()
+    await expect(page.getByLabel('Motivo')).toHaveCount(0)
+    await expect(page.getByLabel('Número do documento')).toHaveCount(0)
   })
 
   test('matriz 20 · teto do pedido somando linhas: pendência com a conta e botão desligado', async ({ page, request }) => {
@@ -277,7 +337,7 @@ test.describe('vitrine', () => {
       { botao: page.getByRole('button', { name: /Adicionar um COMBO/ }).first(), max: v.setores[2].lotes[0].variacoes[0].maxPorCompra },
     ]
     await page.goto(`/e/${SLUG}`)
-    await hidratada(page)
+    await pronta(page)
     let n = 0
     for (const l of linhas) {
       for (let i = 0; i < Number(l.max) && n <= teto; i++) { await l.botao.click(); n++ }
@@ -290,7 +350,7 @@ test.describe('vitrine', () => {
 
   test('matriz 28/32 · botões com nome pro leitor de tela; "Ir para pagamento" grava o carrinho v2 carimbado', async ({ page }) => {
     await page.goto(`/e/${SLUG}`)
-    await hidratada(page)
+    await pronta(page)
     await expect(page.getByRole('button', { name: 'Remover um Inteira' }).first()).toBeDisabled()
     await page.getByRole('button', { name: 'Adicionar um Inteira' }).first().click()
     await expect(page.locator('[aria-live="polite"]').first()).toHaveText('1')
@@ -322,6 +382,139 @@ test.describe('vitrine', () => {
     const dele = lista.promoters.find((p: any) => p.codigo === codigo)
     expect(dele?.pedidos, 'o link do promoter não atribuiu a venda').toBe(1)
     await painel.close()
+  })
+
+  test('matriz 17/18/19 · lote de mínimo 4: o "+" salta pro 4, para no teto dizendo o porquê, e o "−" do 4 zera', async ({ page }) => {
+    await page.goto('/')
+    await pronta(page)
+    // o domingo vira um lote de mínimo 4, com o teto de 6 por CPF na inteira
+    await comResposta(page, `**/api/e/${SLUG}`, (j) => {
+      const lote = j.setores[1].lotes[0]
+      lote.minPorCompra = 4
+      lote.variacoes = lote.variacoes.map((v: any) => (v.ehMeia ? v : { ...v, maxPorCompra: 6, tetoPor: 'cpf' }))
+      return j
+    })
+    await page.locator(`a[href="/e/${SLUG}"]`).first().click()
+    await expect(page.getByRole('heading', { name: /Escolha seus/ })).toBeVisible()
+    const mais = page.getByRole('button', { name: 'Adicionar um Inteira' }).nth(1)
+    const menos = page.getByRole('button', { name: 'Remover um Inteira' }).nth(1)
+    const quantos = menos.locator('xpath=following-sibling::span[1]')
+    await expect(page.getByText('Mínimo de 4 por compra, somando as opções deste lote. Cada CPF leva no máximo 6 desta opção'))
+      .toBeVisible()
+    await mais.click()
+    await expect(quantos, 'o primeiro "+" não entrou no mínimo').toHaveText('4')
+    await mais.click(); await mais.click()
+    await expect(quantos).toHaveText('6')
+    // no teto (6 por CPF) o "+" desliga — o clique seguinte nem acontece
+    await expect(mais, 'o "+" passou do teto da linha').toBeDisabled()
+    await menos.click(); await menos.click()
+    await expect(quantos).toHaveText('4')
+    await menos.click()
+    await expect(quantos, 'o "−" parou num número que não compra').toHaveText('0')
+  })
+
+  test('matriz 25 · vendas fechadas: o selo, a frase do porquê, nenhum "+" e o botão diz "Vendas fechadas"', async ({ page }) => {
+    await page.goto('/')
+    await pronta(page)
+    await comResposta(page, `**/api/e/${SLUG}`, (j) => {
+      j.evento.vendasAbertas = false
+      j.evento.avisoDeVenda = 'As vendas pela internet deste evento já terminaram.'
+      for (const s of j.setores) for (const l of s.lotes) l.situacao = 'fechado'
+      return j
+    })
+    await page.locator(`a[href="/e/${SLUG}"]`).first().click()
+    await expect(page.getByText('VENDAS FECHADAS', { exact: true })).toBeVisible()
+    await expect(page.getByText('As vendas pela internet deste evento já terminaram.')).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Adicionar um/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Vendas fechadas' })).toBeDisabled()
+  })
+
+  test('matriz 26 · giro de lote: o lote que ainda vai abrir diz "Em breve" e QUANDO abre, sem "+"', async ({ page }) => {
+    const abre = new Date(Date.now() + 5 * 86_400_000).toISOString()
+    await page.goto('/')
+    await pronta(page)
+    await comResposta(page, `**/api/e/${SLUG}`, (j) => {
+      const s = j.setores[0]
+      s.lotes.push({ ...s.lotes[0], id: '00000000-0000-4000-8000-0000000e2e26', nome: '2º LOTE',
+        situacao: 'em_breve', abreEm: abre,
+        variacoes: s.lotes[0].variacoes.map((v: any, i: number) => ({ ...v,
+          tipoId: `00000000-0000-4000-8000-00000000e2${i}6`, nome: `${v.nome} (2º lote)` })) })
+      return j
+    })
+    await page.locator(`a[href="/e/${SLUG}"]`).first().click()
+    const segundo = page.locator('main div.card').filter({ hasText: 'Inteira (2º lote)' })
+    await expect(segundo).toContainText('Em breve')
+    await expect(segundo).toContainText(`abre em ${noFusoDoParque(abre)}`)
+    await expect(segundo.getByRole('button')).toHaveCount(0)
+    // e o 1º lote segue vendendo
+    await expect(page.getByRole('button', { name: 'Adicionar um Inteira' }).first()).toBeEnabled()
+  })
+
+  test('matriz 77 · PROD-06 — sem como cobrar pela internet: o aviso vem ANTES do formulário e o botão não leva ao pagamento', async ({ page }) => {
+    await page.goto('/')
+    await pronta(page)
+    // é o que a rota diz de um evento à venda sem chave do Asaas (a bateria roda com o simulado)
+    await comResposta(page, `**/api/e/${SLUG}`, (j) => {
+      j.evento.pagamentoOnline = { disponivel: false,
+        recado: 'A venda pela internet está pausada. Compre na bilheteria do parque.' }
+      return j
+    })
+    await page.locator(`a[href="/e/${SLUG}"]`).first().click()
+    const aviso = page.getByRole('status').filter({ hasText: 'Venda online indisponível agora' })
+    await expect(aviso).toContainText('A venda pela internet está pausada. Compre na bilheteria do parque.')
+    await page.getByRole('button', { name: 'Adicionar um Inteira' }).first().click()
+    await expect(page.getByRole('button', { name: 'Venda online indisponível' })).toBeDisabled()
+    await expect(page).toHaveURL(new RegExp(`/e/${SLUG}$`))
+  })
+
+  test('matriz 29 · preço mexido no navegador: a porta cobra o do banco e a cobrança avisa que mudou', async ({ page, request }) => {
+    const { inteira } = await vitrine(request)
+    await irAoPagamento(page, 1)
+    // quem mexe no sessionStorage (ou uma extensão): R$ 1,00 o ingresso
+    await page.evaluate(() => {
+      const c = JSON.parse(sessionStorage.getItem('dt:carrinho')!)
+      c.linhas[0].unitTotalCents = 100
+      c.totais = { ...c.totais, total: 100, face: 91, taxa: 9 }
+      sessionStorage.setItem('dt:carrinho', JSON.stringify(c))
+    })
+    await page.reload()
+    await pronta(page)
+    await expect(page.getByText('R$ 1,00').first()).toBeVisible()
+    await preencherComprador(page)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    await expect(page.getByText(/O preço mudou entre a escolha e o pagamento: a tela mostrava R\$ 1,00/)).toBeVisible()
+    const pedido = await pedidoDaAba(page)
+    expect(pedido.totalCents, 'a porta cobrou o preço que veio do navegador').toBe(inteira.totalCents)
+  })
+
+  test('matriz 31 · celular 375: a barra fixa mostra total e Pagar, e nem com a pendência ela cobre a lista', async ({ browser }) => {
+    const ctx = await celular(browser)
+    const page = await ctx.newPage()
+    await page.goto(`/e/${SLUG}`)
+    await pronta(page)
+    expect(await larguraDaPagina(page), 'rolagem de lado no celular').toBeLessThanOrEqual(375)
+    // uma meia sem motivo: a barra ganha a pendência (e cresce)
+    await page.getByRole('button', { name: 'Adicionar um Meia-entrada' }).first().click()
+    const barra = page.locator('div.fixed.bottom-0')
+    await expect(barra).toBeVisible()
+    await expect(barra).toContainText('1 ingresso')
+    await expect(barra).toContainText('R$ 16,50')
+    await expect(barra.getByRole('button', { name: 'Pagar' })).toBeDisabled()
+    await expect(barra.locator('.faixa-aviso')).toBeVisible()
+    // rola até o fim: o último cartão de ingresso termina ACIMA da barra
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    await page.waitForTimeout(300)
+    const topoDaBarra = await barra.evaluate((e) => e.getBoundingClientRect().top)
+    const fimDaLista = await page.locator('main div.card').filter({ visible: true }).last()
+      .evaluate((e) => e.getBoundingClientRect().bottom)
+    // com folga: encostar na barra já esconde a borda do cartão (sem o conserto: 0,5 px ENTRAVA nela)
+    expect(fimDaLista + 8, 'a barra do celular cobre o fim da lista').toBeLessThanOrEqual(topoDaBarra)
+    // e sem ingresso nenhum a barra some e o recheio volta ao da classe
+    await page.getByRole('button', { name: 'Remover um Meia-entrada' }).first().click()
+    await expect(barra).toHaveCount(0)
+    expect(await page.locator('div.min-h-screen').first().evaluate((e) => e.style.paddingBottom)).toBe('')
+    await ctx.close()
   })
 })
 
@@ -360,14 +553,23 @@ test.describe('pagamento', () => {
     expect(foiAoCheckout, 'a tela gastou a ida ao servidor com um e-mail que ela já sabia torto').toBe(false)
   })
 
-  test('matriz 88 · B23 — forma de pagamento com estado anunciado (aria-pressed)', async ({ page }) => {
+  test('matriz 88 · B23 — todo campo tem rótulo, e a forma de pagamento anuncia o estado (aria-pressed)', async ({ page }) => {
     await irAoPagamento(page)
+    /** campo que o leitor de tela não sabe dizer o que é */
+    const semRotulo = () => page.locator('form input, form select').evaluateAll((els) => els
+      .filter((e) => !(e as HTMLInputElement).labels?.length && !e.getAttribute('aria-label')
+        && !e.getAttribute('aria-labelledby'))
+      .map((e) => e.id || e.outerHTML.slice(0, 80)))
+    expect(await semRotulo()).toEqual([])
     const pix = page.getByRole('button', { name: 'PIX — na hora' })
     const cartao = page.getByRole('button', { name: 'Cartão de crédito' })
     await expect(pix).toHaveAttribute('aria-pressed', 'true')
     await cartao.click()
     await expect(cartao).toHaveAttribute('aria-pressed', 'true')
     await expect(pix).toHaveAttribute('aria-pressed', 'false')
+    // o seletor de parcelas, que só nasce no cartão, também tem rótulo
+    await expect(page.getByLabel('Parcelas')).toBeVisible()
+    expect(await semRotulo()).toEqual([])
   })
 
   test('matriz 67 · B18 — "Continuar sem o cupom" com a cidade vazia é barrado como o botão principal', async ({ page }) => {
@@ -425,7 +627,7 @@ test.describe('pagamento', () => {
     await expect(page.getByRole('button', { name: 'Copiado!' })).toBeVisible()
     // matriz 78: F5 no meio da cobrança volta NA MESMA cobrança, sem formulário
     await page.reload()
-    await hidratada(page)
+    await pronta(page)
     await expect(page.getByAltText('QR Code do PIX')).toBeVisible()
     await expect(page.getByText(pedido.pedido).first()).toBeVisible()
     await expect(page.locator('#cpf')).toHaveCount(0)
@@ -495,20 +697,304 @@ test.describe('pagamento', () => {
     const pedido = await pedidoDaAba(page)
 
     // outro aparelho, sem a aba do pagamento: a página do pedido oferece a fatura
-    const celular = await browser.newContext()
-    const outro = await celular.newPage()
+    const outroAparelho = await browser.newContext()
+    const outro = await outroAparelho.newPage()
     await outro.goto(`/ingressos/${pedido.pedido}`)
-    await hidratada(outro)
+    await pronta(outro)
     const pagarNoOutro = outro.getByRole('link', { name: 'Pagar com cartão' })
     await expect(pagarNoOutro, 'quem fechou a aba do cartão não tinha como pagar').toBeVisible()
-    const [fatura] = await Promise.all([celular.waitForEvent('page'), pagarNoOutro.click()])
+    const [fatura] = await Promise.all([outroAparelho.waitForEvent('page'), pagarNoOutro.click()])
     await fatura.waitForLoadState()
     await fatura.getByRole('button', { name: 'Pagar com cartão (simulado)' }).click()
     await expect(fatura.getByText('Pagamento aprovado')).toBeVisible()
 
     await expect(page.getByRole('heading', { name: 'Ingressos emitidos' })).toBeVisible({ timeout: 20_000 })
     await expect(outro.locator('img[src^="/api/ingresso/"]')).toHaveCount(1, { timeout: 20_000 })
-    await celular.close()
+    await outroAparelho.close()
+  })
+
+  test('matriz 35/45/47/57 · o que a tela já sabe torto não vai ao servidor: nome curto, sem estado, nascimento incompleto, celular pela metade', async ({ page }) => {
+    await irAoPagamento(page)
+    let checkouts = 0
+    page.on('request', (q) => { if (q.url().includes('/api/checkout')) checkouts++ })
+    const pagar = page.getByRole('button', { name: 'Pagar com PIX' })
+    const alerta = page.locator('form [role="alert"]')
+    await page.locator('#nome').fill('Jo')
+    await page.locator('#email').fill(emailNovo('tela'))
+    await page.locator('#cpf').fill(cpf())
+    await page.locator('#cidade').fill('Ubatã')
+    // matriz 35: 2 letras
+    await expect(page.locator('#nome')).toHaveAttribute('minlength', '3')
+    await pagar.click()
+    await expect(alerta).toContainText('Digite o nome completo')
+    await expect(page.locator('#nome')).toHaveAttribute('aria-invalid', 'true')
+    await expect(page.locator('#nome')).toBeFocused()
+    // matriz 57: estado vazio — e as 27 siglas no seletor
+    await page.locator('#nome').fill('Maria E2E Pública')
+    await pagar.click()
+    await expect(alerta).toContainText('Escolha o estado')
+    await expect(page.locator('#estado')).toHaveAttribute('aria-invalid', 'true')
+    expect(await page.locator('#estado option:not([disabled])').count()).toBe(27)
+    await page.locator('#estado').selectOption('BA')
+    // matriz 47: a data pela metade (a máscara põe as barras)
+    await page.locator('#nascimento').fill('120319')
+    await expect(page.locator('#nascimento')).toHaveValue('12/03/19')
+    await pagar.click()
+    await expect(alerta).toContainText('Confira a data de nascimento')
+    await expect(page.locator('#nascimento')).toBeFocused()
+    await page.locator('#nascimento').fill('15031990')
+    // matriz 45: celular com 9 dígitos
+    await page.locator('#tel').fill('739999000')
+    await pagar.click()
+    await expect(alerta).toContainText('Confira o celular')
+    await expect(page.locator('#tel')).toHaveAttribute('aria-invalid', 'true')
+    expect(checkouts, 'a tela gastou ida ao servidor com o que ela já sabia torto').toBe(0)
+  })
+
+  test('matriz 41/42/43 · CPF: a máscara limpa o que se cola; dígito errado e repetido voltam "CPF inválido" no campo', async ({ page }) => {
+    await irAoPagamento(page)
+    await preencherComprador(page)
+    const campo = page.locator('#cpf')
+    await campo.fill('abc529.982.247-25xyz')
+    await expect(campo, 'a máscara deixou passar letra ou pontuação colada').toHaveValue('529.982.247-25')
+    for (const torto of ['12345678900', '11111111111']) {
+      await campo.fill(torto)
+      await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+      await expect(page.locator('form [role="alert"]'), torto).toContainText('CPF inválido')
+      await expect(campo, torto).toHaveAttribute('aria-invalid', 'true')
+      await expect(page.getByRole('button', { name: 'Pagar com PIX' })).toBeEnabled()
+    }
+  })
+
+  test('matriz 37 · nome com acento, emoji e <script>: aceito, e aparece como TEXTO no pedido', async ({ page }) => {
+    let rodouScript = false
+    page.on('dialog', async (d) => { rodouScript = true; await d.dismiss() })
+    const nome = 'Zé Ñandú <script>alert(1)</script> 😀'
+    await irAoPagamento(page)
+    await preencherComprador(page)
+    await page.locator('#nome').fill(nome)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const pedido = await pedidoDaAba(page)
+    await pagarSimulado(page.request, pedido.pedido)
+    await expect(page.getByRole('heading', { name: 'Ingressos emitidos' })).toBeVisible({ timeout: 20_000 })
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await pronta(page)
+    await expect(page.getByText(nome).first()).toBeVisible()
+    // o JSON da carga do Nuxt leva o nome (escapado) — fora dele, nenhum <script> com o texto
+    expect(await page.locator('script:not([type="application/json"])', { hasText: 'alert(1)' }).count(),
+      'o nome virou elemento <script> na página').toBe(0)
+    expect(rodouScript, 'o nome rodou como script').toBe(false)
+  })
+
+  test('matriz 39/46/52 · e-mail com maiúsculas e espaço, celular FIXO e Instagram colado com @ ou link: aceitos, e guardados limpos', async ({ browser, page }) => {
+    const marca = sufixo()
+    await irAoPagamento(page)
+    await preencherComprador(page, { email: `Maria.E2E.${marca}@Teste.Invalido ` })
+    await page.locator('#tel').fill('7133334444')                     // fixo, 10 dígitos
+    await expect(page.locator('#tel')).toHaveValue('(71) 3333-4444')
+    await page.locator('#instagram').fill('https://www.instagram.com/Maria.Silva_E2E?igsh=zz')
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const pedido = await pedidoDaAba(page)
+    await pagarSimulado(page.request, pedido.pedido)
+    // o cadastro que o painel mostra (a busca também casa dígito com CPF/telefone de outros:
+    // o que interessa é o cliente DESTE e-mail)
+    const painel = await logado(browser, 'master')
+    const r = await painel.request.get(`/api/admin/clientes?q=${encodeURIComponent(marca)}`)
+    expect(r.status(), await r.text()).toBe(200)
+    const deste = (await r.json()).itens.filter((c: any) => String(c.email).toLowerCase().includes(marca))
+    expect(deste).toHaveLength(1)
+    expect(deste[0].email, 'o e-mail ficou gravado com maiúsculas').toBe(`maria.e2e.${marca}@teste.invalido`)
+    expect(String(deste[0].telefone ?? deste[0].phone ?? '').replace(/\D/g, '')).toBe('7133334444')
+    expect(deste[0].instagram).toBe('maria.silva_e2e')
+    await painel.close()
+  })
+
+  test('matriz 40/48/49/50/52 · o que só o servidor sabe: e-mail de outro CPF, data que não existe, no futuro, antiga demais, Instagram torto — frase no lugar certo, e nenhuma compra', async ({ page, request }) => {
+    // um e-mail que já comprou (e pagou) com OUTRO CPF
+    const jaUsado = emailNovo('dono')
+    const { lote, inteira } = await vitrine(request)
+    const r = await request.post('/api/checkout', { headers: { origin: BASE }, data: {
+      eventSlug: SLUG, itens: [{ lotId: lote, ticketTypeId: inteira.tipoId, quantidade: 1 }],
+      comprador: { nome: 'Dono do E-mail', email: jaUsado, documento: cpf() } } })
+    expect(r.status(), await r.text()).toBe(200)
+    await pagarSimulado(request, (await r.json()).pedido)
+
+    await irAoPagamento(page)
+    await preencherComprador(page)
+    let criados = 0
+    page.on('response', (x) => { if (x.url().endsWith('/api/checkout') && x.status() === 200) criados++ })
+    const pagar = page.getByRole('button', { name: 'Pagar com PIX' })
+    const alerta = page.locator('form [role="alert"]')
+    const amanha = new Date(Date.now() + 86_400_000).toLocaleDateString('pt-BR', { timeZone: 'America/Bahia' })
+    const casos: [string, string, string, RegExp][] = [
+      ['#nascimento', '31021990', 'nascimento', /Confira a data de nascimento/],   // 48
+      ['#nascimento', amanha.replace(/\D/g, ''), 'nascimento', /está no futuro/],  // 49
+      ['#nascimento', '01011890', 'nascimento', /Confira o ano de nascimento/],   // 50
+      ['#instagram', 'joão!', 'instagram', /Confira o Instagram/],               // 52
+    ]
+    for (const [campo, valor, id, frase] of casos) {
+      await page.locator(campo).fill(valor)
+      await pagar.click()
+      await expect(alerta, `${campo}=${valor}`).toContainText(frase)
+      await expect(page.locator(`#${id}`), `${campo}=${valor}`).toHaveAttribute('aria-invalid', 'true')
+      await expect(pagar).toBeEnabled()
+      await page.locator(campo).fill(campo === '#nascimento' ? '15031990' : '')
+    }
+    // matriz 40: o e-mail que já pagou com outro CPF
+    await page.locator('#email').fill(jaUsado)
+    await pagar.click()
+    await expect(page.locator('form [role="alert"]')).toContainText('Este e-mail já está cadastrado com outro CPF')
+    expect(criados, 'o servidor criou pedido com cadastro torto').toBe(0)
+  })
+
+  test('matriz 53/54/55/56 · CEP (o ViaCEP é respondido AQUI — nada sai da máquina): preenche o endereço; inexistente e fora do ar avisam e a compra segue; incompleto o servidor marca', async ({ page }) => {
+    let foiPraFora = 0
+    await page.route('https://viacep.com.br/**', async (rota) => {
+      foiPraFora++
+      const cep = /ws\/(\d{8})\//.exec(rota.request().url())?.[1]
+      const cors = { 'access-control-allow-origin': '*' }
+      if (cep === '45800000') {
+        return rota.fulfill({ headers: cors, json: { cep: '45800-000', logradouro: 'Rua do Teste E2E',
+          bairro: 'Centro', localidade: 'Itabuna', uf: 'BA' } })
+      }
+      if (cep === '99999999') return rota.fulfill({ headers: cors, json: { erro: true } })
+      return rota.abort('internetdisconnected')   // qualquer outro: o serviço "caiu"
+    })
+    await irAoPagamento(page)
+    await preencherComprador(page)
+    // 53: CEP que existe — cidade, estado, rua e bairro vêm sozinhos
+    await page.locator('#cidade').fill('')
+    await page.locator('#cep').fill('45800000')
+    await expect(page.locator('#cep')).toHaveValue('45800-000')
+    await expect(page.locator('#cidade')).toHaveValue('Itabuna')
+    await expect(page.locator('#estado')).toHaveValue('BA')
+    await expect(page.locator('#rua')).toHaveValue('Rua do Teste E2E')
+    await expect(page.locator('#bairro')).toHaveValue('Centro')
+    // 54: CEP que não existe — avisa
+    await page.locator('#cep').fill('99999999')
+    await expect(page.getByText('Não achamos esse CEP. Preencha a cidade e o estado.')).toBeVisible()
+    // 55: pela metade — não pergunta ao ViaCEP, e quem marca é o servidor ("são 8 números")
+    const perguntas = foiPraFora
+    await page.locator('#cep').fill('4580')
+    expect(foiPraFora, 'perguntou ao ViaCEP com o CEP pela metade').toBe(perguntas)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.locator('form [role="alert"]')).toContainText('são 8 números')
+    await expect(page.locator('#cep')).toHaveAttribute('aria-invalid', 'true')
+    // 56: o serviço fora do ar — avisa, e a compra SEGUE (CEP é conveniência, não trava)
+    await page.locator('#cep').fill('12345678')
+    await expect(page.getByText('Não deu pra buscar o CEP agora. Preencha o endereço abaixo.')).toBeVisible()
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+  })
+
+  test('matriz 63/64/65 · cupom: sem CPF diz que vale e avisa do limite por CPF; com o CPF reconfere; inexistente tem frase colada e saída', async ({ browser, page }) => {
+    const painel = await logado(browser, 'master')
+    const codigo = `E2EC${sufixo().toUpperCase()}`.slice(0, 20)
+    const criado = await painel.request.post(`/api/admin/evento/${EVENTO_ID}/cupons`, {
+      headers: { origin: BASE }, data: { codigo, tipo: 'percentual', valor: 1000, maxUsos: 50, maxPorCliente: 1 } })
+    expect(criado.status(), await criado.text()).toBe(200)
+    await painel.close()
+
+    await irAoPagamento(page, 2)
+    const conferencias: any[] = []
+    page.on('request', (q) => { if (q.url().includes('/api/cupom/conferir')) conferencias.push(q.postDataJSON()) })
+    await page.locator('#nome').fill('Maria E2E Pública')
+    // matriz 63: sem CPF — vale, e avisa que o limite por CPF ainda vai ser conferido
+    await page.locator('#cupom').fill(codigo)
+    await page.locator('#nome').click()
+    await expect(page.getByText(`Cupom ${codigo} aplicado.`)).toBeVisible()
+    await expect(page.getByText('O limite de uso por CPF é conferido quando você preencher o CPF.')).toBeVisible()
+    expect(conferencias.at(-1)?.documento).toBeUndefined()
+    // matriz 64: sair do CPF reconfere, agora com o documento
+    await page.locator('#cpf').fill(cpf())
+    await page.locator('#nome').click()
+    await expect.poll(() => conferencias.length).toBe(2)
+    expect(conferencias.at(-1).documento).toMatch(/^\d{11}$/)
+    await expect(page.getByText(/Desconto de/)).toBeVisible()
+    await expect(page.getByText('O limite de uso por CPF é conferido')).toHaveCount(0)
+    // matriz 65: código que não existe — frase colada ao campo, com a saída
+    await page.locator('#cupom').fill(`NAOEXISTE${sufixo().toUpperCase()}`)
+    await page.locator('#nome').click()
+    const recusa = page.getByRole('alert').filter({ has: page.getByRole('button', { name: 'Continuar sem o cupom' }) })
+    await expect(recusa).toBeVisible()
+    await expect(recusa).toContainText(/cupom/i)
+    await expect(page.locator('#cupom')).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  test('matriz 66 · o cupom de um uso acaba entre conferir e pagar: a frase vem colada ao campo e dá pra seguir sem ele', async ({ browser, page, request }) => {
+    const painel = await logado(browser, 'master')
+    const codigo = `E2E1U${sufixo().toUpperCase()}`.slice(0, 20)
+    const criado = await painel.request.post(`/api/admin/evento/${EVENTO_ID}/cupons`, {
+      headers: { origin: BASE }, data: { codigo, tipo: 'percentual', valor: 1000, maxUsos: 1, maxPorCliente: 1 } })
+    expect(criado.status(), await criado.text()).toBe(200)
+    await painel.close()
+
+    await irAoPagamento(page, 1)
+    await preencherComprador(page)
+    await page.locator('#cupom').fill(codigo)
+    await page.locator('#nome').click()
+    await expect(page.getByText(/Desconto de/)).toBeVisible()
+    // outra pessoa usa o único uso antes do clique (pedido pendente já conta)
+    await comprarPelaApi(request, { cupom: codigo })
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    const recusa = page.getByRole('alert').filter({ has: page.getByRole('button', { name: 'Continuar sem o cupom' }) })
+    await expect(recusa).toBeVisible()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toHaveCount(0)
+    await recusa.getByRole('button', { name: 'Continuar sem o cupom' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const pedido = await pedidoDaAba(page)
+    expect(pedido.descontoCents ?? 0, 'seguiu com o desconto de um cupom que acabou').toBe(0)
+  })
+
+  test('matriz 72 · duplo clique e Enter duas vezes em Pagar: um pedido só, com "Gerando cobrança…" no meio', async ({ page }) => {
+    await irAoPagamento(page, 1)
+    await preencherComprador(page)
+    let pedidos = 0
+    let soltar!: () => void
+    const segura = new Promise<void>((ok) => { soltar = ok })
+    // a resposta do checkout demora: é nessa janela que o segundo clique criaria o segundo pedido
+    await page.route('**/api/checkout', async (rota) => { pedidos++; await segura; await rota.continue() })
+    await page.getByRole('button', { name: 'Pagar com PIX' }).dblclick()
+    await expect(page.getByRole('button', { name: 'Gerando cobrança…' })).toBeDisabled()
+    await page.locator('#nome').press('Enter')
+    await page.locator('#nome').press('Enter')
+    soltar()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    expect(pedidos, 'o mesmo clique criou mais de um pedido').toBe(1)
+  })
+
+  test('matriz 85 · cartão sem link do gateway: a cobrança diz o que fazer, com o número do pedido', async ({ page }) => {
+    await irAoPagamento(page, 1)
+    await preencherComprador(page)
+    // o gateway respondeu sem `invoiceUrl`
+    await comResposta(page, '**/api/checkout', (j) => ({ ...j, pagamento: { ...j.pagamento, linkFatura: null } }))
+    await page.getByRole('button', { name: 'Cartão de crédito' }).click()
+    await page.getByRole('button', { name: 'Pagar com cartão' }).click()
+    const aviso = page.locator('.faixa-aviso', { hasText: 'O link do cartão não veio do gateway.' })
+    await expect(aviso).toBeVisible()
+    await expect(aviso).toContainText((await pedidoDaAba(page)).pedido)
+    await expect(page.getByRole('link', { name: 'Abrir pagamento com cartão' })).toHaveCount(0)
+  })
+
+  test('matriz 87 · celular 375: campos com 16 px (sem zoom no iPhone), CEP/Cidade/UF cabem e o botão ocupa a largura', async ({ browser }) => {
+    const ctx = await celular(browser)
+    const page = await ctx.newPage()
+    await irAoPagamento(page, 1)
+    const fontes = await page.locator('form input:not([type="checkbox"]), form select')
+      .evaluateAll((els) => els.map((e) => parseFloat(getComputedStyle(e).fontSize)))
+    expect(Math.min(...fontes), 'campo abaixo de 16 px: o iPhone dá zoom ao tocar').toBeGreaterThanOrEqual(16)
+    expect(await larguraDaPagina(page), 'rolagem de lado no celular').toBeLessThanOrEqual(375)
+    for (const id of ['#cep', '#cidade', '#estado']) {
+      const c = (await page.locator(id).boundingBox())!
+      expect(c.x, id).toBeGreaterThanOrEqual(0)
+      expect(c.x + c.width, id).toBeLessThanOrEqual(375)
+    }
+    const botao = (await page.getByRole('button', { name: 'Pagar com PIX' }).boundingBox())!
+    const formulario = (await page.locator('form').boundingBox())!
+    expect(Math.abs(botao.width - formulario.width), 'o botão de pagar não ocupa a largura').toBeLessThanOrEqual(1)
+    await ctx.close()
   })
 })
 
@@ -524,7 +1010,7 @@ test.describe('ingressos', () => {
   test('matriz 90 · B10 — a consulta falha (500): "não respondeu", com Tentar de novo', async ({ page, request }) => {
     const pedido = await comprarPelaApi(request)
     await page.goto('/')
-    await hidratada(page)
+    await pronta(page)
     await page.route('**/api/pedido/**', (rota) => rota.fulfill({ status: 500, contentType: 'application/json',
       body: JSON.stringify({ statusCode: 500 }) }))
     // navegação do NAVEGADOR (o roteador da própria página), que é quem consulta a API
@@ -540,7 +1026,7 @@ test.describe('ingressos', () => {
   test('matriz 91 · PIX pendente: QR, copiar e relógio — e "Total", não "Total pago"', async ({ page, request }) => {
     const pedido = await comprarPelaApi(request)
     await page.goto(`/ingressos/${pedido.pedido}`)
-    await hidratada(page)
+    await pronta(page)
     await expect(page.getByAltText('QR Code do PIX')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Copiar código PIX' })).toBeVisible()
     await expect(page.getByText(/Reserva garantida por/)).toBeVisible()
@@ -552,7 +1038,7 @@ test.describe('ingressos', () => {
     const pedido = await comprarPelaApi(request, { quantidade: 2 })
     await pagarSimulado(request, pedido.pedido)
     await page.goto(`/ingressos/${pedido.pedido}`)
-    await hidratada(page)
+    await pronta(page)
     await expect(page.locator('article')).toHaveCount(2)
     const qr = page.locator('img[src^="/api/ingresso/"]').first()
     await expect(qr).toBeVisible()
@@ -569,7 +1055,7 @@ test.describe('ingressos', () => {
     await avisoDoAsaas(request, 'PAYMENT_PARTIALLY_REFUNDED', pedido.pedidoId,
       { status: 'PARTIALLY_REFUNDED', value: pedido.totalCents / 100, refundedValue: 20 })
     await page.goto(`/ingressos/${pedido.pedido}`)
-    await hidratada(page)
+    await pronta(page)
     await expect(page.getByText('PAGO · DEVOLUÇÃO PARCIAL')).toBeVisible()
     await expect(page.getByText('R$ 20,00 deste pedido foram devolvidos')).toBeVisible()
     await expect(page.locator('article')).toHaveCount(3)
@@ -585,7 +1071,7 @@ test.describe('ingressos', () => {
     await avisoDoAsaas(request, 'PAYMENT_REFUNDED', pedido.pedidoId,
       { status: 'REFUNDED', value: pedido.totalCents / 100, refundedValue: pedido.totalCents / 100 })
     await page.goto(`/ingressos/${pedido.pedido}`)
-    await hidratada(page)
+    await pronta(page)
     await expect(page.getByText('O valor deste pedido foi devolvido')).toBeVisible()
     await expect(page.getByText('DEVOLVIDO', { exact: true })).toBeVisible()
     await expect(page.getByText('ainda não foi pago')).toHaveCount(0)
@@ -612,10 +1098,108 @@ test.describe('ingressos', () => {
     const page = await ctx.newPage()
     const problemas = vigia(page)
     await page.goto(`/ingressos/${pedido.pedido}`)
-    await hidratada(page)
+    await pronta(page)
     await page.waitForTimeout(500)
     await expect(page.locator('main, body').first()).toContainText(noFusoDoParque(v.evento.inicio))
     expect(problemas).toEqual([])
+    await ctx.close()
+  })
+
+  test('matriz 98/96 · convite da casa: "Convidado", "Entrada: Cortesia" e selo CORTESIA; o cancelado pelo painel vira CANCELADO e o PNG responde 410', async ({ browser, page, request }) => {
+    const { lote, inteira } = await vitrine(request)
+    const painel = await logado(browser, 'master')
+    const r = await painel.request.post(`/api/admin/evento/${EVENTO_ID}/cortesias`, { headers: { origin: BASE }, data: {
+      loteId: lote, tipoId: inteira.tipoId, motivo: 'E2E — convite da casa', responsavel: 'Diretoria E2E',
+      pessoas: [{ nome: 'Convidada E2E Um' }, { nome: 'Convidado E2E Dois' }] } })
+    expect(r.status(), await r.text()).toBe(200)
+    const codigo = (await r.json()).pedido as string
+    await page.goto(`/ingressos/${codigo}`)
+    await pronta(page)
+    const ficha = page.locator('div.card').first()
+    await expect(ficha).toContainText('Convidado')
+    await expect(ficha).toContainText('Convidada E2E Um')
+    await expect(ficha).toContainText('Entrada')
+    await expect(ficha).toContainText('Cortesia')
+    await expect(ficha, 'convite com "Comprador" em cima de ninguém').not.toContainText('Comprador')
+    await expect(page.locator('article').getByText('CORTESIA', { exact: true })).toHaveCount(2)
+
+    // matriz 96: o painel cancela um dos dois convites
+    const v = await (await request.get(`/api/pedido/${codigo}`)).json()
+    const cancelado = v.ingressos[1].id as string
+    const d = await painel.request.delete(`/api/admin/evento/${EVENTO_ID}/cortesias`, {
+      headers: { origin: BASE }, data: { id: cancelado } })
+    expect(d.status(), await d.text()).toBe(200)
+    await painel.close()
+    await page.reload()
+    await pronta(page)
+    const segundo = page.locator('article').nth(1)
+    await expect(segundo).toContainText('CANCELADO')
+    await expect(segundo).toContainText('Ingresso cancelado')
+    await expect(segundo.locator('img')).toHaveCount(0)
+    expect((await request.get(`/api/ingresso/${cancelado}/qr.png?pedido=${codigo}`)).status()).toBe(410)
+    // o outro convite segue valendo, com QR
+    await expect(page.locator('article').first()).toContainText('VÁLIDO')
+    await expect(page.locator('article').first().locator('img[src^="/api/ingresso/"]')).toBeVisible()
+  })
+
+  test('matriz 99 · cupom de 100%: a taxa continua (regra do dono) e o ingresso NÃO leva selo de cortesia', async ({ browser, page, request }) => {
+    const painel = await logado(browser, 'master')
+    const codigo = `E2E100${sufixo().toUpperCase()}`.slice(0, 20)
+    const criado = await painel.request.post(`/api/admin/evento/${EVENTO_ID}/cupons`, {
+      headers: { origin: BASE }, data: { codigo, tipo: 'percentual', valor: 10000, maxUsos: 50, maxPorCliente: 5 } })
+    expect(criado.status(), await criado.text()).toBe(200)
+    await painel.close()
+    const pedido = await comprarPelaApi(request, { cupom: codigo })
+    expect(pedido.descontoCents).toBe(pedido.faceCents)
+    expect(pedido.totalCents, 'o cupom de 100% comeu a taxa').toBe(pedido.feeCents)
+    expect(pedido.totalCents).toBeGreaterThan(0)
+    await pagarSimulado(request, pedido.pedido)
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await pronta(page)
+    await expect(page.locator('article')).toHaveCount(1)
+    await expect(page.getByText('CORTESIA', { exact: true }), 'compra com cupom virou "esmola"').toHaveCount(0)
+    await expect(page.getByText('Total pago')).toBeVisible()
+    await expect(page.locator('div.card').first()).toContainText(emReais(pedido.feeCents))
+  })
+
+  test('matriz 101 · imprimir o ingresso: sem cabeçalho nem avisos; QR e código na folha', async ({ page, request }) => {
+    const pedido = await comprarPelaApi(request, { quantidade: 1 })
+    await pagarSimulado(request, pedido.pedido)
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await pronta(page)
+    await expect(page.locator('header')).toBeVisible()
+    await page.emulateMedia({ media: 'print' })
+    await expect(page.locator('header')).toBeHidden()
+    await expect(page.locator('.faixa-aviso')).toBeHidden()
+    await expect(page.getByText('Guarde este link. Na portaria')).toBeHidden()
+    await expect(page.locator('article img[src^="/api/ingresso/"]')).toBeVisible()
+    await expect(page.locator('article dd.font-mono')).toBeVisible()
+    // e o Chrome imprime de verdade (PDF), sem erro
+    const pdf = await page.pdf({ format: 'A4', printBackground: true })
+    expect(pdf.byteLength).toBeGreaterThan(5_000)
+    await page.emulateMedia({ media: 'screen' })
+  })
+
+  test('matriz 102 · celular 375: QR de 160 px no meio do cartão e o código numa linha só', async ({ browser, request }) => {
+    const pedido = await comprarPelaApi(request, { quantidade: 1 })
+    await pagarSimulado(request, pedido.pedido)
+    const ctx = await celular(browser)
+    const page = await ctx.newPage()
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await pronta(page)
+    expect(await larguraDaPagina(page), 'rolagem de lado no celular').toBeLessThanOrEqual(375)
+    const qr = (await page.locator('article img[src^="/api/ingresso/"]').first().boundingBox())!
+    // `h-40 w-40` são 10 rem: 160 px na régua de 16, 170 no celular (a raiz sobe pra 17 px, base.css)
+    expect(Math.round(qr.width), 'QR menor que 160 px no celular').toBeGreaterThanOrEqual(160)
+    expect(Math.round(qr.width)).toBe(Math.round(qr.height))
+    const cartao = (await page.locator('article').first().boundingBox())!
+    expect(Math.abs((qr.x + qr.width / 2) - (cartao.x + cartao.width / 2)), 'o QR não está no meio').toBeLessThanOrEqual(2)
+    const linhas = await page.locator('article dd.font-mono').first().evaluate((e) => {
+      const r = document.createRange()
+      r.selectNodeContents(e)
+      return r.getClientRects().length
+    })
+    expect(linhas, 'o código do ingresso quebrou de linha').toBe(1)
     await ctx.close()
   })
 })
@@ -648,7 +1232,8 @@ test.describe('transferência', () => {
     const t = await r.json()
     const link = t.link ?? t.transferencia?.link
     expect(link).toMatch(/^\/transferencia\//)
-    return { link, qr: v.ingressos[0].qr as string, pedido }
+    return { link, qr: v.ingressos[0].qr as string, pedido, id: t.transferencia?.id as string,
+      codigo: v.ingressos[0].codigo as string, setor: v.ingressos[0].setor as string, tipo: v.ingressos[0].tipo as string }
   }
 
   test('matriz 103 · B10/B25 — link que não existe: HTTP 404 e "Link não encontrado"', async ({ page }) => {
@@ -657,11 +1242,15 @@ test.describe('transferência', () => {
     await expect(page.getByRole('heading', { name: 'Link não encontrado' })).toBeVisible()
   })
 
-  test('matriz 104/105 · aguardando: evento, setor, remetente mascarado, nome preenchido e limites no campo', async ({ page, request }) => {
-    const { link } = await transferir(request)
+  test('matriz 104/105 · aguardando: evento, setor, tipo, remetente mascarado, nome preenchido e limites no campo', async ({ page, request }) => {
+    const { link, setor, tipo } = await transferir(request)
     await page.goto(link)
-    await hidratada(page)
+    await pronta(page)
     await expect(page.getByText('Você recebeu um ingresso')).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('CONQUISTA PARK')
+    const ficha = page.locator('dl').first()
+    await expect(ficha.locator('div', { hasText: 'Setor' }).locator('dd')).toHaveText(setor)
+    await expect(ficha.locator('div', { hasText: 'Tipo' }).locator('dd')).toHaveText(tipo)
     await expect(page.getByText(/•••@/)).toBeVisible()
     const nome = page.getByLabel('Nome completo')
     await expect(nome).toHaveValue('Ana Recebe E2E')
@@ -672,7 +1261,7 @@ test.describe('transferência', () => {
   test('matriz 106 · B33 — CPF com letra/emoji: recusado com a frase e o campo marcado', async ({ page, request }) => {
     const { link } = await transferir(request)
     await page.goto(link)
-    await hidratada(page)
+    await pronta(page)
     const campoCpf = page.locator('input[inputmode="numeric"]')
     await campoCpf.fill('abc😀')
     await page.getByRole('button', { name: 'Aceitar ingresso' }).click()
@@ -683,7 +1272,7 @@ test.describe('transferência', () => {
   test('matriz 107 · duplo clique em Aceitar: uma aceitação só', async ({ page, request }) => {
     const { link } = await transferir(request)
     await page.goto(link)
-    await hidratada(page)
+    await pronta(page)
     const posts: string[] = []
     page.on('request', (q) => { if (q.method() === 'POST' && q.url().includes('/api/transferencia/')) posts.push(q.url()) })
     await page.getByRole('button', { name: 'Aceitar ingresso' }).dblclick()
@@ -699,10 +1288,65 @@ test.describe('transferência', () => {
     await avisoDoAsaas(request, 'PAYMENT_REFUNDED', pedido.pedidoId,
       { status: 'REFUNDED', value: pedido.totalCents / 100, refundedValue: pedido.totalCents / 100 })
     await page.goto(link)
-    await hidratada(page)
+    await pronta(page)
     await expect(page.getByRole('heading', { name: 'Ingresso cancelado' })).toBeVisible()
     await expect(page.getByText('Este ingresso foi cancelado e não pode mais ser transferido.')).toBeVisible()
     await expect(page.locator('form')).toHaveCount(0)
+  })
+
+  test('matriz 105 · o servidor também recusa o nome de 1 letra no aceite — e o ingresso não muda de dono', async ({ request }) => {
+    const { link } = await transferir(request)
+    const token = link.split('/').pop()!
+    const r = await request.post(`/api/transferencia/${token}`, { headers: { origin: BASE }, data: { nome: 'A' } })
+    expect(r.status()).toBe(400)
+    expect((await (await request.get(`/api/transferencia/${token}`)).json()).status).toBe('aguardando')
+  })
+
+  test('matriz 95 · depois do aceite, o pedido de quem mandou mostra TRANSFERIDO, sem código e sem QR', async ({ page, request }) => {
+    const { link, pedido } = await transferir(request)
+    await page.goto(link)
+    await pronta(page)
+    await page.getByRole('button', { name: 'Aceitar ingresso' }).click()
+    await expect(page.getByText(/Ingresso é seu/)).toBeVisible()
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await pronta(page)
+    const bloco = page.locator('article').first()
+    await expect(bloco).toContainText('TRANSFERIDO')
+    await expect(bloco).toContainText('Ingresso transferido para outra pessoa')
+    await expect(bloco.locator('img'), 'o remetente ainda tinha o QR do ingresso que passou adiante').toHaveCount(0)
+    await expect(bloco.getByText('Código', { exact: true })).toHaveCount(0)
+  })
+
+  test('matriz 110 · o painel desfaz a transferência já aceita: quem recebeu perde o QR, o código muda de novo e quem mandou volta a ver o ingresso', async ({ page, request }) => {
+    const { link, pedido, id, codigo: doRemetente } = await transferir(request)
+    const token = link.split('/').pop()!
+    await page.goto(link)
+    await pronta(page)
+    await page.getByRole('button', { name: 'Aceitar ingresso' }).click()
+    await expect(page.getByText(/Ingresso é seu/)).toBeVisible()
+    const doDestinatario = (await (await request.get(`/api/transferencia/${token}`)).json()).ingresso?.codigo
+    expect(doDestinatario, 'o aceite não trocou o código').not.toBe(doRemetente)
+
+    const r = await painel.request.patch(`/api/admin/evento/${EVENTO_ID}/transferencias`, {
+      headers: { origin: BASE }, data: { transferenciaId: id, acao: 'cancelar' } })
+    expect(r.status(), await r.text()).toBe(200)
+    expect((await r.json()).devolvido).toBe(true)
+
+    // quem recebeu: sem QR, e a página diz o que houve
+    await page.reload()
+    await pronta(page)
+    await expect(page.getByText('Quem enviou cancelou esta transferência.')).toBeVisible()
+    await expect(page.locator('img[alt^="QR do ingresso"]'), 'o destinatário seguiu com o QR').toHaveCount(0)
+    // quem mandou: o ingresso volta, com QR e um código NOVO (nem o antigo, nem o do destinatário)
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await pronta(page)
+    const bloco = page.locator('article').first()
+    await expect(bloco).toContainText('VÁLIDO')
+    await expect(bloco.locator('img[src^="/api/ingresso/"]')).toBeVisible()
+    const agora = (await bloco.locator('dd.font-mono').textContent())?.trim()
+    expect(agora).toBeTruthy()
+    expect(agora, 'voltou o código que o destinatário conhecia').not.toBe(doDestinatario)
+    expect(agora, 'voltou o código de antes da transferência').not.toBe(doRemetente)
   })
 })
 
@@ -711,7 +1355,7 @@ test.describe('transferência', () => {
 test.describe('home', () => {
   test('B23 — os títulos descem em ordem (h2 → h3), sem pular pra h4', async ({ page }) => {
     await page.goto('/')
-    await hidratada(page)
+    await pronta(page)
     const niveis = await page.locator('h1, h2, h3, h4, h5, h6').evaluateAll((els) =>
       els.map((e) => Number(e.tagName.slice(1))))
     for (let i = 1; i < niveis.length; i++) {
@@ -722,11 +1366,225 @@ test.describe('home', () => {
 
   test('B31 — a descrição do evento guarda as quebras de linha (white-space medido)', async ({ page }) => {
     await page.goto('/')
-    await hidratada(page)
+    await pronta(page)
     const ws = await page.locator('#ingressos h2#precos + p').evaluate((el) => getComputedStyle(el).whiteSpace)
     expect(ws).toBe('pre-line')
   })
 
+  test('matriz 1 · a lista chega pronta do servidor: sem JavaScript ela já está lá, e com a rede lenta nunca pisca "Nenhum evento"', async ({ browser }) => {
+    // o HTML do servidor, sem JavaScript nenhum
+    const semJs = await browser.newContext({ javaScriptEnabled: false })
+    const cru = await semJs.newPage()
+    await cru.goto('/')
+    await expect(cru.locator('#ingressos h3').first()).toBeVisible()
+    await expect(cru.getByText('Nenhum evento à venda no momento')).toHaveCount(0)
+    await expect(cru.getByText('Carregando os eventos…')).toHaveCount(0)
+    await semJs.close()
+
+    // rede lenta (latência de 250 ms e 400 KB/s): o JavaScript chega devagar, e a hidratação não
+    // troca a lista por "vazio" nem por um instante — um vigia marca se a frase aparecer
+    const ctx = await browser.newContext()
+    const page = await ctx.newPage()
+    await page.addInitScript(() => {
+      const w = window as any
+      w.__piscou = false
+      new MutationObserver(() => {
+        if (document.getElementById('ingressos')?.innerText.includes('Nenhum evento à venda')) w.__piscou = true
+      }).observe(document, { childList: true, subtree: true, characterData: true })
+    })
+    const cdp = await ctx.newCDPSession(page)
+    await cdp.send('Network.enable')
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false, latency: 250, downloadThroughput: 400 * 1024, uploadThroughput: 200 * 1024 })
+    await page.goto('/', { timeout: 150_000 })
+    await pronta(page, 150_000)
+    await expect(page.locator('#ingressos h3').first()).toBeVisible()
+    expect(await page.evaluate(() => (window as any).__piscou), 'a lista piscou "Nenhum evento à venda"').toBe(false)
+    await ctx.close()
+  })
+
+  test('matriz 2 · a lista não carrega (rota fora, vindo de /entrar): faixa de erro, nunca "Nenhum evento à venda"', async ({ page }) => {
+    await page.goto('/entrar')
+    await pronta(page)
+    await page.route('**/api/eventos-publicos**', (rota) => rota.fulfill({ status: 500, contentType: 'application/json',
+      body: JSON.stringify({ statusCode: 500 }) }))
+    await page.locator('a[href="/"]').first().click()
+    await expect(page.getByText('Não deu pra carregar a lista de eventos agora')).toBeVisible()
+    await expect(page.getByText('Nenhum evento à venda no momento')).toHaveCount(0)
+  })
+
+  test('matriz 3 · nenhum evento à venda: a frase certa, e os três "Comprar ingressos" rolam até #ingressos', async ({ page }) => {
+    await page.goto('/entrar')
+    await pronta(page)
+    await page.route('**/api/eventos-publicos**', (rota) => rota.fulfill({ json: { eventos: [] } }))
+    await page.locator('a[href="/"]').first().click()
+    await expect(page.getByText('Nenhum evento à venda no momento. Volte em breve.')).toBeVisible()
+    const comprar = page.getByRole('link', { name: 'Comprar ingressos' })
+    expect(await comprar.evaluateAll((els) => els.map((e) => e.getAttribute('href'))))
+      .toEqual(['/#ingressos', '/#ingressos', '/#ingressos'])
+    await comprar.last().click()
+    await expect(page).toHaveURL(/\/#ingressos$/)
+    await expect(page.locator('#ingressos')).toBeInViewport()
+  })
+
+  test('matriz 4/8 · um selo por situação, com a cor de verdade; a variação esgotada sai riscada e a outra não', async ({ page }) => {
+    await page.goto('/entrar')
+    await pronta(page)
+    const SITUACOES = ['disponivel', 'ultimas', 'em_breve', 'esgotado', 'encerrado']
+    await comResposta(page, '**/api/eventos-publicos**', (j) => {
+      const base = j.eventos[0]
+      const copia = (situacao: string) => ({ ...base, slug: `${base.slug}-zz-${situacao}`, nome: `ZZ ${situacao}`,
+        situacao, aPartirDeCents: null })
+      return { ...j, eventos: [base, ...SITUACOES.map(copia)] }
+    })
+    // a meia do sábado esgotada (a inteira segue)
+    await comResposta(page, `**/api/e/${SLUG}`, (j) => {
+      const l = j.setores[0].lotes[0]
+      l.variacoes = l.variacoes.map((v: any) => (v.ehMeia ? { ...v, esgotado: true } : v))
+      return j
+    })
+    await page.locator('a[href="/"]').first().click()
+    const esperado: Record<string, [string, string]> = {
+      disponivel: ['À VENDA', 'rgb(211, 248, 224)'],        // verde (success-100)
+      ultimas: ['ÚLTIMAS UNIDADES', 'rgb(254, 237, 199)'],  // amarelo (warning-100)
+      em_breve: ['EM BREVE', 'rgb(239, 238, 244)'],         // cinza (ink-100)
+      esgotado: ['ESGOTADO', 'rgb(254, 226, 226)'],         // vermelho (danger-100)
+      encerrado: ['ENCERRADO', 'rgb(239, 238, 244)'],       // cinza
+    }
+    for (const s of SITUACOES) {
+      const selo = page.getByRole('link', { name: new RegExp(`ZZ ${s}`) }).getByText(esperado[s][0], { exact: true })
+      await expect(selo, s).toBeVisible()
+      expect(await selo.evaluate((e) => getComputedStyle(e).backgroundColor), `${s}: cor do selo`).toBe(esperado[s][1])
+    }
+    // matriz 8: o cartão de preço do sábado
+    const sabado = page.locator('#ingressos ul.grid > li').first()
+    const preco = (nome: RegExp) => sabado.locator('li').filter({ hasText: nome }).locator('span').last()
+      .evaluate((e) => getComputedStyle(e).textDecorationLine)
+    expect(await preco(/Meia/), 'a meia esgotada não saiu riscada').toContain('line-through')
+    expect(await preco(/Inteira/), 'a inteira (que vende) saiu riscada').not.toContain('line-through')
+  })
+
+  test('matriz 7 · os três "Comprar ingressos" (cabeçalho, capa e fim) levam à vitrine do evento à venda', async ({ page }) => {
+    await page.goto('/')
+    await pronta(page)
+    const comprar = page.getByRole('link', { name: 'Comprar ingressos' })
+    expect(await comprar.evaluateAll((els) => els.map((e) => e.getAttribute('href'))))
+      .toEqual([`/e/${SLUG}`, `/e/${SLUG}`, `/e/${SLUG}`])
+    await comprar.last().click()
+    await expect(page).toHaveURL(new RegExp(`/e/${SLUG}$`))
+    await expect(page.getByRole('heading', { name: /Escolha seus/ })).toBeVisible()
+  })
+
+  test('matriz 9 · dúvidas pelo teclado: o Tab chega na pergunta com o foco à mostra, e o Enter abre e fecha', async ({ page }) => {
+    await page.goto('/')
+    await pronta(page)
+    const perguntas = page.locator('section[aria-labelledby="duvidas"] summary')
+    const primeira = page.locator('section[aria-labelledby="duvidas"] details').first()
+    await perguntas.nth(1).focus()
+    await page.keyboard.press('Shift+Tab')
+    await expect(perguntas.first()).toBeFocused()
+    const foco = await perguntas.first().evaluate((e) => {
+      const s = getComputedStyle(e)
+      return { visivel: e.matches(':focus-visible'), estilo: s.outlineStyle, largura: parseFloat(s.outlineWidth) }
+    })
+    expect(foco.visivel).toBe(true)
+    expect(foco.estilo !== 'none' && foco.largura >= 2, `foco invisível: ${JSON.stringify(foco)}`).toBe(true)
+    await page.keyboard.press('Enter')
+    await expect(primeira).toHaveJSProperty('open', true)
+    await page.keyboard.press('Enter')
+    await expect(primeira).toHaveJSProperty('open', false)
+    await page.keyboard.press('Tab')
+    await expect(perguntas.nth(1)).toBeFocused()
+  })
+
+  test('matriz 10 · "reduzir movimento": sem bolhas, letreiro e ondas parados, e nada escondido esperando a rolagem', async ({ browser, page }) => {
+    // o controle: sem a preferência, o letreiro corre (senão o caso não provaria nada)
+    await page.goto('/')
+    await pronta(page)
+    expect(await page.locator('.letreiro-trilho').evaluate((e) => getComputedStyle(e).animationName)).not.toBe('none')
+
+    const ctx = await browser.newContext({ reducedMotion: 'reduce' })
+    const calma = await ctx.newPage()
+    await calma.goto('/')
+    await pronta(calma)
+    await calma.evaluate(() => document.fonts.ready)
+    await calma.waitForTimeout(300)
+    const bolhas = await calma.locator('.bolha').evaluateAll((els) => els.map((e) => getComputedStyle(e).display))
+    expect(bolhas.length).toBeGreaterThan(0)
+    expect(bolhas.every((d) => d === 'none'), 'bolha subindo com "reduzir movimento"').toBe(true)
+    expect(await calma.locator('.letreiro-trilho').evaluate((e) => getComputedStyle(e).animationName)).toBe('none')
+    const ondas = await calma.locator('.ondas-lentas').evaluateAll((els) => els.map((e) => getComputedStyle(e).animationName))
+    expect(ondas.length).toBeGreaterThan(0)
+    expect(ondas.every((a) => a === 'none'), 'onda balançando com "reduzir movimento"').toBe(true)
+    expect(await calma.locator('.revelar').count(), 'conteúdo escondido esperando a rolagem').toBe(0)
+    await expect(calma.locator('#ingressos h3').first()).toBeVisible()
+    await ctx.close()
+  })
+
+  test('matriz 11 · celular 375: sem rolagem de lado, e os cartões de preço numa coluna só', async ({ browser }) => {
+    const ctx = await celular(browser)
+    const page = await ctx.newPage()
+    await page.goto('/')
+    await pronta(page)
+    expect(await larguraDaPagina(page), 'rolagem de lado no celular').toBeLessThanOrEqual(375)
+    // os cartões (li.group) — não as linhas de preço de dentro deles, que também são `ul.grid > li`
+    const esquerdas = await page.locator('#ingressos ul.grid > li.group')
+      .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().left)))
+    expect(esquerdas.length).toBeGreaterThan(1)
+    expect(new Set(esquerdas).size, 'cartões lado a lado no celular').toBe(1)
+    await ctx.close()
+  })
+
+  test('matriz 13 · imprimir: o que esperava a rolagem sai no papel', async ({ page }) => {
+    await page.goto('/')
+    await pronta(page)
+    // na tela, o que está abaixo da dobra fica escondido até a pessoa rolar (o controle do caso)
+    await expect.poll(() => page.locator('.revelar').count(), { timeout: 15_000 }).toBeGreaterThan(0)
+    await page.emulateMedia({ media: 'print' })
+    const escondidos = await page.locator('[data-revelar]')
+      .evaluateAll((els) => els.filter((e) => getComputedStyle(e).opacity !== '1').length)
+    expect(escondidos, 'bloco invisível no papel').toBe(0)
+    await page.emulateMedia({ media: 'screen' })
+  })
+})
+
+/* ================================================================ entrar */
+
+test.describe('entrar', () => {
+  test('matriz 117/120 · ?de= para outro site: depois de entrar fica no /admin; o cookie é HttpOnly, SameSite=Lax, Path=/ e vale 30 dias', async ({ browser }) => {
+    const ctx = await browser.newContext()
+    const page = await ctx.newPage()
+    await page.goto('/entrar?de=https://site-de-fora.example/roubo')
+    await pronta(page)
+    await page.getByPlaceholder(/@/).fill(LOGINS.master)
+    await page.getByLabel(/senha/i).fill(SENHA)
+    await page.getByRole('button', { name: /^entrar$/i }).click()
+    await expect(page).toHaveURL(/\/admin/, { timeout: 30_000 })
+    expect(new URL(page.url()).host, 'o login mandou a pessoa pra fora do site').toBe(new URL(BASE).host)
+    // matriz 120: o cookie da sessão
+    const c = (await ctx.cookies()).find((k) => k.name === 'dt_sessao')
+    expect(c, 'sem cookie de sessão depois de entrar').toBeTruthy()
+    expect(c!.httpOnly).toBe(true)
+    expect(c!.sameSite).toBe('Lax')
+    expect(c!.path).toBe('/')
+    const dias = (c!.expires * 1000 - Date.now()) / 86_400_000
+    expect(dias).toBeGreaterThan(29.9)
+    expect(dias).toBeLessThanOrEqual(30.01)
+    // na máquina é http: Secure aqui descartaria o cookie. Em produção ele vai (conferido no build).
+    expect(c!.secure).toBe(false)
+    await ctx.close()
+  })
+
+  test('matriz 119 · F5 com a senha digitada: ela não volta, nem fica guardada no navegador', async ({ page }) => {
+    await page.goto('/entrar')
+    await pronta(page)
+    await page.getByLabel(/senha/i).fill('senha-que-nao-pode-ficar')
+    await page.reload()
+    await pronta(page)
+    await expect(page.getByLabel(/senha/i)).toHaveValue('')
+    const guardado = await page.evaluate(() => JSON.stringify({ ...sessionStorage }) + JSON.stringify({ ...localStorage }))
+    expect(guardado).not.toContain('senha-que-nao-pode-ficar')
+  })
 })
 
 /* =================================================================== API */
@@ -787,5 +1645,47 @@ test.describe('API pública', () => {
     const j = JSON.parse(corpo)
     expect(j.banco?.ok).toBe(true)
     expect(Object.values(j.config ?? {}).every((x: any) => ['SIM', 'NÃO'].includes(String(x)) || typeof x === 'object')).toBe(true)
+  })
+
+  test('matriz 125/126 · tipo de OUTRO lote: 400 "não é deste lote"; lote com tipos e sem o tipo: 400 "Escolha o tipo"', async ({ request }) => {
+    const { v, lote } = await vitrine(request)
+    const tipoDoDomingo = v.setores[1].lotes[0].variacoes.find((x: any) => !x.ehMeia).tipoId
+    const corpo = (itens: any[]) => ({ eventSlug: SLUG, itens,
+      comprador: { nome: 'Comprador E2E Público', email: emailNovo(), documento: cpf() } })
+    const deOutro = await request.post('/api/checkout', { headers: { origin: BASE },
+      data: corpo([{ lotId: lote, ticketTypeId: tipoDoDomingo, quantidade: 1 }]) })
+    expect(deOutro.status()).toBe(400)
+    expect(JSON.stringify(await deOutro.json())).toContain('Tipo de ingresso não é deste lote')
+    const semTipo = await request.post('/api/checkout', { headers: { origin: BASE },
+      data: corpo([{ lotId: lote, quantidade: 1 }]) })
+    expect(semTipo.status()).toBe(400)
+    expect(JSON.stringify(await semTipo.json())).toContain('Escolha o tipo de ingresso de \\"ENTRADA\\"')
+  })
+
+  test('matriz 129/130 · o aviso do Asaas repetido emite UMA vez; o OVERDUE que chega atrasado não despaga', async ({ request }) => {
+    const pedido = await comprarPelaApi(request, { quantidade: 2 })
+    // a MESMA entrega duas vezes (mesmo id de evento), como o Asaas reenvia
+    const entrega = { id: `evt_e2e_rep_${sufixo()}`, event: 'PAYMENT_RECEIVED',
+      payment: { id: `sim_e2e_${sufixo()}`, externalReference: pedido.pedidoId, status: 'RECEIVED',
+        billingType: 'PIX', value: pedido.totalCents / 100 } }
+    for (let i = 0; i < 2; i++) {
+      const r = await request.post('/api/webhooks/asaas', { data: entrega })
+      expect(r.status(), `entrega ${i + 1}: ${await r.text()}`).toBe(200)
+    }
+    const pago = await (await request.get(`/api/pedido/${pedido.pedido}`)).json()
+    expect(pago.status).toBe('pago')
+    expect(pago.ingressos, 'a entrega repetida emitiu de novo').toHaveLength(2)
+    // o OVERDUE de ontem, reenviado depois do pagamento
+    await avisoDoAsaas(request, 'PAYMENT_OVERDUE', pedido.pedidoId, { status: 'OVERDUE', value: pedido.totalCents / 100 })
+    const depois = await (await request.get(`/api/pedido/${pedido.pedido}`)).json()
+    expect(depois.status, 'o OVERDUE atrasado despagou um pedido pago').toBe('pago')
+    expect(depois.ingressos.map((t: any) => t.status)).toEqual(['valido', 'valido'])
+  })
+
+  test('matriz 136 · /api/midia com caminho fora do padrão: 400, nunca o arquivo', async ({ request }) => {
+    for (const caminho of ['/api/midia/..%2F..%2F.env', '/api/midia/x',
+      '/api/midia/eventos%2F..%2F..%2F..%2Fpackage.json']) {
+      expect((await request.get(caminho)).status(), caminho).toBe(400)
+    }
   })
 })

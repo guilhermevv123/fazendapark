@@ -139,6 +139,30 @@ describe('/ingressos · B01 — estorno parcial', () => {
   })
 })
 
+describe('/ingressos · cada ingresso diz o que houve com ele (matriz 94, 95, 96)', () => {
+  it('usado: JÁ UTILIZADO com a hora da entrada; transferido: sem código; cancelado: CANCELADO — nenhum com QR', async () => {
+    // travas: `v-if="t.qr"` no <img>, `SEM_QR[t.status]` no lugar dele, `v-if="t.usadoEm"` e
+    // `v-if="t.codigo"` — o "usado" é o caso que o E2E não monta (a catraca barra fora da sessão)
+    await abrirPedido(pedido({ ingressos: [
+      INGRESSO(1, { status: 'usado', qr: null, usadoEm: '2026-10-04T13:30:00.000Z' }),
+      INGRESSO(2, { status: 'transferido', qr: null, codigo: null }),
+      INGRESSO(3, { status: 'cancelado', qr: null }),
+    ] }))
+    const blocos = tela!.findAll('article')
+    expect(blocos).toHaveLength(3)
+    expect(tela!.findAll('img[src^="/api/ingresso/"]'), 'ingresso que não entra com QR na tela').toHaveLength(0)
+    expect(blocos[0].text()).toContain('JÁ UTILIZADO')
+    expect(blocos[0].text()).toContain('Ingresso já utilizado')
+    // 13h30 UTC é 10h30 no parque (America/Bahia)
+    expect(blocos[0].text()).toMatch(/Entrada em\s*04 de outubro de 2026[^0-9]*10:30/)
+    expect(blocos[1].text()).toContain('TRANSFERIDO')
+    expect(blocos[1].text()).toContain('Ingresso transferido para outra pessoa')
+    expect(blocos[1].text(), 'o remetente ainda via o código do ingresso que passou adiante').not.toContain('Código')
+    expect(blocos[2].find('.selo-erro').text()).toBe('CANCELADO')
+    expect(blocos[2].text()).toContain('Ingresso cancelado')
+  })
+})
+
 describe('/ingressos · B08 e B20 — pedido pendente', () => {
   const pendente = (extra: Record<string, any>) => pedido({
     status: 'aguardando_pagamento', ingressos: [], pagoEm: null,
@@ -235,6 +259,13 @@ describe('/transferencia · B33', () => {
       motivo: 'Este ingresso já foi usado na entrada e não pode mais ser transferido.' }))
     expect(tela!.find('form').exists()).toBe(false)
     expect(tela!.text()).toContain('Este ingresso já foi usado na entrada e não pode mais ser transferido.')
+  })
+  it('matriz 109 · vencida: sem formulário, e a frase manda pedir de novo', async () => {
+    // trava: `RECADO[data.status]` no fim da cadeia (sem ele a frase sai vazia)
+    await abrirTransferencia(transferencia({ status: 'expirado', statusTexto: 'Prazo vencido', podeAceitar: false }))
+    expect(tela!.find('form').exists()).toBe(false)
+    expect(tela!.text()).toContain('Prazo vencido')
+    expect(tela!.text()).toContain('O prazo pra aceitar venceu. Peça pra quem enviou mandar de novo')
   })
   it('CPF recusado pelo servidor: o recado aparece e o campo fica marcado', async () => {
     // trava: `erroNoCpf` ligado pelo `data.campo === 'documento'` da recusa

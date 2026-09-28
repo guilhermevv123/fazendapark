@@ -22,8 +22,11 @@ G.defineEventHandler ??= (h: any) => h
 G.createError ??= createError
 G.getRouterParam ??= getRouterParam
 G.setResponseHeader ??= setResponseHeader
+// o corpo vem do evento de mentira (`_corpo`), sem h3 ler stream nenhum
+G.readBody ??= async (e: any) => e?._corpo ?? {}
 const { default: verFatura } = await import('./fatura/[codigo].get')
 const { default: pagarFatura } = await import('./fatura/[codigo].post')
+const { default: pagarNaMaquina } = await import('./pagar.post')
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
 let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
@@ -102,6 +105,28 @@ describe('a trava: fatura simulada não existe fora da máquina', () => {
     expect(await status(verFatura, codigoSimulado)).toBe(404)
     expect(await status(pagarFatura, codigoSimulado)).toBe(404)
     // e o pedido segue em aberto: nada foi pago por uma rota que não existe
+    expect((await q1<any>(`SELECT status FROM orders WHERE code = $1`, [codigoSimulado]))!.status)
+      .toBe('aguardando_pagamento')
+  })
+})
+
+describe('matriz 133 · POST /api/dev/pagar também não existe fora da máquina', () => {
+  const evento = (corpo: any) => ({ _corpo: corpo, context: { params: {} },
+    node: { req: { headers: {} }, res: { setHeader() {}, getHeader() {} } } }) as any
+  const status = async (corpo: any) => {
+    try { await pagarNaMaquina(evento(corpo)); return 200 } catch (e: any) { return e?.statusCode }
+  }
+  // trava: o `if (!ligado()) throw 404` no topo de pagar.post.ts — sem ele, a chamada de
+  // produção abaixo PAGARIA o pedido do simulado (emissão de verdade, ingresso na mão)
+  it('com o simulado ligado, a porta existe (o controle: sem pedido é 400, não 404)', async () => {
+    process.env.PAGAMENTO_SIMULADO = '1'
+    process.env.NODE_ENV = 'development'
+    expect(await status({})).toBe(400)
+  })
+  it('em produção, mesmo com a variável ligada: 404 — e o pedido segue em aberto', async () => {
+    process.env.PAGAMENTO_SIMULADO = '1'
+    process.env.NODE_ENV = 'production'
+    expect(await status({ pedido: codigoSimulado })).toBe(404)
     expect((await q1<any>(`SELECT status FROM orders WHERE code = $1`, [codigoSimulado]))!.status)
       .toBe('aguardando_pagamento')
   })
