@@ -54,7 +54,16 @@ const form = reactive({
   valorCents: 0,
   maxUsos: null as number | null, maxPorCliente: 1,
   comecaEm: '', terminaEm: '', loteIds: [] as string[], ativo: true,
+  /** "é ilimitado de propósito" — só aparece pro cupom de 100% sem limite de usos */
+  semLimiteConfirmado: false,
 })
+
+/**
+ * Cupom de 100% sem limite de usos, ligado: ingresso grátis pra quem tiver o código. A tela avisa
+ * e só grava com a confirmação (a rota recusa sem ela — ver `cupomDeGracaSemLimite`).
+ */
+const gratisSemLimite = computed(() =>
+  form.tipo === 'percentual' && Math.round(Number(form.valor) * 100) >= 10_000 && !form.maxUsos && form.ativo)
 
 function abrir(c?: any) {
   Object.assign(form, {
@@ -70,7 +79,9 @@ function abrir(c?: any) {
     terminaEm: paraCampoDataHora(c?.terminaEm),
     loteIds: [...(c?.loteIds ?? [])],
     ativo: c?.ativo ?? true,
+    semLimiteConfirmado: false,
   })
+  erro.value = ''
 }
 
 const deCampo = (v: string) => deCampoDataHora(v)
@@ -88,9 +99,10 @@ async function salvar() {
     loteIds: form.loteIds,
     ativo: form.ativo,
   }
+  const confirmacao = gratisSemLimite.value && form.semLimiteConfirmado ? { semLimiteConfirmado: true } : {}
   const ok = form.id
-    ? await chamar('PATCH', { id: form.id, campos })
-    : await chamar('POST', { codigo: form.codigo, tipo: form.tipo, ...campos })
+    ? await chamar('PATCH', { id: form.id, campos, ...confirmacao })
+    : await chamar('POST', { codigo: form.codigo, tipo: form.tipo, ...campos, ...confirmacao })
   if (ok) form.aberto = false
 }
 
@@ -305,10 +317,28 @@ useHead({ title: 'Códigos promocionais' })
         <label class="flex items-center gap-2 text-sm text-tinta-corpo">
           <input v-model="form.ativo" type="checkbox"> Ativo
         </label>
+
+        <!-- 100% sem limite de usos: ingresso grátis pra quem tiver o código -->
+        <div v-if="gratisSemLimite" class="faixa-erro" data-parte="aviso-gratis-ilimitado">
+          <p class="font-semibold">Cupom de 100% sem limite de usos</p>
+          <p class="mt-1">
+            É ingresso grátis pra quem tiver o código. Se ele vazar (grupo de WhatsApp, print), o
+            evento esgota de graça — o "1 por pessoa" não segura, cada CPF novo leva mais um.
+            Defina um limite de usos acima, ou confirme:
+          </p>
+          <label class="mt-2 flex min-h-[40px] items-center gap-2 font-semibold">
+            <input v-model="form.semLimiteConfirmado" type="checkbox" data-parte="confirmar-ilimitado">
+            É ilimitado de propósito
+          </label>
+        </div>
+
+        <!-- o erro da gravação aparece AQUI, junto do botão; no alto da página ele ficava atrás do painel -->
+        <p v-if="erro" class="faixa-erro" data-parte="erro-cupom">{{ erro }}</p>
       </div>
       <template #acoes>
         <button type="button" class="btn-secundario" @click="form.aberto = false">Cancelar</button>
-        <button type="button" class="btn-primario" :disabled="salvando" @click="salvar">
+        <button type="button" class="btn-primario" data-parte="salvar-cupom"
+                :disabled="salvando || (gratisSemLimite && !form.semLimiteConfirmado)" @click="salvar">
           {{ form.id ? 'Salvar' : 'Criar código' }}
         </button>
       </template>

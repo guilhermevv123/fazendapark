@@ -126,3 +126,41 @@ describe('a recusa diz o campo (ADM-36)', () => {
     expect(r.corpo.statusMessage).toMatch(/^Código lido: /)
   }, 60_000)
 })
+
+// ===========================================================================
+// Cupom de 100% sem limite de usos: não nasce por descuido (pedido do F1 via orquestrador)
+// ===========================================================================
+describe('cupom de 100% sem limite de usos pede confirmação', () => {
+  const rota = `/api/admin/evento/${EVENTO}/cupons`
+  const cem = (codigo: string, extra: Record<string, any> = {}) =>
+    chamar(rota, 'POST', { codigo, tipo: 'percentual', valor: 10_000, ...extra })
+
+  it('100% sem limite: 422 com o porquê; com limite ou confirmado, cria', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const sem = await cem('GRATIS1')
+    expect(sem.status, 'nasceu ingresso grátis ilimitado sem ninguém confirmar').toBe(422)
+    expect(sem.corpo.data?.motivo).toBe('gratis_sem_limite')
+    expect(sem.corpo.statusMessage).toContain('limite de usos')
+    expect((await cem('GRATIS2', { maxUsos: 20 })).status).toBe(200)
+    expect((await cem('GRATIS3', { semLimiteConfirmado: true })).status).toBe(200)
+    // 99% e 100% desligado não são o caso
+    expect((await chamar(rota, 'POST', { codigo: 'QUASE', tipo: 'percentual', valor: 9_900 })).status).toBe(200)
+    expect((await cem('DESLIGADO', { ativo: false })).status).toBe(200)
+  }, 120_000)
+
+  it('editar pra 100% sem limite ou apagar o limite: 422; desligar sempre pode', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const [comLimite] = await sql(`SELECT id FROM promo_codes WHERE event_id = $1 AND code = 'GRATIS2'`, [EVENTO])
+    const tirarLimite = await chamar(rota, 'PATCH', { id: comLimite.id, campos: { maxUsos: null } })
+    expect(tirarLimite.status, 'apagar o limite de um cupom de 100% passou calado').toBe(422)
+    expect(tirarLimite.corpo.data?.motivo).toBe('gratis_sem_limite')
+    const [quase] = await sql(`SELECT id FROM promo_codes WHERE event_id = $1 AND code = 'QUASE'`, [EVENTO])
+    expect((await chamar(rota, 'PATCH', { id: quase.id, campos: { valor: 10_000 } })).status).toBe(422)
+    expect((await chamar(rota, 'PATCH', { id: quase.id, campos: { valor: 10_000 }, semLimiteConfirmado: true })).status)
+      .toBe(200)
+    // o cupom confirmado, agora ilimitado: desligar passa sem confirmação nenhuma
+    expect((await chamar(rota, 'PATCH', { id: quase.id, campos: { ativo: false } })).status).toBe(200)
+    // e religar pede de novo
+    expect((await chamar(rota, 'PATCH', { id: quase.id, campos: { ativo: true } })).status).toBe(422)
+  }, 120_000)
+})

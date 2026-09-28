@@ -23,7 +23,26 @@ const Entrada = z.object({
   terminaEm: z.string().datetime({ offset: true }).nullish(),
   loteIds: z.array(z.string().uuid()).default([]),
   ativo: z.boolean().default(true),
+  /** quem criou um cupom de 100% sem limite de usos DE PROPÓSITO (ver `cupomDeGracaSemLimite`) */
+  semLimiteConfirmado: z.boolean().default(false),
 })
+
+/**
+ * CUPOM DE 100% SEM LIMITE DE USOS é ingresso grátis pra quem tiver o código: se o código vazar
+ * (grupo de WhatsApp, print de story), o evento esgota de graça — o "1 por pessoa" não segura,
+ * cada CPF novo leva mais um. A casa não proíbe (cortesia de parceiro existe), mas não deixa
+ * nascer por descuido: sem limite de usos, a rota pede a confirmação explícita.
+ *
+ * Só o percentual de 100%: o desconto fixo sai do PEDIDO, então ele zera só o pedido pequeno e
+ * cada uso tem teto no próprio valor.
+ */
+export function cupomDeGracaSemLimite(tipo: string, valor: number, maxUsos: number | null | undefined): boolean {
+  return tipo === 'percentual' && Number(valor) >= 10_000 && (maxUsos === null || maxUsos === undefined)
+}
+
+export const RECUSA_DE_GRACA_SEM_LIMITE =
+  'Cupom de 100% sem limite de usos é ingresso grátis pra quem tiver o código: se vazar, o evento '
+  + 'esgota de graça. Defina um limite de usos — ou marque que é ilimitado de propósito.'
 
 export const normalizarCodigo = (s: string) =>
   s.trim().toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9_-]/g, '')
@@ -45,6 +64,9 @@ export default defineEventHandler(async (event) => {
   }
   if (d.comecaEm && d.terminaEm && new Date(d.terminaEm) <= new Date(d.comecaEm)) {
     throw createError({ statusCode: 422, statusMessage: 'O cupom não pode terminar antes de começar' })
+  }
+  if (d.ativo && cupomDeGracaSemLimite(d.tipo, d.valor, d.maxUsos) && !d.semLimiteConfirmado) {
+    throw createError({ statusCode: 422, statusMessage: RECUSA_DE_GRACA_SEM_LIMITE, data: { motivo: 'gratis_sem_limite' } })
   }
 
   const ev = await q1<any>(`SELECT id FROM events WHERE id = $1`, [eventoId])

@@ -224,3 +224,31 @@ describe('salvar a ordem manda UMA chamada com tudo (ADM-41)', () => {
     expect(envios('PATCH')).toHaveLength(1)
   })
 })
+
+describe('cupom de 100% sem limite: a tela avisa e só grava confirmado', () => {
+  it('100% sem limite: aviso, botão travado; marcar "de propósito" libera e manda a confirmação', async () => {
+    const w = await abrirCupons([])
+    await w.findAll('button').find((b) => b.text().includes('Criar código'))!.trigger('click')
+    await w.find('input[placeholder="VERAO10"]').setValue('GRATIS')
+    await w.find('#cupom-valor').setValue('100')
+    expect(w.find('[data-parte="aviso-gratis-ilimitado"]').exists(), 'cupom grátis ilimitado sem aviso').toBe(true)
+    const salvar = () => w.find('[data-parte="salvar-cupom"]')
+    expect(salvar().attributes('disabled'), 'grava ingresso grátis ilimitado num clique').toBeDefined()
+    await w.find('[data-parte="confirmar-ilimitado"]').setValue(true)
+    expect(salvar().attributes('disabled')).toBeUndefined()
+    await salvar().trigger('click')
+    const post = envios('POST')[0]
+    expect(post?.opcoes.body).toMatchObject({ tipo: 'percentual', valor: 10_000, maxUsos: null, semLimiteConfirmado: true })
+  })
+
+  it('com limite de usos não há aviso nem confirmação', async () => {
+    const w = await abrirCupons([])
+    await w.findAll('button').find((b) => b.text().includes('Criar código'))!.trigger('click')
+    await w.find('input[placeholder="VERAO10"]').setValue('GRATIS')
+    await w.find('#cupom-valor').setValue('100')
+    await w.find('input[placeholder="sem limite"]').setValue('20')
+    expect(w.find('[data-parte="aviso-gratis-ilimitado"]').exists()).toBe(false)
+    await w.find('[data-parte="salvar-cupom"]').trigger('click')
+    expect(envios('POST')[0]?.opcoes.body.semLimiteConfirmado).toBeUndefined()
+  })
+})
