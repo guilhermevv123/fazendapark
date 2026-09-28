@@ -757,6 +757,28 @@ test.describe('relatórios › extrato', () => {
     expect(csv).toContain(`"'=1+1"`)
   })
 
+  test('#35 #36 filtro de forma e canal: os totais seguem o filtro, e o F5 mantém (estão na URL)', async ({ page }) => {
+    const e = await criarEvento(master)
+    const b = await abrirBalcao(master, e.id)
+    await venderNoBalcao(master, e.id, b.turnoId, [{ lotId: e.lote.id, ticketTypeId: e.inteira, quantidade: 1 }],
+      'dinheiro', { recebidoCents: 3000 })
+    await venderNoBalcao(master, e.id, b.turnoId, [{ lotId: e.lote.id, ticketTypeId: e.inteira, quantidade: 2 }], 'debito')
+    await abrir(page, `/admin/evento/${e.id}/relatorios/extrato`)
+    await page.getByRole('button', { name: 'Tudo', exact: true }).click()
+    const cobrado = page.locator('.card', { has: page.locator('.rotulo-kpi', { hasText: 'Cobrado do comprador' }) }).locator('.numero-kpi')
+    await expect(cobrado).toHaveText('R$ 90,00')
+    const [, , formaSel] = await page.locator('select.campo').all()
+    await formaSel.selectOption('dinheiro')
+    await expect(page).toHaveURL(/forma=dinheiro/)
+    await expect(cobrado).toHaveText('R$ 30,00')
+    await page.locator('select.campo').first().selectOption('bilheteria')
+    await expect(page).toHaveURL(/canal=bilheteria/)
+    await page.reload()
+    await expect(page.locator('select.campo').nth(2)).toHaveValue('dinheiro')
+    await expect(page.locator('select.campo').first()).toHaveValue('bilheteria')
+    await expect(cobrado).toHaveText('R$ 30,00')
+  })
+
   test('#8 Operação abre o extrato pelo link: o recado do papel, nunca "confira a rede"', async ({ browser }) => {
     const ctx = await browser.newContext({ storageState: sessao('operacao') })
     const page = await ctx.newPage()
