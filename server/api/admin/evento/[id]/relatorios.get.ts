@@ -167,7 +167,8 @@ export default defineEventHandler(async (event) => {
                              WHERE t.order_id = o.id AND t.status <> 'cancelado') tk ON true
         WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')}
         GROUP BY c.id, c.name, c.email
-        ORDER BY gasto DESC LIMIT 15`, [id]),
+        -- a mesma ordem da aba Público do painel (ADM-63), com o mesmo desempate
+        ORDER BY gasto DESC, ingressos DESC, c.name, c.id LIMIT 15`, [id]),
 
     q<any>(
       `SELECT p.id, p.name, p.code, p.commission_bps,

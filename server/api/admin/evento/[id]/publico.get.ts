@@ -121,7 +121,10 @@ export default defineEventHandler(async (event) => {
                              WHERE t.order_id = o.id AND t.status <> 'cancelado') tk ON true
         WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')}
         GROUP BY c.id, c.name, c.email
-        ORDER BY ingressos DESC, gasto DESC LIMIT 12`, [id]),
+        -- A MESMA régua de relatórios (ADM-63): quem mais DEIXOU no evento, e o desempate por
+        -- ingressos. Aqui era por ingressos primeiro — o mesmo título "Quem mais comprou" com duas
+        -- ordens diferentes, e o cliente de maior gasto sumia do top da aba Público.
+        ORDER BY gasto DESC, ingressos DESC, c.name, c.id LIMIT 12`, [id]),
 
     // quem ainda não disse quem vai usar o ingresso — trabalho de portaria,
     // não estatística: sem titular a entrada vira conferência na mão.
