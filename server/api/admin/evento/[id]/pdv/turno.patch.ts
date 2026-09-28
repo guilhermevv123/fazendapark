@@ -14,6 +14,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../../utils/auditoria'
 import {
   contarTurno, quebra, SQL_FECHA_TURNO, SQL_TRAVA_TURNO_ABERTO,
 } from '../../../../../utils/caixa'
@@ -67,14 +68,14 @@ export default defineEventHandler(async (event) => {
 
     const q = quebra(d.contadoCents, contagem.esperadoCents)
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'turno',$2,'fechado',$3::jsonb)`,
-      [dono.org_id, d.turnoId, JSON.stringify({
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event), entidade: 'turno', entidadeId: d.turnoId, acao: 'fechado',
+      depois: {
         ponto: dono.ponto, contadoCents: d.contadoCents,
         esperadoCents: contagem.esperadoCents, diferencaCents: q.diferencaCents,
         por: sessao?.nome ?? null,
-      })])
+      },
+    }, c)
 
     return { ok: true, contagem, ...q, contadoCents: d.contadoCents }
   })

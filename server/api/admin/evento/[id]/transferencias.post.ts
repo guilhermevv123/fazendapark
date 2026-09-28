@@ -11,6 +11,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import {
   gerarToken, mesmoEmail, RECUSA, venceEm,
 } from '../../../../utils/transferencia'
@@ -59,6 +60,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 422, statusMessage: RECUSA.mesma_pessoa })
   }
 
+  const autor = autorDaRequisicao(event)
   return await tx(async (c) => {
     const { rows } = await c.query(
       `INSERT INTO ticket_transfers
@@ -73,12 +75,10 @@ export default defineEventHandler(async (event) => {
        d.paraDocumento ?? null, d.paraTelefone ?? null,
        gerarToken(), sessao?.usuarioId ?? null, venceEm()])
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'ingresso',$2,'transferencia_enviada',$3::jsonb)`,
-      [ev.org_id, ingresso.id, JSON.stringify({
-        de: ingresso.holder_email, para: d.paraEmail, codigo: ingresso.code,
-      })])
+    await registrarAuditoria({
+      autor, entidade: 'ingresso', entidadeId: ingresso.id, acao: 'transferencia_enviada',
+      depois: { de: ingresso.holder_email, para: d.paraEmail, codigo: ingresso.code },
+    }, c)
 
     return {
       ok: true,

@@ -19,6 +19,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { q, q1, tx } from '../../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../../utils/auditoria'
 import { EstoqueInsuficiente, LoteIndisponivel, reservar } from '../../../../../utils/estoque'
 import { faceDoTipo, type ModoTaxa } from '../../../../../utils/dinheiro'
 import { aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom } from '../../../../../utils/cupom'
@@ -452,14 +453,14 @@ export default defineEventHandler(async (event) => {
         [ord.rows[0].id, nomeDigitado, documento])
     }
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'order',$2,'venda_balcao',$3::jsonb)`,
-      [ev.org_id, ord.rows[0].id, JSON.stringify({
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event), entidade: 'order', entidadeId: ord.rows[0].id, acao: 'venda_balcao',
+      depois: {
         ponto: turno.ponto, forma: d.forma, totalCents: total.totalCents,
         trocoCents, por: sessao.nome, observacao: d.observacao ?? null,
-        chave: d.chave ?? null,
-      })])
+        chave: d.chave ?? null, cupom: cupom?.codigo ?? null,
+      },
+    }, c)
 
     return { orderId: ord.rows[0].id as string }
   }).catch(async (e) => {

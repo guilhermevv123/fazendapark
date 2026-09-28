@@ -29,6 +29,7 @@
  */
 import { z } from 'zod'
 import { q, q1, tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria, type Autor } from '../../../../utils/auditoria'
 
 const DATA = /^\d{4}-\d{2}-\d{2}$/
 const HORA = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -88,14 +89,16 @@ export default defineEventHandler(async (event) => {
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
   const fuso = ev.timezone || 'America/Bahia'
 
-  if (d.o === 'criar') return await criar(d, ev, fuso)
-  if (d.o === 'editar') return await editar(d, ev)
-  if (d.o === 'lotes') return await ligarLotes(d, ev)
-  return await apagar(d, ev)
+  // quem criou, mudou ou apagou o dia — carimbado por `registrarAuditoria` (ADM-26)
+  const autor = autorDaRequisicao(event)
+  if (d.o === 'criar') return await criar(d, ev, fuso, autor)
+  if (d.o === 'editar') return await editar(d, ev, autor)
+  if (d.o === 'lotes') return await ligarLotes(d, ev, autor)
+  return await apagar(d, ev, autor)
 })
 
 // ------------------------------------------------------------------ criar ---
-async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string) {
+async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string, autor: Autor) {
   if (d.ate < d.de) {
     throw createError({ statusCode: 422, statusMessage: 'A data final é anterior à inicial.' })
   }
@@ -212,14 +215,14 @@ async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string) {
     vinculos = r.length
   }
 
-  await q(
-    `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-     VALUES ($1,'evento',$2,'sessoes_criadas',$3::jsonb)`,
-    [ev.org_id, ev.id, JSON.stringify({
+  await registrarAuditoria({
+    autor, entidade: 'evento', entidadeId: ev.id, acao: 'sessoes_criadas',
+    depois: {
       de: d.de, ate: d.ate, dias: d.dias, horarios: d.horarios,
       capacidade: d.capacidade ?? null, criadas: novas.length,
       repetidas: linhas.length - novas.length, vinculos,
-    })])
+    },
+  })
 
   return {
     ok: true,
@@ -236,7 +239,7 @@ async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string) {
 }
 
 // ----------------------------------------------------------------- editar ---
-async function editar(d: z.infer<typeof Editar>, ev: any) {
+async function editar(d: z.infer<typeof Editar>, ev: any, autor: Autor) {
   return await tx(async (c) => {
     // A trava vem ANTES da conta, e é a mesma linha que a venda segura.
     const { rows } = await c.query(
@@ -272,12 +275,11 @@ async function editar(d: z.infer<typeof Editar>, ev: any) {
       [d.sessaoId, d.titulo !== undefined, d.titulo ?? null,
        d.capacidade !== undefined, d.capacidade ?? null])
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, before, after)
-       VALUES ($1,'sessao',$2,'editada',$3::jsonb,$4::jsonb)`,
-      [ev.org_id, d.sessaoId,
-       JSON.stringify({ titulo: sessao.title, capacidade: sessao.capacity }),
-       JSON.stringify({ titulo: upd[0].title, capacidade: upd[0].capacity })])
+    await registrarAuditoria({
+      autor, entidade: 'sessao', entidadeId: d.sessaoId, acao: 'editada',
+      antes: { titulo: sessao.title, capacidade: sessao.capacity },
+      depois: { titulo: upd[0].title, capacidade: upd[0].capacity },
+    }, c)
 
     return {
       ok: true,
@@ -302,7 +304,7 @@ async function editar(d: z.infer<typeof Editar>, ev: any) {
  * ligação é o único papel que diz que aquele ingresso vale naquele sábado.
  * Tirar deixaria o comprador com um ingresso de dia nenhum.
  */
-async function ligarLotes(d: z.infer<typeof Lotes>, ev: any) {
+async function ligarLotes(d: z.infer<typeof Lotes>, ev: any, autor: Autor) {
   const porSessao = !!d.sessaoId
   if (porSessao === !!d.loteId) {
     throw createError({
@@ -383,19 +385,17 @@ async function ligarLotes(d: z.infer<typeof Lotes>, ev: any) {
       ligados = r.rowCount ?? 0
     }
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'sessao',$2,'lotes_do_dia',$3::jsonb)`,
-      [ev.org_id, porSessao ? d.sessaoId : d.loteId,
-       JSON.stringify({ porSessao, lotes: loteIds, sessoes: sessaoIds,
-                        ligados, desligados: removidos.length })])
+    await registrarAuditoria({
+      autor, entidade: 'sessao', entidadeId: (porSessao ? d.sessaoId : d.loteId) ?? null, acao: 'lotes_do_dia',
+      depois: { porSessao, lotes: loteIds, sessoes: sessaoIds, ligados, desligados: removidos.length },
+    }, c)
 
     return { ok: true, ligados, desligados: removidos.length }
   })
 }
 
 // ----------------------------------------------------------------- apagar ---
-async function apagar(d: z.infer<typeof Apagar>, ev: any) {
+async function apagar(d: z.infer<typeof Apagar>, ev: any, autor: Autor) {
   const s = await q1<any>(
     `SELECT es.id, es.title,
             sessao_ocupacao(es.id) AS ocupadas,
@@ -428,10 +428,9 @@ async function apagar(d: z.infer<typeof Apagar>, ev: any) {
   }
 
   await q(`DELETE FROM event_sessions WHERE id = $1`, [d.sessaoId])
-  await q(
-    `INSERT INTO audit_log (org_id, entity, entity_id, action, before)
-     VALUES ($1,'sessao',$2,'apagada',$3::jsonb)`,
-    [ev.org_id, d.sessaoId, JSON.stringify({ titulo: s.title })])
+  await registrarAuditoria({
+    autor, entidade: 'sessao', entidadeId: d.sessaoId, acao: 'apagada', antes: { titulo: s.title },
+  })
 
   return { ok: true }
 }

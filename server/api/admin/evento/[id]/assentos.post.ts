@@ -18,6 +18,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 
 const Entrada = z.object({
   setorId: z.string().uuid(),
@@ -98,6 +99,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  const autor = autorDaRequisicao(event)
   return await tx(async (c) => {
     if (d.substituir) await c.query(`DELETE FROM seats WHERE sector_id = $1`, [d.setorId])
 
@@ -113,13 +115,10 @@ export default defineEventHandler(async (event) => {
        linhas.map((l) => l.x), linhas.map((l) => l.y)])
 
     await c.query(`UPDATE sectors SET seated = true WHERE id = $1`, [d.setorId])
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'setor',$2,'mapa_gerado',$3::jsonb)`,
-      [setor.org_id, d.setorId, JSON.stringify({
-        fileiras: d.fileiras, porFileira: d.porFileira, lugares: linhas.length,
-        substituiu: d.substituir,
-      })])
+    await registrarAuditoria({
+      autor, entidade: 'setor', entidadeId: d.setorId, acao: 'mapa_gerado',
+      depois: { fileiras: d.fileiras, porFileira: d.porFileira, lugares: linhas.length, substituiu: d.substituir },
+    }, c)
 
     return { ok: true, criados: linhas.length, fileiras: d.fileiras }
   })

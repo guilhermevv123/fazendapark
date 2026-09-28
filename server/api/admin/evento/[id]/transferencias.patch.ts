@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { novoCodigoDoIngresso } from '../../../../utils/ingresso'
 
 const Entrada = z.object({
@@ -40,10 +41,10 @@ export default defineEventHandler(async (event) => {
     await tx(async (c) => {
       await c.query(`UPDATE events SET allow_transfer = $2, updated_at = now() WHERE id = $1`,
         [eventoId, d.permitir])
-      await c.query(
-        `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-         VALUES ($1,'evento',$2,'transferencia_permissao',$3::jsonb)`,
-        [ev.org_id, eventoId, JSON.stringify({ permitir: d.permitir })])
+      await registrarAuditoria({
+        autor: autorDaRequisicao(event), entidade: 'evento', entidadeId: eventoId!,
+        acao: 'transferencia_permissao', depois: { permitir: d.permitir },
+      }, c)
     })
     return { ok: true, permite: d.permitir }
   }
@@ -92,14 +93,15 @@ export default defineEventHandler(async (event) => {
         [tr.ticket_id, tr.de_nome, tr.de_email, tr.de_documento, codigoNovo])
     }
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'ingresso',$2,'transferencia_cancelada',$3::jsonb)`,
-      [ev.org_id, tr.ticket_id, JSON.stringify({
+    await registrarAuditoria({
+      autor: autorDaRequisicao(event), entidade: 'ingresso', entidadeId: tr.ticket_id,
+      acao: 'transferencia_cancelada',
+      depois: {
         transferencia: tr.id, eraStatus: tr.status,
         voltouPara: tr.status === 'concluido' ? tr.de_email : null,
         ...(codigoNovo ? { codigoAnterior: tr.ingresso_codigo, codigoNovo } : {}),
-      })])
+      },
+    }, c)
 
     return {
       ok: true,

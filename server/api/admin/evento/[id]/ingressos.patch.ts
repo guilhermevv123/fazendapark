@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { explicarErro } from '../index.post'
 
 const Entrada = z.object({
@@ -96,6 +97,9 @@ export default defineEventHandler(async (event) => {
   const pares = Object.entries(campos).filter(([k, v]) => k in mapa && v !== undefined)
   if (!pares.length) throw createError({ statusCode: 400, statusMessage: 'Nada para alterar' })
 
+  // quem mexeu no preço, no estoque ou na taxa — `registrarAuditoria` carimba usuário e
+  // organização (ADM-26); o INSERT solto daqui gravava a mudança sem autor
+  const autor = autorDaRequisicao(event)
   return await tx(async (c) => {
     // dono: a linha tem que ser deste evento, sempre.
     // Para 'evento', o id do corpo TEM que ser o mesmo da URL — senão a rota
@@ -212,12 +216,11 @@ export default defineEventHandler(async (event) => {
     const valores = pares.map(([, v]) => v)
     await c.query(`UPDATE ${TABELA[o]} SET ${sets} WHERE id = $1`, [id, ...valores])
 
-    await c.query(
-      `INSERT INTO audit_log (entity, entity_id, action, before, after)
-       VALUES ($1,$2,'editado',$3::jsonb,$4::jsonb)`,
-      [o, id,
-       JSON.stringify(Object.fromEntries(pares.map(([k]) => [k, linha[mapa[k]]]))),
-       JSON.stringify(Object.fromEntries(pares))])
+    await registrarAuditoria({
+      autor, entidade: o, entidadeId: id, acao: 'editado',
+      antes: Object.fromEntries(pares.map(([k]) => [k, linha[mapa[k]]])),
+      depois: Object.fromEntries(pares),
+    }, c)
 
     return { ok: true, alterados: pares.map(([k]) => k) }
   })

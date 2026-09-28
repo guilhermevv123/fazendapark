@@ -10,6 +10,7 @@
  */
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria, type Autor } from '../../../../utils/auditoria'
 
 const Entrada = z.object({
   o: z.enum(['setor', 'lote', 'tipo']),
@@ -22,6 +23,7 @@ export default defineEventHandler(async (event) => {
   if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Dados inválidos' })
   const { o, id } = p.data
 
+  const autor = autorDaRequisicao(event)
   return await tx(async (c) => {
     if (o === 'tipo') {
       const t = await c.query(
@@ -36,7 +38,7 @@ export default defineEventHandler(async (event) => {
         })
       }
       await c.query(`DELETE FROM ticket_types WHERE id = $1`, [id])
-      await auditar(c, 'ticket_type', id, t.rows[0])
+      await auditar(c, autor, 'ticket_type', id, t.rows[0])
       return { ok: true }
     }
 
@@ -55,7 +57,7 @@ export default defineEventHandler(async (event) => {
       }
       await c.query(`DELETE FROM ticket_types WHERE lot_id = $1`, [id])
       await c.query(`DELETE FROM lots WHERE id = $1`, [id])
-      await auditar(c, 'lot', id, l.rows[0])
+      await auditar(c, autor, 'lot', id, l.rows[0])
       return { ok: true }
     }
 
@@ -75,13 +77,14 @@ export default defineEventHandler(async (event) => {
       `DELETE FROM ticket_types WHERE lot_id IN (SELECT id FROM lots WHERE sector_id = $1)`, [id])
     await c.query(`DELETE FROM lots WHERE sector_id = $1`, [id])
     await c.query(`DELETE FROM sectors WHERE id = $1`, [id])
-    await auditar(c, 'sector', id, s.rows[0])
+    await auditar(c, autor, 'sector', id, s.rows[0])
     return { ok: true }
   })
 })
 
-async function auditar(c: any, entidade: string, id: string, antes: unknown) {
-  await c.query(
-    `INSERT INTO audit_log (entity, entity_id, action, before)
-     VALUES ($1,$2,'apagado',$3::jsonb)`, [entidade, id, JSON.stringify(antes)])
+/** quem apagou — com usuário e organização carimbados (ADM-26), não um INSERT sem autor */
+async function auditar(c: any, autor: Autor, entidade: string, id: string, antes: unknown) {
+  await registrarAuditoria({
+    autor, entidade, entidadeId: id, acao: 'apagado', antes: antes as Record<string, unknown>,
+  }, c)
 }

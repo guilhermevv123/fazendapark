@@ -15,6 +15,7 @@
  */
 import { z } from 'zod'
 import { tx } from '../../../../utils/db'
+import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { gerarCodigo } from '../../../../utils/ingresso'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../../../utils/retencao'
 import { SQL_TRAVA_EVENTO, recusaDeSaque, saldoParaSaque } from '../../../../utils/saque'
@@ -37,6 +38,7 @@ export default defineEventHandler(async (event) => {
   const d = p.data
   const sessao = (event.context as any).sessao
 
+  const autor = autorDaRequisicao(event)
   return await tx(async (c) => {
     // A trava vem PRIMEIRO, e sem nenhuma checagem de saldo antes dela. Ver
     // `utils/saque.ts`: uma pré-checagem aqui resolveria o caso enfileirado
@@ -83,13 +85,11 @@ export default defineEventHandler(async (event) => {
        d.destinoTipo, d.destino.trim(), d.valorCents,
        sessao?.usuarioId ?? null, d.observacao ?? null])
 
-    await c.query(
-      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
-       VALUES ($1,'payout',$2,'solicitada',$3::jsonb)`,
-      [ev.org_id, rows[0].id, JSON.stringify({
-        valorCents: d.valorCents, beneficiario: d.beneficiario,
-        por: sessao?.email ?? null,
-      })])
+    // o pedido de saque com autor de verdade (ADM-26): antes só o e-mail, dentro do JSON
+    await registrarAuditoria({
+      autor, entidade: 'payout', entidadeId: rows[0].id, acao: 'solicitada',
+      depois: { valorCents: d.valorCents, beneficiario: d.beneficiario, destinoTipo: d.destinoTipo },
+    }, c)
 
     return { ok: true, ...rows[0] }
   })
