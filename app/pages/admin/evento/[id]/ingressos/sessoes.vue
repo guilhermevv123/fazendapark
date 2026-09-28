@@ -158,8 +158,16 @@ async function salvarLotes() {
   if (r) escolha.aberto = false
 }
 
+/**
+ * Apagar em dois toques, o padrão da casa (cupons, promoters): o 1º arma e o botão diz
+ * "Confirmar", o 2º apaga (ADM-40). Era `confirm()` do navegador — que some em aba de fundo e não
+ * segue o visual do painel.
+ */
+const confirmando = ref('')
 async function apagar(s: any) {
-  if (!confirm(`Apagar ${s.titulo ?? diaLongo(s.inicio)} do calendário?`)) return
+  if (!s.podeApagar) return
+  if (confirmando.value !== s.id) { confirmando.value = s.id; return }
+  confirmando.value = ''
   await chamar({ o: 'apagar', sessaoId: s.id })
 }
 
@@ -245,6 +253,9 @@ useHead({ title: 'Sessões e datas' })
           <label class="rotulo" for="tit">Nome do dia (opcional)</label>
           <input id="tit" v-model="novo.titulo" type="text" class="campo"
                  placeholder="Sábado 07/11">
+          <p class="mt-1 text-xs text-tinta-fraca" data-parte="nome-modelo">
+            Com várias datas, cada uma leva o nome e a data: “Show · 07/11”.
+          </p>
         </div>
       </div>
 
@@ -322,11 +333,16 @@ useHead({ title: 'Sessões e datas' })
                   :aria-label="`Editar ${s.titulo ?? diaLongo(s.inicio)}`" @click="abrirEdicao(s)">
             <IconeMenu nome="lapis" :tamanho="16" />
           </button>
-          <button type="button" class="p-1 text-tinta-fraca hover:text-erro"
-                  :disabled="!s.podeApagar"
-                  :title="s.podeApagar ? 'Apagar este dia' : 'Este dia já tem gente ou setor amarrado'"
+          <button type="button"
+                  class="flex items-center gap-1 rounded-xl p-1 disabled:cursor-not-allowed disabled:opacity-40"
+                  :class="confirmando === s.id ? 'bg-erro-claro px-2 text-erro' : 'text-tinta-fraca hover:text-erro'"
+                  :disabled="!s.podeApagar" data-parte="apagar-dia"
+                  :title="s.podeApagar
+                    ? (confirmando === s.id ? 'Toque de novo para apagar' : 'Apagar este dia')
+                    : 'Este dia já tem gente ou setor amarrado'"
                   :aria-label="`Apagar ${s.titulo ?? diaLongo(s.inicio)}`" @click="apagar(s)">
             <IconeMenu nome="lixo" :tamanho="16" />
+            <span v-if="confirmando === s.id" class="text-sm font-semibold">Confirmar</span>
           </button>
         </div>
       </header>

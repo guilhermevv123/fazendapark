@@ -80,3 +80,105 @@ describe('preço redondo — a conta do checkout, não uma cópia', () => {
     expect(w.find('[data-parte="redondo-nao-existe"]').exists()).toBe(false)
   })
 })
+
+// ===========================================================================
+// Cupons (ADM-50, ADM-51), promoters (ADM-51) e sessões (ADM-40)
+// ===========================================================================
+import { vi } from 'vitest'
+
+const CUPOM = (campos: Record<string, any> = {}) => ({
+  id: 'c1', codigo: 'VERAO', tipo: 'percentual', valor: 1000, maxUsos: null, maxPorCliente: 1,
+  comecaEm: null, terminaEm: null, loteIds: [], ativo: true, usos: 0, descontoDadoCents: 0,
+  podeApagar: true, ...campos })
+
+async function abrirCupons(cupons: any[] = [CUPOM()]) {
+  return montarTela(await import('../pages/admin/evento/[id]/ingressos/cupons.vue'), {
+    rota: { params: { id: EV } },
+    respostas: { [`/api/admin/evento/${EV}/cupons`]: { cupons, lotes: [] } },
+    stubs: { CampoMoeda, AbasSecao: true, ModalLateral: { template: '<div><slot /><slot name="acoes" /></div>' } },
+  })
+}
+const envios = (metodo: string) => chamadas.filter((c) => c.opcoes?.method === metodo)
+
+describe('cupom de valor fixo em centavos, pelo CampoMoeda (ADM-50)', () => {
+  it('novo cupom fixo: o campo é o CampoMoeda e vai o centavo digitado, sem multiplicar', async () => {
+    const w = await abrirCupons([])
+    await w.findAll('button').find((b) => b.text().includes('Criar código'))!.trigger('click')
+    await w.find('select').setValue('fixo')
+    expect(w.find('input[type="number"][step="0.01"]').exists(), 'o desconto em reais voltou a ser type=number')
+      .toBe(false)
+    await w.find('input[placeholder="VERAO10"]').setValue('DEZ')
+    await w.find('[data-campo-moeda]').setValue('1550')
+    // o último "Criar código" é o do formulário (o primeiro abre o formulário)
+    await w.findAll('button').filter((b) => b.text() === 'Criar código').at(-1)!.trigger('click')
+    const post = envios('POST')[0]
+    expect(post?.opcoes.body.tipo).toBe('fixo')
+    expect(post?.opcoes.body.valor, 'R$ 15,50 não chegou como 1550 centavos').toBe(1550)
+  })
+
+  it('editar cupom fixo abre com os centavos gravados no CampoMoeda', async () => {
+    const w = await abrirCupons([CUPOM({ tipo: 'fixo', valor: 1550 })])
+    await w.find('button[title="Editar"]').trigger('click')
+    expect((w.find('[data-campo-moeda]').element as HTMLInputElement).value).toBe('1550')
+  })
+})
+
+describe('ligar/desligar com trava (ADM-51)', () => {
+  it('cupom: dois cliques rápidos mandam UM pedido', async () => {
+    const w = await abrirCupons()
+    const b = w.find('[data-parte="alternar"]')
+    b.trigger('click'); b.trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(envios('PATCH'), 'dois PATCH com valores opostos').toHaveLength(1)
+  })
+
+  it('divulgador: dois cliques rápidos mandam UM pedido', async () => {
+    const w = await montarTela(await import('../pages/admin/evento/[id]/ingressos/promoters.vue'), {
+      rota: { params: { id: EV } },
+      respostas: { [`/api/admin/evento/${EV}/promoters`]: { promoters: [{
+        id: 'p1', nome: 'Ana', codigo: 'ANA', email: null, telefone: null, comissaoBps: 1000, ativo: true,
+        pedidos: 0, pedidosAtribuidos: 0, ingressos: 0, faturadoCents: 0, comissaoCents: 0, link: '/e/x?p=ANA',
+        podeApagar: true }] } },
+      stubs: { AbasSecao: true, ModalLateral: true },
+    })
+    const b = w.find('button[title="Desativar"]')
+    b.trigger('click'); b.trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(envios('PATCH')).toHaveLength(1)
+  })
+})
+
+describe('apagar dia em dois toques, sem confirm() do navegador (ADM-40)', () => {
+  async function abrirSessoes(podeApagar = true) {
+    return montarTela(await import('../pages/admin/evento/[id]/ingressos/sessoes.vue'), {
+      rota: { params: { id: EV } },
+      respostas: { [`/api/admin/evento/${EV}/sessoes`]: {
+        evento: { id: EV, fuso: 'America/Bahia' }, lotes: [],
+        sessoes: [{ id: 's1', titulo: 'Sábado 07/11', inicio: '2026-11-07T12:00:00Z', fim: '2026-11-07T20:00:00Z',
+                    capacidade: 100, ocupadas: 0, vagas: 100, lotado: false, lotes: [], ingressosEmitidos: 0,
+                    estoquePrometido: 0, excedeCapacidade: false, podeApagar }] } },
+      stubs: { AbasSecao: true, ModalLateral: true },
+    })
+  }
+
+  it('o 1º toque arma e diz "Confirmar"; o 2º apaga; confirm() nunca é chamado', async () => {
+    const nativo = vi.fn(() => true)
+    vi.stubGlobal('confirm', nativo)
+    try {
+      const w = await abrirSessoes()
+      await w.find('[data-parte="apagar-dia"]').trigger('click')
+      expect(envios('POST'), 'apagou no primeiro toque').toHaveLength(0)
+      expect(w.find('[data-parte="apagar-dia"]').text()).toContain('Confirmar')
+      await w.find('[data-parte="apagar-dia"]').trigger('click')
+      expect(envios('POST').map((c) => c.opcoes.body)).toEqual([{ o: 'apagar', sessaoId: 's1' }])
+      expect(nativo, 'o confirm() do navegador voltou').not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('o botão travado parece travado', async () => {
+    const w = await abrirSessoes(false)
+    const b = w.find('[data-parte="apagar-dia"]')
+    expect(b.attributes('disabled')).toBeDefined()
+    expect(b.classes()).toContain('disabled:opacity-40')
+  })
+})

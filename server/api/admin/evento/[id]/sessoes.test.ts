@@ -258,6 +258,35 @@ describe('criar várias datas de uma vez', () => {
     expect(n, 'o calendário dobrou de tamanho').toBe(NOVEMBRO.fimDeSemana)
   }, 30_000)
 
+  it('o nome digitado vira modelo com a data quando sai mais de um dia (ADM-39)', async (ctx) => {
+    if (!noAr) ctx.skip()
+    const DESTE_CASO = ['2026-12-05 10:00-03', '2026-12-12 10:00-03', '2026-12-19 10:00-03']
+    await sql(`DELETE FROM event_sessions WHERE event_id = $1 AND starts_at = ANY($2::timestamptz[])`,
+      [EVENTO, DESTE_CASO])
+    // dezembro, longe da fixture de novembro: dois sábados (05 e 12) e, à parte, um sábado só (19)
+    const varios = await acao({
+      o: 'criar', de: '2026-12-05', ate: '2026-12-13', dias: [6],
+      horarios: [{ inicio: '10:00', fim: '18:00' }], titulo: 'Show de Verão',
+    })
+    const um = await acao({
+      o: 'criar', de: '2026-12-19', ate: '2026-12-19', dias: [6],
+      horarios: [{ inicio: '10:00', fim: '18:00' }], titulo: 'Réveillon antecipado',
+    })
+    try {
+      expect(varios.status, varios.mensagem).toBe(200)
+      expect(um.status, um.mensagem).toBe(200)
+      const nomes = (await sql(
+        `SELECT title FROM event_sessions WHERE event_id = $1 AND starts_at = ANY($2::timestamptz[])
+          ORDER BY starts_at`, [EVENTO, DESTE_CASO])).map((l: any) => l.title)
+      expect(nomes, 'as datas saíram com o MESMO nome').toEqual(
+        ['Show de Verão · 05/12', 'Show de Verão · 12/12', 'Réveillon antecipado'])
+    } finally {
+      // só as três deste caso: a fixture tem dia de dezembro com pedido pendurado
+      await sql(`DELETE FROM event_sessions WHERE event_id = $1 AND starts_at = ANY($2::timestamptz[])`,
+        [EVENTO, DESTE_CASO])
+    }
+  }, 30_000)
+
   it('recusa período que não tem nenhum dia da semana pedido', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
     const r = await acao({

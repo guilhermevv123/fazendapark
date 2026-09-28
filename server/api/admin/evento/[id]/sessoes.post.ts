@@ -146,9 +146,18 @@ async function criar(d: z.infer<typeof Criar>, ev: any, fuso: string, autor: Aut
     SELECT (g.d::date + h.inicio::time) AT TIME ZONE $1 AS inicio,
            ((g.d::date + CASE WHEN h.fim::time <= h.inicio::time THEN 1 ELSE 0 END)
              + h.fim::time) AT TIME ZONE $1 AS fim,
-           COALESCE($2::text,
-             (ARRAY['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo'])
-               [EXTRACT(ISODOW FROM g.d)::int] || ' ' || to_char(g.d, 'DD/MM')) AS titulo
+           -- O nome digitado vale como MODELO quando sai mais de uma data (ADM-39): era o mesmo
+           -- texto em todas ("Sábado 07/11" em oito sábados). Leva a data — e a hora, quando o dia
+           -- tem mais de um horário. Uma data só fica com o nome exato.
+           CASE
+             WHEN $2::text IS NULL THEN
+               (ARRAY['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo'])
+                 [EXTRACT(ISODOW FROM g.d)::int] || ' ' || to_char(g.d, 'DD/MM')
+             WHEN count(*) OVER () > 1 THEN
+               $2::text || ' · ' || to_char(g.d, 'DD/MM')
+                 || CASE WHEN cardinality($5::text[]) > 1 THEN ' ' || h.inicio ELSE '' END
+             ELSE $2::text
+           END AS titulo
       FROM generate_series($3::date, $4::date, interval '1 day') AS g(d)
       CROSS JOIN unnest($5::text[], $6::text[]) AS h(inicio, fim)
      WHERE EXTRACT(ISODOW FROM g.d)::int = ANY($7::int[])`

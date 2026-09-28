@@ -48,8 +48,11 @@ async function chamar(metodo: 'POST' | 'PATCH' | 'DELETE', body: any) {
 
 const form = reactive({
   aberto: false, id: '', codigo: '', tipo: 'percentual' as 'percentual' | 'fixo',
-  /** na tela: % ou reais. Vira bps/centavos só no envio. */
-  valor: 10, maxUsos: null as number | null, maxPorCliente: 1,
+  /** percentual: o % da tela (vira bps no envio) */
+  valor: 10,
+  /** fixo: centavos inteiros, pelo CampoMoeda (ADM-50) — era `type=number` com `step=0.01` */
+  valorCents: 0,
+  maxUsos: null as number | null, maxPorCliente: 1,
   comecaEm: '', terminaEm: '', loteIds: [] as string[], ativo: true,
 })
 
@@ -59,7 +62,8 @@ function abrir(c?: any) {
     id: c?.id ?? '',
     codigo: c?.codigo ?? '',
     tipo: c?.tipo ?? 'percentual',
-    valor: c ? (c.tipo === 'percentual' ? c.valor / 100 : c.valor / 100) : 10,
+    valor: c?.tipo === 'percentual' ? c.valor / 100 : 10,
+    valorCents: c?.tipo === 'fixo' ? Number(c.valor) : 0,
     maxUsos: c?.maxUsos ?? null,
     maxPorCliente: c?.maxPorCliente ?? 1,
     comecaEm: paraCampoDataHora(c?.comecaEm),
@@ -72,9 +76,9 @@ function abrir(c?: any) {
 const deCampo = (v: string) => deCampoDataHora(v)
 
 async function salvar() {
-  // percentual → bps; fixo → centavos. Os dois multiplicam por 100, mas por
-  // motivos diferentes: deixar isso implícito é como 10% vira R$ 0,10.
-  const valor = Math.round(form.valor * 100)
+  // percentual → bps (o % vezes 100); fixo → os centavos que o CampoMoeda já dá. Deixar isso
+  // implícito é como 10% vira R$ 0,10.
+  const valor = form.tipo === 'fixo' ? form.valorCents : Math.round(form.valor * 100)
   const campos = {
     valor,
     maxUsos: form.maxUsos || null,
@@ -88,6 +92,15 @@ async function salvar() {
     ? await chamar('PATCH', { id: form.id, campos })
     : await chamar('POST', { codigo: form.codigo, tipo: form.tipo, ...campos })
   if (ok) form.aberto = false
+}
+
+/**
+ * Liga/desliga com trava (ADM-51): dois cliques rápidos mandavam dois PATCH com valores OPOSTOS e
+ * o cupom voltava ao estado de antes. Enquanto grava, o segundo clique é ignorado.
+ */
+async function alternar(c: any) {
+  if (salvando.value) return
+  await chamar('PATCH', { id: c.id, campos: { ativo: !c.ativo } })
 }
 
 const confirmando = ref('')
@@ -198,9 +211,9 @@ useHead({ title: 'Códigos promocionais' })
             </td>
             <td class="px-3 py-3">
               <div class="flex items-center justify-end gap-1">
-                <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
-                        :title="c.ativo ? 'Desativar' : 'Ativar'"
-                        @click="chamar('PATCH', { id: c.id, campos: { ativo: !c.ativo } })">
+                <button type="button" class="p-1 text-tinta-fraca hover:text-acao disabled:opacity-40"
+                        :title="c.ativo ? 'Desativar' : 'Ativar'" :disabled="salvando"
+                        data-parte="alternar" @click="alternar(c)">
                   <IconeMenu :nome="c.ativo ? 'check' : 'fechar'" :tamanho="16" />
                 </button>
                 <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
@@ -249,10 +262,12 @@ useHead({ title: 'Códigos promocionais' })
             </select>
           </div>
           <div>
-            <label class="rotulo">{{ form.tipo === 'percentual' ? 'Desconto (%)' : 'Desconto (R$)' }}</label>
-            <input v-model.number="form.valor" type="number" min="0.01"
-                   :max="form.tipo === 'percentual' ? 100 : undefined" step="0.01"
-                   class="campo tabular-nums">
+            <label class="rotulo" for="cupom-valor">
+              {{ form.tipo === 'percentual' ? 'Desconto (%)' : 'Desconto (R$)' }}
+            </label>
+            <CampoMoeda v-if="form.tipo === 'fixo'" id="cupom-valor" v-model="form.valorCents" />
+            <input v-else id="cupom-valor" v-model.number="form.valor" type="number" min="0.01" max="100"
+                   step="0.01" class="campo tabular-nums">
           </div>
           <div>
             <label class="rotulo">Limite de usos (opcional)</label>
