@@ -4,11 +4,12 @@
  * O dashboard tinha a aba "Público" como botão morto: trocava a variável e
  * nada aparecia. Esta rota é o conteúdo dela.
  *
- * **Só sai daqui o que a casa realmente coletou.** O cadastro do comprador
- * tem nome, e-mail, documento e telefone — não tem data de nascimento nem
- * gênero. Faixa etária e divisão por sexo seriam número inventado, e número
- * inventado num painel é pior que campo vazio: alguém compra mídia em cima.
- * O dia em que o checkout perguntar, a conta entra aqui.
+ * **Só sai daqui o que a casa realmente coletou.** O cadastro do comprador tem nome, e-mail,
+ * documento e telefone — e, desde o 027, data de nascimento e endereço, OPCIONAIS no checkout.
+ * Faixa etária e cidade saem só de quem respondeu, com a contagem de quantos responderam
+ * (ADM-32: a tela dizia "o checkout não pergunta" nascimento e endereço, e pergunta). Gênero não
+ * é perguntado em lugar nenhum: divisão por sexo seria número inventado, e número inventado num
+ * painel é pior que campo vazio — alguém compra mídia em cima.
  *
  * O que dá pra saber com honestidade e é o que a produção usa:
  *
@@ -56,7 +57,7 @@ export default defineEventHandler(async (event) => {
   // a hora da compra é a do relógio DO EVENTO, a mesma de Relatórios (ADM-10)
   const fuso = fusoDoEvento(ev.timezone)
 
-  const [pessoas, porPessoa, origem, hora, topo, titulares, presenca] = await Promise.all([
+  const [pessoas, porPessoa, origem, hora, topo, titulares, presenca, idades, cidades] = await Promise.all([
     // novos × recorrentes, numa passada só
     q1<any>(
       `WITH meus AS (
@@ -135,6 +136,41 @@ export default defineEventHandler(async (event) => {
 
     // quem de fato ENTROU — livro da porta, `sum(people)`
     q1<any>(SQL_PUBLICO, [id]),
+
+    // A IDADE NO DIA DO EVENTO de quem comprou e informou o nascimento (027). Os mesmos
+    // compradores das outras contas (pedido vivo); quem não informou fica em `faixa` nula e vira
+    // a diferença entre "informaram" e "compradores" — nunca uma faixa inventada.
+    q<any>(
+      `WITH compradores AS (
+         SELECT DISTINCT o.customer_id FROM orders o
+          WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.customer_id IS NOT NULL),
+       dia AS (SELECT (starts_at AT TIME ZONE $2)::date AS d FROM events WHERE id = $1)
+       -- A idade é o campo ANOS do age(), e não "age() < interval '18 years'": interval compara
+       -- mês como 30 dias, e "17 anos, 11 meses e 30 dias" (a véspera do aniversário) empata com
+       -- 18 anos — o adolescente entrava na faixa de adulto (medido no teste desta rota).
+       SELECT CASE
+                WHEN c.birth_date IS NULL THEN NULL
+                WHEN date_part('year', age(dia.d, c.birth_date)) < 18 THEN 'Até 17 anos'
+                WHEN date_part('year', age(dia.d, c.birth_date)) < 25 THEN '18 a 24'
+                WHEN date_part('year', age(dia.d, c.birth_date)) < 35 THEN '25 a 34'
+                WHEN date_part('year', age(dia.d, c.birth_date)) < 45 THEN '35 a 44'
+                WHEN date_part('year', age(dia.d, c.birth_date)) < 60 THEN '45 a 59'
+                ELSE '60 ou mais'
+              END AS faixa,
+              count(*)::int AS pessoas
+         FROM compradores m JOIN customers c ON c.id = m.customer_id CROSS JOIN dia
+        GROUP BY 1`, [id, fuso]),
+
+    // A CIDADE do endereço do cadastro (027), de quem informou. `initcap(lower(trim()))` junta
+    // "SALVADOR", "salvador " e "Salvador" numa linha só.
+    q<any>(
+      `WITH compradores AS (
+         SELECT DISTINCT o.customer_id FROM orders o
+          WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.customer_id IS NOT NULL)
+       SELECT initcap(lower(trim(c.city))) AS cidade, c.state AS uf, count(*)::int AS pessoas
+         FROM compradores m JOIN customers c ON c.id = m.customer_id
+        WHERE c.city IS NOT NULL AND trim(c.city) <> ''
+        GROUP BY 1, 2 ORDER BY 3 DESC, 1`, [id]),
   ])
 
   // faixas de quantidade: 1, 2, 3-4, 5-9, 10+
@@ -160,6 +196,9 @@ export default defineEventHandler(async (event) => {
     porUf.set(uf, (porUf.get(uf) ?? 0) + o.pessoas)
     return { ddd: o.ddd, uf, regiao: REGIAO_DDD[o.ddd] ?? null, pessoas: o.pessoas }
   })
+
+  const FAIXAS_ETARIAS = ['Até 17 anos', '18 a 24', '25 a 34', '35 a 44', '45 a 59', '60 ou mais']
+  const informaramIdade = idades.filter((f: any) => f.faixa).reduce((n: number, f: any) => n + f.pessoas, 0)
 
   const totalIngressos = porPessoa.reduce((s, p) => s + p.ingressos, 0)
   const compradores = pessoas?.compradores ?? 0
@@ -200,8 +239,19 @@ export default defineEventHandler(async (event) => {
       passagensOffline: Number(presenca?.offline ?? 0),
       ultimaEm: presenca?.ultima ?? null,
     },
-    // a tela mostra isto como aviso, não como número: é o que a casa NÃO
-    // coletou, e some sozinho no dia em que o checkout perguntar
-    naoColetado: ['data de nascimento', 'gênero', 'endereço'],
+    // faixa etária e cidade: só de quem respondeu, com quantos responderam (ADM-32)
+    idades: {
+      informaram: informaramIdade,
+      faixas: FAIXAS_ETARIAS.map((faixa) => ({
+        faixa, pessoas: Number(idades.find((f: any) => f.faixa === faixa)?.pessoas ?? 0),
+      })),
+    },
+    cidades: {
+      informaram: cidades.reduce((n: number, c: any) => n + c.pessoas, 0),
+      top: cidades.slice(0, 10).map((c: any) => ({ cidade: c.cidade, uf: c.uf, pessoas: c.pessoas })),
+    },
+    // a tela mostra isto como aviso, não como número: é o que a casa NÃO pergunta em lugar nenhum
+    // (nascimento e endereço ela pergunta — opcionais — e aparecem acima)
+    naoColetado: ['gênero'],
   }
 })

@@ -820,6 +820,29 @@ describe('as telas do dinheiro contam igual', () => {
     })
   }, 30_000)
 
+  // O PAINEL REDESENHADO (27/09) PARTE O LÍQUIDO COMO O FINANCEIRO E O BORDERÔ, e os blocos novos
+  // somam os números do próprio topo: a série de dias soma o total, "por tipo" soma os ingressos
+  // vendidos, e o público é o de relatórios. É a fixture com estorno parcial, estorno total, cupom
+  // e balcão — a que já separou réguas que pareciam iguais no evento semeado.
+  it('o painel parte o líquido como Financeiro e Borderô, e os blocos novos fecham com o topo', async (ctx) => {
+    if (!noAr) ctx.skip()
+    const t = await asSeteTelas(EVENTO)
+    const p = t.dashboard
+    expect(p.totais.liquidoNaPlataformaCents + p.totais.liquidoDiretoCents, 'as duas metades não fecham o líquido')
+      .toBe(p.totais.liquidoCents)
+    expect({ plataforma: p.totais.liquidoNaPlataformaCents, direto: p.totais.liquidoDiretoCents })
+      .toEqual({ plataforma: t.financeiroDoEvento.resumo.naPlataformaCents, direto: t.financeiroDoEvento.resumo.recebidoDiretoCents })
+    expect({ plataforma: p.totais.liquidoNaPlataformaCents, direto: p.totais.liquidoDiretoCents })
+      .toEqual({ plataforma: t.bordero.totais.naPlataformaCents, direto: t.bordero.totais.recebidoDiretoCents })
+    expect(p.totais.liquidoDiretoCents, 'a fixture perdeu o dinheiro do balcão e a metade "direto" não prova nada')
+      .toBeGreaterThan(0)
+    expect(p.serie.reduce((s: number, d: any) => s + d.cobradoCents, 0), 'a série de dias não soma o total do painel')
+      .toBe(p.totais.cobradoCents)
+    expect(p.porTipo.reduce((s: number, x: any) => s + x.ingressos, 0), '"por tipo" não soma os ingressos vendidos')
+      .toBe(p.totais.pagos)
+    expect(p.portaria.pessoas, 'o painel e relatórios contam público diferente').toBe(t.relatorios.publico.pessoas)
+  }, 30_000)
+
   // O BORDERÔ FECHA A PRÓPRIA CONTA (ADM-13). A tela escreve, linha a linha,
   //   face + taxa do comprador − descontos − plataforma − estornos parciais = líquido
   // com os campos que a rota devolve. Se um desses campos mudar de régua (voltar

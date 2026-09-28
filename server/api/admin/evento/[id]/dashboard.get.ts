@@ -1,5 +1,5 @@
 /**
- * GET /api/admin/evento/:id/dashboard?de=&ate=
+ * GET /api/admin/evento/:id/dashboard?periodo=hoje|ontem|7d  ou  ?de=AAAA-MM-DD&ate=AAAA-MM-DD
  *
  * DECISÃO QUE VALE A PENA LER ANTES DE MEXER: a régua do período.
  *
@@ -29,8 +29,9 @@
  * não de ingresso emitido: uma mesa de 4 é um ingresso e quatro pessoas.
  */
 import { q, q1 } from '../../../../utils/db'
-import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
-import { SQL_PUBLICO } from '../../../../utils/catraca'
+import { PEDIDO_VIVO, SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY } from '../../../../utils/liquido'
+import { retratoDoPublico, SQL_PUBLICO } from '../../../../utils/catraca'
+import { cotaDeMeias } from '../../../../utils/meia-entrada'
 
 /**
  * PEDIDO QUE PAGOU ALGUMA COISA — a população do ticket médio (ADM-12).
@@ -116,11 +117,101 @@ export function hojeNoFuso(fuso: string, agora = new Date()): string {
 }
 
 /** soma dias a um `AAAA-MM-DD` sem passar por fuso nenhum */
-function somarDias(dia: string, n: number): string {
+export function somarDias(dia: string, n: number): string {
   const d = new Date(`${dia}T12:00:00Z`)
   d.setUTCDate(d.getUTCDate() + n)
   return d.toISOString().slice(0, 10)
 }
+
+/** quantos dias de calendário de `de` a `ate`, contando os dois */
+export function diasEntre(de: string, ate: string): number {
+  return Math.round((Date.parse(`${ate}T12:00:00Z`) - Date.parse(`${de}T12:00:00Z`)) / 86_400_000) + 1
+}
+
+/** o teto da série do gráfico: dois anos de barras ainda cabem no card; mais que isso é outra tela */
+export const MAXIMO_DE_DIAS_NA_SERIE = 731
+
+/**
+ * A SÉRIE DE DIAS CONTÍNUA (ADM-20): de `de` a `ate`, TODO dia, com zero onde não houve venda.
+ *
+ * A curva era desenhada só com os dias que tiveram venda: 40 dias alternados viravam 20 pontos
+ * colados, o tempo encolhia e a venda parecia constante. Dia sem venda é informação — é o platô
+ * que diz "a campanha parou". O dia é texto `AAAA-MM-DD` do calendário do evento (a mesma chave
+ * que `ritmo` usa), então aqui não entra fuso nenhum.
+ *
+ * Passou do teto, fica com os ÚLTIMOS dias e avisa (`cortada`) — o fim é o que se acompanha.
+ */
+export function serieDeDias<T extends { dia: string }>(
+  de: string | null, ate: string | null, pontos: T[], zero: (dia: string) => T,
+  maximo = MAXIMO_DE_DIAS_NA_SERIE,
+): { serie: T[]; cortada: boolean } {
+  if (!de || !ate || de > ate) return { serie: [], cortada: false }
+  const total = diasEntre(de, ate)
+  const cortada = total > maximo
+  const inicio = cortada ? somarDias(ate, -(maximo - 1)) : de
+  const porDia = new Map(pontos.map((p) => [p.dia, p]))
+  const serie: T[] = []
+  for (let d = inicio, i = 0; i < Math.min(total, maximo); d = somarDias(d, 1), i++) {
+    serie.push(porDia.get(d) ?? zero(d))
+  }
+  return { serie, cortada }
+}
+
+/**
+ * A variação contra o período anterior, em %, com uma casa abaixo de 10. `null` quando não há
+ * base (anterior zero): "+∞%" não informa nada, e a tela escreve "sem base" no lugar.
+ */
+export function variacaoPct(atual: number, anterior: number): number | null {
+  if (!anterior) return null
+  const v = ((atual - anterior) / Math.abs(anterior)) * 100
+  return Math.abs(v) < 10 ? Math.round(v * 10) / 10 : Math.round(v)
+}
+
+/**
+ * OS NÚMEROS DE UMA JANELA, pela régua do painel — o mesmo `PEDIDO_VIVO`, o mesmo `SQL_LIQUIDO`,
+ * o mesmo `PAGANTE`, o mesmo funil do site (`CANAL_DO_FUNIL`) e o livro da portaria.
+ *
+ * É uma função (e não duas cópias) porque a tabela "Comparação" põe a janela atual ao lado da
+ * anterior: se cada coluna tivesse a própria conta, a diferença entre elas seria de régua, não
+ * de venda. O teste confere que a janela atual daqui bate com os totais do topo.
+ */
+async function numerosDaJanela(id: string, inicio: Date, fim: Date) {
+  const p = [id, inicio, fim]
+  const [v, f, e] = await Promise.all([
+    q1<any>(
+      `SELECT COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
+              ${SQL_LIQUIDO('o.')} AS liquido,
+              COUNT(*) FILTER (WHERE ${PAGANTE})::int AS pagantes,
+              COALESCE(SUM(oi.n) FILTER (WHERE o.channel <> 'cortesia'),0)::int AS vendidos
+         FROM orders o
+         LEFT JOIN LATERAL (SELECT SUM(quantity)::int AS n FROM order_items WHERE order_id = o.id) oi ON true
+        WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.paid_at BETWEEN $2 AND $3`, p),
+    q1<any>(
+      `SELECT COUNT(*)::int AS criados, COUNT(*) FILTER (WHERE ${PEDIDO_VIVO()})::int AS finalizados
+         FROM orders WHERE event_id = $1 AND ${CANAL_DO_FUNIL} AND created_at BETWEEN $2 AND $3`, p),
+    q1<any>(
+      `SELECT COALESCE(sum(people),0)::int AS pessoas
+         FROM entries WHERE event_id = $1 AND entered_at BETWEEN $2 AND $3`, p),
+  ])
+  const cobrado = Number(v?.cobrado ?? 0)
+  const pagantes = Number(v?.pagantes ?? 0)
+  const criados = Number(f?.criados ?? 0)
+  return {
+    de: inicio.toISOString(),
+    ate: fim.toISOString(),
+    cobradoCents: cobrado,
+    liquidoCents: Number(v?.liquido ?? 0),
+    ingressosVendidos: Number(v?.vendidos ?? 0),
+    pedidosPagantes: pagantes,
+    ticketMedioPorPedidoCents: pagantes ? Math.round(cobrado / pagantes) : 0,
+    criadosNoSite: criados,
+    conversaoDoSitePct: criados ? Math.round((Number(f?.finalizados ?? 0) / criados) * 1000) / 10 : null,
+    entradasNaPortaria: Number(e?.pessoas ?? 0),
+  }
+}
+
+/** as cores de cada portão no gráfico da portaria — hex das escalas da casa (pool, grape, sun, citrus) */
+const PORTOES_NO_GRAFICO = 4
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -129,7 +220,7 @@ export default defineEventHandler(async (event) => {
   // O fuso é conferido antes de entrar no SQL (`fusoDoEvento`): um texto torto na
   // coluna faria o `AT TIME ZONE` estourar 500 no painel inteiro.
   const ev = await q1<any>(
-    `SELECT id, name, status, starts_at, fee_bps, timezone
+    `SELECT id, name, status, starts_at, ends_at, fee_bps, timezone
        FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
   const fuso: string = fusoDoEvento(ev.timezone)
@@ -137,8 +228,24 @@ export default defineEventHandler(async (event) => {
   const hoje = hojeNoFuso(fuso)
   let diaDe = diaValido(de)
   let diaAte = diaValido(ate)
-  if (periodo === 'hoje') { diaDe = hoje; diaAte = hoje }
-  else if (periodo === '7d') { diaDe = somarDias(hoje, -6); diaAte = hoje }
+  // o NOME do período vai de volta pra tela: é ele que acende o chip certo e decide se a página
+  // se atualiza sozinha ("Hoje")
+  let nomeDoPeriodo: 'tudo' | 'hoje' | 'ontem' | '7d' | 'personalizado' = 'tudo'
+  if (periodo === 'hoje') { diaDe = hoje; diaAte = hoje; nomeDoPeriodo = 'hoje' }
+  else if (periodo === 'ontem') { diaDe = somarDias(hoje, -1); diaAte = diaDe; nomeDoPeriodo = 'ontem' }
+  else if (periodo === '7d') { diaDe = somarDias(hoje, -6); diaAte = hoje; nomeDoPeriodo = '7d' }
+  else if (diaDe || diaAte) {
+    nomeDoPeriodo = 'personalizado'
+    // "de 30 até 20" é a mesma pergunta que "de 20 até 30" — trocar vale mais que responder zero
+    if (diaDe && diaAte && diaDe > diaAte) [diaDe, diaAte] = [diaAte, diaDe]
+  }
+
+  // O PERÍODO ANTERIOR, de mesma duração (tabela "Comparação" e o ▲▼ dos números do topo). Só
+  // existe quando o período tem começo: "todo o período" não tem anterior.
+  const fimEfetivo = diaDe ? (diaAte ?? hoje) : null
+  const duracao = diaDe && fimEfetivo ? diasEntre(diaDe, fimEfetivo) : 0
+  const antDe = diaDe && duracao > 0 ? somarDias(diaDe, -duracao) : null
+  const antAte = diaDe && duracao > 0 ? somarDias(diaDe, -1) : null
 
   // "Todo o período" tem que significar TODO o período. Ancorar o padrão na
   // criação do evento parece razoável e não é: basta um pedido com data
@@ -152,11 +259,20 @@ export default defineEventHandler(async (event) => {
                  ELSE ($2::date)::timestamp AT TIME ZONE $1 END                        AS inicio,
             CASE WHEN $3::date IS NULL THEN now()
                  ELSE (($3::date + 1)::timestamp AT TIME ZONE $1) - interval '1 millisecond' END AS fim,
-            ($4::date)::timestamp AT TIME ZONE $1                                      AS hoje_inicio`,
-    [fuso, diaDe, diaAte, hoje])
+            ($4::date)::timestamp AT TIME ZONE $1                                      AS hoje_inicio,
+            (($4::date - 1)::timestamp AT TIME ZONE $1)                                AS ontem_inicio,
+            (($4::date + 1)::timestamp AT TIME ZONE $1)                                AS amanha_inicio,
+            CASE WHEN $5::date IS NULL THEN NULL
+                 ELSE ($5::date)::timestamp AT TIME ZONE $1 END                        AS ant_inicio,
+            CASE WHEN $6::date IS NULL THEN NULL
+                 ELSE (($6::date + 1)::timestamp AT TIME ZONE $1) - interval '1 millisecond' END AS ant_fim,
+            extract(hour FROM now() AT TIME ZONE $1)::int                              AS hora_agora,
+            now()                                                                      AS agora`,
+    [fuso, diaDe, diaAte, hoje, antDe, antAte])
   const inicio: Date = janela.inicio
   const fim: Date = janela.fim
   const p = [id, inicio, fim]
+  const agora: Date = janela.agora
 
   // A régua do período, uma vez só. `PEDIDO_VIVO` no lugar de `status =
   // 'pago'`: o pedido com estorno parcial continua sendo dinheiro que entrou,
@@ -172,6 +288,10 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.discount_cents),0)::bigint AS desconto,
               COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
               ${SQL_LIQUIDO('o.')}                     AS liquido,
+              -- as duas metades do líquido, com a régua do financeiro (utils/liquido.ts): o que
+              -- está na plataforma e o que já está com o produtor (gaveta, pix na chave dele)
+              ${SQL_LIQUIDO_GATEWAY('o.')}             AS liquido_plataforma,
+              ${SQL_LIQUIDO_DIRETO('o.')}              AS liquido_direto,
               COUNT(*)::int                            AS pedidos,
               COUNT(*) FILTER (WHERE o.status = 'pago')::int AS fechados,
               COUNT(*) FILTER (WHERE o.status = 'estornado_parcial')::int AS com_estorno,
@@ -300,6 +420,96 @@ export default defineEventHandler(async (event) => {
     q1<any>(SQL_PUBLICO, [id]),
   ])
 
+  // ------------------------------------------------------------------ o que o painel ganhou
+  // (redesenho de 27/09: dias contínuos, hoje por hora, tipo de ingresso e cota de meia, próximos
+  // dias, portaria de hoje e a comparação com o período anterior). Tudo com as réguas de cima.
+  const [porHora, porTipo, cotas, sessoes, totalDeSessoes, entradasHoje, porQuarto, barrados,
+    atual, anterior] = await Promise.all([
+    // HOJE E ONTEM POR HORA, no relógio do evento — sempre, qualquer que seja o período: é o
+    // "a que horas está vendendo" do dia (bilheteria e site juntos)
+    q<any>(
+      `SELECT extract(hour FROM o.paid_at AT TIME ZONE ${fusoSql(fuso)})::int AS hora,
+              (o.paid_at >= $2) AS eh_hoje,
+              COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
+              COUNT(*)::int AS pedidos
+         FROM orders o
+        WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')}
+          AND o.paid_at >= $3 AND o.paid_at < $4
+        GROUP BY 1, 2`, [id, janela.hoje_inicio, janela.ontem_inicio, janela.amanha_inicio]),
+
+    // POR TIPO DE INGRESSO no período — a espécie do tipo (`ticket_types.kind`, gerada no 015);
+    // item sem tipo é inteira (o preço do lote). A cortesia fica fora: ela tem linha própria, e
+    // somada aqui seria "gratuito" com outro nome. Mesma unidade de `pagos` (item do pedido).
+    q<any>(
+      `SELECT COALESCE(tt.kind, 'inteira') AS especie,
+              COALESCE(SUM(oi.quantity),0)::int AS ingressos,
+              COALESCE(SUM(oi.quantity * oi.unit_total_cents),0)::bigint AS cobrado
+         FROM orders o
+         JOIN order_items oi ON oi.order_id = o.id
+         LEFT JOIN ticket_types tt ON tt.id = oi.ticket_type_id
+        WHERE o.event_id = $1 AND ${vivoNoPeriodo} AND o.channel <> 'cortesia'
+        GROUP BY 1`, p),
+
+    // A COTA DE MEIA de cada lote que vende meia — a MESMA conta da trava da venda
+    // (`SQL_MEIAS_DO_LOTE` + `cotaDeMeias`, utils/meia-entrada.ts): soma dos `sold` dos tipos de
+    // meia contra o piso de `quantity × half_quota_bps`. É do lote inteiro, não do período.
+    q<any>(
+      `SELECT l.id, s.name AS setor, l.name AS lote, l.quantity::int, l.half_quota_bps::int,
+              COALESCE(SUM(tt.sold) FILTER (WHERE tt.kind = 'meia'), 0)::int AS meias
+         FROM sectors s
+         JOIN lots l ON l.sector_id = s.id
+         JOIN ticket_types tt ON tt.lot_id = l.id
+        WHERE s.event_id = $1
+        GROUP BY s.id, l.id
+       HAVING count(*) FILTER (WHERE tt.kind = 'meia') > 0
+        ORDER BY s.sort_order, l.sort_order`, [id]),
+
+    // OS PRÓXIMOS DIAS (sessões que ainda não acabaram): a ocupação é a da trava da venda
+    // (`sessao_ocupacao`, do 016) — a tela de Sessões lê a mesma função
+    q<any>(
+      `SELECT es.id, es.title, es.capacity,
+              to_char(es.starts_at AT TIME ZONE ${fusoSql(fuso)}, 'YYYY-MM-DD') AS dia,
+              to_char(es.starts_at AT TIME ZONE ${fusoSql(fuso)}, 'HH24:MI') AS hora,
+              sessao_ocupacao(es.id) AS ocupadas
+         FROM event_sessions es
+        WHERE es.event_id = $1 AND es.ends_at >= now()
+        ORDER BY es.starts_at, es.sort_order
+        LIMIT 8`, [id]),
+    q1<any>(
+      `SELECT count(*) FILTER (WHERE ends_at >= now())::int AS futuras, count(*)::int AS todas
+         FROM event_sessions WHERE event_id = $1`, [id]),
+
+    // A PORTARIA HOJE — o livro de passagens (`entries`, pessoas) e o log de leituras
+    // (`checkins`, as recusas). Hoje é o dia do evento no fuso dele, como o resto.
+    q1<any>(
+      `SELECT COALESCE(sum(people),0)::int AS pessoas, count(*)::int AS passagens
+         FROM entries WHERE event_id = $1 AND entered_at >= $2 AND entered_at < $3`,
+      [id, janela.hoje_inicio, janela.amanha_inicio]),
+    q<any>(
+      `SELECT (extract(hour FROM entered_at AT TIME ZONE ${fusoSql(fuso)})::int * 4
+               + floor(extract(minute FROM entered_at AT TIME ZONE ${fusoSql(fuso)}) / 15)::int) AS quarto,
+              COALESCE(NULLIF(trim(gate), ''), 'Sem portão') AS portao,
+              COALESCE(sum(people),0)::int AS pessoas
+         FROM entries WHERE event_id = $1 AND entered_at >= $2 AND entered_at < $3
+        GROUP BY 1, 2 ORDER BY 1`, [id, janela.hoje_inicio, janela.amanha_inicio]),
+    q<any>(
+      `SELECT resultado, count(*)::int AS n
+         FROM checkins
+        WHERE event_id = $1 AND created_at >= $2 AND created_at < $3 AND resultado <> 'ok'
+        GROUP BY 1 ORDER BY 2 DESC, 1`, [id, janela.hoje_inicio, janela.amanha_inicio]),
+
+    // A COMPARAÇÃO: a janela atual e a anterior pela MESMA função. Janela que ainda não acabou
+    // (hoje, 7 dias) compara com a anterior ATÉ A MESMA HORA: às 14h, "hoje" contra o dia
+    // inteiro de ontem pareceria queda todo dia.
+    numerosDaJanela(id!, inicio, fim),
+    janela.ant_inicio
+      ? numerosDaJanela(id!, janela.ant_inicio, fim > agora
+        ? new Date(Math.min(janela.ant_fim.getTime(),
+          janela.ant_inicio.getTime() + (agora.getTime() - inicio.getTime())))
+        : janela.ant_fim)
+      : Promise.resolve(null),
+  ])
+
   // Cortesia é o que a CASA deu — o pedido que nasceu na rota de cortesia
   // (`channel = 'cortesia'`), a mesma régua da tela de Cortesias e do borderô.
   //
@@ -375,8 +585,68 @@ export default defineEventHandler(async (event) => {
     outros: criados - Object.values(baldes).reduce((s, n) => s + n, 0),
   }
 
+  // ---- a série contínua do gráfico (ADM-20) --------------------------------------------------
+  // Período com dias: do primeiro ao último. "Todo o período": do primeiro dia com venda até o
+  // último — ou até hoje, se o evento ainda não acabou (os dias parados até aqui SÃO o ritmo).
+  const ritmo = porDia.map((d) => ({
+    dia: d.dia as string, cobradoCents: Number(d.cobrado), liquidoCents: Number(d.liquido),
+    ingressos: Number(d.ingressos),
+  }))
+  const fimDoEvento = ev.ends_at ? hojeNoFuso(fuso, new Date(ev.ends_at)) : hoje
+  const serieDe = diaDe ?? ritmo[0]?.dia ?? null
+  const serieAte = diaDe || diaAte
+    ? (diaAte ?? hoje)
+    : ritmo.length
+      ? [ritmo[ritmo.length - 1].dia, hoje < fimDoEvento ? hoje : fimDoEvento].sort().at(-1)!
+      : null
+  const { serie, cortada } = serieDeDias(serieDe, serieAte, ritmo,
+    (dia) => ({ dia, cobradoCents: 0, liquidoCents: 0, ingressos: 0 }))
+
+  // ---- hoje por hora: 24 posições sempre -------------------------------------------------------
+  const horas = Array.from({ length: 24 }, (_, hora) => {
+    const h = porHora.find((x) => x.hora === hora && x.eh_hoje)
+    const o = porHora.find((x) => x.hora === hora && !x.eh_hoje)
+    return {
+      hora,
+      hojeCents: Number(h?.cobrado ?? 0), hojePedidos: Number(h?.pedidos ?? 0),
+      ontemCents: Number(o?.cobrado ?? 0), ontemPedidos: Number(o?.pedidos ?? 0),
+    }
+  })
+
+  // ---- portaria: os quartos de hora de hoje, do primeiro ao último com gente --------------------
+  const nomesDosPortoes = [...new Set(porQuarto.map((x) => x.portao as string))]
+    .sort((a, b) => porQuarto.filter((x) => x.portao === b).reduce((n, x) => n + x.pessoas, 0)
+      - porQuarto.filter((x) => x.portao === a).reduce((n, x) => n + x.pessoas, 0))
+  const principais = nomesDosPortoes.slice(0, PORTOES_NO_GRAFICO)
+  const quartos: { quarto: number; rotulo: string; pessoas: number; porPortao: Record<string, number> }[] = []
+  if (porQuarto.length) {
+    const primeiro = Number(porQuarto[0].quarto)
+    const ultimo = Number(porQuarto[porQuarto.length - 1].quarto)
+    for (let k = primeiro; k <= ultimo; k++) {
+      const doQuarto = porQuarto.filter((x) => Number(x.quarto) === k)
+      const porPortao: Record<string, number> = {}
+      for (const x of doQuarto) {
+        const nome = principais.includes(x.portao) ? x.portao : 'Outros'
+        porPortao[nome] = (porPortao[nome] ?? 0) + Number(x.pessoas)
+      }
+      quartos.push({
+        quarto: k,
+        rotulo: `${String(Math.floor(k / 4)).padStart(2, '0')}:${String((k % 4) * 15).padStart(2, '0')}`,
+        pessoas: doQuarto.reduce((n, x) => n + Number(x.pessoas), 0),
+        porPortao,
+      })
+    }
+  }
+
   return {
-    periodo: { de: inicio.toISOString(), ate: fim.toISOString(), fuso, hoje },
+    evento: { id: ev.id, nome: ev.name, status: ev.status },
+    periodo: {
+      de: inicio.toISOString(), ate: fim.toISOString(), fuso, hoje,
+      // o que a tela acende e escreve: o nome do período e os dias de calendário dele
+      nome: nomeDoPeriodo, diaDe, diaAte: diaDe || diaAte ? (diaAte ?? hoje) : null,
+      atualizadoEm: agora.toISOString(),
+      horaAgora: Number(janela.hora_agora),
+    },
     regua: 'pedido que virou dinheiro, pela data do pagamento',
     totais: {
       cobradoCents: Number(totais.cobrado),
@@ -392,6 +662,9 @@ export default defineEventHandler(async (event) => {
       estornadoNoLiquidoCents: Number(totais.estornado),
       // o que sobra pro produtor — mesma conta do borderô e dos financeiros
       liquidoCents: Number(totais.liquido),
+      // as duas metades dele, com o nome do Financeiro: na plataforma × recebido direto
+      liquidoNaPlataformaCents: Number(totais.liquido_plataforma),
+      liquidoDiretoCents: Number(totais.liquido_direto),
       hojeCents: Number(vendasHoje?.cobrado ?? 0),
       hojeLiquidoCents: Number(vendasHoje?.liquido ?? 0),
       pedidos,
@@ -441,10 +714,60 @@ export default defineEventHandler(async (event) => {
       passagensOffline: Number(publico?.offline ?? 0),
       ultimaEm: publico?.ultima ?? null,
     },
-    ritmo: porDia.map((d) => ({
-      dia: d.dia, cobradoCents: Number(d.cobrado), liquidoCents: Number(d.liquido),
-      ingressos: Number(d.ingressos),
+    // A PORTARIA (ADM-19): o retrato da porta pela MESMA função do leitor (`retratoDoPublico`),
+    // mais o dia de hoje — quem entrou, a cada 15 minutos por portão, e quem foi barrado
+    portaria: {
+      ...retratoDoPublico(publico),
+      hoje: { pessoas: Number(entradasHoje?.pessoas ?? 0), passagens: Number(entradasHoje?.passagens ?? 0) },
+      portoes: principais.concat(nomesDosPortoes.length > PORTOES_NO_GRAFICO ? ['Outros'] : []),
+      quartos,
+      barradosHoje: barrados.map((b) => ({ resultado: b.resultado as string, n: Number(b.n) })),
+    },
+    // a série contínua do gráfico: todo dia do período, zero onde não vendeu (`ritmo`, abaixo,
+    // continua só com os dias que venderam — é o que o extrato e os testes de fuso comparam)
+    serie,
+    serieCortada: cortada,
+    porHoraHoje: horas,
+    porTipo: ['inteira', 'meia', 'gratuito'].map((especie) => {
+      const t = porTipo.find((x) => x.especie === especie)
+      return { especie, ingressos: Number(t?.ingressos ?? 0), cobradoCents: Number(t?.cobrado ?? 0) }
+    }),
+    cotaDeMeia: cotas.map((c) => ({
+      loteId: c.id, setor: c.setor, lote: c.lote, quantidade: Number(c.quantity),
+      cotaBps: Number(c.half_quota_bps),
+      cota: cotaDeMeias(Number(c.quantity), Number(c.half_quota_bps)),
+      meias: Number(c.meias),
     })),
+    proximosDias: sessoes.map((s) => {
+      const capacidade = s.capacity === null ? null : Number(s.capacity)
+      const ocupadas = Number(s.ocupadas)
+      return {
+        id: s.id, titulo: s.title, dia: s.dia, hora: s.hora, capacidade, ocupadas,
+        vagas: capacidade === null ? null : Math.max(capacidade - ocupadas, 0),
+        lotado: capacidade !== null && ocupadas >= capacidade,
+      }
+    }),
+    sessoes: { futuras: Number(totalDeSessoes?.futuras ?? 0), todas: Number(totalDeSessoes?.todas ?? 0) },
+    // o período atual e o anterior de mesma duração, pela mesma função; `null` em "todo o período"
+    // (a janela atual sai da mesma função que a anterior, e bate com os totais do topo — o teste
+    // confere; a variação é calculada UMA vez, aqui, pro cartão e pra tabela dizerem o mesmo)
+    comparacao: anterior ? {
+      atual,
+      anterior,
+      duracaoEmDias: duracao,
+      ateAMesmaHora: fim > agora,
+      variacao: {
+        cobrado: variacaoPct(atual.cobradoCents, anterior.cobradoCents),
+        liquido: variacaoPct(atual.liquidoCents, anterior.liquidoCents),
+        ingressos: variacaoPct(atual.ingressosVendidos, anterior.ingressosVendidos),
+        ticketPorPedido: variacaoPct(atual.ticketMedioPorPedidoCents, anterior.ticketMedioPorPedidoCents),
+        entradas: variacaoPct(atual.entradasNaPortaria, anterior.entradasNaPortaria),
+        // conversão é porcentagem: a diferença vai em pontos percentuais, não em % de %
+        conversaoPp: atual.conversaoDoSitePct === null || anterior.conversaoDoSitePct === null
+          ? null : Math.round((atual.conversaoDoSitePct - anterior.conversaoDoSitePct) * 10) / 10,
+      },
+    } : null,
+    ritmo,
     funil: funilDoPeriodo,
     porForma: porForma.map((f) => ({
       forma: f.forma, cobradoCents: Number(f.cobrado), liquidoCents: Number(f.liquido), n: f.n,
