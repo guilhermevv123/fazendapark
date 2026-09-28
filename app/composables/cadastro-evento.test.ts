@@ -36,6 +36,10 @@ Object.defineProperty(globalThis, 'localStorage', {
 
 afterEach(() => { limparTela(); localStorage.clear() })
 
+/** EVT-10 (27/09): o rascunho mora numa chave POR PESSOA (`dt:criar-evento:v2:<marca>`) */
+const EU = { usuario: { email: 'dono@fazendapark.com.br', orgId: 'org-1', papel: 'master' } }
+const rascunhoGuardado = () => [...memoria.entries()].find(([k]) => k.startsWith('dt:criar-evento:v2:'))?.[1] ?? null
+
 /** O layout do assistente de verdade tem o botão "Prosseguir"; o dublê também. */
 const LayoutComBotao = defineComponent({
   emits: ['avancar', 'voltar', 'sair'],
@@ -68,6 +72,7 @@ describe('assistente de criação', () => {
         EnvioDeImagem: (await import('../components/EnvioDeImagem.vue')).default,
       },
       respostas: {
+        '/api/auth/eu': EU,
         '/api/admin/organizacoes': [{ id: 'org-1', nome: 'Fazenda Park' }],
         '/api/admin/evento': { ok: true, id: 'ev-1', slug: 'zz-noite-2', slugPedido: 'zz-noite' },
       },
@@ -133,14 +138,15 @@ describe('assistente de criação', () => {
     const corpo = post!.opcoes.body
     expect(corpo.setores.map((x: any) => x.nome)).toEqual(['Pista'])
     expect(corpo.slug, 'endereço não vai da tela: o servidor tira do nome').toBeUndefined()
-    // data e hora do campo único chegam como antes; o encerramento preenchido vale
-    expect(corpo.inicio).toBe(new Date('2031-03-10T22:00').toISOString())
-    expect(corpo.fim).toBe(new Date('2031-03-11T02:00').toISOString())
+    // data e hora do campo único chegam no fuso do EVENTO (padrão America/Bahia, GMT−3) — não no
+    // do processo que roda o teste (EVT-03); o encerramento preenchido vale
+    expect(corpo.inicio).toBe('2031-03-11T01:00:00.000Z')
+    expect(corpo.fim).toBe('2031-03-11T05:00:00.000Z')
     expect(corpo.encerraVendasMinutosApos).toBeNull()
-    expect(corpo.encerraVendasEm).toBe(new Date('2031-03-10T20:00').toISOString())
-    expect(corpo.setores[0].lotes[0].expiraEm).toBe(new Date('2031-03-09T18:00').toISOString())
+    expect(corpo.encerraVendasEm).toBe('2031-03-10T23:00:00.000Z')
+    expect(corpo.setores[0].lotes[0].expiraEm).toBe('2031-03-09T21:00:00.000Z')
     // criou: nada de rascunho pra "continuar" e criar de novo
-    expect(localStorage.getItem('dt:criar-evento:v1')).toBeNull()
+    expect(rascunhoGuardado()).toBeNull()
     const lote = corpo.setores[0].lotes[0]
     // os dois tipos do passo 3 chegaram em cada lote, COMPARTILHANDO o estoque:
     // cada um vai até o lote inteiro (é o lote que segura o total)
@@ -284,7 +290,7 @@ describe('rascunho: sair no meio não perde nada', () => {
       CampoMoeda: (await import('../components/CampoMoeda.vue')).default,
       EnvioDeImagem: (await import('../components/EnvioDeImagem.vue')).default,
     },
-    respostas: { '/api/admin/organizacoes': [{ id: 'org-1', nome: 'Fazenda Park' }] },
+    respostas: { '/api/auth/eu': EU, '/api/admin/organizacoes': [{ id: 'org-1', nome: 'Fazenda Park' }] },
   })
 
   it('preenche, sai, volta: continua no mesmo passo com o que tinha, e "Começar do zero" apaga', async () => {
@@ -296,7 +302,7 @@ describe('rascunho: sair no meio não perde nada', () => {
     await avancar(tela) // → passo 3
     await tela.find('input[aria-label="Nome do setor"]').setValue('Camarote')
     await tela.findAll('button').find((b: any) => b.text() === 'Adicionar setor')!.trigger('click')
-    await vi.waitFor(() => expect(localStorage.getItem('dt:criar-evento:v1')).toContain('Camarote'))
+    await vi.waitFor(() => expect(rascunhoGuardado()).toContain('Camarote'))
 
     limparTela() // saiu da página (o servidor reiniciou, fechou a aba…)
     tela = await montar()
@@ -309,7 +315,7 @@ describe('rascunho: sair no meio não perde nada', () => {
     const recarregar = vi.fn()
     Object.defineProperty(window, 'location', { value: { ...window.location, reload: recarregar }, configurable: true })
     await tela.findAll('button').find((b: any) => b.text() === 'Começar do zero')!.trigger('click')
-    expect(localStorage.getItem('dt:criar-evento:v1')).toBeNull()
+    expect(rascunhoGuardado()).toBeNull()
     expect(recarregar).toHaveBeenCalled()
   })
 })

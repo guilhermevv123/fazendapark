@@ -21,7 +21,25 @@
  * lote inteiro sem perceber.
  */
 import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
+import { instanteNoFuso } from '~/composables/fusoHorario'
 definePageMeta({ layout: false })
+
+/**
+ * EVT-09: a chave desta criação. Nasce uma vez por evento a criar (e vai no rascunho): se a
+ * resposta do "Publicar" se perde — rede do parque caindo — e a pessoa clica de novo, o servidor
+ * reconhece a chave e devolve o evento que JÁ criou, em vez de nascer um segundo com "-2".
+ */
+function novaChaveDeCriacao(): string {
+  const c = globalThis.crypto as Crypto | undefined
+  if (c?.randomUUID) return c.randomUUID()
+  // http sem TLS não tem randomUUID; getRandomValues existe em todo navegador
+  const b = new Uint8Array(16)
+  c?.getRandomValues?.(b) ?? b.forEach((_, i) => { b[i] = Math.floor(Math.random() * 256) })
+  b[6] = (b[6]! & 0x0f) | 0x40
+  b[8] = (b[8]! & 0x3f) | 0x80
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
 
 const PASSOS = [
   'Dados básicos', 'Descrição do evento', 'Setores, lotes e tipos',
@@ -44,8 +62,11 @@ const erros = ref<string[]>([])
 
 /* ------------------------------------------------------------- estado --- */
 const f = reactive({
+  chaveDeCriacao: novaChaveDeCriacao(),
   nome: '',
-  faixaEtaria: 18,
+  // EVT-14: nasce "Livre", como o servidor e o banco. Era 18: o evento do parque criado sem mexer
+  // aqui aparecia na página pública com "Idade 18 anos" — um parque aquático de família.
+  faixaEtaria: 0,
   privado: false,
   categoria: '',
   subcategorias: [] as string[],
@@ -273,13 +294,10 @@ function validar(p: number): string[] {
     }
   }
   if (p === 4) {
-    // a capacidade do setor agora se preenche aqui, no cabeçalho de cada setor
-    f.setores.forEach((s) => {
-      const soma = s.lotes.reduce((a, l) => a + l.quantidade, 0)
-      if (s.capacidade && soma > s.capacidade) {
-        e.push(`"${s.nome}": os lotes somam ${soma} para uma capacidade de ${s.capacidade}.`)
-      }
-    })
+    // EVT-08: a regra "os lotes somam X para uma capacidade de Y" morava aqui sem campo nenhum de
+    // capacidade na tela — `capacidade` nasce null e nunca muda, então a regra nunca disparou.
+    // Saiu. A capacidade do setor (quando existir) é dita em Ingressos, depois de criado, e o
+    // servidor continua conferindo a soma se ela vier.
     f.setores.forEach((s) => s.lotes.forEach((l) => {
       if (l.faceCents === 0 && !l.gratuito) {
         e.push(`"${s.nome} · ${l.nome}": o valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito".`)
@@ -349,20 +367,24 @@ const encerraCampo = computed({
 /* ------------------------------------------------------------ gravar ---- */
 
 /**
- * Data + hora digitadas (relógio de quem está criando o evento) → o instante
- * que o servidor guarda. `deCampoDataHora` mora em `app/composables/formato.ts`
- * e é o único lugar do projeto que faz esta conversão: sem a hora, o
- * `new Date('2026-10-17')` que existia aqui nasceria meia-noite UTC e o evento
- * começaria às 21h do dia ANTERIOR.
+ * Data + hora digitadas → o instante que o servidor guarda, NO FUSO ESCOLHIDO no passo 5 (EVT-03).
+ *
+ * Antes a conta era pelo relógio do navegador (`deCampoDataHora`): o fuso ia gravado, mas "20:00"
+ * de um evento em Manaus criado de Ubatã virava 20:00 da Bahia. Agora todo horário do assistente —
+ * início, término, encerramento das vendas e expiração do lote — vale no fuso do evento, e a hora
+ * continua obrigatória no formato (sem ela, meia-noite UTC seria 21h do dia ANTERIOR).
  */
 const iso = (data: string, hora: string) =>
-  deCampoDataHora(`${data}T${hora || '00:00'}`)
+  instanteNoFuso(`${data}T${hora || '00:00'}`, f.fuso)
+/** EVT-06: UF é maiúscula de verdade (o `uppercase` do campo era só visual e gravava "ba") */
+const soUf = (v: string) => (v || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2)
 
 async function publicar() {
   salvando.value = true
   erro.value = ''
   try {
     const corpo: any = {
+      chaveDeCriacao: f.chaveDeCriacao,
       nome: f.nome.trim(),
       descricao: f.descricao || undefined,
       inicio: iso(f.inicioData, f.inicioHora),
@@ -377,7 +399,7 @@ async function publicar() {
       subcategorias: f.subcategorias,
       online: f.online,
       linkTransmissao: f.online ? f.linkTransmissao : undefined,
-      local: f.online ? {} : { ...f.local, estado: f.local.estado || undefined },
+      local: f.online ? {} : { ...f.local, estado: soUf(f.local.estado) || undefined },
       suporte: f.suporteValor ? { tipo: f.suporteTipo, valor: f.suporteValor.trim() } : null,
       taxaBps: f.taxaBps,
       modoTaxaOnline: f.modoTaxaOnline,
@@ -396,7 +418,7 @@ async function publicar() {
           nome: l.nome.trim(), faceCents: l.faceCents,
           gratuito: l.faceCents === 0 && l.gratuito, canais: l.canais,
           quantidade: l.quantidade,
-          expiraEm: deCampoDataHora(l.expiraEm) ?? undefined,
+          expiraEm: instanteNoFuso(l.expiraEm, f.fuso) ?? undefined,
           minPorCompra: l.minPorCompra, maxPorCompra: l.maxPorCompra,
           // cada tipo vai até o lote inteiro: é o lote que segura o total
           tipos: l.tipos.map((t) => ({
@@ -416,6 +438,9 @@ async function publicar() {
     // página agora não pode oferecer "continuar" e criar o evento duas vezes
     apagarRascunho()
     rascunhoLigado = false
+    // EVT-09: o primeiro clique tinha chegado (a resposta é que se perdeu) — o servidor devolveu o
+    // MESMO evento; o ✓ diz isso em vez de fingir que criou outro
+    jaExistia.value = !!r.repetido
     // As imagens sobem DEPOIS: o evento já existe, e uma falha aqui não pode
     // desfazer o cadastro. O que não subir é dito no ✓, com onde reenviar.
     imagensQueFalharam.value = []
@@ -458,24 +483,45 @@ async function publicar() {
  * no banco seria um evento "rascunho" nascendo na lista de todo mundo a cada
  * pessoa que abre o assistente e desiste.
  */
-const CHAVE_RASCUNHO = 'dt:criar-evento:v1'
+/**
+ * EVT-10: o rascunho é DA PESSOA, não do navegador. Com uma chave só (`dt:criar-evento:v1`), quem
+ * entrava depois no mesmo computador da bilheteria abria "Criar evento" e herdava o rascunho do
+ * outro — nome, preços, contato. Agora a chave leva uma marca de quem está logado (organização +
+ * e-mail, embaralhados: o e-mail não fica escrito no armazenamento). Sem saber quem é, não há
+ * rascunho. O de chave antiga não tem dono conhecido: é apagado na montagem, não entregue.
+ */
+const CHAVE_ANTIGA = 'dt:criar-evento:v1'
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+function marcaDaPessoa(texto: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < texto.length; i++) { h ^= texto.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0 }
+  return h.toString(16).padStart(8, '0')
+}
+const chaveDoRascunho = computed<string | null>(() => {
+  const u = eu.value?.usuario
+  return u?.email ? `dt:criar-evento:v2:${marcaDaPessoa(`${u.orgId ?? ''}|${String(u.email).toLowerCase()}`)}` : null
+})
 const rascunhoSalvoEm = ref<number | null>(null)
+/** EVT-07: o rascunho lembrava que havia foto e ninguém lia — agora vira aviso até escolher de novo */
+const fotoPerdida = ref(false)
+const jaExistia = ref(false)
+watch(() => [imagens.banner, imagens.thumb], ([b, t]) => { if (b || t) fotoPerdida.value = false })
 let esperaRascunho: ReturnType<typeof setTimeout> | null = null
 let rascunhoLigado = false
 
 function gravarRascunho() {
-  if (!rascunhoLigado || criado.value) return
+  if (!rascunhoLigado || criado.value || !chaveDoRascunho.value) return
   try {
     const salvoEm = Date.now()
-    localStorage.setItem(CHAVE_RASCUNHO, JSON.stringify({
+    localStorage.setItem(chaveDoRascunho.value, JSON.stringify({
       versao: 1, salvoEm, passo: passo.value,
-      f, estrutura, tinhaFoto: !!(imagens.banner || imagens.thumb),
+      f, estrutura, tinhaFoto: !!(imagens.banner || imagens.thumb) || fotoPerdida.value,
     }))
     rascunhoSalvoEm.value = salvoEm
   } catch { /* navegador sem armazenamento (aba anônima cheia etc.): segue sem rascunho */ }
 }
 function apagarRascunho() {
-  try { localStorage.removeItem(CHAVE_RASCUNHO) } catch { /* idem */ }
+  try { if (chaveDoRascunho.value) localStorage.removeItem(chaveDoRascunho.value) } catch { /* idem */ }
 }
 function comecarDoZero() {
   apagarRascunho()
@@ -484,11 +530,17 @@ function comecarDoZero() {
 }
 
 onMounted(() => {
+  try { localStorage.removeItem(CHAVE_ANTIGA) } catch { /* sem armazenamento */ }
+  // sem saber quem é, não há rascunho (nem pra ler, nem pra gravar)
+  if (!chaveDoRascunho.value) return
   try {
-    const bruto = localStorage.getItem(CHAVE_RASCUNHO)
+    const bruto = localStorage.getItem(chaveDoRascunho.value)
     const r = bruto ? JSON.parse(bruto) : null
     if (r?.versao === 1 && r.f && r.estrutura) {
       Object.assign(f, r.f)
+      // rascunho de antes da chave de criação: ganha uma agora
+      if (!f.chaveDeCriacao) f.chaveDeCriacao = novaChaveDeCriacao()
+      fotoPerdida.value = !!r.tinhaFoto
       // rascunho do navegador salvo quando o padrão era não publicar
       f.publicarAoCriar = true
       // rascunho antigo trazia os 10% do padrão velho; o assistente não mostra taxa
@@ -523,6 +575,17 @@ useHead({ title: 'Criar evento' })
       Salvo automaticamente em {{ diaMesHora(rascunhoSalvoEm) }}
       <button type="button" class="font-semibold text-pool-700 underline-offset-2 hover:underline" @click="comecarDoZero">Começar do zero</button>
     </p>
+
+    <!-- EVT-07: foto não cabe no rascunho; depois de recarregar, a tela AVISA em vez de publicar sem
+         capa em silêncio. Some quando uma foto é escolhida de novo. -->
+    <div v-if="fotoPerdida && !imagens.banner && !imagens.thumb" role="status" data-parte="foto-perdida"
+         class="flex flex-wrap items-center justify-between gap-3 rounded-card border border-alerta bg-alerta-claro px-4 py-3 text-sm text-tinta">
+      <p>As fotos escolhidas antes de a página recarregar não ficam no rascunho. <strong>Escolha a capa de novo</strong> no passo 1 — sem ela, o evento entra com a foto do parque.</p>
+      <button v-if="passo !== 1" type="button" class="btn-secundario min-h-[40px] shrink-0" data-acao="ir-para-fotos"
+              @click="erros = []; sentido = 'volta'; passo = 1">
+        Ir ao passo 1
+      </button>
+    </div>
 
     <div v-if="erros.length || erro" :key="'erro' + tentativas" role="alert"
          class="animate-sacode rounded-card border border-erro bg-erro-claro px-4 py-3 text-sm text-erro">
@@ -687,7 +750,9 @@ useHead({ title: 'Criar evento' })
           </div>
           <div>
             <label for="uf" class="rotulo">Estado</label>
-            <input id="uf" v-model="f.local.estado" maxlength="2" class="campo uppercase">
+            <!-- EVT-06: maiúscula de verdade no que é gravado, não só no que aparece -->
+            <input id="uf" :value="f.local.estado" maxlength="2" class="campo uppercase" autocapitalize="characters"
+                   placeholder="BA" @input="f.local.estado = soUf(($event.target as HTMLInputElement).value)">
           </div>
           <div class="lg:col-span-3">
             <label for="comp" class="rotulo">Complemento (opcional)</label>
@@ -901,7 +966,7 @@ useHead({ title: 'Criar evento' })
               <label class="rotulo sm:sr-only">Expira em</label>
               <input v-model="l.expiraEm" type="datetime-local" class="campo"
                      :aria-label="`Data de expiração do ${l.nome}`">
-              <p class="mt-1 text-[11.5px] text-tinta-fraca">opcional</p>
+              <p class="mt-1 text-[11.5px] text-tinta-fraca">opcional · no fuso do evento (passo 5)</p>
             </div>
             <div class="col-span-2 sm:col-span-1">
               <label class="rotulo sm:sr-only">Canais de venda</label>
@@ -947,6 +1012,10 @@ useHead({ title: 'Criar evento' })
             </select>
           </div>
         </div>
+        <!-- EVT-03: o fuso vale pra TODOS os horários do assistente, não só fica gravado -->
+        <p class="mt-2 text-[12.5px] text-tinta-suave" data-parte="aviso-fuso">
+          Todos os horários daqui (e a expiração dos lotes) valem no fuso escolhido — não no deste computador.
+        </p>
         <label class="mt-3 flex items-center gap-2 text-sm text-tinta-corpo">
           <input v-model="f.esconderFim" type="checkbox" class="size-4 accent-pool-600"> Não mostrar o término do evento
         </label>
@@ -975,6 +1044,9 @@ useHead({ title: 'Criar evento' })
         <p class="titulo mt-4 text-xl font-semibold text-tinta">Evento publicado!</p>
         <p class="mt-1 text-sm text-tinta-suave">
           Já está à venda no site. Abrindo os ingressos…
+        </p>
+        <p v-if="jaExistia" class="mt-2 max-w-xs text-sm text-tinta-suave" data-parte="ja-existia">
+          O primeiro clique já tinha criado este evento — a resposta é que não voltou. Nada foi criado em dobro.
         </p>
         <p v-if="imagensQueFalharam.length" class="mt-3 max-w-xs rounded-lg bg-warning-50 px-3 py-2 text-sm text-warning-800 ring-1 ring-inset ring-warning-600/25">
           Não consegui enviar {{ imagensQueFalharam.join(' e ') }}. Envie de novo em

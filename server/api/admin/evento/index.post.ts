@@ -32,6 +32,9 @@ const Entrada = z.object({
   // operação o select vinha vazio e o passo 1 travava em "Escolha a organização vinculada",
   // com o botão "Criar evento" na tela prometendo o contrário (auditoria EVT-01).
   orgId: z.string().uuid().optional(),
+  // EVT-09: a chave desta criação (o assistente sorteia uma por evento a criar). Mesma chave de
+  // novo = a resposta se perdeu e a pessoa clicou outra vez: devolve o evento que já existe.
+  chaveDeCriacao: z.string().uuid().optional(),
   nome: z.string().min(3).max(140),
   slug: z.string().min(3).max(80).regex(/^[a-z0-9-]+$/).optional(),
   descricao: z.string().max(20_000).optional(),
@@ -60,7 +63,9 @@ const Entrada = z.object({
     numero: z.string().max(20).optional(),
     bairro: z.string().max(120).optional(),
     cidade: z.string().max(120).optional(),
-    estado: z.string().length(2).optional(),
+    // EVT-06: UF maiúscula no que é GRAVADO ("ba" chegava e ficava "ba" na lista e no site)
+    estado: z.string().trim().regex(/^[A-Za-z]{2}$/, 'use as duas letras do estado (ex.: BA)')
+      .transform((v) => v.toUpperCase()).optional(),
     complemento: z.string().max(140).optional(),
   }).default({}),
 
@@ -154,6 +159,7 @@ const ROTULOS: Record<string, string> = {
   sessoes: 'Sessões', setores: 'Setores', local: 'Endereço',
   faceCents: 'Valor de face', quantidade: 'Quantidade', minPorCompra: 'Mínimo por compra',
   maxPorCompra: 'Máximo por compra', canais: 'Onde vende', capacidade: 'Capacidade',
+  estado: 'Estado (UF)', chaveDeCriacao: 'Chave de criação',
 }
 
 /** "Setores › 1 › Lotes › 2 › Quantidade: …" em vez de "Dados inválidos". */
@@ -270,129 +276,152 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // EVT-09: a mesma criação chegando de novo devolve o evento que ela já fez — nada em dobro
+  const jaFeito = async () => d.chaveDeCriacao
+    ? await q1<{ id: string; slug: string; status: string }>(
+        `SELECT id, slug, status FROM events WHERE org_id = $1 AND creation_key = $2`, [orgId, d.chaveDeCriacao])
+    : null
+  const repetido = (e: { id: string; slug: string; status: string }) =>
+    ({ ok: true, id: e.id, slug: e.slug, slugPedido: d.slug ?? null, status: e.status, repetido: true })
+  const antes = await jaFeito()
+  if (antes) return repetido(antes)
+
   const slug = await slugLivre(d.slug ?? paraSlug(d.nome))
 
-  const criado = await tx(async (c) => {
-    const ev = await c.query(
-      `INSERT INTO events (org_id, name, slug, description, status,
-         starts_at, ends_at, sales_end_at, sales_end_minutes_after, timezone, hide_end_date,
-         age_rating, ticket_noun, category, subcategories, tags,
-         is_online, stream_url, venue_name, zip_code, address, address_number,
-         neighborhood, city, state, complement, banner_url, thumb_url,
-         support_kind, support_value, fee_bps, fee_mode_online, fee_mode_pos,
-         max_per_customer, hold_minutes, is_private)
-       VALUES ($1,$2,$3,$4,$36,
-         $5,$6,$7,$8,$9,$10,
-         $11,$12,$13,$14,$15,
-         $16,$17,$18,$19,$20,$21,
-         $22,$23,$24,$25,$26,$27,
-         $28,$29,$30,$31,$32,
-         $33,$34,$35)
-       RETURNING id, slug`,
-      [orgId, d.nome.trim(), slug, d.descricao ?? null,
-       d.inicio, d.fim, d.encerraVendasEm ?? null, d.encerraVendasMinutosApos ?? null,
-       d.fuso, d.esconderFim,
-       d.faixaEtaria, d.substantivo, d.categoria ?? null, d.subcategorias, d.tags,
-       d.online, d.linkTransmissao ?? null, d.local.nome ?? null, d.local.cep ?? null,
-       d.local.endereco ?? null, d.local.numero ?? null, d.local.bairro ?? null,
-       d.local.cidade ?? null, d.local.estado ?? null, d.local.complemento ?? null,
-       d.banner ?? null, d.thumb ?? null,
-       d.suporte?.tipo ?? null, d.suporte?.valor ?? null,
-       d.taxaBps, d.modoTaxaOnline, d.modoTaxaPdv,
-       d.maxPorCliente ?? null, d.minutosDeReserva, d.privado,
-       d.publicar ? 'ativo' : 'rascunho'])
+  let criado: { id: string; slug: string }
+  try {
+    criado = await tx(async (c) => {
+      const ev = await c.query(
+        `INSERT INTO events (org_id, name, slug, description, status,
+           starts_at, ends_at, sales_end_at, sales_end_minutes_after, timezone, hide_end_date,
+           age_rating, ticket_noun, category, subcategories, tags,
+           is_online, stream_url, venue_name, zip_code, address, address_number,
+           neighborhood, city, state, complement, banner_url, thumb_url,
+           support_kind, support_value, fee_bps, fee_mode_online, fee_mode_pos,
+           max_per_customer, hold_minutes, is_private, creation_key)
+         VALUES ($1,$2,$3,$4,$36,
+           $5,$6,$7,$8,$9,$10,
+           $11,$12,$13,$14,$15,
+           $16,$17,$18,$19,$20,$21,
+           $22,$23,$24,$25,$26,$27,
+           $28,$29,$30,$31,$32,
+           $33,$34,$35,$37)
+         RETURNING id, slug`,
+        [orgId, d.nome.trim(), slug, d.descricao ?? null,
+         d.inicio, d.fim, d.encerraVendasEm ?? null, d.encerraVendasMinutosApos ?? null,
+         d.fuso, d.esconderFim,
+         d.faixaEtaria, d.substantivo, d.categoria ?? null, d.subcategorias, d.tags,
+         d.online, d.linkTransmissao ?? null, d.local.nome ?? null, d.local.cep ?? null,
+         d.local.endereco ?? null, d.local.numero ?? null, d.local.bairro ?? null,
+         d.local.cidade ?? null, d.local.estado ?? null, d.local.complemento ?? null,
+         d.banner ?? null, d.thumb ?? null,
+         d.suporte?.tipo ?? null, d.suporte?.valor ?? null,
+         d.taxaBps, d.modoTaxaOnline, d.modoTaxaPdv,
+         d.maxPorCliente ?? null, d.minutosDeReserva, d.privado,
+         d.publicar ? 'ativo' : 'rascunho', d.chaveDeCriacao ?? null])
 
-    const id = ev.rows[0].id
+      const id = ev.rows[0].id
 
-    const idsSessao: string[] = []
-    for (const [i, s] of d.sessoes.entries()) {
-      const r = await c.query(
-        `INSERT INTO event_sessions (event_id, title, starts_at, ends_at, sort_order)
-         VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-        [id, s.titulo ?? null, s.inicio, s.fim, i + 1])
-      idsSessao.push(r.rows[0].id)
-    }
-
-    let nLotes = 0
-    for (const [is, s] of d.setores.entries()) {
-      if (s.indiceSessao != null && !idsSessao[s.indiceSessao]) {
-        throw createError({
-          statusCode: 422,
-          statusMessage: `O setor "${s.nome}" aponta para uma sessão que não existe`,
-        })
-      }
-      const soma = s.lotes.reduce((a, l) => a + l.quantidade, 0)
-      if (s.capacidade && soma > s.capacidade) {
-        throw createError({
-          statusCode: 422,
-          statusMessage: `"${s.nome}": os lotes somam ${soma} para uma capacidade de ${s.capacidade}`,
-        })
+      const idsSessao: string[] = []
+      for (const [i, s] of d.sessoes.entries()) {
+        const r = await c.query(
+          `INSERT INTO event_sessions (event_id, title, starts_at, ends_at, sort_order)
+           VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+          [id, s.titulo ?? null, s.inicio, s.fim, i + 1])
+        idsSessao.push(r.rows[0].id)
       }
 
-      const rs = await c.query(
-        `INSERT INTO sectors (event_id, session_id, name, kind, description, capacity, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [id, s.indiceSessao != null ? idsSessao[s.indiceSessao] : null,
-         s.nome.trim(), s.tipo, s.descricao ?? null, s.capacidade ?? null, is + 1])
-
-      for (const [il, l] of s.lotes.entries()) {
-        if (l.minPorCompra > l.maxPorCompra) {
+      let nLotes = 0
+      for (const [is, s] of d.setores.entries()) {
+        if (s.indiceSessao != null && !idsSessao[s.indiceSessao]) {
           throw createError({
             statusCode: 422,
-            statusMessage: `"${l.nome}": o mínimo por compra não pode passar do máximo`,
+            statusMessage: `O setor "${s.nome}" aponta para uma sessão que não existe`,
           })
         }
-        // Os tipos COMPARTILHAM o estoque do lote (modelo da Zig, 22/09): cada
-        // um vai no máximo até o lote, e é o lote que segura o total — ele é
-        // conferido antes do tipo em `reservar()`, e a vitrine mostra por tipo
-        // o menor entre o que sobra no tipo e no lote. A meia tem a cota legal
-        // própria no lote (`half_quota_bps`). Antes a soma dos tipos tinha que
-        // caber no lote: "100" virava 50 inteiras + 50 meias, e a meia
-        // esgotava com inteira sobrando.
-        const passou = l.tipos.find((t) => t.quantidade > l.quantidade)
-        if (passou) {
+        const soma = s.lotes.reduce((a, l) => a + l.quantidade, 0)
+        if (s.capacidade && soma > s.capacidade) {
           throw createError({
             statusCode: 422,
-            statusMessage: `"${l.nome} · ${passou.nome}": o tipo não pode ter mais que o lote (${l.quantidade})`,
+            statusMessage: `"${s.nome}": os lotes somam ${soma} para uma capacidade de ${s.capacidade}`,
           })
         }
 
-        const rl = await c.query(
-          `INSERT INTO lots (sector_id, name, price_cents, quantity,
-                             min_per_order, max_per_order, channels, sort_order, expires_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-          [rs.rows[0].id, l.nome.trim(), l.faceCents, l.quantidade,
-           l.minPorCompra, l.maxPorCompra, l.canais ?? [...CANAIS_PADRAO], il + 1, l.expiraEm ?? null])
-        nLotes++
+        const rs = await c.query(
+          `INSERT INTO sectors (event_id, session_id, name, kind, description, capacity, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+          [id, s.indiceSessao != null ? idsSessao[s.indiceSessao] : null,
+           s.nome.trim(), s.tipo, s.descricao ?? null, s.capacidade ?? null, is + 1])
 
-        for (const [it, t] of l.tipos.entries()) {
-          await c.query(
-            `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps,
-                                       requires_document, sort_order)
-             VALUES ($1,$2,$3,$4,$5,$6)`,
-            [rl.rows[0].id, t.nome.trim(), t.quantidade, t.descontoBps,
-             t.exigeDocumento, it + 1])
+        for (const [il, l] of s.lotes.entries()) {
+          if (l.minPorCompra > l.maxPorCompra) {
+            throw createError({
+              statusCode: 422,
+              statusMessage: `"${l.nome}": o mínimo por compra não pode passar do máximo`,
+            })
+          }
+          // Os tipos COMPARTILHAM o estoque do lote (modelo da Zig, 22/09): cada
+          // um vai no máximo até o lote, e é o lote que segura o total — ele é
+          // conferido antes do tipo em `reservar()`, e a vitrine mostra por tipo
+          // o menor entre o que sobra no tipo e no lote. A meia tem a cota legal
+          // própria no lote (`half_quota_bps`). Antes a soma dos tipos tinha que
+          // caber no lote: "100" virava 50 inteiras + 50 meias, e a meia
+          // esgotava com inteira sobrando.
+          const passou = l.tipos.find((t) => t.quantidade > l.quantidade)
+          if (passou) {
+            throw createError({
+              statusCode: 422,
+              statusMessage: `"${l.nome} · ${passou.nome}": o tipo não pode ter mais que o lote (${l.quantidade})`,
+            })
+          }
+
+          const rl = await c.query(
+            `INSERT INTO lots (sector_id, name, price_cents, quantity,
+                               min_per_order, max_per_order, channels, sort_order, expires_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+            [rs.rows[0].id, l.nome.trim(), l.faceCents, l.quantidade,
+             l.minPorCompra, l.maxPorCompra, l.canais ?? [...CANAIS_PADRAO], il + 1, l.expiraEm ?? null])
+          nLotes++
+
+          for (const [it, t] of l.tipos.entries()) {
+            await c.query(
+              `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps,
+                                         requires_document, sort_order)
+               VALUES ($1,$2,$3,$4,$5,$6)`,
+              [rl.rows[0].id, t.nome.trim(), t.quantidade, t.descontoBps,
+               t.exigeDocumento, it + 1])
+          }
         }
       }
+
+      // Pelo helper, na MESMA transação: o INSERT cru que morava aqui gravava a linha sem
+      // `org_id`, sem autor e sem IP — e a tela de Auditoria, que recorta por organização, nunca
+      // mostrava a criação de evento nenhum (auditoria AUD-02).
+      await registrarAuditoria({
+        autor: autorDaRequisicao(event),
+        entidade: 'evento',
+        entidadeId: id,
+        acao: 'criado',
+        depois: {
+          nome: d.nome, slug, sessoes: d.sessoes.length,
+          setores: d.setores.length, lotes: nLotes,
+          status: d.publicar ? 'ativo' : 'rascunho',
+        },
+      }, c)
+
+      return { id, slug: ev.rows[0].slug }
+    })
+  } catch (e: any) {
+    // Dois cliques AO MESMO TEMPO com a mesma chave: os dois passam pelo "já feito" antes de
+    // qualquer um gravar. O segundo INSERT espera o primeiro terminar e cai em 23505 — pelo índice
+    // da chave (031) ou antes, pelo do endereço (os dois tiraram o mesmo slug do nome). Nos dois
+    // casos o primeiro já está gravado: lê e devolve ele.
+    if (e?.code === '23505' && d.chaveDeCriacao) {
+      const outro = await jaFeito()
+      if (outro) return repetido(outro)
     }
-
-    // Pelo helper, na MESMA transação: o INSERT cru que morava aqui gravava a linha sem
-    // `org_id`, sem autor e sem IP — e a tela de Auditoria, que recorta por organização, nunca
-    // mostrava a criação de evento nenhum (auditoria AUD-02).
-    await registrarAuditoria({
-      autor: autorDaRequisicao(event),
-      entidade: 'evento',
-      entidadeId: id,
-      acao: 'criado',
-      depois: {
-        nome: d.nome, slug, sessoes: d.sessoes.length,
-        setores: d.setores.length, lotes: nLotes,
-        status: d.publicar ? 'ativo' : 'rascunho',
-      },
-    }, c)
-
-    return { id, slug: ev.rows[0].slug }
-  })
+    throw e
+  }
 
   // `slugPedido` volta junto pra tela poder AVISAR quando o endereço foi
   // renomeado ("-2") — antes ela mostrava o que a pessoa digitou, e o link
