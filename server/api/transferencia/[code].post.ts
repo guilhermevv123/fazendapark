@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { q1, tx } from '../../utils/db'
 import { SQL_ACEITA_TRANSFERENCIA } from '../../utils/transferencia'
 import { novoCodigoDoIngresso } from '../../utils/ingresso'
+import { cpfValido } from '../../utils/documento'
 
 const Entrada = z.object({
   /** a pessoa confirma o próprio nome; pode corrigir grafia, não trocar de dono */
@@ -22,11 +23,35 @@ const Entrada = z.object({
   documento: z.string().max(20).nullish(),
 })
 
+/**
+ * O CPF de quem aceita (B33). Era gravado COMO VEIO em `holder_document` —
+ * "abc😀" virava o documento que a portaria confere. Aceita a máscara
+ * (pontos, traço, espaço) e nada mais: letra ou símbolo é recusa, e o que
+ * sobra tem que ser um CPF que confere. Vazio = não informou.
+ */
+export function cpfDoAceite(bruto: string | null | undefined):
+  { ok: true; cpf: string | null } | { ok: false; recado: string } {
+  const texto = String(bruto ?? '').trim()
+  if (!texto) return { ok: true, cpf: null }
+  if (/[^\d.\-\s]/.test(texto)) return { ok: false, recado: 'Digite só os números do CPF.' }
+  const cpf = texto.replace(/\D/g, '')
+  if (!cpfValido(cpf)) return { ok: false, recado: 'CPF inválido. Confira os 11 números.' }
+  return { ok: true, cpf }
+}
+
 export default defineEventHandler(async (event) => {
   const code = getRouterParam(event, 'code')
   const p = Entrada.safeParse(await readBody(event).catch(() => ({})))
-  if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Dados inválidos' })
+  if (!p.success) {
+    const campo = String(p.error.issues[0]?.path?.[0] ?? '')
+    throw createError({ statusCode: 400,
+      statusMessage: campo === 'nome' ? 'Digite o nome de quem vai usar o ingresso (de 2 a 120 letras).'
+        : campo === 'documento' ? 'Confira o CPF: são 11 números.' : 'Não deu pra ler o aceite. Recarregue a página.',
+      data: { campo: campo || null } })
+  }
   const d = p.data
+  const cpf = cpfDoAceite(d.documento)
+  if (!cpf.ok) throw createError({ statusCode: 400, statusMessage: cpf.recado, data: { campo: 'documento' } })
 
   const tr = await q1<any>(
     `SELECT tr.id, tr.org_id, tr.ticket_id, tr.status, tr.expires_at,
@@ -80,7 +105,7 @@ export default defineEventHandler(async (event) => {
     const mudou = await c.query(
       `UPDATE tickets SET holder_name = $2, holder_email = $3, holder_document = $4, code = $5
         WHERE id = $1 AND status = 'valido'`,
-      [tr.ticket_id, nome, tr.para_email, d.documento ?? tr.para_documento ?? null, codigoNovo])
+      [tr.ticket_id, nome, tr.para_email, cpf.cpf ?? tr.para_documento ?? null, codigoNovo])
     if (mudou.rowCount !== 1) {
       throw createError({ statusCode: 409,
         statusMessage: 'Este ingresso já foi usado ou cancelado e não pode mais ser transferido.' })

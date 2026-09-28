@@ -282,7 +282,8 @@ describe('transferência de ingresso', () => {
     })
     const token = env.corpo.transferencia.link.split('/').pop()
     await aberto(`/api/transferencia/${token}`, {
-      method: 'POST', body: JSON.stringify({ documento: '99988877766' }),
+      // um CPF que confere: desde B33 o aceite recusa documento que não é CPF
+      method: 'POST', body: JSON.stringify({ documento: '529.982.247-25' }),
     })
 
     const [tr] = await sql(`SELECT id FROM ticket_transfers WHERE code = $1`, [token])

@@ -178,6 +178,34 @@ describe('PROD-06 · sem jeito de cobrar, a recusa sai antes do estoque e do cad
   })
 })
 
+describe('PROD-06 · a vitrine não oferece pagamento que vai falhar', () => {
+  const vitrine = async () => {
+    ;(globalThis as any).getRouterParam ??= (ev: any, nome: string) => ev.context.params[nome]
+    const { default: rota } = await import('./e/[slug].get')
+    return await (rota as any)({ context: { params: { slug } }, node: { req: { headers: {} }, res: {} } })
+  }
+  it('sem chave: disponivel false com a frase da bilheteria — e sem chave nem motivo técnico', async () => {
+    await semGateway(null)
+    const v = await vitrine()
+    expect(v.evento.pagamentoOnline).toEqual({ disponivel: false,
+      recado: 'As vendas online estão indisponíveis no momento. Tente mais tarde ou compre na bilheteria.' })
+    expect(v.evento.fuso).toBe('America/Bahia')
+  })
+  it('com chave de teste em produção: indisponível, e a chave não aparece em lugar nenhum', async () => {
+    await semGateway(CHAVE_TESTE, 'production')
+    process.env.ASAAS_WEBHOOK_TOKEN = 'token-de-teste-do-webhook'
+    try {
+      const v = await vitrine()
+      expect(v.evento.pagamentoOnline.disponivel).toBe(false)
+      expect(JSON.stringify(v)).not.toContain('aact')
+    } finally { delete process.env.ASAAS_WEBHOOK_TOKEN }
+  })
+  it('com como cobrar: disponível', async () => {
+    await semGateway(CHAVE_TESTE)
+    expect((await vitrine()).evento.pagamentoOnline).toEqual({ disponivel: true })
+  })
+})
+
 describe('B12 · recusa do Asaas a um dado do comprador', () => {
   it('celular recusado: 422 com o campo e a frase do gateway, e o estoque volta', async () => {
     await semGateway(CHAVE_TESTE)

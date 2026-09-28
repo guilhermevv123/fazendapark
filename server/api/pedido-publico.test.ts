@@ -117,3 +117,36 @@ describe('B08 · cartão retomável de qualquer aparelho', () => {
     expect(v.pagamento?.linkFatura, 'quem fechou a aba do cartão não tem como pagar').toBe(fatura)
   })
 })
+
+describe('B13 · desistir do pedido que ainda não pagou', () => {
+  const desistir = (id: string) => fetch(`${BASE}/api/pedido/${id}/desistir`, {
+    method: 'POST', headers: { 'content-type': 'application/json', origin: BASE }, body: '{}',
+  })
+  const reservado = async () => Number((await q1<any>(`SELECT reserved FROM lots WHERE id = $1`, [lotId]))!.reserved)
+
+  it('devolve o lugar na hora e o pedido vira expirado (a varredura cancela a cobrança)', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const o = await pedido(2)
+    const antes = await reservado()
+    const r = await desistir(o.id)
+    expect(r.status, await r.clone().text()).toBe(200)
+    expect((await r.json()).status).toBe('expirado')
+    expect(await reservado(), 'desistiu e o lugar continuou preso').toBe(antes - 2)
+    const v = await q1<any>(`SELECT status, canceled_at FROM orders WHERE id = $1`, [o.id])
+    expect(v).toMatchObject({ status: 'expirado' })
+    expect(v.canceled_at).not.toBeNull()
+    // de novo: nada a desfazer, e o lugar não é devolvido duas vezes
+    expect((await desistir(o.id)).status).toBe(200)
+    expect(await reservado()).toBe(antes - 2)
+  })
+
+  it('pedido pago não se desiste por aqui (409) — e o código do pedido não serve pra cancelar', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const o = await pedido(1)
+    await emitirIngressos(o.id)
+    const r = await desistir(o.id)
+    expect(r.status).toBe(409)
+    expect((await r.json()).data).toMatchObject({ status: 'pago' })
+    expect((await desistir(o.code)).status).toBe(404)
+  })
+})

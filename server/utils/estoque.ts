@@ -343,6 +343,31 @@ async function matarPedidoVencido(c: PoolClient, orderId: string): Promise<boole
 }
 
 /**
+ * O comprador LARGA o pedido que ainda não pagou (B13): "trocar a forma de
+ * pagamento", "montar outro carrinho". Mesma virada de `matarPedidoVencido`
+ * (vira 'expirado' e devolve o lugar na hora) — e por isso a varredura de
+ * cobranças cancela a cobrança dele no gateway logo depois, como em todo
+ * pedido expirado. Sem isto o pedido abandonado segurava o lugar e contava no
+ * teto do CPF até vencer, e a tela de pagamento reabria ele no lugar do
+ * carrinho novo.
+ *
+ * Só pedido em 'aguardando_pagamento'. O pago não se desiste por aqui (é
+ * cancelamento, com estorno), e o 'em_analise' está com o gateway decidindo.
+ */
+export async function desistirDoPedido(
+  c: PoolClient, orderId: string,
+): Promise<{ ok: true } | { ok: false; status: string | null }> {
+  const { rows } = await c.query(`SELECT status FROM orders WHERE id = $1 FOR UPDATE`, [orderId])
+  if (!rows[0]) return { ok: false, status: null }
+  if (rows[0].status !== 'aguardando_pagamento') return { ok: false, status: rows[0].status }
+  if (!(await matarPedidoVencido(c, orderId))) return { ok: false, status: rows[0].status }
+  await c.query(
+    `INSERT INTO audit_log (entity, entity_id, action, after)
+     VALUES ('order', $1, 'desistencia_do_comprador', '{}'::jsonb)`, [orderId])
+  return { ok: true }
+}
+
+/**
  * Solta um pedido que estava em ANÁLISE DE RISCO (B09) e devolve o que ele
  * segurava. Quem decide que pode soltar é `varrerEmAnalise` (asaas.ts), depois
  * de perguntar ao gateway — aqui é só a virada, com a mesma trava de

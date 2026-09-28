@@ -69,10 +69,22 @@ export default defineEventHandler(async (event) => {
   const doDestinatario = status === 'concluido' && tr.em_vigor
   const qrDisponivel = doDestinatario && tr.ingresso_status === 'valido'
 
+  // B33: o link de ingresso que já entrou ou foi cancelado oferecia o
+  // formulário de aceite — e o POST recusava depois de a pessoa preencher. O
+  // aceite só existe com a transferência aguardando E o ingresso valendo.
+  const ingressoMorto = status === 'aguardando' && tr.ingresso_status !== 'valido'
   return {
     status,
-    statusTexto: STATUS_LEGIVEL[status] ?? status,
-    podeAceitar: status === 'aguardando',
+    statusTexto: ingressoMorto
+      ? (tr.ingresso_status === 'usado' ? 'Ingresso já utilizado' : 'Ingresso cancelado')
+      : STATUS_LEGIVEL[status] ?? status,
+    podeAceitar: status === 'aguardando' && !ingressoMorto,
+    /** por que não dá pra aceitar, quando é o INGRESSO (e não o link) que morreu */
+    motivo: ingressoMorto
+      ? (tr.ingresso_status === 'usado'
+          ? 'Este ingresso já foi usado na entrada e não pode mais ser transferido.'
+          : 'Este ingresso foi cancelado e não pode mais ser transferido.')
+      : null,
     venceEm: tr.expires_at,
     de: { nome: tr.de_nome, email: meioEscondido(tr.de_email) },
     para: { nome: tr.para_nome, email: meioEscondido(tr.para_email) },
