@@ -15,6 +15,7 @@
 import { z } from 'zod'
 import { q1, tx } from '../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
+import { fusoValido } from '../../../../app/composables/fusoHorario'
 
 /**
  * Prefixos que já são rota do site. Um evento com slug "admin" ou "api"
@@ -41,7 +42,10 @@ const Entrada = z.object({
 
   inicio: z.string().datetime({ offset: true }),
   fim: z.string().datetime({ offset: true }),
-  fuso: z.string().max(60).default('America/Bahia'),
+  // O fuso vai pro `AT TIME ZONE` do painel, do extrato e dos relatórios, e pro `Intl` do e-mail
+  // do ingresso: texto torto era aceito e derrubava tudo isso DEPOIS, com 500 (auditoria 28/09).
+  fuso: z.string().max(60).refine(fusoValido, 'fuso que não existe (use um nome como America/Bahia)')
+    .default('America/Bahia'),
   esconderFim: z.boolean().default(false),
 
   // encerramento da venda: data fixa OU minutos após o início, nunca os dois
@@ -159,7 +163,7 @@ const ROTULOS: Record<string, string> = {
   sessoes: 'Sessões', setores: 'Setores', local: 'Endereço',
   faceCents: 'Valor de face', quantidade: 'Quantidade', minPorCompra: 'Mínimo por compra',
   maxPorCompra: 'Máximo por compra', canais: 'Onde vende', capacidade: 'Capacidade',
-  estado: 'Estado (UF)', chaveDeCriacao: 'Chave de criação',
+  estado: 'Estado (UF)', chaveDeCriacao: 'Chave de criação', fuso: 'Fuso horário',
 }
 
 /** "Setores › 1 › Lotes › 2 › Quantidade: …" em vez de "Dados inválidos". */
@@ -261,6 +265,15 @@ export default defineEventHandler(async (event) => {
   }
   if (d.online && !d.linkTransmissao) {
     throw createError({ statusCode: 422, statusMessage: 'Evento online precisa do link de transmissão' })
+  }
+  // o navegador conhecer o fuso não basta: quem corta o dia é o banco (tzdata dele pode ser outra)
+  const fusoNoBanco = await q1<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = $1) AS ok`, [d.fuso])
+  if (!fusoNoBanco?.ok) {
+    throw createError({
+      statusCode: 422,
+      statusMessage: `Fuso horário: "${d.fuso}" não é conhecido pelo banco — use um nome como America/Bahia`,
+    })
   }
 
   // A organização vem da SESSÃO, não do payload. Antes o `orgId` do corpo era

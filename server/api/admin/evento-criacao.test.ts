@@ -145,4 +145,26 @@ describe('EVT-06 e EVT-14 — o que o evento grava', () => {
     expect(r.status).toBe(400)
     expect(r.corpo.statusMessage).toBe('Endereço › Estado (UF): use as duas letras do estado (ex.: BA)')
   })
+
+  // 28/09: o fuso era texto livre — "America/Ubata" nascia gravado e o painel, o extrato e os
+  // relatórios desse evento davam 500 no `AT TIME ZONE` (e o e-mail do ingresso, RangeError)
+  it('fuso torto volta 400 dizendo o campo, e nenhum evento nasce', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const corpo = evento({ fuso: 'America/Ubata' })
+    const r = await chamar(corpo)
+    expect(r.status).toBe(400)
+    expect(r.corpo.statusMessage).toBe('Fuso horário: fuso que não existe (use um nome como America/Bahia)')
+    expect(await quantosComNome(corpo.nome)).toBe(0)
+  })
+
+  it('fuso de verdade grava (Manaus) e o painel do evento abre com ele; sem fuso, Bahia', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const manaus = await chamar(evento({ fuso: 'America/Manaus' }))
+    expect(manaus.status, JSON.stringify(manaus.corpo)).toBe(200)
+    expect((await q1<any>(`SELECT timezone FROM events WHERE id = $1`, [manaus.corpo.id]))!.timezone).toBe('America/Manaus')
+    const painel = await http(`/api/admin/evento/${manaus.corpo.id}/dashboard`)
+    expect(painel.status).toBe(200)
+    const padrao = await chamar(evento())
+    expect((await q1<any>(`SELECT timezone FROM events WHERE id = $1`, [padrao.corpo.id]))!.timezone).toBe('America/Bahia')
+  })
 })
