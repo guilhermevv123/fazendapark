@@ -959,8 +959,15 @@ useHead({ title: 'Leitor de entrada' })
 </script>
 
 <template>
-  <div>
-    <div class="flex flex-wrap items-start justify-between gap-3 py-5">
+  <!--
+    NO CELULAR, O CAMPO E O VEREDITO VÊM PRIMEIRO (ADM-24). Em 375 px, KPIs, faixas de aviso, fila
+    e sincronização vinham antes do campo: o operador rolava a cada leitura e o foco escapava.
+    Abaixo de `lg` a página vira coluna e cabeçalho, abas, leitura e veredito levam
+    `max-lg:order-first` (ficam na ordem do HTML entre si, acima de todo o resto); o estado da rede
+    aparece numa linha curta dentro do cartão de leitura. No computador nada muda de lugar.
+  -->
+  <div class="max-lg:flex max-lg:flex-col" data-parte="leitor-pagina">
+    <div class="flex flex-wrap items-start justify-between gap-3 py-5 max-lg:order-first max-lg:py-3">
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Leitor de entrada</h1>
         <p class="mt-1 text-tinta-suave">
@@ -972,7 +979,9 @@ useHead({ title: 'Leitor de entrada' })
            hesitar -->
     </div>
 
-    <AbasSecao :evento-id="id" />
+    <div class="max-lg:order-first">
+      <AbasSecao :evento-id="id" />
+    </div>
 
     <!-- Faixa de estado da rede. Fica no topo e é a primeira coisa que o
          operador vê: trabalhar offline sem saber que está offline é como o
@@ -1155,7 +1164,14 @@ useHead({ title: 'Leitor de entrada' })
       </div>
     </div>
 
-    <div class="card mt-4">
+    <div class="card mt-4 max-lg:order-first" data-parte="cartao-leitura">
+      <!-- a rede em uma linha, só no celular: o cartão grande de estado desceu pra baixo do veredito -->
+      <p class="mb-3 flex items-center gap-2 text-sm font-semibold lg:hidden"
+         :class="online ? 'text-ok' : 'text-alerta'" data-parte="rede-curta">
+        <span class="h-2.5 w-2.5 shrink-0 rounded-full" :class="online ? 'bg-ok' : 'bg-alerta'" />
+        {{ online ? 'Conectado' : 'Sem rede — validando pela lista do aparelho' }}
+        <span v-if="fila.length" class="font-normal text-alerta">· {{ fila.length }} na fila</span>
+      </p>
       <div class="mb-4 inline-flex rounded-xl bg-ink-100 p-1" role="group" aria-label="Modo de leitura">
         <button type="button" class="rounded-lg px-4 py-2 text-sm font-semibold"
                 :class="!modoCamera ? 'bg-white text-tinta shadow-card' : 'text-tinta-suave'"
@@ -1204,7 +1220,7 @@ useHead({ title: 'Leitor de entrada' })
       </p>
     </div>
 
-    <div v-if="ultima" class="mt-4 rounded-card px-6 py-8 text-center entra-resposta"
+    <div v-if="ultima" class="mt-4 rounded-card px-6 py-8 text-center entra-resposta max-lg:order-first"
          :class="classeDoVeredito(ultima)" data-parte="cartao-veredito">
       <!-- "Só conferir" agora responde mesmo fora do horário da sessão (o
            cliente que chega cedo é quem ainda dá tempo de mandar buscar o

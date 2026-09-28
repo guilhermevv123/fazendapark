@@ -362,3 +362,35 @@ describe('a lista baixada não envelhece com rede (ADM-06)', () => {
     }
   })
 })
+
+describe('no celular, campo e veredito no topo (ADM-24)', () => {
+  /**
+   * Em 375 px o campo de leitura ficava abaixo da dobra: KPIs, faixas, fila e sincronização vinham
+   * antes. O happy-dom não calcula layout, então o que se prende aqui é o CONTRATO do reordenamento
+   * (quem leva `max-lg:order-first`, e em que ordem do HTML); a medida em pixel é do navegador —
+   * `e2e/evento.celular.e2e.ts` mede o campo dentro da primeira tela em 390 px.
+   */
+  it('abaixo de lg: cabeçalho, abas, leitura e veredito vêm antes de todo o resto, nessa ordem', async () => {
+    const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'Liberado', ingresso: { titular: 'Ana' } })
+    await lerCodigo(t, 'CON-AAAA-BBBB')
+    const pagina = t.find('[data-parte="leitor-pagina"]')
+    expect(pagina.classes()).toEqual(expect.arrayContaining(['max-lg:flex', 'max-lg:flex-col']))
+    const filhos = pagina.element.children
+    const primeiros = [...filhos].filter((f) => f.classList.contains('max-lg:order-first'))
+    expect(primeiros.length, 'algum bloco do topo perdeu o order-first').toBe(4)
+    expect(primeiros[0].querySelector('h1')?.textContent).toContain('Leitor de entrada')
+    expect(primeiros[2].getAttribute('data-parte')).toBe('cartao-leitura')
+    expect(primeiros[2].querySelector('#cod'), 'o campo não está no cartão que sobe').toBeTruthy()
+    expect(primeiros[3].getAttribute('data-parte')).toBe('cartao-veredito')
+    // e o resto (estado da rede grande, contador, KPIs) NÃO sobe
+    expect(t.find('[data-parte="contador"]').classes()).not.toContain('max-lg:order-first')
+  })
+
+  it('a rede aparece numa linha curta dentro do cartão de leitura', async () => {
+    const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'Liberado' })
+    const linha = t.find('[data-parte="cartao-leitura"] [data-parte="rede-curta"]')
+    expect(linha.exists(), 'no celular o operador perdeu de vista se está com rede').toBe(true)
+    expect(linha.classes()).toContain('lg:hidden')
+    expect(linha.text()).toContain('Conectado')
+  })
+})
