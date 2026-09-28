@@ -41,5 +41,7 @@ if (!/_e2e(_[a-z0-9]+)?$/.test(banco)) {
 const porta = process.env.E2E_PORTA ?? '3120'
 // pasta de compilação própria: dividir `.nuxt/` com o 3100 e o 3101 faz os três recompilarem juntos
 process.env.NUXT_PASTA_BUILD ??= `.nuxt-e2e-${porta}`
-const filho = spawn('npx', ['nuxt', 'dev', '--port', porta], { stdio: 'inherit', env: process.env })
+// endereço fixo em IPv4: com `localhost`, o Node desta máquina passou a abrir só no [::1] (28/09) e
+// quem esperava em 127.0.0.1 — a bateria do Playwright, que só aceita máquina local — ficava parado
+const filho = spawn('npx', ['nuxt', 'dev', '--host', '127.0.0.1', '--port', porta], { stdio: 'inherit', env: process.env })
 filho.on('exit', (codigo) => process.exit(codigo ?? 0))

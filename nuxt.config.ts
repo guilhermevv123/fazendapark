@@ -53,9 +53,11 @@ export default defineNuxtConfig({
     '@fontsource-variable/geist-mono/index.css',
     '~/assets/base.css',
   ],
+  // Segredo NÃO entra aqui. O que se põe no runtimeConfig com `process.env.X` no build fica
+  // ESCRITO no pacote gerado (.output) se a variável existir na hora de compilar — e o banco e o
+  // token do webhook estavam aqui sem ninguém ler (o servidor lê direto de process.env; achado da
+  // frota F1, 28/09). Só o que é público fica.
   runtimeConfig: {
-    databaseUrl: process.env.DATABASE_URL,
-    asaasWebhookToken: process.env.ASAAS_WEBHOOK_TOKEN,
     public: { baseUrl: process.env.PUBLIC_BASE_URL || 'http://localhost:3000' },
   },
   app: {
