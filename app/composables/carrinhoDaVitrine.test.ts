@@ -403,6 +403,26 @@ describe('declaração de meia-entrada', () => {
     expect(faltaNaDeclaracao({ motivo: 'estudante', documento: '2024-118822' })).toBeNull()
   })
 
+  it('matriz 23 · número com 2 caracteres trava na vitrine — a porta recusa menos de 3', () => {
+    // trava: o `documento.length < 3` (sem ele, "AB" passava daqui e morria num 400 no pagamento)
+    expect(faltaNaDeclaracao({ motivo: 'estudante', documento: 'AB' })).toMatch(/pelo menos 3 caracteres/)
+    expect(faltaNaDeclaracao({ motivo: 'estudante', documento: ' AB ' })).toMatch(/pelo menos 3 caracteres/)
+    expect(faltaNaDeclaracao({ motivo: 'estudante', documento: 'ABC' })).toBeNull()
+  })
+
+  it('matriz 23 · o número que sobrou ESCONDIDO (Estudante → Idoso) não trava nem vai pra porta', () => {
+    // travas: o `if (!MOTIVOS[motivo].exigeNumero) return null` e o `comNumero` de
+    // itensDoCheckout — sem eles a pessoa ficava presa num campo que a tela não mostra mais
+    expect(faltaNaDeclaracao({ motivo: 'idoso', documento: 'AB' }),
+      'cobrou o número de um campo escondido').toBeNull()
+    const lote = { id: 'lote-1' }
+    const meia = { tipoId: 'tipo-1', nome: 'Meia-entrada', exigeDocumento: true, totalCents: 1650 }
+    const [item] = itensDoCheckout([linha(lote, meia, 1, { motivo: 'idoso', documento: 'CART-123' })]) as any[]
+    expect(item.meia, 'o número escondido foi pro ingresso de idoso').toEqual({ motivo: 'idoso', documento: undefined })
+    const [estudante] = itensDoCheckout([linha(lote, meia, 1, { motivo: 'estudante', documento: ' CART-123 ' })]) as any[]
+    expect(estudante.meia).toEqual({ motivo: 'estudante', documento: 'CART-123' })
+  })
+
   it('gratuidade não é meia: total zero não pede motivo', () => {
     expect(pedeDeclaracaoDeMeia({ exigeDocumento: true, totalCents: 0 })).toBe(false)
     expect(pedeDeclaracaoDeMeia({ exigeDocumento: true, totalCents: 1650 })).toBe(true)

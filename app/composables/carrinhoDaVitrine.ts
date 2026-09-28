@@ -193,8 +193,16 @@ export function faltaNaDeclaracao(d: DeclaracaoDeMeia | null | undefined): strin
   const motivo = String(d?.motivo ?? '').trim()
   if (!motivo) return 'Escolha o motivo da meia-entrada'
   if (!motivoValido(motivo)) return 'Escolha um dos motivos previstos em lei'
-  if (MOTIVOS[motivo].exigeNumero && !String(d?.documento ?? '').trim()) {
-    return `Informe o número da ${MOTIVOS[motivo].documento}`
+  // Só o motivo de credencial numerada tem o campo do número na tela. Nos outros, o
+  // número que sobrou de uma troca de motivo (Estudante → Idoso) está ESCONDIDO: cobrar
+  // dele seria travar a pessoa num campo que ela não vê (e `itensDoCheckout` não o manda).
+  if (!MOTIVOS[motivo].exigeNumero) return null
+  const documento = String(d?.documento ?? '').trim()
+  if (!documento) return `Informe o número da ${MOTIVOS[motivo].documento}`
+  // A porta recusa menos de 3 (`meia.documento` em checkout.post.ts): com 2 letras
+  // a pessoa só descobria na ÚLTIMA tela, num 400 (matriz 23). A vitrine diz aqui.
+  if (documento.length < 3) {
+    return `O número da ${MOTIVOS[motivo].documento} tem pelo menos 3 caracteres`
   }
   return null
 }
@@ -243,9 +251,13 @@ export function itensDoCheckout(
       quantidade: l.quantidade,
     }
     if (!opcoes.semDeclaracao && l.pedeMeia && l.declaracao?.motivo) {
+      // O número só vai com o motivo que tem o campo na tela: trocar de Estudante pra
+      // Idoso escondia o campo com o número dentro, e ele ia junto — gravado num ingresso
+      // de idoso, ou recusado pela porta (menos de 3) sem a pessoa ver onde corrigir.
+      const comNumero = MOTIVOS[l.declaracao.motivo]?.exigeNumero === true
       item.meia = {
         motivo: l.declaracao.motivo,
-        documento: String(l.declaracao.documento ?? '').trim() || undefined,
+        documento: comNumero ? String(l.declaracao.documento ?? '').trim() || undefined : undefined,
       }
     }
     return item

@@ -315,6 +315,32 @@ function irParaPagamento() {
   navigateTo(`/e/${encodeURIComponent(slug)}/pagamento`)
 }
 
+/* ------------------------------------- a barra do celular (matriz 31) --- */
+/**
+ * A barra de baixo do celular é `fixed` e CRESCE com a pendência ("Meia-entrada:
+ * escolha o motivo…" ocupa duas, três linhas). O recheio de baixo da página era
+ * fixo (`pb-44`, 176 px) e a barra com a pendência passou disso: o fim da lista
+ * ficava embaixo dela (medido no E2E da matriz 31, em 375 px). Agora o recheio
+ * acompanha a altura da barra, com folga, enquanto ela existe; no computador ela
+ * some (`lg:hidden`, altura 0) e vale o `lg:pb-16` da classe.
+ */
+const barraDoCelular = ref<HTMLElement | null>(null)
+const alturaDaBarra = ref(0)
+let vigiaDaBarra: ResizeObserver | null = null
+watch(barraDoCelular, (el) => {
+  vigiaDaBarra?.disconnect()
+  vigiaDaBarra = null
+  alturaDaBarra.value = 0
+  if (!el || typeof ResizeObserver === 'undefined') return
+  vigiaDaBarra = new ResizeObserver(() => { alturaDaBarra.value = el.offsetHeight })
+  vigiaDaBarra.observe(el)
+})
+onBeforeUnmount(() => vigiaDaBarra?.disconnect())
+/** a barra + 24 px de folga — só enquanto ela aparece (sem ela, vale a classe) */
+const recheioDaBarra = computed(() => (alturaDaBarra.value
+  ? { paddingBottom: `${alturaDaBarra.value + 24}px` }
+  : undefined))
+
 useHead(() => ({
   title: data.value?.evento ? `${data.value.evento.nome} — ingressos` : 'Ingressos',
 }))
@@ -351,7 +377,7 @@ useHead(() => ({
     </main>
   </div>
 
-  <div v-else-if="data" class="min-h-screen pb-44 lg:pb-16">
+  <div v-else-if="data" class="min-h-screen pb-44 lg:pb-16" :style="recheioDaBarra">
     <CabecalhoPublico>
       <span class="truncate text-ink-500">{{ data.evento.organizacao }}</span>
     </CabecalhoPublico>
@@ -651,7 +677,7 @@ useHead(() => ({
     </main>
 
     <!-- barra do celular -->
-    <div v-if="totais.n"
+    <div v-if="totais.n" ref="barraDoCelular"
          class="fixed inset-x-0 bottom-0 z-20 border-t border-ink-200/70 bg-white/95 p-4 shadow-[0_-8px_24px_-12px_rgb(30_26_46/0.18)] backdrop-blur lg:hidden">
       <div class="mx-auto max-w-5xl">
         <p v-if="pendencias.length || bloqueioDePagamento" class="faixa-aviso mb-3">

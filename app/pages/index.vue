@@ -727,8 +727,15 @@ useSeoMeta({
   .home-parque .bolha { display: none !important; }
 }
 
-/* papel não rola: o que esperava a tela chegar sai no papel de uma vez */
+/* papel não rola: o que esperava a tela chegar sai no papel de uma vez — e SEM transição nem
+   animação. O cartão de preço e a dúvida têm `transition` (a opacidade entra nela), e a página vai
+   pro papel no instante em que a mídia vira "print": com a transição correndo, eles saíam ainda
+   em 0 (medido no E2E da matriz 13: 9 blocos invisíveis logo depois de virar a mídia). */
 @media print {
-  .home-parque .revelar { opacity: 1 !important; }
+  .home-parque .revelar, .home-parque .revelado {
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+  }
 }
 </style>
