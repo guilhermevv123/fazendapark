@@ -276,12 +276,22 @@ export default defineEventHandler(async (event) => {
 
   // Dias até o evento em que a venda aconteceu — responde "quando a venda
   // realmente acontece", que decide quando abrir o lote e quando anunciar.
+  //
+  // A régua é o DIA DO INGRESSO (ADM-62): a sessão que o item do pedido carrega
+  // (`order_items.session_id`, o dia que o comprador escolheu — ou o único do lote). Contada contra
+  // o início do EVENTO, toda venda feita depois da 1ª data de um parque que abre todo fim de
+  // semana virava 0 dia ("últimos 3 dias"): o gráfico dizia que tudo vendeu na última hora.
+  // Pedido sem dia (lote sem sessão, passaporte) segue medido contra o início do evento.
   const antecedencia = await q<any>(
-    `SELECT GREATEST(0, (($2::timestamptz AT TIME ZONE $3)::date
-                         - (paid_at AT TIME ZONE $3)::date))::int AS dias,
+    `SELECT GREATEST(0, ((COALESCE(dia.inicio, $2::timestamptz) AT TIME ZONE $3)::date
+                         - (o.paid_at AT TIME ZONE $3)::date))::int AS dias,
             count(*)::int AS pedidos
-       FROM orders
-      WHERE event_id = $1 AND ${PEDIDO_VIVO()} AND paid_at IS NOT NULL
+       FROM orders o
+       LEFT JOIN LATERAL (
+         SELECT min(es.starts_at) AS inicio
+           FROM order_items oi JOIN event_sessions es ON es.id = oi.session_id
+          WHERE oi.order_id = o.id) dia ON true
+      WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.paid_at IS NOT NULL
       GROUP BY 1 ORDER BY 1`, [id, ev.starts_at, fuso])
 
   return {
