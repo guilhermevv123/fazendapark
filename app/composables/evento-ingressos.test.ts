@@ -82,6 +82,78 @@ describe('preço redondo — a conta do checkout, não uma cópia', () => {
 })
 
 // ===========================================================================
+// O teto do preço no campo (pedido do F2 via orquestrador)
+// ===========================================================================
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+/**
+ * O servidor recusa face acima de R$ 100.000,00 (`faceCents ... .max(100_000_00)`), e o campo
+ * aceitava 11 dígitos: R$ 1.000.000,00 digitado ia até o servidor e voltava 400. O CampoMoeda
+ * ganhou um `maximo` (na branch do F2); aqui se confere o que a TELA passa pra ele — por isso o
+ * dublê declara o `maximo`, qualquer que seja o componente de verdade.
+ */
+const CampoComTeto = defineComponent({
+  name: 'CampoComTeto',
+  props: {
+    modelValue: { type: Number, default: 0 }, maximo: { type: Number, default: undefined },
+    disabled: Boolean, conferirAbaixo: { type: Number, default: undefined },
+  },
+  emits: ['update:modelValue'],
+  setup: (p) => () => h('input', { 'data-campo-moeda': '', value: p.modelValue }),
+})
+
+async function telaComTeto(modo: 'repassar' | 'absorver') {
+  return montarTela(await import('../pages/admin/evento/[id]/ingressos/index.vue'), {
+    rota: { params: { id: EV } },
+    respostas: {
+      [`/api/admin/evento/${EV}/ingressos`]: { ...INGRESSOS, evento: { ...INGRESSOS.evento, modoTaxaOnline: modo } },
+      '/api/auth/eu': { usuario: { papel: 'master' } },
+    },
+    stubs: {
+      CampoMoeda: CampoComTeto, AbasSecao: true,
+      ModalLateral: { template: '<div><slot /><slot name="acoes" /></div>' },
+    },
+  })
+}
+
+describe('o preço tem o teto do servidor no campo — não vai 400 com número em centavos', () => {
+  it('o teto da tela é o mesmo das duas rotas que gravam a face', async () => {
+    const { TETO_DO_INGRESSO } = await import('../pages/admin/evento/[id]/ingressos/index.vue') as any
+    expect(TETO_DO_INGRESSO).toBe(100_000_00)
+    for (const rota of ['ingressos.post.ts', 'ingressos.patch.ts']) {
+      const fonte = readFileSync(join(import.meta.dirname, '../../server/api/admin/evento/[id]', rota), 'utf8')
+      const m = fonte.match(/faceCents:\s*z\.number\(\)\.int\(\)\.min\(0\)\.max\(([\d_]+)\)/)
+      expect(m, `${rota}: não achei o teto da face`).toBeTruthy()
+      expect(Number(m![1].replace(/_/g, '')), `${rota} mudou o teto: a tela tem que acompanhar`)
+        .toBe(TETO_DO_INGRESSO)
+    }
+  })
+
+  it('valor de face do lote: o campo para em R$ 100.000,00', async () => {
+    const w = await telaComTeto('repassar')
+    await w.find('button[title="Editar lote"]').trigger('click')
+    const face = w.findAllComponents(CampoComTeto).find((c) => c.props('conferirAbaixo') !== undefined)
+    expect(face, 'o campo do valor de face não abriu').toBeTruthy()
+    expect(face!.props('maximo'), 'o valor de face vai sem teto pro CampoMoeda').toBe(100_000_00)
+  })
+
+  it('"comprador paga" do preço redondo: o teto é o total da face máxima (com a taxa repassada, passa de R$ 100 mil)', async () => {
+    const repassa = await telaComTeto('repassar')
+    await repassa.find('button[title="Preço redondo"]').trigger('click')
+    const [total] = repassa.findAllComponents(CampoComTeto)
+    // 10% repassada: face 100.000,00 + taxa 10.000,00 — acima disso a face passaria do teto
+    expect(total.props('maximo'), 'o "comprador paga" vai sem teto (ou com o teto da face)').toBe(110_000_00)
+    limparTela()
+
+    const absorve = await telaComTeto('absorver')
+    await absorve.find('button[title="Preço redondo"]').trigger('click')
+    // absorvida: o comprador paga a face — o teto é o da face
+    expect(absorve.findAllComponents(CampoComTeto)[0].props('maximo')).toBe(100_000_00)
+  })
+})
+
+// ===========================================================================
 // Cupons (ADM-50, ADM-51), promoters (ADM-51) e sessões (ADM-40)
 // ===========================================================================
 import { vi } from 'vitest'

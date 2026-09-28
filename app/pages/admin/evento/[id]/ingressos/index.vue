@@ -1,3 +1,13 @@
+<script lang="ts">
+/**
+ * O teto do preço de ingresso — o MESMO do servidor (`faceCents ... .max(100_000_00)` em
+ * ingressos.post.ts e ingressos.patch.ts). Sem ele no campo, R$ 1.000.000,00 digitado ia até o
+ * servidor e voltava 400 com o número em centavos; com ele, o CampoMoeda para no teto e diz qual
+ * é (o `maximo` do CampoMoeda). O teste confere que este número e o das duas rotas são o mesmo.
+ */
+export const TETO_DO_INGRESSO = 100_000_00
+</script>
+
 <script setup lang="ts">
 /**
  * Configurar ingressos: setor → lote → tipo, em tabela.
@@ -277,6 +287,16 @@ const previaLote = computed(() => {
 
 /* ---------------------------------------------------------- preço redondo - */
 const alvo = reactive({ loteId: '', totalCents: 0 })
+/**
+ * O maior "comprador paga" cuja face ainda cabe no teto do servidor: com a taxa repassada, o
+ * total de uma face de R$ 100.000,00 passa de R$ 100.000,00 — o teto do total é o preço da face
+ * máxima, pela mesma `precificar` do checkout (a face achada de trás pra frente é monótona no
+ * total, então total ≤ este teto ⇒ face ≤ TETO_DO_INGRESSO).
+ */
+const tetoDoRedondo = computed(() => data.value
+  ? precificar(TETO_DO_INGRESSO, Number(data.value.evento.taxaBps),
+               data.value.evento.modoTaxaOnline as ModoTaxa).totalCents
+  : TETO_DO_INGRESSO)
 /**
  * A face que faz o comprador pagar o total pedido — ou, quando esse total NÃO existe com a
  * taxa (10% repassada não gera R$ 10,06: 9,14 → 10,05 e 9,15 → 10,07), os dois vizinhos, e a
@@ -629,7 +649,7 @@ useHead({ title: 'Ingressos' })
                   <div class="mt-3 flex flex-wrap items-end gap-3">
                     <div class="w-40">
                       <label class="rotulo">Comprador paga</label>
-                      <CampoMoeda v-model="alvo.totalCents" />
+                      <CampoMoeda v-model="alvo.totalCents" :maximo="tetoDoRedondo" />
                     </div>
                     <p v-if="previaAlvo" class="pb-2 text-sm text-tinta-suave" data-parte="previa-redondo">
                       face <strong class="text-tinta">{{ reais(previaAlvo.face) }}</strong>
@@ -814,7 +834,7 @@ useHead({ title: 'Ingressos' })
         <div>
           <label class="rotulo">Valor de face</label>
           <CampoMoeda v-model="loteForm.faceCents" :disabled="loteForm.gratuito"
-                      :conferir-abaixo="CONFERIR_ABAIXO_CENTS" />
+                      :conferir-abaixo="CONFERIR_ABAIXO_CENTS" :maximo="TETO_DO_INGRESSO" />
           <label class="mt-1.5 flex items-center gap-2 text-sm text-tinta-corpo">
             <input type="checkbox" :checked="loteForm.gratuito"
                    @change="marcarGratuito(($event.target as HTMLInputElement).checked)">
