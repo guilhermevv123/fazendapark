@@ -143,6 +143,20 @@ test.describe('leitor (portaria, 390 px)', () => {
     await expect(page.getByText('Passagens sem rede')).toBeVisible()
     await expect(page.locator('main')).not.toContainText('Seu acesso')
   })
+
+  test('#171 portaria abre o leitor e libera uma entrada: nenhum pedido ao log de leituras, nenhum 403 no console (achado da main)', async ({ page }) => {
+    const [t] = await ingressos(1)
+    const problemas = vigiar(page)
+    const aoLog: string[] = []
+    page.on('request', (r) => { if (new URL(r.url()).pathname.endsWith('/checkins')) aoLog.push(r.method()) })
+    page.on('response', (r) => { if (r.status() === 403) problemas.push(`403 ${new URL(r.url()).pathname}`) })
+    await abrir(page, leitor())
+    await ler(page, t.qr)
+    await expect(veredito(page)).toHaveText('PODE ENTRAR')
+    await page.waitForLoadState('networkidle').catch(() => {})
+    expect(aoLog, 'a portaria pediu o log de leituras (a rota é 403 pra ela)').toEqual([])
+    expect(problemas).toEqual([])
+  })
 })
 
 /* ======================================================= leitor, sem rede */
