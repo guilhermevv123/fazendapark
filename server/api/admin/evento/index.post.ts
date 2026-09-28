@@ -42,8 +42,9 @@ const Entrada = z.object({
 
   inicio: z.string().datetime({ offset: true }),
   fim: z.string().datetime({ offset: true }),
-  // O fuso vai pro `AT TIME ZONE` do painel, do extrato e dos relatórios, e pro `Intl` do e-mail
-  // do ingresso: texto torto era aceito e derrubava tudo isso DEPOIS, com 500 (auditoria 28/09).
+  // Texto torto era aceito (auditoria 28/09), e o estrago vinha DEPOIS: a leitura do passaporte na
+  // portaria dá erro no `AT TIME ZONE` cru (`catraca.ts`), o e-mail do ingresso morre no `Intl`
+  // (RangeError), e painel, extrato e relatórios cortam o dia em silêncio no fuso da Bahia.
   fuso: z.string().max(60).refine(fusoValido, 'fuso que não existe (use um nome como America/Bahia)')
     .default('America/Bahia'),
   esconderFim: z.boolean().default(false),

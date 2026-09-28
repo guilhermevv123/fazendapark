@@ -146,8 +146,9 @@ describe('EVT-06 e EVT-14 — o que o evento grava', () => {
     expect(r.corpo.statusMessage).toBe('Endereço › Estado (UF): use as duas letras do estado (ex.: BA)')
   })
 
-  // 28/09: o fuso era texto livre — "America/Ubata" nascia gravado e o painel, o extrato e os
-  // relatórios desse evento davam 500 no `AT TIME ZONE` (e o e-mail do ingresso, RangeError)
+  // 28/09: o fuso era texto livre — "America/Ubata" nascia gravado; medido no banco de teste: o
+  // passaporte na portaria dá erro no `AT TIME ZONE` cru ("time zone not recognized"), o e-mail do
+  // ingresso morre no `Intl` (RangeError), e painel/extrato/relatórios caem em silêncio na Bahia
   it('fuso torto volta 400 dizendo o campo, e nenhum evento nasce', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const corpo = evento({ fuso: 'America/Ubata' })
