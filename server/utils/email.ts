@@ -58,8 +58,15 @@ export interface Entrega {
 
 /* ------------------------------------------------------------ remetente */
 
+/**
+ * Quem assina o e-mail. Sem `EMAIL_REMETENTE` fica um endereço que NÃO existe
+ * de propósito (`.invalid` é reservado pra isso, RFC 2606) — o de antes,
+ * `nao-responda@diamond-tickets.local`, era domínio inválido E carregava o nome
+ * antigo do repositório na frente do comprador (PROD-05). Em produção a falta
+ * da variável nem chega aqui: `pendenciaDoEmail` segura o envio antes.
+ */
 export function remetente(): string {
-  return process.env.EMAIL_REMETENTE || 'Conquista Park <nao-responda@diamond-tickets.local>'
+  return process.env.EMAIL_REMETENTE || 'Conquista Park <nao-responda@conquistapark.invalid>'
 }
 
 /** Só o endereço, sem o nome de exibição — é o que o SMTP quer no MAIL FROM. */
@@ -362,11 +369,40 @@ function abrirConversa(
 /* ------------------------------------------------------------- fachada */
 
 /**
+ * O que falta pro e-mail sair DE VERDADE em produção — frase pra operador, ou
+ * `null` quando está tudo no lugar (ou fora de produção, onde simular é o certo).
+ *
+ * PROD-05: sem `SMTP_URL` o transporte caía no simulado em silêncio — o .eml
+ * ia pra `/tmp` do contêiner (que some no deploy), a linha era marcada como
+ * enviada, e a home e a FAQ seguiam prometendo e-mail. Agora, em produção, o
+ * envio FALHA com esta frase: a fila tenta de novo com espera, desiste com o
+ * erro escrito, e `/admin/filas` e `/api/saude` acusam. Quem quer mesmo simular
+ * em produção (ensaio) diz isso com `EMAIL_TRANSPORTE=simulado`.
+ */
+export function pendenciaDoEmail(env: Record<string, string | undefined> = process.env): string | null {
+  if (env.NODE_ENV !== 'production' || env.EMAIL_TRANSPORTE === 'simulado') return null
+  if (!env.SMTP_URL) {
+    return 'SMTP_URL não configurado: o e-mail do ingresso não sai em produção '
+      + '(configure o servidor de e-mail no ambiente do deploy)'
+  }
+  try { new URL(env.SMTP_URL) } catch {
+    return 'SMTP_URL não é um endereço smtp:// ou smtps:// válido'
+  }
+  if (!env.EMAIL_REMETENTE || !enderecoValido(soEndereco(env.EMAIL_REMETENTE))) {
+    return 'EMAIL_REMETENTE não configurado (ex.: "Conquista Park <ingressos@seudominio.com.br>"): '
+      + 'sem ele o remetente seria um endereço que não existe'
+  }
+  return null
+}
+
+/**
  * Entrega pelo transporte do ambiente. É o único ponto que decide entre
  * simular e mandar de verdade — quem chama não precisa saber, e não existe
  * um segundo caminho que possa divergir deste.
  */
 export async function entregar(m: Mensagem): Promise<Entrega> {
+  const falta = pendenciaDoEmail()
+  if (falta) throw new Error(falta)
   return transporteEscolhido() === 'smtp' ? entregarPorSmtp(m) : entregarSimulado(m)
 }
 
@@ -392,8 +428,11 @@ export interface DadosConfirmacao {
   local?: string | null
   totalCents: number
   ingressos: IngressoNoEmail[]
-  linkIngressos: string
+  /** `null` quando a URL pública não está configurada: o e-mail sai sem o link */
+  linkIngressos: string | null
   substantivo?: string | null
+  /** fuso do EVENTO (events.timezone); sem ele, o do parque */
+  fuso?: string | null
 }
 
 const reais = (c: number) =>
@@ -403,12 +442,24 @@ const reais = (c: number) =>
  * Data no fuso do parque. `toISOString()` cortaria em UTC e, às 21h de
  * Brasília, o ingresso de hoje chegaria marcado com a data de amanhã.
  */
-export function quando(d: Date | string | null | undefined): string {
+export function quando(d: Date | string | null | undefined, fuso?: string | null): string {
   if (!d) return ''
   return new Date(d).toLocaleString('pt-BR', {
-    timeZone: process.env.TZ_EVENTO || 'America/Bahia',
+    timeZone: fuso || process.env.TZ_EVENTO || 'America/Bahia',
     day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
   })
+}
+
+/**
+ * O dia de uma sessão sem título, do jeito que se fala: "sábado, 04/10 às
+ * 09:00" — no fuso do evento. Antes saía `String(Date)` (B28).
+ */
+export function diaDaSessao(d: Date | string, fuso?: string | null): string {
+  const data = new Date(d)
+  const tz = fuso || process.env.TZ_EVENTO || 'America/Bahia'
+  const dia = data.toLocaleDateString('pt-BR', { timeZone: tz, weekday: 'long', day: '2-digit', month: '2-digit' })
+  const hora = data.toLocaleTimeString('pt-BR', { timeZone: tz, hour: '2-digit', minute: '2-digit' })
+  return `${dia} às ${hora}`
 }
 
 const escapar = (v: any) => String(v ?? '')
@@ -433,16 +484,16 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
     `${d.compradorNome ? `${d.compradorNome}, s` : 'S'}eu pagamento foi confirmado.`,
     '',
     d.eventoNome,
-    d.eventoInicio ? quando(d.eventoInicio) : '',
+    d.eventoInicio ? quando(d.eventoInicio, d.fuso) : '',
     d.local ?? '',
     '',
     `Pedido ${d.pedido} · ${reais(d.totalCents)}`,
     `${d.ingressos.length} ${d.ingressos.length === 1 ? 'ingresso' : 'ingressos'}:`,
     ...linhasTexto,
     '',
-    'Abra o link abaixo para ver o QR de cada ingresso:',
-    d.linkIngressos,
-    '',
+    ...(d.linkIngressos
+      ? ['Abra o link abaixo para ver o QR de cada ingresso:', d.linkIngressos, '']
+      : ['O QR de cada ingresso está anexado a este e-mail.', '']),
     'Na portaria, apresente o QR. Se a leitura falhar, informe o código do ingresso.',
   ].filter((l) => l !== null).join('\n')
 
@@ -493,7 +544,7 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
       </td></tr>
       <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;color:#1E1A2E">
         <div style="font-size:20px;font-weight:bold">${escapar(d.eventoNome)}</div>
-        ${d.eventoInicio ? `<div style="font-size:14px;color:#5B5570;margin-top:4px">${escapar(quando(d.eventoInicio))}</div>` : ''}
+        ${d.eventoInicio ? `<div style="font-size:14px;color:#5B5570;margin-top:4px">${escapar(quando(d.eventoInicio, d.fuso))}</div>` : ''}
         ${d.local ? `<div style="font-size:14px;color:#5B5570">${escapar(d.local)}</div>` : ''}
 
         <div style="font-size:15px;margin-top:16px">
@@ -509,13 +560,13 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
                style="margin-top:12px">${blocos}</table>
 
-        <div style="margin:24px 0 8px">
+        ${d.linkIngressos ? `<div style="margin:24px 0 8px">
           <a href="${escapar(d.linkIngressos)}"
              style="display:inline-block;background:#583C8D;color:#FFFFFF;text-decoration:none;
                     font-weight:bold;font-size:16px;padding:14px 28px;border-radius:10px">
             Ver ${escapar(substantivo.toLowerCase())} no celular
           </a>
-        </div>
+        </div>` : '<div style="margin:24px 0 8px"></div>'}
         <div style="font-size:13px;color:#5B5570">
           Na portaria, apresente o QR. Se a leitura falhar, informe o código do ingresso —
           ele funciona digitado. Guarde este e-mail: ele é a sua entrada.

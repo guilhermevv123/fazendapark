@@ -4,21 +4,28 @@
  * O que está travado aqui não é "gravou": é o que o segundo cliente NÃO consegue
  * fazer com a linha do primeiro.
  *
- *   · a senha já gravada não é trocada por quem compra de novo com o mesmo e-mail
- *     (o formulário não prova que o e-mail é de quem digitou);
+ *   · o cadastro só passa pro cliente quando o pedido é PAGO (B14, db/028): até
+ *     lá ele mora no pedido (`cadastro_pendente`). O formulário não prova que o
+ *     e-mail é de quem digitou; o pagamento custa dinheiro no nome de alguém;
+ *   · o e-mail usado por um desconhecido sem pagar volta pro dono (B14);
+ *   · senha nenhuma é gravada — não existe login de cliente (B17);
  *   · comprar de novo só com nome e CPF não apaga o endereço nem a idade;
  *   · o endereço é um bloco: o novo substitui o velho INTEIRO;
- *   · o consentimento de novidades só muda quando a pessoa se manifesta, e o
- *     carimbo só anda quando o valor muda;
+ *   · o consentimento de novidades só muda quando a pessoa se manifesta — e só
+ *     com a compra paga —, e o carimbo só anda quando o valor muda;
  *   · cadastro inválido recusa ANTES de tocar no banco: nada de cliente pela
  *     metade nem pedido órfão.
  *
- * Vai pela HTTP, que é onde o comprador está. Sem servidor de dev no ar PULA.
+ * Vai pela HTTP, que é onde o comprador está, e paga pelo gateway simulado
+ * (`/api/dev/pagar`, a mesma emissão do webhook). Sem servidor de dev no ar PULA.
  */
-import bcrypt from 'bcryptjs'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { db, q, q1 } from '../utils/db'
 import { anunciarPulo, seForaDoArPula, sondarServidor, type Sonda } from '../../scripts/test-setup'
+
+// Casos de até dez idas ao servidor de dev (compra + pagamento, cinco vezes):
+// com a máquina dividida com outras suítes, os 5 s padrão cortam no meio.
+vi.setConfig({ testTimeout: 30_000 })
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
 const SLUG = 'zz-checkout-cadastro'
@@ -52,14 +59,42 @@ async function comprar(base: { email: string; documento: string }, extra: Record
     }),
   })
   const corpo = await r.json().catch(() => ({}))
-  return { status: r.status, recado: corpo.statusMessage ?? '', corpo }
+  return { status: r.status, recado: corpo.statusMessage ?? '', corpo, pedido: corpo.pedido as string }
+}
+
+/** "O PIX caiu": a mesma emissão que o webhook do Asaas chama. */
+async function pagar(pedido: string) {
+  const r = await fetch(`${BASE}/api/dev/pagar`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pedido }),
+  })
+  expect(r.status, `o pagamento simulado de ${pedido} falhou`).toBe(200)
+}
+
+/** Compra e paga; devolve o código do pedido. */
+async function comprarEPagar(base: { email: string; documento: string }, extra: Record<string, any> = {}) {
+  const r = await comprar(base, extra)
+  expect(r.status, r.recado).toBe(200)
+  await pagar(r.pedido)
+  return r.pedido
 }
 
 const cliente = (email: string) => q1<any>(
-  `SELECT birth_date::text AS birth_date, instagram, zip_code, street, address_number,
+  `SELECT name, document, phone, asaas_customer_id,
+          birth_date::text AS birth_date, instagram, zip_code, street, address_number,
           neighborhood, city, state, address_complement, password_hash, registered_at,
           marketing_opt_in, marketing_opt_in_at::text AS marketing_opt_in_at
      FROM customers WHERE org_id = $1 AND email = $2`, [orgId, email])
+
+const pendente = (codigo: string) => q1<any>(
+  `SELECT cadastro_pendente FROM orders WHERE code = $1`, [codigo]).then((o) => o!.cadastro_pendente)
+
+/** O perfil que ninguém provou: o que o cliente tem antes de pagar a primeira vez. */
+const SEM_PERFIL = {
+  birth_date: null, instagram: null, zip_code: null, street: null, address_number: null,
+  neighborhood: null, city: null, state: null, address_complement: null,
+  password_hash: null, registered_at: null, marketing_opt_in: false, marketing_opt_in_at: null,
+}
 
 const CADASTRO = {
   nascimento: '1990-12-25',
@@ -101,13 +136,22 @@ afterAll(async () => {
   await db().end()
 })
 
-describe('checkout — o cadastro grava certo', () => {
-  it('grava tudo padronizado e guarda a senha só como hash', async (ctx) => {
+describe('checkout — o cadastro entra no PAGAMENTO, padronizado', () => {
+  it('antes de pagar mora no pedido; pago, vai pro cliente — sem senha nenhuma', async (ctx) => {
     seForaDoArPula(ctx, sonda)
-    const email = novoEmail()
-    const r = await comprar({ email, documento: cpf() }, CADASTRO)
+    const email = novoEmail(), documento = cpf()
+    const r = await comprar({ email, documento }, CADASTRO)
     expect(r.status, r.recado).toBe(200)
 
+    // o pedido existe e tem dono, mas o perfil ainda não foi escrito
+    expect(await cliente(email)).toMatchObject({ name: 'Maria de Teste', document: documento, ...SEM_PERFIL })
+    expect(await pendente(r.pedido)).toMatchObject({
+      documento, nome: 'Maria de Teste', nascimento: '1990-12-25', instagram: 'maria.souza',
+      aceitaNovidades: true, cadastroDoSite: true,
+      endereco: { cep: '45000000', cidade: 'Vitória da Conquista', estado: 'BA' },
+    })
+
+    await pagar(r.pedido)
     const c = await cliente(email)
     expect(c.birth_date).toBe('1990-12-25')
     expect(c.instagram).toBe('maria.souza')
@@ -121,63 +165,49 @@ describe('checkout — o cadastro grava certo', () => {
     expect(c.registered_at).not.toBeNull()
     expect(c.marketing_opt_in).toBe(true)
     expect(c.marketing_opt_in_at).not.toBeNull()
-
-    // a senha nunca fica em texto, e o hash confere com a que foi digitada
-    expect(c.password_hash).not.toContain('cachoeira2026')
-    expect(await bcrypt.compare('cachoeira2026', c.password_hash)).toBe(true)
-    expect(await bcrypt.compare('outra-senha-qualquer', c.password_hash)).toBe(false)
+    // B17: a senha digitada numa página antiga não é gravada nem em hash
+    expect(c.password_hash).toBeNull()
+    // aplicado, o dado pessoal não fica duplicado no pedido
+    expect(await pendente(r.pedido)).toBeNull()
   })
 
   it('comprar sem cadastro continua funcionando e não inventa nada', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const email = novoEmail()
-    const r = await comprar({ email, documento: cpf() })
-    expect(r.status, r.recado).toBe(200)
-    const c = await cliente(email)
-    expect(c).toMatchObject({
-      birth_date: null, instagram: null, zip_code: null, city: null, state: null,
-      password_hash: null, registered_at: null, marketing_opt_in: false, marketing_opt_in_at: null,
-    })
+    await comprarEPagar({ email, documento: cpf() })
+    expect(await cliente(email)).toMatchObject(SEM_PERFIL)
+  })
+
+  it('B17 · senha curta (ou qualquer senha) não recusa mais a compra', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const email = novoEmail()
+    const r = await comprar({ email, documento: cpf() }, { senha: '123' })
+    expect(r.status, 'a senha, que não serve pra nada, derrubou a compra').toBe(200)
+    await pagar(r.pedido)
+    expect((await cliente(email)).password_hash).toBeNull()
   })
 })
 
 describe('checkout — quem compra de novo não estraga o cadastro', () => {
-  it('a senha já gravada NÃO é trocada por outra compra com o mesmo e-mail', async (ctx) => {
-    seForaDoArPula(ctx, sonda)
-    const email = novoEmail(), documento = cpf()
-    expect((await comprar({ email, documento }, CADASTRO)).status).toBe(200)
-    const antes = (await cliente(email)).password_hash
-
-    const r = await comprar({ email, documento }, { ...CADASTRO, senha: 'outra-senha-2026' })
-    expect(r.status, r.recado).toBe(200)
-
-    const depois = (await cliente(email)).password_hash
-    expect(depois).toBe(antes)
-    expect(await bcrypt.compare('cachoeira2026', depois)).toBe(true)
-    expect(await bcrypt.compare('outra-senha-2026', depois)).toBe(false)
-  })
-
   it('compra só com nome e CPF não apaga endereço, idade nem Instagram', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const email = novoEmail(), documento = cpf()
-    await comprar({ email, documento }, CADASTRO)
-    expect((await comprar({ email, documento })).status).toBe(200)
+    await comprarEPagar({ email, documento }, CADASTRO)
+    await comprarEPagar({ email, documento })
 
     const c = await cliente(email)
     expect(c.birth_date).toBe('1990-12-25')
     expect(c.instagram).toBe('maria.souza')
     expect(c.city).toBe('Vitória da Conquista')
     expect(c.street).toBe('Rua das Flores')
-    expect(c.password_hash).not.toBeNull()
   })
 
   it('o endereço novo substitui o velho INTEIRO — nada de rua de uma cidade em outra', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const email = novoEmail(), documento = cpf()
-    await comprar({ email, documento }, CADASTRO)
+    await comprarEPagar({ email, documento }, CADASTRO)
     // só cidade e UF: rua, número, bairro e CEP do endereço velho têm que sumir
-    const r = await comprar({ email, documento }, { endereco: { cidade: 'Salvador', estado: 'BA' } })
-    expect(r.status, r.recado).toBe(200)
+    await comprarEPagar({ email, documento }, { endereco: { cidade: 'Salvador', estado: 'BA' } })
 
     const c = await cliente(email)
     expect(c.city).toBe('Salvador')
@@ -190,28 +220,34 @@ describe('checkout — quem compra de novo não estraga o cadastro', () => {
 })
 
 describe('checkout — consentimento de novidades (LGPD)', () => {
-  it('só muda quando a pessoa se manifesta, e o carimbo só anda quando o valor muda', async (ctx) => {
+  it('só vale com a compra paga, só muda quando a pessoa se manifesta, e o carimbo só anda quando o valor muda', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const email = novoEmail(), documento = cpf()
 
-    await comprar({ email, documento }, { aceitaNovidades: true })
+    // marcou "sim" mas não pagou: consentimento nenhum (B14 — qualquer um
+    // digita o e-mail de outra pessoa)
+    const r = await comprar({ email, documento }, { aceitaNovidades: true })
+    expect(r.status, r.recado).toBe(200)
+    expect(await cliente(email)).toMatchObject({ marketing_opt_in: false, marketing_opt_in_at: null })
+
+    await pagar(r.pedido)
     const dito = await cliente(email)
     expect(dito.marketing_opt_in).toBe(true)
     const carimbo = dito.marketing_opt_in_at
     expect(carimbo).not.toBeNull()
 
     // não se manifestou: nada muda
-    await comprar({ email, documento })
+    await comprarEPagar({ email, documento })
     const calado = await cliente(email)
     expect(calado.marketing_opt_in).toBe(true)
     expect(calado.marketing_opt_in_at).toBe(carimbo)
 
     // repetiu o "sim": o carimbo NÃO anda (a data do consentimento é a primeira)
-    await comprar({ email, documento }, { aceitaNovidades: true })
+    await comprarEPagar({ email, documento }, { aceitaNovidades: true })
     expect((await cliente(email)).marketing_opt_in_at).toBe(carimbo)
 
     // disse não: muda e o carimbo anda
-    await comprar({ email, documento }, { aceitaNovidades: false })
+    await comprarEPagar({ email, documento }, { aceitaNovidades: false })
     const nao = await cliente(email)
     expect(nao.marketing_opt_in).toBe(false)
     expect(nao.marketing_opt_in_at).not.toBe(carimbo)
@@ -220,8 +256,93 @@ describe('checkout — consentimento de novidades (LGPD)', () => {
   it('quem nunca se manifestou fica sem consentimento e sem carimbo', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const email = novoEmail()
-    await comprar({ email, documento: cpf() }, { nascimento: '1990-12-25' })
+    await comprarEPagar({ email, documento: cpf() }, { nascimento: '1990-12-25' })
     expect(await cliente(email)).toMatchObject({ marketing_opt_in: false, marketing_opt_in_at: null })
+  })
+})
+
+describe('B14 · e-mail sequestrado e cadastro reescrito sem pagar', () => {
+  it('quem sabe e-mail + CPF de um cliente NÃO reescreve o cadastro dele sem pagar', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const email = novoEmail(), documento = cpf()
+    await comprarEPagar({ email, documento }, { ...CADASTRO, aceitaNovidades: false })
+    const antes = await cliente(email)
+
+    // o desconhecido: mesmo e-mail, mesmo CPF, outro perfil, "aceito novidades" — e não paga
+    const r = await comprar({ email, documento }, {
+      nome: 'Outra Pessoa', telefone: '11912345678', nascimento: '2001-01-01',
+      instagram: '@outra', endereco: { cidade: 'São Paulo', estado: 'SP' }, aceitaNovidades: true,
+    })
+    expect(r.status, r.recado).toBe(200)
+    expect(await cliente(email), 'o formulário não pago reescreveu o cadastro de outra pessoa')
+      .toEqual(antes)
+  })
+
+  it('e-mail usado por um desconhecido sem pagar volta pro dono quando o pedido morre', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const email = novoEmail(), cpfDoOutro = cpf(), cpfDoDono = cpf()
+    const doOutro = await comprar({ email, documento: cpfDoOutro },
+      { nome: 'Desconhecido', aceitaNovidades: true })
+    expect(doOutro.status, doOutro.recado).toBe(200)
+    // o cliente do Asaas daquele CPF não pode ir junto pro dono do e-mail
+    await q(`UPDATE customers SET asaas_customer_id = 'cus_zz_do_outro', marketing_opt_in = true
+              WHERE org_id = $1 AND email = $2`, [orgId, email])
+    // a reserva vence sem pagamento (o que a varredura de expirados faz)
+    await q(`UPDATE orders SET status = 'expirado' WHERE code = $1`, [doOutro.pedido])
+
+    const doDono = await comprar({ email, documento: cpfDoDono }, { nome: 'Dona Do Email' })
+    expect(doDono.status, `o dono do e-mail ficou preso ao CPF de quem não pagou: ${doDono.recado}`)
+      .toBe(200)
+    expect(await cliente(email)).toMatchObject({
+      name: 'Dona Do Email', document: cpfDoDono, asaas_customer_id: null, ...SEM_PERFIL,
+    })
+    const log = await q1<any>(
+      `SELECT count(*)::int AS n FROM audit_log a JOIN customers c ON c.id::text = a.entity_id::text
+        WHERE c.org_id = $1 AND c.email = $2 AND a.action = 'email_reassumido'`, [orgId, email])
+    expect(log!.n).toBe(1)
+  })
+
+  it('enquanto o pedido do outro CPF está de pé, o e-mail não troca de dono (409)', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const email = novoEmail(), cpfA = cpf()
+    expect((await comprar({ email, documento: cpfA })).status).toBe(200)
+    const r = await comprar({ email, documento: cpf() })
+    expect(r.status, r.recado).toBe(409)
+    expect(r.corpo.data).toMatchObject({ tipo: 'email_de_outro_cpf' })
+    // e sem nenhum pedaço do CPF de ninguém no recado
+    expect(r.recado).not.toMatch(/\d{2,}/)
+    expect((await cliente(email)).document).toBe(cpfA)
+  })
+
+  it('e-mail que já PAGOU com um CPF recusa outro CPF, como antes', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const email = novoEmail(), cpfA = cpf()
+    const pago = await comprarEPagar({ email, documento: cpfA })
+    // mesmo com o pedido estornado depois: o pagamento provou quem é o dono
+    await q(`UPDATE orders SET status = 'estornado', refunded_cents = total_cents WHERE code = $1`, [pago])
+    const r = await comprar({ email, documento: cpf() })
+    expect(r.status, r.recado).toBe(409)
+    expect((await cliente(email)).document).toBe(cpfA)
+  })
+
+  it('cliente do balcão sem CPF ganha o CPF da compra (é ele que conta o teto por CPF)', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const email = novoEmail(), documento = cpf()
+    await q(`INSERT INTO customers (org_id, name, email) VALUES ($1, 'Cliente do balcão', $2)`, [orgId, email])
+    const r = await comprar({ email, documento })
+    expect(r.status, r.recado).toBe(200)
+    expect((await cliente(email)).document).toBe(documento)
+  })
+
+  it('a rede do gatilho: se o CPF do cliente mudou até o pagamento, o cadastro não é aplicado', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const email = novoEmail()
+    const r = await comprar({ email, documento: cpf() }, CADASTRO)
+    expect(r.status, r.recado).toBe(200)
+    await q(`UPDATE customers SET document = '52998224725' WHERE org_id = $1 AND email = $2`, [orgId, email])
+    await pagar(r.pedido)
+    expect(await cliente(email)).toMatchObject({ birth_date: null, city: null, marketing_opt_in: false })
+    expect(await pendente(r.pedido)).toBeNull()
   })
 })
 
@@ -240,7 +361,6 @@ describe('checkout — cadastro inválido recusa antes de gravar qualquer coisa'
 
   it('nascimento no futuro', async (ctx) => recusa({ nascimento: '2999-01-01' }, 'nascimento', ctx))
   it('data que não existe', async (ctx) => recusa({ nascimento: '2001-02-31' }, 'nascimento', ctx))
-  it('senha curta', async (ctx) => recusa({ senha: '123' }, 'senha', ctx))
   it('Instagram com espaço', async (ctx) => recusa({ instagram: 'meu nome' }, 'instagram', ctx))
   it('endereço sem UF', async (ctx) => recusa({ endereco: { cidade: 'Salvador' } }, 'estado', ctx))
   it('UF que não existe', async (ctx) =>

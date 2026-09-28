@@ -41,25 +41,58 @@
 import { q, q1 } from '../../utils/db'
 import { montarQr } from '../../utils/ingresso'
 import { CANAL_CORTESIA, eCortesia } from '../../utils/emissao'
+import { PEDIDO_VIVO } from '../../utils/liquido'
+import { conferirFreio, marcarNoFreio } from '../../utils/sessao'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+let avisouSemChave = false
+
+/**
+ * O QR do ingresso, ou `null` quando não há chave pra assinar. Sem chave a
+ * rota inteira dava 500 — e o comprador perdia até o CÓDIGO, que a portaria
+ * aceita digitado. A falta da chave grita no boot e em `/api/saude`.
+ */
+function qrOuNada(code: string, eventId: string): string | null {
+  try {
+    return montarQr(code, eventId)
+  } catch (e: any) {
+    if (!avisouSemChave) {
+      avisouSemChave = true
+      console.error(`[pedido] QR sem assinatura: ${e?.message ?? e}`)
+    }
+    return null
+  }
+}
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
   if (!id) throw createError({ statusCode: 400, statusMessage: 'pedido ausente' })
 
+  // B15: o código PED-XXXX-XXXX é a credencial, e 404 × 200 sem freio deixava
+  // chutar à vontade. Só a consulta por CÓDIGO entra no balde — o UUID (que a
+  // tela de pagamento consulta a cada 4 s) não é adivinhável, e frear a
+  // consulta dele seria derrubar o relógio da cobrança de quem está pagando.
+  const porCodigo = !UUID.test(id)
+  if (porCodigo) conferirFreio(event, 'pedido_404')
+
   const o = await q1<any>(
     `SELECT o.id, o.code, o.status, o.face_cents, o.fee_cents, o.discount_cents,
-            o.total_cents, o.payment_method, o.installments, o.expires_at, o.channel,
-            o.created_at, o.paid_at, o.pix_payload, o.pix_qr_base64,
+            o.total_cents, o.refunded_cents, o.payment_method, o.installments,
+            o.expires_at, o.channel, o.created_at, o.paid_at, o.pix_payload, o.pix_qr_base64,
+            o.invoice_url,
+            (${PEDIDO_VIVO('o.')}) AS vivo,
             c.name AS comprador, c.email,
             e.id AS event_id, e.name AS evento, e.slug, e.starts_at, e.ticket_noun,
-            e.venue_name, e.city, e.state, e.banner_url
+            e.venue_name, e.city, e.state, e.banner_url, e.timezone
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
        JOIN events e ON e.id = o.event_id
-      WHERE ${UUID.test(id) ? 'o.id = $1' : 'upper(o.code) = upper($1)'}`, [id])
-  if (!o) throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado' })
+      WHERE ${porCodigo ? 'upper(o.code) = upper($1)' : 'o.id = $1'}`, [id])
+  if (!o) {
+    if (porCodigo) marcarNoFreio(event, 'pedido_404')
+    throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado' })
+  }
 
   const itens = await q<any>(
     `SELECT oi.quantity, oi.unit_face_cents, oi.unit_fee_cents, oi.unit_total_cents,
@@ -70,9 +103,15 @@ export default defineEventHandler(async (event) => {
        LEFT JOIN ticket_types tt ON tt.id = oi.ticket_type_id
       WHERE oi.order_id = $1`, [o.id])
 
-  // QR só existe pra pedido pago. Emitir a imagem antes disso seria entregar
-  // ingresso válido a quem ainda não pagou.
-  const ingressos = o.status === 'pago'
+  // QR só existe pra pedido com a venda de pé. Emitir a imagem antes disso
+  // seria entregar ingresso válido a quem ainda não pagou.
+  //
+  // A régua é `PEDIDO_VIVO` (utils/liquido.ts), não `status = 'pago'` (B01): o
+  // estorno PARCIAL grava `estornado_parcial`, devolve parte do dinheiro e NÃO
+  // cancela ingresso nenhum (o valor devolvido não diz qual). Recortar por
+  // 'pago' sumia com os ingressos que continuavam valendo — a tela dizia "ainda
+  // não foi pago" e o PNG do QR dava 404, com a portaria aceitando o código.
+  const ingressos = o.vivo
     ? (await q<any>(
         // `transferido`: o ingresso segue ligado a ESTE pedido (é o pedido de
         // quem comprou), mas passou pra outra pessoa por transferência aceita.
@@ -110,7 +149,7 @@ export default defineEventHandler(async (event) => {
             gratuito: Boolean(t.is_courtesy) && !eCortesia(t.is_courtesy, o.channel),
             usadoEm: t.checked_in_at, setor: t.setor, lote: t.lote, tipo: t.tipo,
             sessao: t.sessao, sessaoInicio: t.sessao_inicio,
-            qr: entra ? montarQr(t.code, o.event_id) : null,
+            qr: entra ? qrOuNada(t.code, o.event_id) : null,
           }
         })
     : []
@@ -134,6 +173,11 @@ export default defineEventHandler(async (event) => {
     feeCents: Number(o.fee_cents),
     descontoCents: Number(o.discount_cents),
     totalCents: Number(o.total_cents),
+    /** o que já voltou pro comprador — o estorno parcial mostra isto ao lado dos ingressos */
+    estornadoCents: Number(o.refunded_cents ?? 0),
+    formaDePagamento: o.payment_method,
+    /** fuso do evento: a tela escreve a data na hora do PARQUE, não na do navegador */
+    fuso: o.timezone ?? 'America/Bahia',
     /**
      * Do PEDIDO, não do ingresso — e as duas nunca são verdade juntas.
      * `gratuito` é o que a tela precisa pra escrever "você não paga nada" sem
@@ -156,8 +200,14 @@ export default defineEventHandler(async (event) => {
       unitFaceCents: Number(i.unit_face_cents),
       unitTotalCents: Number(i.unit_total_cents),
     })),
+    // `linkFatura` (B08): a fatura do cartão ficava só na memória da aba que
+    // pagou. Quem fechava a aba — ou abria o link do pedido no celular — não
+    // achava como pagar, e a reserva ficava presa até vencer.
     pagamento: o.status === 'aguardando_pagamento'
-      ? { forma: o.payment_method, pixPayload: o.pix_payload, pixQrBase64: o.pix_qr_base64 }
+      ? {
+          forma: o.payment_method, pixPayload: o.pix_payload, pixQrBase64: o.pix_qr_base64,
+          linkFatura: o.invoice_url ?? null,
+        }
       : null,
     ingressos,
     pagoSemIngresso,

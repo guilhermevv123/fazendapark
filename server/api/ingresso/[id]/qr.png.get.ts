@@ -20,6 +20,7 @@
 import QRCode from 'qrcode'
 import { q1 } from '../../../utils/db'
 import { montarQr } from '../../../utils/ingresso'
+import { PEDIDO_VIVO } from '../../../utils/liquido'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -35,13 +36,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Ingresso não encontrado' })
   }
 
+  // `PEDIDO_VIVO` e não `status = 'pago'` (B01): o estorno PARCIAL não cancela
+  // ingresso nenhum, e o QR de quem continua com ingresso válido não pode dar
+  // 404 só porque parte do dinheiro voltou. O estorno total cancela o ingresso,
+  // e aí quem responde é o 410 de logo abaixo.
   const t = pedido
     ? await q1<any>(
         `SELECT t.code, t.status, o.event_id,
                 EXISTS (SELECT 1 FROM ticket_transfers tr
                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido') AS transferido
            FROM tickets t JOIN orders o ON o.id = t.order_id
-          WHERE t.id = $1 AND upper(o.code) = upper($2) AND o.status = 'pago'`,
+          WHERE t.id = $1 AND upper(o.code) = upper($2) AND ${PEDIDO_VIVO('o.')}`,
         [id, pedido])
     : await q1<any>(
         // a transferência em vigor: aceita, e nenhuma aceita DEPOIS dela
@@ -61,7 +66,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 410, statusMessage: 'Ingresso transferido para outra pessoa' })
   }
 
-  const png = await QRCode.toBuffer(montarQr(t.code, t.event_id), {
+  let conteudo: string
+  try {
+    conteudo = montarQr(t.code, t.event_id)
+  } catch (e: any) {
+    // Sem chave de ingresso configurada (PROD-03): não é o ingresso que está
+    // errado, é a instalação. 503 com o que fazer na portaria, não 500 mudo.
+    console.error(`[qr] ${e?.message ?? e}`)
+    throw createError({ statusCode: 503,
+      statusMessage: 'O QR está indisponível agora. Na entrada, informe o código do ingresso.' })
+  }
+  const png = await QRCode.toBuffer(conteudo, {
     margin: 1, width: 560, errorCorrectionLevel: 'M',
   })
   setHeader(event, 'content-type', 'image/png')

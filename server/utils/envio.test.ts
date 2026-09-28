@@ -32,11 +32,12 @@ import { db, q, q1, tx } from './db'
 import { emitirNaTransacao } from './emissao'
 import { reservar } from './estoque'
 import {
-  assuntoCodificado, enderecoValido, entregarPorSmtp, montarConfirmacao, montarMime,
+  assuntoCodificado, enderecoValido, entregar, entregarPorSmtp, montarConfirmacao, montarMime,
+  pendenciaDoEmail, remetente,
 } from './email'
 import {
   FILA_DE_ENVIO, FILA_DE_ESTORNO, SQL_RESERVA, adiamentoSegundos, anunciarWorker,
-  baterPonto, emPortugues, encerrarPonto,
+  baseDoSite, baterPonto, emPortugues, encerrarPonto,
   enfileirar, garantirWorker, instanciaDoProcesso, montarMensagemDoPedido, pararWorker,
   processarUm, reservarProximo, usarTransporte, vereditoDaFila,
 } from './envio'
@@ -368,6 +369,20 @@ describe('a reserva da fila', () => {
 /* ============================================ 3. o e-mail que sai */
 
 describe('o e-mail de confirmação', () => {
+  it('matriz 37 · nome com <script>, acento e emoji sai como TEXTO no e-mail', () => {
+    // trava: o `escapar(...)` do nome do comprador e do titular no HTML (utils/email.ts)
+    const nome = 'Zé Ñandú <script>alert(1)</script> 😀'
+    const m = montarConfirmacao({ pedido: 'PED-ZZ37', compradorNome: nome, compradorEmail: 'a@b.com.br',
+      eventoNome: 'ZZ <b>Festa</b>', totalCents: 3300, linkIngressos: null,
+      ingressos: [{ id: 't-37', codigo: 'ZZ-0037', titular: nome, tipo: 'Inteira' }] })
+    expect(m.html, 'o nome virou tag no HTML do e-mail').not.toContain('<script>')
+    expect(m.html).not.toContain('<b>Festa</b>')
+    expect(m.html).toContain('Zé Ñandú &lt;script&gt;alert(1)&lt;/script&gt; 😀, seu')
+    expect(m.html).toContain('Titular: Zé Ñandú &lt;script&gt;alert(1)&lt;/script&gt; 😀')
+    // o texto puro leva o nome como a pessoa escreveu (texto puro não interpreta tag)
+    expect(m.texto).toContain(nome)
+  })
+
   it('leva o QR ANEXADO, não um link de imagem que o Gmail bloqueia', async () => {
     const p = await pedidoPendente(2)
     await pagar(p.id)
@@ -445,6 +460,159 @@ describe('o e-mail de confirmação', () => {
 
     const m = await montarMensagemDoPedido(p.id, 'joao.envio@teste.invalido')
     expect(m.imagens?.length, 'sumiu com o ingresso de quem teve estorno de R$ 10').toBe(1)
+  })
+
+  /**
+   * B02 (27/09): o ingresso transferido e ACEITO segue `valido` — é o
+   * destinatário que entra com ele, com código novo. O e-mail do pedido
+   * original pegava todo ingresso `<> 'cancelado'`, então "reenviar" entregava
+   * ao remetente o QR que agora é do destinatário, e os dois entravam.
+   */
+  it('o reenvio de quem comprou NÃO leva o ingresso que ele transferiu', async () => {
+    const p = await pedidoPendente(2)
+    await pagar(p.id)
+    const [dado, meu] = await q<any>(
+      `SELECT id, code FROM tickets WHERE order_id = $1 ORDER BY code`, [p.id])
+    // o aceite troca o código (utils/transferencia.ts) — aqui na mão, igual
+    const novoCodigo = `${dado.code.split('-')[0]}-ZZTR-${randomUUID().slice(0, 4).toUpperCase()}`
+    await q(`UPDATE tickets SET code = $2, holder_name = 'Quem Recebeu' WHERE id = $1`,
+      [dado.id, novoCodigo])
+    await q(`INSERT INTO ticket_transfers (org_id, event_id, ticket_id, para_nome, para_email,
+                                          status, code, accepted_at)
+             VALUES ($1,$2,$3,'Quem Recebeu','recebeu.envio@teste.invalido','concluido',
+                     'tr_zz_' || gen_random_uuid(), now())`, [orgId, eventId, dado.id])
+
+    const m = await montarMensagemDoPedido(p.id, 'joao.envio@teste.invalido')
+    expect(m.imagens?.length, 'o e-mail de quem comprou levou o QR de quem recebeu').toBe(1)
+    expect(m.texto).toContain(meu.code)
+    expect(m.texto, 'o código novo do destinatário foi pro remetente').not.toContain(novoCodigo)
+    expect(m.html).not.toContain(novoCodigo)
+  })
+
+  it('pedido com TODOS os ingressos transferidos falha de vez, com o motivo — não fica na fila', async () => {
+    const p = await pedidoPendente(1)
+    await pagar(p.id)
+    const [t] = await q<any>(`SELECT id FROM tickets WHERE order_id = $1`, [p.id])
+    await q(`INSERT INTO ticket_transfers (org_id, event_id, ticket_id, para_nome, para_email,
+                                          status, code, accepted_at)
+             VALUES ($1,$2,$3,'Quem Recebeu','recebeu2.envio@teste.invalido','concluido',
+                     'tr_zz_' || gen_random_uuid(), now())`, [orgId, eventId, t.id])
+    const envio = await envioDoPedido(p.id)
+    usarTransporte(async () => { throw new Error('não era pra chegar no transporte') })
+    try {
+      const r = await processarUm('teste-b02', envio.id)
+      expect(r?.status, 'retentar não faz o ingresso voltar pra quem transferiu').toBe('falhou')
+      expect(r?.erro).toMatch(/transferidos/)
+    } finally {
+      usarTransporte(null)
+    }
+  })
+
+  it('sessão sem título sai com a data em português, no fuso do evento (B28)', async () => {
+    const sessao = (await q1<any>(
+      `INSERT INTO event_sessions (event_id, starts_at, ends_at)
+       VALUES ($1, '2026-10-04 12:00:00+00', '2026-10-04 20:00:00+00') RETURNING id`, [eventId]))!.id
+    const setor = (await q1<any>(`INSERT INTO sectors (event_id, session_id, name)
+      VALUES ($1,$2,'Domingo sem título') RETURNING id`, [eventId, sessao]))!.id
+    const lote = (await q1<any>(`INSERT INTO lots (sector_id, name, price_cents, quantity, max_per_order)
+      VALUES ($1,'Lote da sessão',4500,10,5) RETURNING id`, [setor]))!.id
+    const pedido = (await q1<any>(
+      `INSERT INTO orders (org_id, event_id, customer_id, code, status,
+                           face_cents, fee_cents, platform_cents, discount_cents, total_cents,
+                           payment_method, asaas_payment_id, expires_at)
+       VALUES ($1,$2,$3,'ZZE-'||substr(gen_random_uuid()::text,1,8),'aguardando_pagamento',
+               4500,450,450,0,4950,'pix','pay_zz_'||substr(gen_random_uuid()::text,1,8),
+               now() + interval '20 minutes') RETURNING id`, [orgId, eventId, customerId]))!.id
+    await q(`INSERT INTO order_items (order_id, lot_id, quantity, unit_face_cents, unit_fee_cents,
+                                      unit_total_cents) VALUES ($1,$2,1,4500,450,4950)`, [pedido, lote])
+    await tx((c) => reservar(c, [{ lotId: lote, quantidade: 1 }]))
+    await pagar(pedido)
+
+    const m = await montarMensagemDoPedido(pedido, 'joao.envio@teste.invalido')
+    expect(m.html, 'a sessão saiu como String(Date) no e-mail').not.toMatch(/GMT|Sun Oct/)
+    // 04/10/2026 é domingo; 12:00 UTC = 09:00 em America/Bahia
+    expect(m.html).toContain('domingo, 04/10 às 09:00')
+  })
+
+  /**
+   * PROD-04: sem PUBLIC_BASE_URL o link ia pra http://localhost:3100 — que não
+   * abre no celular de ninguém. Em produção o e-mail sai SEM o link (os QRs vão
+   * anexados, e são eles a entrada), nunca com um link pra esta máquina.
+   */
+  it('em produção sem URL pública o e-mail sai sem link — nunca pra localhost', async () => {
+    const p = await pedidoPendente(1)
+    await pagar(p.id)
+    const antes = { NODE_ENV: process.env.NODE_ENV, PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL }
+    try {
+      process.env.NODE_ENV = 'production'
+      for (const url of ['', 'http://localhost:3100', 'isto não é url']) {
+        process.env.PUBLIC_BASE_URL = url
+        expect(baseDoSite(), `"${url}" virou link de e-mail em produção`).toBeNull()
+        const m = await montarMensagemDoPedido(p.id, 'joao.envio@teste.invalido')
+        expect(m.texto).not.toMatch(/localhost|\/ingressos\//)
+        expect(m.html).not.toMatch(/localhost|\/ingressos\//)
+        expect(m.texto).toContain('anexado')
+        expect(m.imagens?.length, 'sem o link, o QR anexado é a entrada — não pode faltar').toBe(1)
+      }
+      process.env.PUBLIC_BASE_URL = 'https://ingressos.conquistapark.com.br/'
+      expect(baseDoSite()).toBe('https://ingressos.conquistapark.com.br')
+      const m = await montarMensagemDoPedido(p.id, 'joao.envio@teste.invalido')
+      expect(m.html).toContain(`https://ingressos.conquistapark.com.br/ingressos/${p.code}`)
+    } finally {
+      for (const [k, v] of Object.entries(antes)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+  })
+})
+
+/* ============================ PROD-05: e-mail simulado em produção */
+
+describe('em produção o e-mail não é simulado em silêncio (PROD-05)', () => {
+  const PROD = { NODE_ENV: 'production' }
+  const SMTP = 'smtp://guiche:senha@smtp.exemplo.com.br:587'
+
+  it('sem SMTP_URL, sem remetente ou com remetente torto: diz o que falta', () => {
+    expect(pendenciaDoEmail(PROD)).toMatch(/SMTP_URL/)
+    expect(pendenciaDoEmail({ ...PROD, SMTP_URL: SMTP })).toMatch(/EMAIL_REMETENTE/)
+    expect(pendenciaDoEmail({ ...PROD, SMTP_URL: SMTP, EMAIL_REMETENTE: 'Parque <sem arroba>' }))
+      .toMatch(/EMAIL_REMETENTE/)
+    expect(pendenciaDoEmail({ ...PROD, SMTP_URL: SMTP,
+      EMAIL_REMETENTE: 'Conquista Park <ingressos@conquistapark.com.br>' })).toBeNull()
+    // fora de produção simular é o certo; em produção, só dizendo com todas as letras
+    expect(pendenciaDoEmail({ NODE_ENV: 'development' })).toBeNull()
+    expect(pendenciaDoEmail({ ...PROD, EMAIL_TRANSPORTE: 'simulado' })).toBeNull()
+  })
+
+  it('a entrega recusa em vez de gravar o .eml no /tmp do contêiner', async () => {
+    const antes = { NODE_ENV: process.env.NODE_ENV, SMTP_URL: process.env.SMTP_URL,
+                    EMAIL_TRANSPORTE: process.env.EMAIL_TRANSPORTE }
+    try {
+      process.env.NODE_ENV = 'production'
+      delete process.env.SMTP_URL
+      delete process.env.EMAIL_TRANSPORTE
+      const m = montarConfirmacao({ pedido: 'PED-ZZ', compradorEmail: 'a@b.com.br',
+        eventoNome: 'ZZ', totalCents: 100, ingressos: [], linkIngressos: null })
+      await expect(entregar(m), 'o e-mail "saiu" pra /tmp e a linha virou enviada')
+        .rejects.toThrow(/SMTP_URL/)
+    } finally {
+      for (const [k, v] of Object.entries(antes)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+  })
+
+  it('o remetente padrão não é domínio inventado com o nome antigo do repositório', () => {
+    const antes = process.env.EMAIL_REMETENTE
+    delete process.env.EMAIL_REMETENTE
+    try {
+      expect(remetente()).not.toMatch(/diamond/i)
+      expect(remetente()).toMatch(/\.invalid>$/)
+    } finally {
+      if (antes !== undefined) process.env.EMAIL_REMETENTE = antes
+    }
   })
 })
 

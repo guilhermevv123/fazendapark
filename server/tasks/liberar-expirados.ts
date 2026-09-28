@@ -14,50 +14,104 @@
  * Só fala quando fez alguma coisa. Log de "0 liberados" a cada minuto entope
  * o diário e esconde o dia em que liberar 300 de uma vez seria o aviso de
  * que algo quebrou no pagamento.
+ *
+ * ## Cada etapa por si (ADM-52)
+ *
+ * As etapas eram chamadas em fila, sem rede: uma exceção na primeira (banco
+ * piscando no meio da varredura, um pedido torto) derrubava a rodada inteira
+ * — e junto a expiração das TRANSFERÊNCIAS, que não tem nada com isso. Uma
+ * transferência parada tranca o ingresso (o índice único deixa uma pendente
+ * por ingresso), então o dono ficava sem conseguir mandar de novo por causa
+ * de um defeito em outro lugar. Agora cada etapa tem o seu `try`: a que cai
+ * vira linha de erro no log e no resultado, e as outras seguem.
  */
 import { liberarExpirados } from '../utils/estoque'
-import { cancelarCobrancasDeExpirados } from '../utils/asaas'
+import { cancelarCobrancasDeExpirados, varrerEmAnalise } from '../utils/asaas'
 import { expirarTransferencias } from '../utils/transferencia'
-import { tx } from '../utils/db'
+import { esquecerCadastrosPendentes } from '../utils/cadastro'
+import { db, tx } from '../utils/db'
+
+export interface Etapa {
+  nome: string
+  rodar: () => Promise<number>
+  /** a frase quando fez alguma coisa (nada feito = silêncio) */
+  falar: (n: number) => string
+}
+
+export const ETAPAS: Etapa[] = [
+  {
+    nome: 'pedidos vencidos',
+    rodar: () => tx((c) => liberarExpirados(c)),
+    falar: (n) => `[estoque] ${n} pedido(s) vencido(s) — estoque devolvido`,
+  },
+  {
+    // A cobrança do pedido que acabou de cair (aqui ou na reserva sob demanda
+    // de `reclamarVencidosDoLote`) é cancelada no gateway DEPOIS do commit:
+    // rede de terceiro não segura estoque, e gateway fora não impede a
+    // devolução. Falha de UMA cobrança vira linha no `audit_log` do pedido; o
+    // pagamento que escapar é tratado na emissão (reserva refeita, ou
+    // pendência visível no painel).
+    nome: 'cobranças de reserva vencida',
+    rodar: async () => {
+      const r = await cancelarCobrancasDeExpirados()
+      const falhas = r.filter((x) => !x.ok).length
+      if (falhas) console.warn(`[asaas] ${falhas} cobrança(s) vencida(s) com erro ao cancelar (ver audit_log do pedido)`)
+      return r.length - falhas
+    },
+    falar: (n) => `[asaas] cobranças de reserva vencida: ${n} cancelada(s)`,
+  },
+  {
+    // Transferência parada também tranca: o índice único deixa uma pendente
+    // por ingresso, então enquanto a antiga não vence o dono não consegue
+    // mandar de novo — nem pro mesmo e-mail escrito certo.
+    nome: 'transferências paradas',
+    rodar: () => tx((c) => expirarTransferencias(c)),
+    falar: (n) => `[transferencia] ${n} venceram sem aceite`,
+  },
+  {
+    // B09: cartão em análise de risco não tem prazo — pergunta ao gateway e
+    // só solta o que ele disser que não foi pago (ver `decidirEmAnalise`).
+    nome: 'análise de risco sem saída',
+    rodar: async () => (await varrerEmAnalise()).filter((d) => d.desfecho === 'solto').length,
+    falar: (n) => `[asaas] ${n} pedido(s) em análise de risco soltos (o gateway disse que não foi pago)`,
+  },
+  {
+    // LGPD: o formulário do pedido que morreu sem pagar não fica guardado.
+    nome: 'cadastro de pedido morto',
+    rodar: () => esquecerCadastrosPendentes(db()),
+    falar: (n) => `[cadastro] ${n} formulário(s) de pedido não pago apagado(s)`,
+  },
+]
+
+export interface ResultadoDaVarredura {
+  feitos: Record<string, number>
+  falhas: Record<string, string>
+}
+
+/** Roda TODAS as etapas; a que cai não leva as outras junto. */
+export async function varrer(etapas: Etapa[] = ETAPAS): Promise<ResultadoDaVarredura> {
+  const feitos: Record<string, number> = {}
+  const falhas: Record<string, string> = {}
+  for (const e of etapas) {
+    try {
+      const n = await e.rodar()
+      feitos[e.nome] = n
+      if (n > 0) console.log(e.falar(n))
+    } catch (erro: any) {
+      falhas[e.nome] = erro?.message ?? String(erro)
+      console.error(`[liberar-expirados] a etapa "${e.nome}" falhou e as outras seguiram: ${falhas[e.nome]}`)
+    }
+  }
+  return { feitos, falhas }
+}
 
 export default defineTask({
   meta: {
     name: 'liberar-expirados',
-    description: 'Expira pedidos vencidos, devolve estoque, cancela a cobrança e vence transferências paradas',
+    description: 'Expira pedidos vencidos, devolve estoque, cancela a cobrança, vence transferências paradas, '
+      + 'pergunta ao gateway pelos pedidos em análise de risco e apaga o cadastro de pedido não pago',
   },
   async run() {
-    const liberados = await tx((c) => liberarExpirados(c))
-    if (liberados > 0) {
-      console.log(`[estoque] ${liberados} pedido(s) vencido(s) — estoque devolvido`)
-    }
-
-    // A cobrança do pedido que acabou de cair (aqui ou na reserva sob demanda
-    // de `reclamarVencidosDoLote`) é cancelada no gateway DEPOIS do commit:
-    // rede de terceiro não segura estoque, e gateway fora não impede a
-    // devolução. Falha aqui só vira aviso — a tentativa e o erro ficam no
-    // `audit_log` de cada pedido, e o pagamento que escapar é tratado na
-    // emissão (reserva refeita, ou pendência visível no painel).
-    let cobrancasCanceladas = 0
-    try {
-      const r = await cancelarCobrancasDeExpirados()
-      cobrancasCanceladas = r.filter((x) => x.ok).length
-      const falhas = r.length - cobrancasCanceladas
-      if (r.length) {
-        console.log(`[asaas] cobranças de reserva vencida: ${cobrancasCanceladas} cancelada(s)`
-          + (falhas ? `, ${falhas} com erro (ver audit_log do pedido)` : ''))
-      }
-    } catch (e: any) {
-      console.warn(`[asaas] varredura de cobranças vencidas falhou: ${e?.message ?? e}`)
-    }
-
-    // Transferência parada também tranca: o índice único deixa uma pendente
-    // por ingresso, então enquanto a antiga não vence o dono não consegue
-    // mandar de novo — nem pro mesmo e-mail escrito certo.
-    const vencidas = await tx((c) => expirarTransferencias(c))
-    if (vencidas > 0) {
-      console.log(`[transferencia] ${vencidas} venceram sem aceite`)
-    }
-
-    return { result: { liberados, vencidas, cobrancasCanceladas } }
+    return { result: await varrer() }
   },
 })

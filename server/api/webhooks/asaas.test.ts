@@ -57,6 +57,17 @@ const PEDIDO_12X_CARTAO = '0000e010-0000-4000-8000-0000000000ae'
 /** 12x no cartão, mas o payload não diz a forma: quem responde é `orders.payment_method` */
 const PEDIDO_12X_SEM_FORMA = '0000e010-0000-4000-8000-0000000000af'
 
+/** chargeback com a disputa GANHA (ordem oficial do Asaas) */
+const PEDIDO_CB_GANHO = '0000e010-0000-4000-8000-0000000000c1'
+/** chargeback com a disputa PERDIDA */
+const PEDIDO_CB_PERDIDO = '0000e010-0000-4000-8000-0000000000c2'
+/** o pagamento da disputa ganha chega ANTES do AWAITING_CHARGEBACK_REVERSAL */
+const PEDIDO_CB_FORA = '0000e010-0000-4000-8000-0000000000c3'
+/** disputa que parecia ganha e terminou em estorno */
+const PEDIDO_CB_VOLTA = '0000e010-0000-4000-8000-0000000000c5'
+/** cartão reprovado na análise de risco (B09) */
+const PEDIDO_REPROVADO = '0000e010-0000-4000-8000-0000000000c4'
+
 /** cota de "meia" do lote: 4 no total */
 const TIPO_MEIA = '0000e010-0000-4000-8000-0000000000b1'
 
@@ -254,6 +265,18 @@ beforeAll(async () => {
   await semearPedido({ id: PEDIDO_12X_SEM_FORMA, codigo: 'ZZ-WH-15',
                        situacao: 'aguardando_pagamento', cobranca: 'pay_zz_wh_15',
                        quantidade: 2, parcelas: 12, forma: 'credito', expiraEmMin: 30 })
+  // o ganho nasce esperando pagamento: o PIX cai pelo webhook e emite de
+  // verdade — é o que o chargeback vai cancelar
+  await semearPedido({ id: PEDIDO_CB_GANHO, codigo: 'ZZ-WH-16', situacao: 'aguardando_pagamento',
+                       cobranca: 'pay_zz_wh_16', quantidade: 2, expiraEmMin: 30 })
+  await semearPedido({ id: PEDIDO_CB_PERDIDO, codigo: 'ZZ-WH-17', situacao: 'pago',
+                       cobranca: 'pay_zz_wh_17', quantidade: 2 })
+  await semearPedido({ id: PEDIDO_CB_FORA, codigo: 'ZZ-WH-18', situacao: 'pago',
+                       cobranca: 'pay_zz_wh_18', quantidade: 1 })
+  await semearPedido({ id: PEDIDO_CB_VOLTA, codigo: 'ZZ-WH-19', situacao: 'pago',
+                       cobranca: 'pay_zz_wh_19', quantidade: 1 })
+  await semearPedido({ id: PEDIDO_REPROVADO, codigo: 'ZZ-WH-20', situacao: 'em_analise',
+                       cobranca: 'pay_zz_wh_20', quantidade: 1, forma: 'credito' })
 
   // O servidor de dev pode ou não ter ASAAS_WEBHOOK_TOKEN no ambiente. Se
   // tiver, este teste não tem como adivinhar o valor: descobre pelo 401 e
@@ -281,8 +304,8 @@ function podeBater(): boolean {
 }
 
 describe('webhook do Asaas · a mesma entrega duas vezes', () => {
-  it('emite o ingresso UMA vez e devolve 200 na repetição', async () => {
-    if (!podeBater()) return
+  it('emite o ingresso UMA vez e devolve 200 na repetição', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'pago'
     const corpo = corpoAsaas({
       idEvento: chave, evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_EMISSAO,
@@ -312,8 +335,8 @@ describe('webhook do Asaas · a mesma entrega duas vezes', () => {
     expect(linhas[0].order_id, 'não ligou o evento ao pedido').toBe(PEDIDO_EMISSAO)
   }, 30_000)
 
-  it('guarda o payload cru — é a resposta pra "o Asaas mandou?"', async () => {
-    if (!podeBater()) return
+  it('guarda o payload cru — é a resposta pra "o Asaas mandou?"', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const linha = (await sql(
       `SELECT payload, event_name, external_id FROM payment_events
         WHERE gateway_event_id = $1`, [PREFIXO + 'pago']))[0]
@@ -334,8 +357,8 @@ describe('webhook do Asaas · a mesma entrega duas vezes', () => {
    *
    * Arranque `payment_events_gateway_uk` e este caso fica vermelho na hora.
    */
-  it('duas entregas simultâneas: só uma linha entra', async () => {
-    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+  it('duas entregas simultâneas: só uma linha entra', async (ctx) => {
+    if (!noAr) ctx.skip()
     const chave = PREFIXO + 'corrida'
     await sql(`DELETE FROM payment_events WHERE gateway_event_id = $1`, [chave])
 
@@ -387,8 +410,8 @@ describe('webhook do Asaas · a mesma entrega duas vezes', () => {
 })
 
 describe('webhook do Asaas · cancelamento e estorno', () => {
-  it('cobrança apagada devolve o estoque mesmo com o pagamento em PENDING', async () => {
-    if (!podeBater()) return
+  it('cobrança apagada devolve o estoque mesmo com o pagamento em PENDING', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const antes = await lote()
     const corpo = corpoAsaas({
       idEvento: PREFIXO + 'delete', evento: 'PAYMENT_DELETED', pedido: PEDIDO_CANCELA,
@@ -407,8 +430,8 @@ describe('webhook do Asaas · cancelamento e estorno', () => {
       'os lugares do pedido apagado continuaram presos no lote').toBe(antes.reserved - 3)
   }, 30_000)
 
-  it('o mesmo cancelamento duas vezes não come a reserva de outro comprador', async () => {
-    if (!podeBater()) return
+  it('o mesmo cancelamento duas vezes não come a reserva de outro comprador', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const antes = await lote()
     // o vizinho tem 4 lugares reservados neste mesmo lote e não fez nada
     expect(antes.reserved, 'a reserva do vizinho sumiu antes da hora').toBeGreaterThanOrEqual(4)
@@ -427,8 +450,8 @@ describe('webhook do Asaas · cancelamento e estorno', () => {
     expect((await eventosGravados(PREFIXO + 'delete')).length).toBe(1)
   }, 30_000)
 
-  it('estorno parcial grava o valor devolvido e o pedido segue contando no líquido', async () => {
-    if (!podeBater()) return
+  it('estorno parcial grava o valor devolvido e o pedido segue contando no líquido', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const r = await entregar(corpoAsaas({
       idEvento: PREFIXO + 'parcial', evento: 'PAYMENT_PARTIALLY_REFUNDED',
       pedido: PEDIDO_PARCIAL, cobranca: 'pay_zz_wh_4', status: 'PARTIALLY_REFUNDED',
@@ -453,8 +476,8 @@ describe('webhook do Asaas · cancelamento e estorno', () => {
       .toBe(Number(p.total_cents) - Number(p.platform_cents) - 2_000)
   }, 30_000)
 
-  it('estorno parcial sem valor no payload não grava zero devolvido', async () => {
-    if (!podeBater()) return
+  it('estorno parcial sem valor no payload não grava zero devolvido', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'parcial_sem_valor'
     const r = await entregar(corpoAsaas({
       idEvento: chave, evento: 'PAYMENT_PARTIALLY_REFUNDED', pedido: PEDIDO_EMISSAO,
@@ -473,8 +496,8 @@ describe('webhook do Asaas · cancelamento e estorno', () => {
     expect(String(linha.error), 'não disse por que não tratou').toContain('valor devolvido')
   }, 30_000)
 
-  it('estorno total desfaz a venda: cancela ingresso e devolve o lugar', async () => {
-    if (!podeBater()) return
+  it('estorno total desfaz a venda: cancela ingresso e devolve o lugar', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     // paga primeiro, pelo caminho de verdade
     await entregar(corpoAsaas({
       idEvento: PREFIXO + 'pago5', evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_ESTORNO,
@@ -503,8 +526,8 @@ describe('webhook do Asaas · cancelamento e estorno', () => {
    * Reentrega de um evento ANTIGO, com id próprio — o índice único não pega
    * esta. Quem pega é a lista de permissão de `permiteAnotarStatus()`.
    */
-  it('evento atrasado não ressuscita pedido já estornado', async () => {
-    if (!podeBater()) return
+  it('evento atrasado não ressuscita pedido já estornado', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const r = await entregar(corpoAsaas({
       idEvento: PREFIXO + 'atrasado', evento: 'PAYMENT_OVERDUE', pedido: PEDIDO_ESTORNO,
       cobranca: 'pay_zz_wh_5', status: 'OVERDUE', valorReais: 220,
@@ -539,8 +562,8 @@ describe('webhook do Asaas · o que a entrega repetida não pega', () => {
    *     é só um erro: o Asaas reentrega pra sempre a MESMA coisa e a fila de
    *     webhook da conta para naquele evento.
    */
-  it('a rota se apoia no índice do banco, não num SELECT antes do INSERT', async () => {
-    if (!podeBater()) return
+  it('a rota se apoia no índice do banco, não num SELECT antes do INSERT', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'bloqueada'
     await sql(`DELETE FROM payment_events WHERE gateway_event_id = $1`, [chave])
 
@@ -585,8 +608,8 @@ describe('webhook do Asaas · o que a entrega repetida não pega', () => {
    * sempre a mesma coisa. Uma cobrança de fora parava a fila de todas as
    * outras.
    */
-  it('cobrança de outro sistema na mesma conta não derruba a porta nem some do registro', async () => {
-    if (!podeBater()) return
+  it('cobrança de outro sistema na mesma conta não derruba a porta nem some do registro', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'de_fora'
     await sql(`DELETE FROM payment_events WHERE gateway_event_id = $1`, [chave])
     expect((await sql(`SELECT id FROM orders WHERE id = $1`, [PEDIDO_DE_FORA])).length,
@@ -616,8 +639,8 @@ describe('webhook do Asaas · o que a entrega repetida não pega', () => {
    * 48 livres e a porta de venda (`sold + n <= quantity`) recusa a terceira
    * meia — prateleira presa que ninguém vê.
    */
-  it('estorno devolve a cota do TIPO de ingresso, não só o lugar do lote', async () => {
-    if (!podeBater()) return
+  it('estorno devolve a cota do TIPO de ingresso, não só o lugar do lote', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const tipoAntes = await tipo()
     const loteAntes = await lote()
     expect(Number(tipoAntes.sold), 'a cota do tipo nem foi consumida — o caso não prova nada')
@@ -639,17 +662,17 @@ describe('webhook do Asaas · o que a entrega repetida não pega', () => {
   }, 30_000)
 
   /**
-   * Chargeback no Asaas não é um evento, é uma sequência:
-   *   REQUESTED → AWAITING_CHARGEBACK_REVERSAL → DISPUTE.
-   * O do meio só anota e leva o pedido de 'chargeback' pra 'disputa'. Se
-   * 'disputa' não contar como "já desfeito", o terceiro desfaz DE NOVO — e
-   * como 'disputa' também não é 'pago', o desfazimento cai no `liberar()`, que
+   * Chargeback FORA DE ORDEM: REQUESTED → AWAITING_CHARGEBACK_REVERSAL →
+   * DISPUTE (a ordem oficial, com o DISPUTE antes, está no bloco de baixo).
+   * O do meio leva o pedido de 'chargeback' pra 'disputa'. Se 'disputa' não
+   * contar como "já desfeito", o DISPUTE atrasado desfaz DE NOVO — e como
+   * 'disputa' também não é 'pago', o desfazimento cai no `liberar()`, que
    * subtrai `reserved` de um pedido que não reserva mais nada. Quem paga é o
    * vizinho: medido, 5 lugares reservados viraram 3, e o lote passou a achar
    * que tem 2 a mais pra vender.
    */
-  it('a sequência inteira do chargeback não come a reserva de outro comprador', async () => {
-    if (!podeBater()) return
+  it('o chargeback entregue fora de ordem não come a reserva de outro comprador', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const antes = await lote()
     expect(Number(antes.reserved), 'a reserva do vizinho sumiu antes da hora')
       .toBeGreaterThanOrEqual(5)
@@ -679,6 +702,132 @@ describe('webhook do Asaas · o que a entrega repetida não pega', () => {
     // e o pedido segue fora do líquido, não volta pra vivo
     expect(['chargeback', 'disputa']).toContain((await pedido(PEDIDO_DISPUTA)).status)
   }, 40_000)
+})
+
+// ------------------------------------------------ o chargeback, na ordem oficial
+/**
+ * A sequência do Asaas (docs.asaas.com, "Eventos para cobranças" e
+ * "Chargeback", conferida em 27/09):
+ *
+ *   PAYMENT_CHARGEBACK_REQUESTED → PAYMENT_CHARGEBACK_DISPUTE ("em disputa após
+ *   apresentação de documentos") → e aí:
+ *     ganhou: PAYMENT_AWAITING_CHARGEBACK_REVERSAL ("disputa vencida, aguardando
+ *             repasse da adquirente") → PAYMENT_CONFIRMED ou PAYMENT_RECEIVED
+ *     perdeu: PAYMENT_REFUNDED
+ *
+ * O ganho era o buraco: o PAYMENT_CONFIRMED do repasse caía na emissão, que
+ * recusa pedido em 'disputa', a entrega era dada por concluída e o pedido
+ * ficava fora do líquido pra sempre — com o dinheiro de volta na conta.
+ */
+describe('webhook do Asaas · chargeback na ordem oficial', () => {
+  const passo = (pedidoId: string, cobranca: string, sufixo: string, evento: string, status: string,
+    valorReais: number, extra?: Record<string, any>) =>
+    entregar(corpoAsaas({ idEvento: PREFIXO + sufixo, evento, pedido: pedidoId, cobranca, status,
+      valorReais, extra }))
+
+  it('GANHO: REQUESTED → DISPUTE → AWAITING_REVERSAL → CONFIRMED → RECEIVED — o pedido volta a contar', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
+    const cob = 'pay_zz_wh_16'
+    expect((await passo(PEDIDO_CB_GANHO, cob, 'cbg0', 'PAYMENT_CONFIRMED', 'CONFIRMED', 220)).status).toBe(200)
+    expect((await pedido(PEDIDO_CB_GANHO)).status).toBe('pago')
+    expect(await ingressos(PEDIDO_CB_GANHO, 'valido')).toBe(2)
+    const antes = await lote()
+
+    await passo(PEDIDO_CB_GANHO, cob, 'cbg1', 'PAYMENT_CHARGEBACK_REQUESTED', 'CHARGEBACK_REQUESTED', 220)
+    expect((await pedido(PEDIDO_CB_GANHO)).status).toBe('chargeback')
+    await passo(PEDIDO_CB_GANHO, cob, 'cbg2', 'PAYMENT_CHARGEBACK_DISPUTE', 'CHARGEBACK_DISPUTE', 220)
+    expect((await pedido(PEDIDO_CB_GANHO)).status).toBe('chargeback')
+    await passo(PEDIDO_CB_GANHO, cob, 'cbg3', 'PAYMENT_AWAITING_CHARGEBACK_REVERSAL',
+      'AWAITING_CHARGEBACK_REVERSAL', 220)
+    expect((await pedido(PEDIDO_CB_GANHO)).status).toBe('disputa')
+
+    // a trilha é só de acrescentar (db/019): conta o que ESTA rodada escreveu
+    const trilha = async () => (await sql(`SELECT count(*)::int AS n FROM audit_log
+      WHERE entity = 'order' AND entity_id = $1 AND action = 'chargeback_revertido'`, [PEDIDO_CB_GANHO]))[0].n
+    const trilhaAntes = await trilha()
+    const r = await passo(PEDIDO_CB_GANHO, cob, 'cbg4', 'PAYMENT_CONFIRMED', 'CONFIRMED', 220)
+    expect(r.status).toBe(200)
+    const p = await pedido(PEDIDO_CB_GANHO)
+    expect(p.status, 'a disputa foi ganha, o dinheiro voltou e o pedido seguiu fora do líquido').toBe('pago')
+    expect(Number(p.refunded_cents)).toBe(0)
+    expect(await trilha()).toBe(trilhaAntes + 1)
+
+    // o RECEIVED que vem depois (o saldo ficou disponível) não emite ingresso novo
+    expect((await passo(PEDIDO_CB_GANHO, cob, 'cbg5', 'PAYMENT_RECEIVED', 'RECEIVED', 220)).status).toBe(200)
+    expect((await pedido(PEDIDO_CB_GANHO)).status).toBe('pago')
+    expect(await ingressos(PEDIDO_CB_GANHO, 'valido'),
+      'os ingressos cancelados no chargeback voltaram sozinhos (reemitir é decisão do produtor)').toBe(0)
+
+    // o lugar devolvido no chargeback não é tomado de novo, e ninguém perde reserva
+    const depois = await lote()
+    expect(Number(depois.sold)).toBe(Number(antes.sold) - 2)
+    expect(Number(depois.reserved)).toBe(Number(antes.reserved))
+  }, 40_000)
+
+  it('PERDIDO: REQUESTED → DISPUTE → REFUNDED — segue chargeback, o lugar volta uma vez', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
+    const cob = 'pay_zz_wh_17'
+    const antes = await lote()
+    for (const [sufixo, evento, status] of [
+      ['cbp1', 'PAYMENT_CHARGEBACK_REQUESTED', 'CHARGEBACK_REQUESTED'],
+      ['cbp2', 'PAYMENT_CHARGEBACK_DISPUTE', 'CHARGEBACK_DISPUTE'],
+      ['cbp3', 'PAYMENT_REFUNDED', 'REFUNDED'],
+    ]) {
+      expect((await passo(PEDIDO_CB_PERDIDO, cob, sufixo, evento, status, 220)).status).toBe(200)
+    }
+    const p = await pedido(PEDIDO_CB_PERDIDO)
+    expect(p.status).toBe('chargeback')
+    expect(Number(p.refunded_cents)).toBe(Number(p.total_cents))
+    const depois = await lote()
+    expect(Number(depois.sold)).toBe(Number(antes.sold) - 2)
+    expect(Number(depois.reserved)).toBe(Number(antes.reserved))
+  }, 40_000)
+
+  it('o pagamento que chega ANTES do AWAITING_REVERSAL fica pendurado e vale quando ele chegar', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
+    const cob = 'pay_zz_wh_18'
+    await passo(PEDIDO_CB_FORA, cob, 'cbf1', 'PAYMENT_CHARGEBACK_REQUESTED', 'CHARGEBACK_REQUESTED', 110)
+    const cedo = await passo(PEDIDO_CB_FORA, cob, 'cbf2', 'PAYMENT_CONFIRMED', 'CONFIRMED', 110)
+    expect(cedo.status).toBe(200)
+    expect((await pedido(PEDIDO_CB_FORA)).status).toBe('chargeback')
+    const [linha] = await eventosGravados(PREFIXO + 'cbf2')
+    expect(linha.processed_at, 'o pagamento fora de ordem foi dado por concluído e sumiu da fila').toBeNull()
+    expect(linha.error).toMatch(/AWAITING_CHARGEBACK_REVERSAL/)
+
+    await passo(PEDIDO_CB_FORA, cob, 'cbf3', 'PAYMENT_AWAITING_CHARGEBACK_REVERSAL',
+      'AWAITING_CHARGEBACK_REVERSAL', 110)
+    expect((await pedido(PEDIDO_CB_FORA)).status).toBe('disputa')
+    // a reentrega (ou o reprocessador) da mesma entrega agora vale
+    await passo(PEDIDO_CB_FORA, cob, 'cbf2', 'PAYMENT_CONFIRMED', 'CONFIRMED', 110)
+    expect((await pedido(PEDIDO_CB_FORA)).status).toBe('pago')
+    const [depois] = await eventosGravados(PREFIXO + 'cbf2')
+    expect(depois.processed_at).not.toBeNull()
+  }, 40_000)
+
+  it('disputa que termina em estorno vira chargeback — não fica prometendo repasse', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
+    const cob = 'pay_zz_wh_19'
+    await passo(PEDIDO_CB_VOLTA, cob, 'cbv1', 'PAYMENT_CHARGEBACK_REQUESTED', 'CHARGEBACK_REQUESTED', 110)
+    await passo(PEDIDO_CB_VOLTA, cob, 'cbv2', 'PAYMENT_AWAITING_CHARGEBACK_REVERSAL',
+      'AWAITING_CHARGEBACK_REVERSAL', 110)
+    expect((await pedido(PEDIDO_CB_VOLTA)).status).toBe('disputa')
+    await passo(PEDIDO_CB_VOLTA, cob, 'cbv3', 'PAYMENT_REFUNDED', 'REFUNDED', 110)
+    expect((await pedido(PEDIDO_CB_VOLTA)).status).toBe('chargeback')
+  }, 40_000)
+})
+
+describe('webhook do Asaas · análise de risco (B09)', () => {
+  it('reprovado com o status ainda em AWAITING_RISK_ANALYSIS volta a esperar pagamento, com prazo', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
+    const r = await entregar(corpoAsaas({
+      idEvento: PREFIXO + 'reprovado', evento: 'PAYMENT_REPROVED_BY_RISK_ANALYSIS', pedido: PEDIDO_REPROVADO,
+      cobranca: 'pay_zz_wh_20', status: 'AWAITING_RISK_ANALYSIS', valorReais: 110,
+    }))
+    expect(r.status).toBe(200)
+    const [o] = await sql(`SELECT status, expires_at FROM orders WHERE id = $1`, [PEDIDO_REPROVADO])
+    expect(o.status, 'o reprovado seguiu em análise, sem prazo, segurando o lugar').toBe('aguardando_pagamento')
+    expect(o.expires_at).not.toBeNull()
+  }, 30_000)
 })
 
 // ---------------------------------------------------------------- o segredo
@@ -793,8 +942,8 @@ describe('webhook do Asaas · segredo', () => {
  * lote.
  */
 describe('webhook do Asaas · a devolução que a casa pediu', () => {
-  it('não devolve o lugar duas vezes quando o estoque já voltou pela desistência', async () => {
-    if (!podeBater()) return
+  it('não devolve o lugar duas vezes quando o estoque já voltou pela desistência', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
 
     // 1. a compra acontece de verdade: paga pelo webhook, ingressos emitidos
     await entregar(corpoAsaas({
@@ -978,8 +1127,8 @@ describe('webhook do Asaas · pago de quanto', () => {
       .toBe(false)
   })
 
-  it('parcela do meio registra o recebimento e NÃO emite ingresso', async () => {
-    if (!podeBater()) return
+  it('parcela do meio registra o recebimento e NÃO emite ingresso', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'parcela1'
     // O prazo é posto aqui, e não na fixture, pra a afirmação lá embaixo ser
     // sobre o que ESTA entrega fez — e não sobre um relógio de dez minutos
@@ -1031,8 +1180,8 @@ describe('webhook do Asaas · pago de quanto', () => {
       .toBe(true)
   }, 30_000)
 
-  it('a parcela que COMPLETA libera os ingressos', async () => {
-    if (!podeBater()) return
+  it('a parcela que COMPLETA libera os ingressos', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const r = await entregar(corpoAsaas({
       idEvento: PREFIXO + 'parcela12', evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_12X_FIM,
       cobranca: 'pay_zz_wh_11', status: 'RECEIVED', valorReais: 18.34,
@@ -1056,8 +1205,8 @@ describe('webhook do Asaas · pago de quanto', () => {
    * agosto de 2027 — o comprador de 12x no cartão ficaria sem entrada no dia
    * do evento.
    */
-  it('compra parcelada no CARTÃO emite na primeira parcela', async () => {
-    if (!podeBater()) return
+  it('compra parcelada no CARTÃO emite na primeira parcela', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'cartao1'
     const r = await entregar(corpoAsaas({
       idEvento: chave, evento: 'PAYMENT_CONFIRMED', pedido: PEDIDO_12X_CARTAO,
@@ -1094,8 +1243,8 @@ describe('webhook do Asaas · pago de quanto', () => {
     expect(await ingressos(PEDIDO_12X_SEM_FORMA, 'valido')).toBe(2)
   }, 30_000)
 
-  it('à vista com valor menor emite e deixa o alerta escrito, nunca recusa', async () => {
-    if (!podeBater()) return
+  it('à vista com valor menor emite e deixa o alerta escrito, nunca recusa', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'menos'
     const r = await entregar(corpoAsaas({
       idEvento: chave, evento: 'PAYMENT_RECEIVED', pedido: PEDIDO_MENOS,
@@ -1133,8 +1282,8 @@ describe('webhook do Asaas · pago de quanto', () => {
  * afirmação do `refunded_cents` — a entrega é reprocessada e falha igual.
  */
 describe('webhook do Asaas · a entrega pendurada tem consumidor', () => {
-  it('o estorno sem valor volta a ser tratado depois de perguntar ao gateway', async () => {
-    if (!podeBater()) return
+  it('o estorno sem valor volta a ser tratado depois de perguntar ao gateway', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'pendurado'
 
     // 1. a entrega que falha ALTO de propósito: estorno parcial sem valor
@@ -1189,8 +1338,8 @@ describe('webhook do Asaas · a entrega pendurada tem consumidor', () => {
    * Sem esta cerca o financeiro de uma produtora veria — e reprocessaria — o
    * dinheiro da outra.
    */
-  it('a lista de entregas penduradas não atravessa a cerca da organização', async () => {
-    if (!podeBater()) return
+  it('a lista de entregas penduradas não atravessa a cerca da organização', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     const chave = PREFIXO + 'cerca'
     await entregar(corpoAsaas({
       idEvento: chave, evento: 'PAYMENT_PARTIALLY_REFUNDED', pedido: PEDIDO_VIZINHO,
@@ -1227,8 +1376,8 @@ describe('webhook do Asaas · a entrega pendurada tem consumidor', () => {
       .toBe(true)
   }, 40_000)
 
-  it('a carência segura a retentativa — a entrega que acabou de falhar não é reprocessada já', async () => {
-    if (!podeBater()) return
+  it('a carência segura a retentativa — a entrega que acabou de falhar não é reprocessada já', async (ctx) => {
+    if (!podeBater()) return ctx.skip()
     // A mesma linha do caso acima já foi resolvida; esta é outra, recém-nascida.
     const chave = PREFIXO + 'carencia'
     await entregar(corpoAsaas({

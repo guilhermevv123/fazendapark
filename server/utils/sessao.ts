@@ -20,7 +20,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { isIP } from 'node:net'
-import { getRequestHeader, type H3Event } from 'h3'
+import { createError, getRequestHeader, setResponseHeader, type H3Event } from 'h3'
 import { q, q1, tx } from './db'
 import { ehPapel, papelDoRoleLegado, type Papel } from './papeis'
 
@@ -336,16 +336,30 @@ export const FREIO = {
  *   minutos, não um script de oito linhas;
  * - **por IP (30)** — um endereço testando a mesma senha em mil contas.
  */
-export async function travadoPorTentativas(email: string, ip: string | null) {
+export async function travadoPorTentativas(
+  email: string, ip: string | null,
+  /**
+   * `ipConfiavel: false` quando o IP é o do PROXY, não o de quem digitou (ver
+   * `origemDaRequisicao`): aí os baldes por IP virariam baldes da casa inteira
+   * — 8 erros de qualquer um trancariam o dono, 30 trancariam a equipe toda,
+   * portaria incluída. Sem saber quem é quem, sobra o teto por e-mail (50),
+   * que um script de oito linhas não usa como arma. A falta do `CONFIAR_PROXY`
+   * grita no boot e em `/api/saude`; isto só impede que ela tranque o parque.
+   */
+  opcoes: { ipConfiavel?: boolean } = {},
+) {
+  const ipConfiavel = opcoes.ipConfiavel !== false
   // `IS NOT DISTINCT FROM`: sem IP conhecido, o balde é o dos "sem IP" — e
   // não o e-mail inteiro, que era o defeito.
-  const porPar = await q1<any>(
-    `SELECT count(*)::int AS n FROM login_attempts
-      WHERE email = $1 AND ip IS NOT DISTINCT FROM $2
-        AND ok = false AND at > now() - interval '15 minutes'`, [email, ip])
-  if (Number(porPar.n) >= FREIO.porEmailEIp) {
-    return 'Muitas tentativas erradas para este e-mail a partir deste aparelho. '
-      + 'Tente de novo em 15 minutos.'
+  if (ipConfiavel) {
+    const porPar = await q1<any>(
+      `SELECT count(*)::int AS n FROM login_attempts
+        WHERE email = $1 AND ip IS NOT DISTINCT FROM $2
+          AND ok = false AND at > now() - interval '15 minutes'`, [email, ip])
+    if (Number(porPar.n) >= FREIO.porEmailEIp) {
+      return 'Muitas tentativas erradas para este e-mail a partir deste aparelho. '
+        + 'Tente de novo em 15 minutos.'
+    }
   }
 
   const porEmail = await q1<any>(
@@ -355,7 +369,7 @@ export async function travadoPorTentativas(email: string, ip: string | null) {
     return 'Muitas tentativas erradas para este e-mail. Tente de novo em 15 minutos.'
   }
 
-  if (ip) {
+  if (ip && ipConfiavel) {
     const porIp = await q1<any>(
       `SELECT count(*)::int AS n FROM login_attempts
         WHERE ip = $1 AND ok = false AND at > now() - interval '15 minutes'`, [ip])
@@ -374,25 +388,269 @@ export async function registrarTentativa(email: string, ip: string | null, ok: b
  *
  * Cabeçalho de IP é texto que o CLIENTE escreve. Confiar em `cf-connecting-ip`
  * sempre (como era) deixava qualquer um mandar um IP novo a cada tentativa e
- * nunca encher balde nenhum. Então só se lê cabeçalho quando o dono DECLARA que
- * existe um proxy na frente que sobrescreve o valor: `CONFIAR_PROXY=1`.
+ * nunca encher balde nenhum. Então só se lê cabeçalho quando o dono DECLARA
+ * qual proxy está na frente:
  *
- * Com proxy declarado: `cf-connecting-ip` (Cloudflare) e, sem ele, o ÚLTIMO
- * item do `x-forwarded-for` — o que o nosso proxy acrescentou; os da esquerda
- * vieram do cliente. Valor que não é IP cai no socket.
+ *   CONFIAR_PROXY=1           o proxy do EasyPanel (Traefik): vale o ÚLTIMO item
+ *                             do `x-forwarded-for` — o que o NOSSO proxy
+ *                             acrescentou; os da esquerda vieram do cliente.
+ *   CONFIAR_PROXY=cloudflare  Cloudflare na frente: vale `cf-connecting-ip`
+ *                             (e, sem ele, o último do `x-forwarded-for`).
+ *
+ * Até 27/09 o `=1` lia `cf-connecting-ip` primeiro (B05): sem Cloudflare de
+ * verdade na frente, o cliente escrevia um IP novo nesse cabeçalho a cada
+ * tentativa e o freio por IP sumia. Valor que não é IP cai no socket.
  */
 export function ipDaRequisicao(event: H3Event): string | null {
+  return origemDaRequisicao(event).ip
+}
+
+/** Rede interna: a conexão veio de um proxy nosso, não de alguém na internet. */
+export function ipDeRedeInterna(ip: string | null | undefined): boolean {
+  const s = String(ip ?? '').replace(/^::ffff:/i, '').toLowerCase()
+  if (isIP(s) === 4) {
+    const [a, b] = s.split('.').map(Number)
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+      || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)
+  }
+  if (isIP(s) === 6) return s === '::1' || /^f[cd]/.test(s) || /^fe[89ab]/.test(s)
+  return false
+}
+
+/** A própria máquina: servidor de teste, E2E, HEALTHCHECK do contêiner. */
+export function ipLocal(ip: string | null | undefined): boolean {
+  const s = String(ip ?? '').replace(/^::ffff:/i, '')
+  return s === '::1' || s.startsWith('127.')
+}
+
+let avisouProxy = false
+
+/**
+ * O IP e se dá pra confiar nele como "uma pessoa".
+ *
+ * `proxySemConfianca` é o estado que o B05 descreve: a conexão chega de um
+ * endereço de rede interna, trazendo `x-forwarded-for`, e `CONFIAR_PROXY` não
+ * foi ligado — ou seja, há um proxy na frente e o socket é ELE, igual pra todo
+ * mundo. Contar freio por esse IP tranca a casa inteira. Só a rede interna
+ * conta aqui: de um socket da internet, `x-forwarded-for` é texto do cliente e
+ * não rebaixa nada.
+ */
+export function origemDaRequisicao(event: H3Event): { ip: string | null; proxySemConfianca: boolean } {
   const socket = event.node?.req?.socket?.remoteAddress ?? null
-  if (process.env.CONFIAR_PROXY !== '1') return socket
-
-  const cf = getRequestHeader(event, 'cf-connecting-ip')?.trim()
-  if (cf && isIP(cf)) return cf
-
+  const modo = String(process.env.CONFIAR_PROXY ?? '').trim().toLowerCase()
   const xff = getRequestHeader(event, 'x-forwarded-for')
-  const ultimo = xff?.split(',').map((s) => s.trim()).filter(Boolean).pop()
-  if (ultimo && isIP(ultimo)) return ultimo
 
-  return socket
+  if (modo !== '1' && modo !== 'cloudflare') {
+    const semConfianca = !!xff && ipDeRedeInterna(socket)
+    if (semConfianca && !avisouProxy) {
+      avisouProxy = true
+      console.error('[freio] a requisição chegou por um proxy (x-forwarded-for, de '
+        + `${socket}) e CONFIAR_PROXY não está ligado: todo mundo aparece com o mesmo IP. `
+        + 'O freio por IP fica desligado até configurar CONFIAR_PROXY=1 (Traefik) '
+        + 'ou CONFIAR_PROXY=cloudflare.')
+    }
+    return { ip: socket, proxySemConfianca: semConfianca }
+  }
+
+  if (modo === 'cloudflare') {
+    const cf = getRequestHeader(event, 'cf-connecting-ip')?.trim()
+    if (cf && isIP(cf)) return { ip: cf, proxySemConfianca: false }
+  }
+  const ultimo = xff?.split(',').map((s) => s.trim()).filter(Boolean).pop()
+  if (ultimo && isIP(ultimo)) return { ip: ultimo, proxySemConfianca: false }
+  return { ip: socket, proxySemConfianca: false }
+}
+
+/* ------------------------------------------------- freio das portas públicas */
+
+/**
+ * O freio de quem COMPRA (B03, B04, B15 — auditoria de 27/09).
+ *
+ * `/api/checkout`, `/api/cupom/conferir` e `/api/pedido/:id` não exigem login
+ * — é a natureza delas — e não tinham freio nenhum. Um script com CPF gerado
+ * reservava o estoque inteiro por `hold_minutes` e renovava (o evento "esgotava"
+ * com o parque vazio), testava dicionário de cupom e chutava código de pedido
+ * sem ninguém perceber.
+ *
+ * Cinco baldes, por IP, em memória do processo (com duas instâncias, cada uma
+ * conta o seu — freio de abuso, não trava de dinheiro):
+ *
+ *   checkout            pedidos tentados      20 a cada 10 min
+ *   checkout_ingressos  ingressos reservados  60 a cada 20 min  (o que segura estoque)
+ *   cupom               conferências de cupom 30 a cada 10 min
+ *   cupom_errado        código que não existe 10 a cada 15 min  (dicionário)
+ *   pedido_404          pedido que não existe 20 a cada 10 min  (enumeração)
+ *
+ * Os números cabem uma família numa rede de Wi-Fi compartilhada (o do parque,
+ * o do celular com CGNAT) e barram o script no primeiro minuto. Cada um muda
+ * por ambiente — `FREIO_CHECKOUT=20/600` (limite/segundos), `0` desliga.
+ *
+ * Duas isenções, as duas porque o IP ali não é de uma pessoa:
+ *   • a própria máquina (127.0.0.1, ::1) — a suíte e o E2E compram centenas de
+ *     vezes em sequência, e o HEALTHCHECK do contêiner bate daqui;
+ *   • proxy na frente sem `CONFIAR_PROXY`: aí todo mundo tem o IP do proxy, e
+ *     frear esse IP seria tirar o site do ar pro Brasil inteiro depois de 20
+ *     compras. Fica desligado, e a falta grita no log e em `/api/saude`.
+ */
+export type NomeDoFreio = 'checkout' | 'checkout_ingressos' | 'cupom' | 'cupom_errado' | 'pedido_404'
+
+export const FREIO_PUBLICO_PADRAO: Record<NomeDoFreio, { limite: number; janelaSeg: number }> = {
+  checkout: { limite: 20, janelaSeg: 600 },
+  checkout_ingressos: { limite: 60, janelaSeg: 1200 },
+  cupom: { limite: 30, janelaSeg: 600 },
+  cupom_errado: { limite: 10, janelaSeg: 900 },
+  pedido_404: { limite: 20, janelaSeg: 600 },
+}
+
+const VARIAVEL_DO_FREIO: Record<NomeDoFreio, string> = {
+  checkout: 'FREIO_CHECKOUT',
+  checkout_ingressos: 'FREIO_CHECKOUT_INGRESSOS',
+  cupom: 'FREIO_CUPOM',
+  cupom_errado: 'FREIO_CUPOM_ERRADO',
+  pedido_404: 'FREIO_PEDIDO_404',
+}
+
+/** A regra valendo: a do ambiente (`20/600`, ou `0` pra desligar) ou a padrão. */
+export function regraDoFreio(
+  nome: NomeDoFreio, env: Record<string, string | undefined> = process.env,
+): { limite: number; janelaSeg: number } | null {
+  const cru = String(env[VARIAVEL_DO_FREIO[nome]] ?? '').trim()
+  if (cru === '0') return null
+  const m = cru.match(/^(\d+)\s*\/\s*(\d+)$/)
+  if (m && Number(m[1]) > 0 && Number(m[2]) > 0) return { limite: Number(m[1]), janelaSeg: Number(m[2]) }
+  if (cru) console.warn(`[freio] ${VARIAVEL_DO_FREIO[nome]}="${cru}" não é "limite/segundos"; usando o padrão`)
+  return FREIO_PUBLICO_PADRAO[nome]
+}
+
+/**
+ * A janela deslizante, pura: sem relógio embutido e sem IP embutido, pra o
+ * teste provar a conta sem esperar dez minutos.
+ */
+export class JanelaDeFreio {
+  private marcas = new Map<string, Array<{ t: number; peso: number }>>()
+  private chamadas = 0
+
+  private vivas(chave: string, janelaMs: number, agora: number) {
+    const lista = (this.marcas.get(chave) ?? []).filter((m) => m.t > agora - janelaMs)
+    if (lista.length) this.marcas.set(chave, lista)
+    else this.marcas.delete(chave)
+    return lista
+  }
+
+  /** Quanto já foi gasto na janela. */
+  usado(chave: string, janelaMs: number, agora = Date.now()): number {
+    return this.vivas(chave, janelaMs, agora).reduce((s, m) => s + m.peso, 0)
+  }
+
+  /** Cabe `peso` a mais sem passar do limite? Se não, em quantos segundos cabe. */
+  cabe(chave: string, limite: number, janelaMs: number, peso = 1, agora = Date.now()):
+    { ok: true } | { ok: false; esperarSeg: number } {
+    const lista = this.vivas(chave, janelaMs, agora)
+    let usado = lista.reduce((s, m) => s + m.peso, 0)
+    if (usado + peso <= limite) return { ok: true }
+    // espera até sair da janela o bastante pra caber
+    for (const m of lista) {
+      usado -= m.peso
+      if (usado + peso <= limite) {
+        return { ok: false, esperarSeg: Math.max(1, Math.ceil((m.t + janelaMs - agora) / 1000)) }
+      }
+    }
+    return { ok: false, esperarSeg: Math.ceil(janelaMs / 1000) }
+  }
+
+  marcar(chave: string, peso = 1, agora = Date.now()) {
+    const lista = this.marcas.get(chave) ?? []
+    lista.push({ t: agora, peso })
+    this.marcas.set(chave, lista)
+    // Faxina de tempos em tempos: chave de IP que sumiu não fica na memória.
+    if (++this.chamadas % 1000 === 0) {
+      const maisLonga = Math.max(...Object.values(FREIO_PUBLICO_PADRAO).map((r) => r.janelaSeg)) * 2000
+      for (const k of [...this.marcas.keys()]) this.vivas(k, maisLonga, agora)
+    }
+  }
+
+  limpar() { this.marcas.clear() }
+}
+
+const janelaPublica = new JanelaDeFreio()
+
+/** Esvazia os baldes do processo — só o teste chama. */
+export function esvaziarFreioPublico() { janelaPublica.limpar() }
+
+/**
+ * A pergunta do freio pra uma requisição: quem é (IP), se conta, e a regra.
+ * `null` = não freia (própria máquina, proxy sem confiança, balde desligado).
+ */
+function alvoDoFreio(event: H3Event, nome: NomeDoFreio) {
+  const regra = regraDoFreio(nome)
+  if (!regra) return null
+  const { ip, proxySemConfianca } = origemDaRequisicao(event)
+  if (!ip || proxySemConfianca || ipLocal(ip)) return null
+  return { chave: `${nome}|${ip}`, ip, regra, janelaMs: regra.janelaSeg * 1000 }
+}
+
+function recusarPorFreio(event: H3Event, nome: NomeDoFreio, ip: string, esperarSeg: number): never {
+  const minutos = Math.max(1, Math.ceil(esperarSeg / 60))
+  // O alarme: um endereço batendo no teto é o sinal que a auditoria pediu.
+  console.warn(`[freio] ${nome}: ${ip} passou do limite; recusando por ~${minutos} min`)
+  setResponseHeader(event, 'Retry-After', String(esperarSeg))
+  const recado: Record<NomeDoFreio, string> = {
+    checkout: 'Muitas tentativas de compra deste endereço em pouco tempo.',
+    checkout_ingressos: 'Muitos ingressos reservados a partir deste endereço em pouco tempo.',
+    cupom: 'Muitas conferências de cupom deste endereço em pouco tempo.',
+    cupom_errado: 'Muitos códigos de cupom que não existem, deste endereço.',
+    pedido_404: 'Muitas consultas de pedido que não existem, deste endereço.',
+  }
+  throw createError({
+    statusCode: 429,
+    statusMessage: `${recado[nome]} Espere ${minutos} ${minutos === 1 ? 'minuto' : 'minutos'} e tente de novo.`,
+    data: { tipo: 'freio', freio: nome, esperarSeg },
+  })
+}
+
+/** Confere e já GASTA `peso` no balde. Estourado: 429 com `Retry-After`. */
+export function frearPortaPublica(event: H3Event, nome: NomeDoFreio, peso = 1) {
+  const alvo = alvoDoFreio(event, nome)
+  if (!alvo) return
+  const r = janelaPublica.cabe(alvo.chave, alvo.regra.limite, alvo.janelaMs, peso)
+  if (!r.ok) recusarPorFreio(event, nome, alvo.ip, r.esperarSeg)
+  janelaPublica.marcar(alvo.chave, peso)
+}
+
+/** Só confere (o gasto vem depois, com `marcarNoFreio`, se o caso acontecer). */
+export function conferirFreio(event: H3Event, nome: NomeDoFreio, peso = 1) {
+  const alvo = alvoDoFreio(event, nome)
+  if (!alvo) return
+  // `peso` 1 no mínimo: o balde cheio recusa a próxima, mesmo que ela não gaste
+  const r = janelaPublica.cabe(alvo.chave, alvo.regra.limite, alvo.janelaMs, Math.max(1, peso))
+  if (!r.ok) recusarPorFreio(event, nome, alvo.ip, r.esperarSeg)
+}
+
+/** Gasta sem conferir — o que aconteceu já aconteceu (o 404, o código errado). */
+export function marcarNoFreio(event: H3Event, nome: NomeDoFreio, peso = 1) {
+  const alvo = alvoDoFreio(event, nome)
+  if (!alvo) return
+  janelaPublica.marcar(alvo.chave, peso)
+}
+
+/** Como o freio está ligado — pra `/api/saude`, sem IP nenhum. */
+export function estadoDoFreio(): {
+  proxy: 'traefik' | 'cloudflare' | 'nenhum'
+  /** já chegou requisição por proxy interno SEM `CONFIAR_PROXY` (o freio por IP está desligado) */
+  proxySemConfiancaVisto: boolean
+  baldes: Record<string, string>
+} {
+  const modo = String(process.env.CONFIAR_PROXY ?? '').trim().toLowerCase()
+  const baldes: Record<string, string> = {}
+  for (const nome of Object.keys(FREIO_PUBLICO_PADRAO) as NomeDoFreio[]) {
+    const r = regraDoFreio(nome)
+    baldes[nome] = r ? `${r.limite}/${r.janelaSeg}s` : 'desligado'
+  }
+  return {
+    proxy: modo === '1' ? 'traefik' : modo === 'cloudflare' ? 'cloudflare' : 'nenhum',
+    proxySemConfiancaVisto: avisouProxy,
+    baldes,
+  }
 }
 
 /* ------------------------------------------------------------------ papéis */

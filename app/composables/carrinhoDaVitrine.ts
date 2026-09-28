@@ -15,6 +15,7 @@
  * a tela faz; decidir quanto custa, não.
  */
 import { MOTIVOS, motivoValido } from '../../server/utils/meia-entrada'
+import { reais } from './formato'
 
 /** Uma linha comprável da vitrine (inteira, meia…), como a rota devolve. */
 export interface VariacaoDaVitrine {
@@ -61,6 +62,13 @@ export interface LinhaDoPedido {
   /** a vitrine pediu declaração de meia nesta linha? */
   pedeMeia: boolean
   declaracao: DeclaracaoDeMeia | null
+  /**
+   * O mínimo do LOTE e o nome dele (B32): o mínimo vale pela soma das linhas
+   * do mesmo lote (2 inteiras + 2 meias num lote de mínimo 4 compram).
+   * Opcionais: carrinho gravado antes deles continua valendo.
+   */
+  minDoLote?: number
+  lote?: string
 }
 
 /** A versão do formato acima. Carrinho de build velha volta pra vitrine. */
@@ -101,17 +109,27 @@ export function minimoDaLinha(lote: any): number {
 }
 
 /**
+ * O mínimo que ESTA linha precisa, dado o que as outras linhas do mesmo lote
+ * já têm (B32). O mínimo é do LOTE: com 2 meias no carrinho, as inteiras de um
+ * lote de mínimo 4 começam em 2, não em 4. Era linha a linha, na tela e no
+ * servidor, e 2 + 2 não comprava.
+ */
+export function minimoDestaLinha(lote: any, outrasDoLote = 0): number {
+  return Math.max(1, minimoDaLinha(lote) - Math.max(0, Math.floor(Number(outrasDoLote) || 0)))
+}
+
+/**
  * Por que esta linha não dá pra comprar agora — em português, ou `null` quando
  * dá. O caso que ninguém espera é o terceiro: lote com mínimo 4 e 2 na
  * prateleira não vende nada, e sem dizer isso o "+" fica travado sem motivo
  * visível.
  */
-export function impedimentoDaLinha(lote: any, v: any): string | null {
+export function impedimentoDaLinha(lote: any, v: any, outrasDoLote = 0): string | null {
   const teto = tetoDaLinha(lote, v)
   if (v?.esgotado || teto <= 0) return 'Esgotado'
-  const min = minimoDaLinha(lote)
+  const min = minimoDestaLinha(lote, outrasDoLote)
   if (min > teto) {
-    return `Mínimo de ${min} por compra, e só restam ${teto}`
+    return `Mínimo de ${minimoDaLinha(lote)} por compra, e só restam ${teto}`
   }
   return null
 }
@@ -119,12 +137,15 @@ export function impedimentoDaLinha(lote: any, v: any): string | null {
 /**
  * O "+" e o "−" da vitrine, com mínimo e teto juntos.
  *
- * Sair do zero pula direto pro mínimo do lote, e descer abaixo do mínimo tira
- * a linha do carrinho em vez de parar num número que não pode ser comprado.
+ * Sair do zero pula direto pro mínimo (o que falta pro mínimo do LOTE, contando
+ * as outras linhas dele), e descer abaixo dele tira a linha do carrinho em vez
+ * de parar num número que não pode ser comprado.
  */
-export function ajustarQuantidade(atual: number, delta: number, lote: any, v: any): number {
+export function ajustarQuantidade(
+  atual: number, delta: number, lote: any, v: any, outrasDoLote = 0,
+): number {
   const teto = tetoDaLinha(lote, v)
-  const min = minimoDaLinha(lote)
+  const min = minimoDestaLinha(lote, outrasDoLote)
   if (teto <= 0 || min > teto) return 0
   const bruto = Math.floor(Number(atual) || 0) + delta
   if (bruto <= 0) return 0
@@ -172,8 +193,16 @@ export function faltaNaDeclaracao(d: DeclaracaoDeMeia | null | undefined): strin
   const motivo = String(d?.motivo ?? '').trim()
   if (!motivo) return 'Escolha o motivo da meia-entrada'
   if (!motivoValido(motivo)) return 'Escolha um dos motivos previstos em lei'
-  if (MOTIVOS[motivo].exigeNumero && !String(d?.documento ?? '').trim()) {
-    return `Informe o número da ${MOTIVOS[motivo].documento}`
+  // Só o motivo de credencial numerada tem o campo do número na tela. Nos outros, o
+  // número que sobrou de uma troca de motivo (Estudante → Idoso) está ESCONDIDO: cobrar
+  // dele seria travar a pessoa num campo que ela não vê (e `itensDoCheckout` não o manda).
+  if (!MOTIVOS[motivo].exigeNumero) return null
+  const documento = String(d?.documento ?? '').trim()
+  if (!documento) return `Informe o número da ${MOTIVOS[motivo].documento}`
+  // A porta recusa menos de 3 (`meia.documento` em checkout.post.ts): com 2 letras
+  // a pessoa só descobria na ÚLTIMA tela, num 400 (matriz 23). A vitrine diz aqui.
+  if (documento.length < 3) {
+    return `O número da ${MOTIVOS[motivo].documento} tem pelo menos 3 caracteres`
   }
   return null
 }
@@ -185,6 +214,18 @@ export function pendenciasDoCarrinho(linhas: LinhaDoPedido[]): string[] {
     if (!l.pedeMeia) continue
     const falta = faltaNaDeclaracao(l.declaracao)
     if (falta) saida.push(`${l.nome}: ${falta.toLowerCase()}`)
+  }
+  // B32: o mínimo é do lote, pela soma das linhas dele
+  const porLote = new Map<string, { n: number; min: number; nome: string }>()
+  for (const l of linhas) {
+    const min = Math.floor(Number(l.minDoLote ?? 1))
+    if (!(min > 1)) continue
+    const atual = porLote.get(l.loteId) ?? { n: 0, min, nome: l.lote ?? l.nome }
+    atual.n += Math.floor(Number(l.quantidade) || 0)
+    porLote.set(l.loteId, atual)
+  }
+  for (const { n, min, nome } of porLote.values()) {
+    if (n > 0 && n < min) saida.push(`${nome}: o mínimo por compra é ${min} — faltam ${min - n}`)
   }
   return saida
 }
@@ -210,9 +251,13 @@ export function itensDoCheckout(
       quantidade: l.quantidade,
     }
     if (!opcoes.semDeclaracao && l.pedeMeia && l.declaracao?.motivo) {
+      // O número só vai com o motivo que tem o campo na tela: trocar de Estudante pra
+      // Idoso escondia o campo com o número dentro, e ele ia junto — gravado num ingresso
+      // de idoso, ou recusado pela porta (menos de 3) sem a pessoa ver onde corrigir.
+      const comNumero = MOTIVOS[l.declaracao.motivo]?.exigeNumero === true
       item.meia = {
         motivo: l.declaracao.motivo,
-        documento: String(l.declaracao.documento ?? '').trim() || undefined,
+        documento: comNumero ? String(l.declaracao.documento ?? '').trim() || undefined : undefined,
       }
     }
     return item
@@ -263,7 +308,8 @@ export function destinoSemCarrinho(slug: string, pago: any): string {
 export function carimboDePago(
   slug: string, resposta: any, codigoConhecido?: string | null,
 ): { slug: string; pedido: string } | null {
-  if (!resposta || resposta.status !== 'pago') return null
+  // estorno parcial é venda de pé (B01): quem está nele também tem ingresso
+  if (!resposta || !pedidoVivo(resposta.status)) return null
   const codigo = String(resposta.pedido ?? codigoConhecido ?? '').trim()
   // Sem código não há pra onde mandar ninguém, e meio carimbo é pior que
   // nenhum: `destinoSemCarrinho` teria que adivinhar.
@@ -288,4 +334,366 @@ export function totaisDoCarrinho(linhas: LinhaDoPedido[]) {
     n += q
   }
   return { face, taxa, total, n }
+}
+
+/* ===================================================================== */
+/*  O RESTO DA COMPRA PÚBLICA — funções puras que as telas usam           */
+/* ===================================================================== */
+
+/**
+ * A data no FUSO DO EVENTO (B24). `toLocaleString` sem `timeZone` escreve na
+ * hora de quem abre: o servidor (America/Bahia) e o celular de quem está em
+ * Manaus desenhavam horas diferentes — a hidratação trocava o texto e o
+ * horário do evento saía errado. Fuso torto cai no do parque.
+ */
+export function dataNoFuso(
+  v: string | number | Date | null | undefined, fuso?: string | null,
+  estilo: 'extenso' | 'curta' = 'extenso',
+): string {
+  if (v == null || v === '') return '—'
+  const d = v instanceof Date ? v : new Date(v)
+  if (Number.isNaN(d.getTime())) return '—'
+  const opcoes: Intl.DateTimeFormatOptions = estilo === 'curta'
+    ? { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+    : { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+  try {
+    return d.toLocaleString('pt-BR', { ...opcoes, timeZone: fuso || 'America/Bahia' })
+  } catch {
+    return d.toLocaleString('pt-BR', { ...opcoes, timeZone: 'America/Bahia' })
+  }
+}
+
+/**
+ * O código do promoter do link (`/e/<slug>?promoter=CODE`, B07) — ou `null`.
+ * O link que o painel gera nunca era lido: a venda não ia pro promoter.
+ */
+export function codigoDePromoter(v: unknown): string | null {
+  const s = String(Array.isArray(v) ? v[0] ?? '' : v ?? '').trim().toUpperCase()
+  return /^[A-Z0-9_-]{1,40}$/.test(s) ? s : null
+}
+
+/** O carrinho gravado no `sessionStorage` (`dt:carrinho`). */
+export interface CarrinhoGuardado {
+  versao: number
+  slug: string
+  linhas: LinhaDoPedido[]
+  totais: { face: number; taxa: number; total: number; n: number }
+  promoter?: string | null
+}
+
+/**
+ * O carrinho do jeito que vai pro `sessionStorage`.
+ *
+ * `comDocumento: false` é o que a vitrine grava a cada mudança (B19, pra o F5
+ * não zerar a seleção): o número da carteirinha da meia fica de fora — dado
+ * pessoal não precisa sobreviver ao F5. No clique de "Ir para pagamento" vai
+ * inteiro, porque o checkout precisa dele.
+ */
+export function carrinhoParaGuardar(
+  slug: string, linhas: LinhaDoPedido[], promoter: string | null,
+  opcoes: { comDocumento: boolean },
+): CarrinhoGuardado {
+  return {
+    versao: VERSAO_DO_CARRINHO,
+    slug,
+    linhas: linhas.map((l) => ({
+      ...l,
+      declaracao: l.declaracao
+        ? { motivo: l.declaracao.motivo, documento: opcoes.comDocumento ? l.declaracao.documento : '' }
+        : null,
+    })),
+    totais: totaisDoCarrinho(linhas),
+    promoter: promoter ?? null,
+  }
+}
+
+/**
+ * De volta do F5 (ou do "← Voltar" do pagamento): o carrinho guardado vira
+ * quantidades de novo — mas só o que a vitrine de AGORA ainda vende, e nunca
+ * acima do teto de agora. Linha que sumiu, esgotou ou fechou fica de fora
+ * (a vitrine é quem sabe o estoque; o `sessionStorage` só lembra a intenção).
+ */
+export function restaurarCarrinho(salvo: any, slug: string, setores: any[]): {
+  quantidades: Record<string, number>
+  declaracoes: Record<string, DeclaracaoDeMeia>
+} {
+  const quantidades: Record<string, number> = {}
+  const declaracoes: Record<string, DeclaracaoDeMeia> = {}
+  if (!salvo || salvo.versao !== VERSAO_DO_CARRINHO || salvo.slug !== slug || !Array.isArray(salvo.linhas)) {
+    return { quantidades, declaracoes }
+  }
+  const lotes = new Map<string, any>()
+  for (const s of setores ?? []) for (const l of s?.lotes ?? []) lotes.set(l.id, l)
+  for (const linha of salvo.linhas) {
+    const lote = lotes.get(linha?.loteId)
+    if (!lote || !['disponivel', 'ultimas'].includes(lote.situacao)) continue
+    const v = (lote.variacoes ?? []).find((x: any) => (x.tipoId ?? null) === (linha.tipoId ?? null))
+    if (!v || v.esgotado) continue
+    const n = Math.min(Math.floor(Number(linha.quantidade) || 0), tetoDaLinha(lote, v))
+    if (n <= 0) continue
+    const k = chaveDaLinha(lote.id, v.tipoId)
+    quantidades[k] = n
+    if (linha.declaracao) {
+      declaracoes[k] = {
+        motivo: String(linha.declaracao.motivo ?? ''),
+        documento: String(linha.declaracao.documento ?? ''),
+      }
+    }
+  }
+  return { quantidades, declaracoes }
+}
+
+/* ------------------------------------------------ a tela de pagamento */
+
+/**
+ * O `id` do campo na tela de pagamento para o nome que o SERVIDOR usa em
+ * `data.campo` (B11/B12). Os dois vocabulários só divergem em dois: o servidor
+ * diz `documento`/`telefone`, a tela tem `#cpf`/`#tel`.
+ */
+const CAMPO_NA_TELA: Record<string, string> = { documento: 'cpf', telefone: 'tel' }
+export const idDoCampo = (campo: string | null | undefined): string =>
+  CAMPO_NA_TELA[String(campo ?? '')] ?? String(campo ?? '')
+
+/** Os limites do formulário — os MESMOS do `Entrada` de `server/api/checkout.post.ts`. */
+export const LIMITES_DO_FORMULARIO = {
+  nome: 120, email: 254, instagram: 120, rua: 120, numero: 20, bairro: 80, cidade: 80, cupom: 40,
+} as const
+
+/**
+ * O que a tela confere ANTES de gastar uma ida ao servidor (B11) — e o que o
+ * "Continuar sem o cupom" também passa a conferir (B18: ele chamava o
+ * pagamento por fora do `submit`, sem a validação do formulário, e o pedido
+ * nascia sem cidade nem UF). Devolve o primeiro problema, na ordem da tela.
+ */
+export function conferirAntesDePagar(d: {
+  nome: string; email: string; documento: string; telefone: string
+  cidade: string; estado: string
+}): { campo: string; recado: string } | null {
+  const nome = d.nome.trim()
+  if (nome.length < 3) return { campo: 'nome', recado: 'Digite o nome completo, como está no documento.' }
+  if (nome.length > LIMITES_DO_FORMULARIO.nome) {
+    return { campo: 'nome', recado: `O nome passou do limite de ${LIMITES_DO_FORMULARIO.nome} caracteres. Abrevie.` }
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(d.email.trim())) {
+    return { campo: 'email', recado: 'Confira o e-mail: ele precisa ter o formato nome@provedor.com.br.' }
+  }
+  if (d.documento.replace(/\D/g, '').length !== 11) {
+    return { campo: 'cpf', recado: 'CPF inválido. Confira os 11 números.' }
+  }
+  const tel = d.telefone.replace(/\D/g, '')
+  if (tel && tel.length !== 10 && tel.length !== 11) {
+    return { campo: 'tel', recado: 'Confira o celular: DDD + número (ex.: (73) 99999-0000).' }
+  }
+  if (d.cidade.trim().length < 2) return { campo: 'cidade', recado: 'Diga em que cidade você mora.' }
+  if (!d.estado) return { campo: 'estado', recado: 'Escolha o estado (a sigla, ex.: BA).' }
+  return null
+}
+
+/**
+ * As parcelas do cartão sobre o total que VAI SER COBRADO — com o cupom
+ * (B21: o rótulo usava o total antes do desconto) — e dizendo que não há
+ * juros: o checkout manda `totalValue` ao Asaas, e é esse o total que o
+ * comprador paga, dividido. O piso de R$ 5,00 por parcela é do Asaas (a porta
+ * aplica a mesma conta: `maxParcelas` em checkout.post.ts).
+ */
+export function opcoesDeParcela(totalCents: number, pisoCents = 500): { n: number; rotulo: string }[] {
+  const total = Math.max(0, Math.round(Number(totalCents) || 0))
+  const max = Math.max(1, Math.min(12, Math.floor(total / pisoCents)))
+  return Array.from({ length: max }, (_, i) => {
+    const n = i + 1
+    return { n, rotulo: n === 1 ? `À vista — ${reais(total)}` : `${n}× de ${reais(Math.ceil(total / n))} sem juros` }
+  })
+}
+
+/**
+ * O que a cobrança diz quando o pedido não está mais só "aguardando" (B34).
+ * Sem estes ramos o cartão em análise de risco via o relógio zerar, "Tempo de
+ * reserva esgotado", e a tela seguia consultando sem explicar nada.
+ */
+export function situacaoDaCobranca(status: string | null | undefined):
+  { titulo: string; frase: string; final: boolean } | null {
+  switch (status) {
+    case 'em_analise':
+      return { titulo: 'Pagamento em análise', final: false,
+        frase: 'O cartão está em análise de segurança pela operadora. Não pague de novo: quando a '
+          + 'análise terminar, esta tela muda sozinha — e a reserva fica de pé enquanto isso.' }
+    // `estornado_parcial` NÃO entra aqui (B01): o estorno parcial devolve parte
+    // do dinheiro e não cancela ingresso nenhum — a venda segue de pé, e a
+    // tela trata como paga.
+    case 'estornado':
+      return { titulo: 'Pagamento devolvido', final: true,
+        frase: 'O valor deste pedido foi devolvido. Os ingressos dele não valem na entrada.' }
+    case 'chargeback':
+    case 'disputa':
+      return { titulo: 'Pagamento contestado', final: true,
+        frase: 'O pagamento deste pedido foi contestado junto ao cartão. Fale com a bilheteria com o número do pedido.' }
+    default:
+      return null
+  }
+}
+
+/** Os status em que a venda está de pé — a MESMA lista de `PEDIDO_VIVO` (server/utils/liquido.ts). */
+export const STATUS_VIVOS = ['pago', 'estornado_parcial'] as const
+export const pedidoVivo = (status: string | null | undefined) =>
+  (STATUS_VIVOS as readonly string[]).includes(String(status ?? ''))
+
+/* ===================================================================== */
+/*  ESTADOS DE ERRO E SITUAÇÃO DO PEDIDO — as frases que não podem mentir */
+/* ===================================================================== */
+
+/**
+ * O que houve com a consulta de uma página pública — ou `null` quando deu
+ * certo (B10).
+ *
+ * Evento, pedido e transferência diziam "não encontrado" pra QUALQUER falha.
+ * Com o banco fora do ar, quem tinha o link certo lia que o evento não existe
+ * (ou que o pedido que ele pagou sumiu) — e ia embora, ou comprava de novo.
+ * Só o 404 é "não existe"; o 429 é o freio de consulta (B15); o resto é a
+ * bilheteria que não respondeu.
+ */
+export type FalhaDaConsulta = 'nao_encontrado' | 'freio' | 'fora_do_ar'
+export function falhaDaConsulta(erro: any): FalhaDaConsulta | null {
+  if (!erro) return null
+  const status = Number(erro?.statusCode ?? erro?.status ?? erro?.response?.status ?? 0)
+  if (status === 404 || status === 400) return 'nao_encontrado'
+  if (status === 429) return 'freio'
+  return 'fora_do_ar'
+}
+
+/**
+ * A página de erro do site (`app/error.vue`, B25) — em português, dizendo o
+ * que houve e pra onde ir. Sem ela o Nuxt mostrava a própria tela, em inglês.
+ */
+export function paginaDeErro(status: unknown, caminho = ''): {
+  titulo: string; frase: string; tentarDeNovo: boolean; voltar: { para: string; rotulo: string }
+} {
+  const s = Number(status) || 500
+  const p = String(caminho ?? '')
+  const voltar = p.startsWith('/admin')
+    ? { para: '/admin', rotulo: 'Voltar ao painel' }
+    : { para: '/', rotulo: 'Ver os eventos à venda' }
+  if (s === 404) {
+    if (p.startsWith('/e/')) {
+      return { titulo: 'Evento não encontrado', tentarDeNovo: false, voltar,
+        frase: 'Confira o link ou fale com quem te mandou. Se ele veio por mensagem, às vezes a '
+          + 'última parte do endereço fica de fora.' }
+    }
+    if (p.startsWith('/ingressos/')) {
+      return { titulo: 'Pedido não encontrado', tentarDeNovo: false, voltar,
+        frase: 'Confira o código do pedido: ele está no e-mail da compra e começa com PED-.' }
+    }
+    if (p.startsWith('/transferencia/')) {
+      return { titulo: 'Link não encontrado', tentarDeNovo: false, voltar,
+        frase: 'Confira se o endereço veio completo. Se veio por mensagem, às vezes a última parte '
+          + 'do link fica de fora.' }
+    }
+    return { titulo: 'Página não encontrada', tentarDeNovo: false, voltar,
+      frase: 'O endereço pode estar errado, ou esta página saiu do ar.' }
+  }
+  if (s >= 400 && s < 500) {
+    return { titulo: 'Não deu para abrir esta página', tentarDeNovo: false, voltar,
+      frase: 'O endereço pode estar incompleto. Volte ao início e tente de novo.' }
+  }
+  return { titulo: 'A bilheteria não respondeu agora', tentarDeNovo: true, voltar,
+    frase: 'Não é com você: o sistema não conseguiu responder. Tente de novo em alguns instantes.' }
+}
+
+/**
+ * Qual caminho deu erro, pra `paginaDeErro` escolher a frase. No navegador vale
+ * a BARRA DE ENDEREÇO: numa navegação do próprio site que falhou (a vitrine
+ * lança 404 num link seguido pelo roteador), a rota "atual" do Nuxt ainda é a
+ * página de antes — medido no E2E: o evento que não existe lia "Página não
+ * encontrada". No servidor vale a rota da requisição; `error.url` (a URL
+ * inteira) é a última rede.
+ */
+export function caminhoDoErro(o: {
+  enderecoDoNavegador?: string | null; rota?: string | null; url?: string | null
+}): string {
+  if (o.enderecoDoNavegador) return o.enderecoDoNavegador
+  if (o.rota) return o.rota
+  try { return new URL(String(o.url ?? ''), 'http://x').pathname } catch { return '' }
+}
+
+/**
+ * "Endereço — Cidade/UF", sem pedaço solto (B31): evento sem logradouro
+ * renderizava " — Cidade/UF", com o travessão na frente de nada.
+ */
+export function enderecoDoLocal(l: {
+  endereco?: string | null; cidade?: string | null; estado?: string | null
+} | null | undefined): string {
+  if (!l) return ''
+  const limpo = (x: unknown) => String(x ?? '').trim()
+  const cidade = [limpo(l.cidade), limpo(l.estado)].filter(Boolean).join('/')
+  return [limpo(l.endereco), cidade].filter(Boolean).join(' — ')
+}
+
+/**
+ * A situação do pedido na página `/ingressos/<código>` (B01, B10): o selo, se
+ * os ingressos aparecem, e a frase no lugar deles.
+ *
+ * Todo status que não era 'pago' lia "Este pedido ainda não foi pago" — o
+ * estornado, o cancelado, o que expirou, o cartão recusado e o contestado. E o
+ * estorno PARCIAL, cujos ingressos continuam valendo, dizia que o pedido não
+ * foi pago.
+ */
+export interface SituacaoDoPedido {
+  selo: { texto: string; classe: string }
+  /** a venda está de pé: os ingressos aparecem, com QR */
+  vivo: boolean
+  /** o que dizer no lugar dos ingressos (ou em cima deles, no estorno parcial) */
+  frase: string | null
+  /** o rótulo do valor: "Total pago" só quando foi pago */
+  rotuloDoTotal: string
+}
+export function situacaoDoPedido(
+  status: string | null | undefined,
+  extra: { estornadoCents?: number | null; pagoSemIngresso?: boolean } = {},
+): SituacaoDoPedido {
+  const fora = (texto: string, classe: string, frase: string | null): SituacaoDoPedido =>
+    ({ selo: { texto, classe }, vivo: false, frase, rotuloDoTotal: 'Total' })
+  switch (status) {
+    case 'pago':
+      return { selo: { texto: 'PAGO', classe: 'selo-ok' }, vivo: true, frase: null, rotuloDoTotal: 'Total pago' }
+    case 'estornado_parcial': {
+      const volta = Math.max(0, Math.round(Number(extra.estornadoCents) || 0))
+      return {
+        selo: { texto: 'PAGO · DEVOLUÇÃO PARCIAL', classe: 'selo-ok' }, vivo: true, rotuloDoTotal: 'Total pago',
+        frase: `${volta > 0 ? `${reais(volta)} deste pedido foram devolvidos` : 'Parte do valor deste pedido foi devolvida'}. `
+          + 'Os ingressos abaixo continuam valendo na entrada.',
+      }
+    }
+    case 'aguardando_pagamento':
+      return fora('AGUARDANDO PAGAMENTO', 'selo-alerta',
+        'Este pedido ainda não foi pago, então os ingressos não foram emitidos.')
+    case 'em_analise':
+      return fora('EM ANÁLISE', 'selo-alerta',
+        'O pagamento no cartão está em análise de segurança pela operadora. Não pague de novo: '
+        + 'quando a análise terminar, os ingressos aparecem nesta página.')
+    case 'expirado':
+      // PIX pago depois do prazo e sem lugar: a página tem um bloco próprio
+      // pra isso — "expirou" seria mentir pra quem pagou
+      if (extra.pagoSemIngresso) return fora('PAGAMENTO RECEBIDO', 'selo-alerta', null)
+      return fora('EXPIRADO', 'selo-neutro',
+        'O prazo para pagar este pedido acabou e os ingressos voltaram para a venda. Se você pagou '
+        + 'há pouco, toque em Atualizar daqui a alguns minutos; se não pagou, é só fazer uma nova compra.')
+    case 'cancelado':
+      return fora('CANCELADO', 'selo-erro',
+        'Este pedido foi cancelado e os ingressos dele não valem na entrada. Se foi engano, fale com '
+        + 'a bilheteria com o número do pedido.')
+    case 'falhou':
+      return fora('NÃO APROVADO', 'selo-erro',
+        'O pagamento deste pedido não foi aprovado e nenhum ingresso foi emitido. Você pode fazer '
+        + 'uma nova compra com outra forma de pagamento.')
+    case 'estornado':
+      return fora('DEVOLVIDO', 'selo-erro',
+        'O valor deste pedido foi devolvido e os ingressos dele foram cancelados: não valem na entrada.')
+    case 'chargeback':
+    case 'disputa':
+      return fora('CONTESTADO', 'selo-erro',
+        'O pagamento deste pedido foi contestado junto à operadora do cartão, e os ingressos estão '
+        + 'suspensos enquanto isso. Fale com a bilheteria com o número do pedido.')
+    default:
+      return fora(String(status ?? '').replace(/_/g, ' ').toUpperCase() || 'PEDIDO', 'selo-neutro',
+        'Este pedido não foi concluído.')
+  }
 }

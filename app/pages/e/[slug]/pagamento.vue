@@ -18,8 +18,9 @@
  *     ao servidor de quatro em quatro segundos e obedece.
  */
 import {
-  carimboDePago, itensDoCheckout, destinoSemCarrinho, VERSAO_DO_CARRINHO,
-  type LinhaDoPedido,
+  carimboDePago, conferirAntesDePagar, destinoSemCarrinho, idDoCampo, itensDoCheckout, pedidoVivo,
+  LIMITES_DO_FORMULARIO as LIMITE, opcoesDeParcela as parcelasPossiveis, situacaoDaCobranca,
+  totaisDoCarrinho, VERSAO_DO_CARRINHO, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
 import { MOTIVOS } from '~~/server/utils/meia-entrada'
 import { UFS } from '~~/server/utils/cadastro'
@@ -34,6 +35,10 @@ interface Carrinho {
   slug: string
   linhas: LinhaDoPedido[]
   totais: { face: number; taxa: number; total: number; n: number }
+  /** quando a vitrine gravou (B13: carrinho mais novo que o pedido pendente = outra compra) */
+  criadoEm?: number
+  /** o código do link do promoter (B07) */
+  promoter?: string | null
 }
 
 const CHAVE_CARRINHO = 'dt:carrinho'
@@ -89,6 +94,18 @@ const restante = ref(0)
 const avisoDePreco = ref('')
 /** O pagamento entrou depois do prazo e o lugar já tinha sido vendido. */
 const pagoSemIngresso = ref(false)
+/**
+ * B13: o pedido pendente desta aba quando a pessoa voltou e montou OUTRO
+ * carrinho. A tela avisa, deixa voltar pra ele, e — se ela pagar o novo —
+ * desiste do anterior antes (o lugar dele volta e ele sai do teto do CPF).
+ */
+const pedidoAnterior = ref<any>(null)
+/** as linhas do pedido em cobrança (a etapa de cobrança mostrava só código e total) */
+const linhasDoPedido = ref<LinhaDoPedido[]>([])
+/** B34: em análise, devolvido, contestado — a frase da cobrança quando não é só "aguardando" */
+const situacao = ref<ReturnType<typeof situacaoDaCobranca>>(null)
+const statusDaCobranca = ref('')
+const desistindo = ref(false)
 
 const form = reactive({ nome: '', email: '', documento: '', telefone: '', cupom: '' })
 
@@ -96,76 +113,99 @@ const form = reactive({ nome: '', email: '', documento: '', telefone: '', cupom:
  * O cadastro do cliente: o que o parque guarda pra falar com quem compra.
  *
  * FICA FORA de `form` DE PROPÓSITO. O `form` inteiro é gravado em sessionStorage
- * (`{ ...form }` em `pagar`) pra o F5 não perder a cobrança, e a senha nunca pode
- * ir parar lá — sessionStorage é legível por qualquer script da página.
+ * (`{ ...form }` em `pagar`) pra o F5 não perder a cobrança, e o cadastro
+ * (nascimento, endereço) não precisa estar lá — sessionStorage é legível por
+ * qualquer script da página.
+ *
+ * Sem senha (B17): não existe login de cliente, então a senha era coleta sem
+ * finalidade (LGPD) — e qualquer um gravava a PRIMEIRA senha de um e-mail alheio.
  */
 const cadastro = reactive({
   nascimento: '', instagram: '',
   cep: '', rua: '', numero: '', bairro: '', cidade: '', estado: '',
-  senha: '', aceitaNovidades: false,
+  aceitaNovidades: false,
 })
-const verSenha = ref(false)
 const buscandoCep = ref(false)
 const avisoDeCep = ref('')
 /** O `id` do campo que o servidor (ou esta tela) apontou — ganha contorno e foco. */
 const campoComErro = ref('')
 const marca = (campo: string) => (campoComErro.value === campo ? 'ring-2 ring-danger-600' : '')
+/**
+ * O campo "Número" do endereço vai por constante, não literal, no `:class`: a
+ * varredura de classe morta (`telas.test.ts`) lê `'numero'` dentro de um
+ * `:class` como a família `numero-*` da casa (`numero-kpi`) e grita.
+ */
+const CAMPO_NUMERO = 'numero'
+/** B23: o leitor de tela também precisa saber qual campo está errado */
+const invalido = (campo: string) => (campoComErro.value === campo ? 'true' : undefined)
 const forma = ref<'pix' | 'credito'>('pix')
 const parcelas = ref(1)
 
 /**
- * Quantas parcelas cabem. O piso de R$ 5,00 por parcela é do Asaas: oferecer
- * 12× num pedido de R$ 33,00 é oferecer uma opção que o gateway recusa depois
- * de o comprador já ter escolhido.
- *
- * A porta (`server/api/checkout.post.ts`, `maxParcelas`) aplica a MESMA conta
- * e limita o que passar dela — o teste `checkout-parcelas.test.ts` compara o
- * piso daqui com o de lá.
+ * Quantas parcelas cabem, e de quanto — sobre o total que VAI SER COBRADO, com
+ * o cupom (B21). O piso de R$ 5,00 por parcela é do Asaas; a porta
+ * (`server/api/checkout.post.ts`, `maxParcelas`) aplica a MESMA conta — o
+ * teste `checkout-parcelas.test.ts` compara o piso daqui com o de lá.
  */
 const PARCELA_MINIMA_CENTS = 500
-const maxParcelas = computed(() => {
+const totalACobrar = computed(() => {
   const total = carrinho.value?.totais.total ?? 0
-  return Math.max(1, Math.min(12, Math.floor(total / PARCELA_MINIMA_CENTS)))
+  const desconto = cupom.estado === 'vale' ? Number(cupom.descontoCents ?? 0) : 0
+  return Math.max(0, total - desconto)
 })
-const opcoesDeParcela = computed(() =>
-  Array.from({ length: maxParcelas.value }, (_, i) => {
-    const n = i + 1
-    const total = carrinho.value?.totais.total ?? 0
-    return { n, rotulo: n === 1 ? `À vista — ${reais(total)}` : `${n}× de ${reais(Math.ceil(total / n))}` }
-  }))
+const opcoesDeParcela = computed(() => parcelasPossiveis(totalACobrar.value, PARCELA_MINIMA_CENTS))
+watch(opcoesDeParcela, (o) => { if (parcelas.value > o.length) parcelas.value = o.length })
+
+const lerJson = (chave: string) => {
+  try { return JSON.parse(sessionStorage.getItem(chave) || 'null') } catch { return null }
+}
 
 onMounted(() => {
+  const bruto = lerJson(CHAVE_CARRINHO)
+  // Carrinho de build antiga não tem a declaração de meia e morreria com 422
+  // na última tela. Volta pra vitrine, onde ele se refaz em dois cliques.
+  const c: Carrinho | null = bruto?.versao === VERSAO_DO_CARRINHO && bruto.slug === slug && bruto.linhas?.length
+    ? bruto : null
+  if (bruto && !c) sessionStorage.removeItem(CHAVE_CARRINHO)
+
   // Pedido já criado nesta aba tem prioridade sobre o carrinho: recarregar a
   // página enquanto o PIX não cai é o gesto mais comum que existe aqui, e sem
   // isto ele jogava o comprador de volta pra vitrine com o lote já reservado
   // no nome dele — que é como se perde uma venda já feita.
-  const cru = sessionStorage.getItem(CHAVE_PEDIDO)
-  if (cru) {
-    const p = JSON.parse(cru)
+  const p = lerJson(CHAVE_PEDIDO)
+  if (p) {
     if (p?.slug === slug && p?.pedido?.pedidoId) {
-      pedido.value = p.pedido
-      Object.assign(form, p.comprador ?? {})
-      forma.value = p.pedido.pagamento?.forma === 'credito' ? 'credito' : 'pix'
-      etapa.value = 'cobranca'
-      comecarContagem(p.pedido.expiraEm)
-      vigiarPagamento(p.pedido.pedidoId)
-      conferirAgora(p.pedido.pedidoId)
+      // B13: o carrinho foi montado DEPOIS deste pedido — a pessoa voltou e
+      // escolheu outra coisa. Reabrir o pedido velho ignorava o carrinho novo;
+      // agora a tela mostra o novo, avisa do anterior e deixa voltar pra ele.
+      if (c?.criadoEm && p.criadoEm && c.criadoEm > p.criadoEm) {
+        pedidoAnterior.value = p
+        Object.assign(form, p.comprador ?? {})
+        carrinho.value = c
+        return
+      }
+      retomarCobranca(p)
       return
     }
     sessionStorage.removeItem(CHAVE_PEDIDO)
   }
 
-  const bruto = sessionStorage.getItem(CHAVE_CARRINHO)
-  if (!bruto) return void semCarrinho()
-  const c = JSON.parse(bruto)
-  // Carrinho de build antiga não tem a declaração de meia e morreria com 422
-  // na última tela. Volta pra vitrine, onde ele se refaz em dois cliques.
-  if (c?.versao !== VERSAO_DO_CARRINHO || c.slug !== slug || !c.linhas?.length) {
-    sessionStorage.removeItem(CHAVE_CARRINHO)
-    return void semCarrinho()
-  }
+  if (!c) return void semCarrinho()
   carrinho.value = c
 })
+
+/** Volta pra cobrança do pedido guardado nesta aba (F5, ou "voltar ao pedido anterior"). */
+function retomarCobranca(p: any) {
+  pedidoAnterior.value = null
+  pedido.value = p.pedido
+  linhasDoPedido.value = p.linhas ?? []
+  Object.assign(form, p.comprador ?? {})
+  forma.value = p.pedido.pagamento?.forma === 'credito' ? 'credito' : 'pix'
+  etapa.value = 'cobranca'
+  comecarContagem(p.pedido.expiraEm)
+  vigiarPagamento(p.pedido.pedidoId)
+  conferirAgora(p.pedido.pedidoId)
+}
 
 /**
  * Chegou no pagamento sem nada pra pagar. Se esta aba acabou de comprar, o
@@ -297,16 +337,42 @@ function revisarCupomComCpf() {
   if (form.cupom.trim()) void conferirCupom()
 }
 
+/**
+ * Larga um pedido pendente desta aba (B13). Devolve o lugar na hora e a
+ * varredura cancela a cobrança no gateway. Pedido que já tinha acabado conta
+ * como largado; pago ou em análise, não (a rota responde 409 com a frase).
+ */
+async function largarPedido(pedidoId: string): Promise<boolean> {
+  try {
+    await $fetch(`/api/pedido/${encodeURIComponent(pedidoId)}/desistir`, { method: 'POST', body: {} })
+    return true
+  } catch (e: any) {
+    erro.value = e?.data?.statusMessage || e?.statusMessage
+      || 'Não deu pra cancelar o pedido anterior agora. Tente de novo.'
+    return false
+  }
+}
+
 async function pagar(semDeclaracao = false) {
   if (!carrinho.value) return
   erro.value = ''
   campoComErro.value = ''
+  // A mesma conferência pelos dois caminhos que pagam: o botão e o "Continuar
+  // sem o cupom" (B18 — ele passava por fora da validação do formulário).
+  const falta = conferirAntesDePagar({ ...form, cidade: cadastro.cidade, estado: cadastro.estado })
+  if (falta) return void recusar(falta.campo, falta.recado)
   const nascimento = nascimentoEmIso(cadastro.nascimento)
   if (!nascimento) {
     return void recusar('nascimento', 'Confira a data de nascimento: dia, mês e ano (ex.: 25/12/1990).')
   }
   enviando.value = true
   try {
+    // B13: vai pagar o carrinho novo — o pedido anterior desta aba sai antes
+    if (pedidoAnterior.value) {
+      if (!(await largarPedido(pedidoAnterior.value.pedido.pedidoId))) return
+      pedidoAnterior.value = null
+      sessionStorage.removeItem(CHAVE_PEDIDO)
+    }
     const r = await $fetch<any>('/api/checkout', {
       method: 'POST',
       body: {
@@ -327,17 +393,18 @@ async function pagar(semDeclaracao = false) {
             cidade: cadastro.cidade.trim(),
             estado: cadastro.estado,
           },
-          senha: cadastro.senha,
           // só manda quando marcou: desmarcado é "não disse nada", não "revogou"
           aceitaNovidades: cadastro.aceitaNovidades ? true : undefined,
         },
         cupom: form.cupom.trim() || undefined,
+        // B07: a venda que veio pelo link do promoter é dele
+        promoter: carrinho.value.promoter || undefined,
         forma: forma.value,
         parcelas: forma.value === 'credito' ? parcelas.value : 1,
       },
     })
     pedido.value = r
-    cadastro.senha = ''
+    linhasDoPedido.value = carrinho.value.linhas
     conferirOPrecoCobrado(r)
     sessionStorage.removeItem(CHAVE_CARRINHO)
 
@@ -353,9 +420,12 @@ async function pagar(semDeclaracao = false) {
       return
     }
 
-    // Guardado pra o F5 não perder a cobrança (ver onMounted).
+    // Guardado pra o F5 não perder a cobrança (ver onMounted) — com as linhas,
+    // que a etapa de cobrança mostra e que voltam pro carrinho se a pessoa
+    // desistir deste pedido pra pagar de outro jeito.
     sessionStorage.setItem(CHAVE_PEDIDO, JSON.stringify({
-      slug, pedido: r, comprador: { ...form },
+      slug, pedido: r, comprador: { ...form }, linhas: carrinho.value?.linhas ?? [],
+      criadoEm: Date.now(),
     }))
     etapa.value = 'cobranca'
     comecarContagem(r.expiraEm)
@@ -372,8 +442,12 @@ async function pagar(semDeclaracao = false) {
       enviando.value = false
       return await pagar(true)
     }
-    // Erro de cadastro fica no campo que o servidor apontou.
-    if (tipo === 'cadastro') return void recusar(corpo.data.campo, recado)
+    // Erro de cadastro fica no campo que o servidor apontou (B11/B12 — inclusive
+    // o que o GATEWAY recusou, com `origem: 'gateway'`). O documento da meia
+    // não mora nesta tela: aí o recado vem com o caminho de volta.
+    if (tipo === 'cadastro' && corpo.data?.campo && !String(corpo.data.campo).startsWith('meia_')) {
+      return void recusar(idDoCampo(corpo.data.campo), recado)
+    }
     // Erro de cupom fica COLADO no campo do cupom, com o botão de seguir sem
     // ele. Numa faixa geral, o comprador relê o formulário inteiro procurando
     // o que errou.
@@ -469,7 +543,21 @@ function lembrarPago(r: any) {
 }
 
 function aplicarEstado(r: any) {
-  if (r.status === 'pago') {
+  situacao.value = situacaoDaCobranca(r.status)
+  statusDaCobranca.value = r.status
+  if (r.status === 'em_analise') {
+    // B34: o relógio da reserva PARA — em análise o pedido não vence (a
+    // varredura pergunta ao gateway antes de soltar o lugar) — e o vigia segue.
+    clearInterval(timerContagem)
+    return
+  }
+  if (situacao.value?.final) {
+    sessionStorage.removeItem(CHAVE_PEDIDO)
+    return void pararRelogios()
+  }
+  // `estornado_parcial` é venda de pé (B01): parte do dinheiro voltou e os
+  // ingressos seguem valendo — a tela mostra os ingressos, como no pago
+  if (pedidoVivo(r.status)) {
     pedido.value = { ...pedido.value, ...r }
     ingressos.value = r.ingressos ?? []
     etapa.value = 'pago'
@@ -509,6 +597,35 @@ let expiradoDesde = 0
 
 function pararRelogios() { clearInterval(timerVigia); clearInterval(timerContagem) }
 onUnmounted(pararRelogios)
+
+/**
+ * "Trocar a forma de pagamento ou desistir" (B13): larga este pedido e volta
+ * pro formulário com o MESMO carrinho, pra pagar de outro jeito ou mudar a
+ * escolha. Não havia saída: a cobrança mostrava só código e total.
+ */
+async function trocarPagamento() {
+  if (!pedido.value?.pedidoId || desistindo.value) return
+  desistindo.value = true
+  erro.value = ''
+  try {
+    if (!(await largarPedido(pedido.value.pedidoId))) return
+    pararRelogios()
+    sessionStorage.removeItem(CHAVE_PEDIDO)
+    const linhas = linhasDoPedido.value
+    if (!linhas.length) return void navigateTo(`/e/${slug}`)
+    const c: Carrinho = {
+      versao: VERSAO_DO_CARRINHO, slug, linhas, totais: totaisDoCarrinho(linhas),
+      criadoEm: Date.now(), promoter: carrinho.value?.promoter ?? null,
+    }
+    sessionStorage.setItem(CHAVE_CARRINHO, JSON.stringify(c))
+    carrinho.value = c
+    pedido.value = null
+    situacao.value = null
+    etapa.value = 'dados'
+  } finally {
+    desistindo.value = false
+  }
+}
 
 /** Depois de pago: os ingressos emitidos, pra mostrar o QR aqui mesmo. */
 async function buscarIngressos(id: string) {
@@ -555,6 +672,14 @@ async function simularPagamento() {
 }
 
 const ehPix = computed(() => (pedido.value?.pagamento?.forma ?? 'pix') === 'pix')
+/**
+ * B20: o prazo do PIX venceu — a varredura já cancelou a cobrança no gateway,
+ * então o QR e o copia-e-cola SOMEM (pagar um QR cancelado é dinheiro que não
+ * chega). A tela segue consultando: o pagamento feito no último minuto ainda
+ * pode chegar.
+ */
+const pixVencido = computed(() => etapa.value === 'cobranca' && restante.value <= 0
+  && !!pedido.value?.expiraEm && statusDaCobranca.value !== 'em_analise')
 
 useHead({ title: 'Pagamento' })
 </script>
@@ -601,29 +726,48 @@ useHead({ title: 'Pagamento' })
           </p>
         </div>
 
-        <form class="mt-5 space-y-4" @submit.prevent="pagar()">
+        <!-- B13: a pessoa voltou e montou OUTRO carrinho com um pedido ainda
+             aberto nesta aba. Pagar este larga o anterior (o lugar dele volta). -->
+        <div v-if="pedidoAnterior" class="faixa-aviso mt-4" role="status">
+          <p class="font-semibold text-tinta">Você tem um pedido aguardando pagamento.</p>
+          <p class="mt-1">
+            Pedido <strong class="text-tinta">{{ pedidoAnterior.pedido.pedido }}</strong>
+            ({{ reais(pedidoAnterior.pedido.totalCents) }}). Se você pagar a escolha abaixo, esse pedido
+            é cancelado e os ingressos dele voltam para a venda.
+          </p>
+          <button type="button" class="btn-secundario mt-2 w-full py-2" @click="retomarCobranca(pedidoAnterior)">
+            Voltar para o pedido anterior
+          </button>
+        </div>
+
+        <form class="mt-5 space-y-4" novalidate @submit.prevent="pagar()">
           <div>
             <label for="nome" class="rotulo">Nome completo</label>
-            <input id="nome" v-model="form.nome" required minlength="3" autocomplete="name" class="campo">
+            <input id="nome" v-model="form.nome" required minlength="3" :maxlength="LIMITE.nome"
+                   autocomplete="name" class="campo" :class="marca('nome')" :aria-invalid="invalido('nome')">
           </div>
           <div>
             <label for="email" class="rotulo">E-mail</label>
-            <input id="email" v-model="form.email" type="email" required autocomplete="email" class="campo">
+            <input id="email" v-model="form.email" type="email" required :maxlength="LIMITE.email"
+                   autocomplete="email" class="campo" :class="marca('email')" :aria-invalid="invalido('email')">
             <p class="mt-1 text-xs text-tinta-fraca">É pra onde vão os ingressos.</p>
           </div>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
               <label for="cpf" class="rotulo">CPF</label>
               <input id="cpf" :value="form.documento" required inputmode="numeric" class="campo tabular-nums"
-                     autocomplete="off"
+                     autocomplete="off" :class="marca('cpf')" :aria-invalid="invalido('cpf')"
                      @input="form.documento = mascaraCpf(($event.target as HTMLInputElement).value)"
                      @blur="revisarCupomComCpf">
               <p class="mt-1 text-xs text-tinta-fraca">Vai impresso no ingresso.</p>
             </div>
             <div>
-              <label for="tel" class="rotulo">Celular</label>
+              <label for="tel" class="rotulo">
+                Celular <span class="font-normal text-tinta-fraca">(opcional)</span>
+              </label>
               <input id="tel" :value="form.telefone" inputmode="numeric" autocomplete="tel"
-                     class="campo tabular-nums"
+                     class="campo tabular-nums" :class="marca('tel')" :aria-invalid="invalido('tel')"
+                     placeholder="(73) 99999-0000"
                      @input="form.telefone = mascaraTel(($event.target as HTMLInputElement).value)">
             </div>
           </div>
@@ -635,6 +779,7 @@ useHead({ title: 'Pagamento' })
               <input id="nascimento" :value="cadastro.nascimento" required inputmode="numeric"
                      maxlength="10" placeholder="dd/mm/aaaa" autocomplete="off"
                      class="campo tabular-nums" :class="marca('nascimento')"
+                     :aria-invalid="invalido('nascimento')"
                      @input="cadastro.nascimento = mascaraData(($event.target as HTMLInputElement).value)">
             </div>
             <div>
@@ -642,7 +787,8 @@ useHead({ title: 'Pagamento' })
                 Instagram <span class="font-normal text-tinta-fraca">(opcional)</span>
               </label>
               <input id="instagram" v-model="cadastro.instagram" placeholder="@seunome"
-                     autocomplete="off" autocapitalize="none" class="campo" :class="marca('instagram')">
+                     :maxlength="LIMITE.instagram" autocomplete="off" autocapitalize="none" class="campo"
+                     :class="marca('instagram')" :aria-invalid="invalido('instagram')">
             </div>
           </div>
 
@@ -658,17 +804,19 @@ useHead({ title: 'Pagamento' })
               <label for="cep" class="rotulo">CEP</label>
               <input id="cep" :value="cadastro.cep" inputmode="numeric" maxlength="9" placeholder="00000-000"
                      autocomplete="postal-code" class="campo tabular-nums" :class="marca('cep')"
+                     :aria-invalid="invalido('cep')"
                      @input="cadastro.cep = mascaraCep(($event.target as HTMLInputElement).value); buscarCep()">
             </div>
             <div>
               <label for="cidade" class="rotulo">Cidade</label>
               <input id="cidade" v-model="cadastro.cidade" required autocomplete="address-level2"
-                     class="campo" :class="marca('cidade')">
+                     :maxlength="LIMITE.cidade" class="campo" :class="marca('cidade')"
+                     :aria-invalid="invalido('cidade')">
             </div>
             <div>
               <label for="estado" class="rotulo">Estado</label>
               <select id="estado" v-model="cadastro.estado" required autocomplete="address-level1"
-                      class="campo" :class="marca('estado')">
+                      class="campo" :class="marca('estado')" :aria-invalid="invalido('estado')">
                 <option value="" disabled>UF</option>
                 <option v-for="uf in UFS" :key="uf" :value="uf">{{ uf }}</option>
               </select>
@@ -681,41 +829,26 @@ useHead({ title: 'Pagamento' })
               <label for="rua" class="rotulo">
                 Rua <span class="font-normal text-tinta-fraca">(opcional)</span>
               </label>
-              <input id="rua" v-model="cadastro.rua" autocomplete="address-line1" class="campo">
+              <input id="rua" v-model="cadastro.rua" :maxlength="LIMITE.rua" autocomplete="address-line1"
+                     class="campo" :class="marca('rua')" :aria-invalid="invalido('rua')">
             </div>
             <div>
-              <label for="numero" class="rotulo">Número</label>
-              <input id="numero" v-model="cadastro.numero" autocomplete="off" class="campo">
+              <label for="numero" class="rotulo">
+                Número <span class="font-normal text-tinta-fraca">(opcional)</span>
+              </label>
+              <input id="numero" v-model="cadastro.numero" :maxlength="LIMITE.numero" autocomplete="off"
+                     class="campo" :class="marca(CAMPO_NUMERO)" :aria-invalid="invalido(CAMPO_NUMERO)">
             </div>
           </div>
           <div>
             <label for="bairro" class="rotulo">
               Bairro <span class="font-normal text-tinta-fraca">(opcional)</span>
             </label>
-            <input id="bairro" v-model="cadastro.bairro" autocomplete="off" class="campo">
+            <input id="bairro" v-model="cadastro.bairro" :maxlength="LIMITE.bairro" autocomplete="off"
+                   class="campo" :class="marca('bairro')" :aria-invalid="invalido('bairro')">
           </div>
 
-          <!-- --------------------------------------------------- a conta -->
-          <div class="border-t border-linha pt-4">
-            <p class="titulo text-base font-semibold text-tinta">Sua conta</p>
-          </div>
-          <div>
-            <label for="senha" class="rotulo">Crie uma senha</label>
-            <div class="relative">
-              <input id="senha" v-model="cadastro.senha" :type="verSenha ? 'text' : 'password'" required
-                     minlength="8" maxlength="72" autocomplete="new-password"
-                     class="campo pr-24" :class="marca('senha')">
-              <button type="button"
-                      class="absolute inset-y-0 right-3.5 text-sm font-semibold text-acao hover:underline"
-                      @click="verSenha = !verSenha">
-                {{ verSenha ? 'Ocultar' : 'Mostrar' }}
-              </button>
-            </div>
-            <p class="mt-1 text-xs text-tinta-fraca">
-              Pelo menos 8 caracteres. Guardamos só uma versão codificada dela.
-            </p>
-          </div>
-          <label class="flex items-start gap-2.5 text-sm text-tinta-corpo">
+          <label class="flex items-start gap-2.5 border-t border-linha pt-4 text-sm text-tinta-corpo">
             <input v-model="cadastro.aceitaNovidades" type="checkbox" class="mt-1 h-4 w-4 accent-pool-600">
             <span>Quero receber novidades e ofertas do parque por WhatsApp, e-mail e Instagram.</span>
           </label>
@@ -726,7 +859,9 @@ useHead({ title: 'Pagamento' })
                  requisição por letra e diria "não encontramos o cupom ZZB"
                  enquanto a pessoa ainda digita ZZBOM. -->
             <input id="cupom" v-model="form.cupom" class="campo uppercase" autocomplete="off"
-                   :class="cupom.estado === 'nao_vale' ? 'border-erro' : ''"
+                   :maxlength="LIMITE.cupom"
+                   :class="[cupom.estado === 'nao_vale' ? 'border-erro' : '', marca('cupom')]"
+                   :aria-invalid="cupom.estado === 'nao_vale' ? 'true' : invalido('cupom')"
                    @blur="conferirCupom">
             <p v-if="cupom.estado === 'conferindo'" class="mt-2 text-sm text-tinta-suave">
               Conferindo o cupom…
@@ -749,7 +884,7 @@ useHead({ title: 'Pagamento' })
             <!-- O recado do cupom mora COLADO no campo, e vem com a saída:
                  sem o botão, quem digitou um cupom vencido fica preso — o
                  formulário inteiro está certo e o botão de pagar não passa. -->
-            <div v-else-if="cupom.estado === 'nao_vale'" class="faixa-erro mt-2">
+            <div v-else-if="cupom.estado === 'nao_vale'" class="faixa-erro mt-2" role="alert">
               <p>{{ cupom.recado }}</p>
               <button type="button" class="btn-secundario mt-2 w-full py-2" :disabled="enviando"
                       @click="seguirSemCupom">
@@ -760,12 +895,13 @@ useHead({ title: 'Pagamento' })
 
           <!-- ------------------------------------------ forma de pagamento -->
           <div>
-            <span class="rotulo">Como você quer pagar</span>
-            <div class="flex flex-wrap gap-2">
+            <span id="rotulo-forma" class="rotulo">Como você quer pagar</span>
+            <!-- B23: o estado do chip é anunciado (antes era só cor) -->
+            <div class="flex flex-wrap gap-2" role="group" aria-labelledby="rotulo-forma">
               <button type="button" :class="forma === 'pix' ? 'chip-ativo' : 'chip'"
-                      @click="forma = 'pix'">PIX — na hora</button>
+                      :aria-pressed="forma === 'pix'" @click="forma = 'pix'">PIX — na hora</button>
               <button type="button" :class="forma === 'credito' ? 'chip-ativo' : 'chip'"
-                      @click="forma = 'credito'">Cartão de crédito</button>
+                      :aria-pressed="forma === 'credito'" @click="forma = 'credito'">Cartão de crédito</button>
             </div>
             <div v-if="forma === 'credito'" class="mt-3">
               <label for="parcelas" class="rotulo">Parcelas</label>
@@ -773,12 +909,19 @@ useHead({ title: 'Pagamento' })
                 <option v-for="o in opcoesDeParcela" :key="o.n" :value="o.n">{{ o.rotulo }}</option>
               </select>
               <p class="mt-1 text-xs text-tinta-fraca">
+                Parcelas sem juros, sobre o total{{ cupom.estado === 'vale' ? ' já com o cupom' : '' }}.
                 Os dados do cartão são digitados no ambiente do Asaas — eles não passam por aqui.
               </p>
             </div>
           </div>
 
-          <p v-if="erro" class="faixa-erro">{{ erro }}</p>
+          <div v-if="erro" class="faixa-erro" role="alert">
+            <p>{{ erro }}</p>
+            <NuxtLink v-if="/meia-entrada/.test(erro)" :to="`/e/${slug}`"
+                      class="mt-1 block font-semibold text-acao hover:underline">
+              Corrigir na escolha dos ingressos →
+            </NuxtLink>
+          </div>
 
           <button type="submit" :disabled="enviando" class="btn-cta w-full py-3">
             <template v-if="enviando">Gerando cobrança…</template>
@@ -800,10 +943,32 @@ useHead({ title: 'Pagamento' })
         <p v-if="pedido.descontoCents" class="mt-0.5 text-sm text-ok">
           Cupom aplicado: −{{ reais(pedido.descontoCents) }}
         </p>
+        <!-- o que está sendo pago (a cobrança mostrava só código e total — B13) -->
+        <ul v-if="linhasDoPedido.length" class="mt-2 space-y-0.5 text-sm text-tinta-corpo">
+          <li v-for="(l, i) in linhasDoPedido" :key="i">
+            <span class="font-medium tabular-nums text-tinta">{{ l.quantidade }}×</span> {{ l.nome }}
+            <span class="text-tinta-fraca">· {{ l.setor }}</span>
+          </li>
+        </ul>
         <p v-if="avisoDePreco" class="faixa-aviso mt-3">{{ avisoDePreco }}</p>
 
+        <!-- B34: em análise, devolvido, contestado — a cobrança diz o que houve -->
+        <div v-if="situacao" class="mt-4" :class="situacao.final ? 'faixa-erro' : 'faixa-aviso'" role="status">
+          <p class="font-semibold text-tinta">{{ situacao.titulo }}</p>
+          <p class="mt-1">{{ situacao.frase }}</p>
+        </div>
+
+        <!-- PIX vencido: a cobrança foi cancelada no gateway, o QR não serve mais (B20) -->
+        <div v-if="ehPix && pixVencido && !situacao" class="card mt-4 text-center">
+          <p class="font-semibold text-tinta">O prazo deste PIX venceu</p>
+          <p class="mt-1 text-sm text-tinta-suave">
+            O código foi cancelado e não pode mais ser pago. Se você pagou nos últimos minutos, espere
+            nesta tela: a confirmação ainda pode chegar.
+          </p>
+        </div>
+
         <!-- PIX -->
-        <div v-if="ehPix" class="card mt-4 text-center">
+        <div v-else-if="ehPix && !situacao" class="card mt-4 text-center">
           <img v-if="pedido.pagamento?.pixQrBase64"
                :src="`data:image/png;base64,${pedido.pagamento.pixQrBase64}`"
                alt="QR Code do PIX" class="mx-auto h-56 w-56 max-w-full">
@@ -822,7 +987,7 @@ useHead({ title: 'Pagamento' })
         </div>
 
         <!-- cartão: o pagamento acontece no ambiente do Asaas -->
-        <div v-else class="card mt-4">
+        <div v-else-if="!ehPix && !situacao" class="card mt-4">
           <p class="text-tinta-corpo">
             O cartão é digitado no ambiente seguro do Asaas. Termine o pagamento por lá e
             <strong class="text-tinta">volte para esta aba</strong> — ela muda sozinha quando a
@@ -839,21 +1004,28 @@ useHead({ title: 'Pagamento' })
           </p>
         </div>
 
-        <!-- o relógio da reserva vale pros dois meios de pagamento -->
-        <p v-if="restante > 0" class="mt-4 text-center text-sm text-tinta-suave">
+        <!-- o relógio da reserva vale pros dois meios de pagamento; em análise
+             ou já resolvido, ele não se aplica -->
+        <p v-if="!situacao && restante > 0" class="mt-4 text-center text-sm text-tinta-suave">
           Seus ingressos estão reservados por
           <span class="font-semibold tabular-nums text-acao">{{ relogio }}</span>
         </p>
-        <div v-else class="mt-4 text-center">
+        <div v-else-if="!situacao" class="mt-4 text-center">
           <p class="text-sm font-medium text-erro">Tempo de reserva esgotado</p>
           <p class="mt-1 text-sm text-tinta-suave">
             Se você pagou nos últimos minutos, espere: a confirmação ainda pode chegar.
           </p>
         </div>
 
-        <p class="mt-3 text-center text-sm text-tinta-suave">
+        <p v-if="!situacao?.final" class="mt-3 text-center text-sm text-tinta-suave">
           Assim que o pagamento cair, esta tela muda sozinha.
         </p>
+
+        <!-- B13: a saída que não existia — trocar a forma de pagamento ou largar o pedido -->
+        <button v-if="!situacao && !pagoSemIngresso && restante > 0" type="button"
+                class="btn-secundario mt-4 w-full py-2.5" :disabled="desistindo" @click="trocarPagamento">
+          {{ desistindo ? 'Cancelando este pedido…' : 'Trocar a forma de pagamento ou mudar os ingressos' }}
+        </button>
         <!-- `div`, não `p`: o navegador fecha um `<p>` sozinho quando aparece
              bloco dentro, e o layout quebra sem avisar. -->
         <div v-if="pagoSemIngresso" class="faixa-aviso mt-3">
@@ -865,7 +1037,7 @@ useHead({ title: 'Pagamento' })
             <strong class="text-tinta">{{ pedido.pedido }}</strong>.
           </p>
         </div>
-        <div v-else-if="erro" class="faixa-erro mt-3">
+        <div v-else-if="erro" class="faixa-erro mt-3" role="alert">
           <p>{{ erro }}</p>
           <NuxtLink :to="`/e/${slug}`" class="mt-2 block font-semibold text-acao hover:underline">
             Escolher os ingressos de novo →

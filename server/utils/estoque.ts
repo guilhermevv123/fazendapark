@@ -147,6 +147,13 @@ export async function reservar(
   // mesmos dois lotes em ordens opostas travam uma na outra pra sempre.
   const ordenados = [...itens].sort((a, b) => a.lotId.localeCompare(b.lotId))
 
+  // B32: o MÍNIMO é do lote, e vale pela soma das linhas dele (2 inteiras + 2
+  // meias num lote de mínimo 4 compram). Era conferido linha a linha, e a
+  // compra de 2 + 2 era recusada com "Mínimo de 4 por compra". O máximo segue
+  // por linha, como sempre foi.
+  const somaDoLote = new Map<string, number>()
+  for (const i of itens) somaDoLote.set(i.lotId, (somaDoLote.get(i.lotId) ?? 0) + Number(i.quantidade))
+
   for (const item of ordenados) {
     if (!Number.isInteger(item.quantidade) || item.quantidade <= 0) {
       throw new Error('quantidade precisa ser inteiro positivo')
@@ -177,7 +184,7 @@ export async function reservar(
       if (!lote.channels.includes(opts.canal)) {
         throw new LoteIndisponivel(item.lotId, 'Lote não é vendido por este canal')
       }
-      if (item.quantidade < lote.min_per_order) {
+      if ((somaDoLote.get(item.lotId) ?? item.quantidade) < lote.min_per_order) {
         throw new LoteIndisponivel(item.lotId, `Mínimo de ${lote.min_per_order} por compra`)
       }
       if (item.quantidade > lote.max_per_order) {
@@ -333,6 +340,61 @@ async function matarPedidoVencido(c: PoolClient, orderId: string): Promise<boole
   )
   if (virou.rowCount !== 1) return false
 
+  const { rows: itens } = await c.query(
+    `SELECT lot_id AS "lotId", ticket_type_id AS "ticketTypeId", quantity AS quantidade
+       FROM order_items WHERE order_id = $1`,
+    [orderId],
+  )
+  await liberar(c, itens)
+  return true
+}
+
+/**
+ * O comprador LARGA o pedido que ainda não pagou (B13): "trocar a forma de
+ * pagamento", "montar outro carrinho". Mesma virada de `matarPedidoVencido`
+ * (vira 'expirado' e devolve o lugar na hora) — e por isso a varredura de
+ * cobranças cancela a cobrança dele no gateway logo depois, como em todo
+ * pedido expirado. Sem isto o pedido abandonado segurava o lugar e contava no
+ * teto do CPF até vencer, e a tela de pagamento reabria ele no lugar do
+ * carrinho novo.
+ *
+ * Só pedido em 'aguardando_pagamento'. O pago não se desiste por aqui (é
+ * cancelamento, com estorno), e o 'em_analise' está com o gateway decidindo.
+ */
+export async function desistirDoPedido(
+  c: PoolClient, orderId: string,
+): Promise<{ ok: true } | { ok: false; status: string | null }> {
+  const { rows } = await c.query(`SELECT status FROM orders WHERE id = $1 FOR UPDATE`, [orderId])
+  if (!rows[0]) return { ok: false, status: null }
+  if (rows[0].status !== 'aguardando_pagamento') return { ok: false, status: rows[0].status }
+  if (!(await matarPedidoVencido(c, orderId))) return { ok: false, status: rows[0].status }
+  await c.query(
+    `INSERT INTO audit_log (entity, entity_id, action, after)
+     VALUES ('order', $1, 'desistencia_do_comprador', '{}'::jsonb)`, [orderId])
+  return { ok: true }
+}
+
+/**
+ * Solta um pedido que estava em ANÁLISE DE RISCO (B09) e devolve o que ele
+ * segurava. Quem decide que pode soltar é `varrerEmAnalise` (asaas.ts), depois
+ * de perguntar ao gateway — aqui é só a virada, com a mesma trava de
+ * `matarPedidoVencido`: `WHERE status = 'em_analise'` acerta uma vez só, e o
+ * pagamento que chegar na mesma hora ganha a corrida.
+ *
+ * `para`: 'expirado' quando a cobrança voltou a esperar pagamento (reprovada
+ * na análise) — a varredura de cobranças cancela ela depois, como em todo
+ * pedido expirado; 'cancelado' quando o gateway já apagou ou devolveu.
+ */
+export async function soltarPedidoEmAnalise(
+  c: PoolClient, orderId: string, para: 'expirado' | 'cancelado',
+): Promise<boolean> {
+  const virou = await c.query(
+    `UPDATE orders SET status = $2, canceled_at = now()
+      WHERE id = $1 AND status = 'em_analise'
+      RETURNING id`,
+    [orderId, para],
+  )
+  if (virou.rowCount !== 1) return false
   const { rows: itens } = await c.query(
     `SELECT lot_id AS "lotId", ticket_type_id AS "ticketTypeId", quantity AS quantidade
        FROM order_items WHERE order_id = $1`,

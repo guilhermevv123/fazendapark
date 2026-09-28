@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
                          WHERE depois.ticket_id = tr.ticket_id
                            AND depois.status = 'concluido'
                            AND depois.accepted_at > tr.accepted_at) AS em_vigor,
-            e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.slug,
+            e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.slug, e.timezone,
             s.name AS setor, l.name AS lote, tt.name AS tipo,
             se.label AS assento,
             es.title AS sessao, es.starts_at AS sessao_inicio
@@ -69,16 +69,30 @@ export default defineEventHandler(async (event) => {
   const doDestinatario = status === 'concluido' && tr.em_vigor
   const qrDisponivel = doDestinatario && tr.ingresso_status === 'valido'
 
+  // B33: o link de ingresso que já entrou ou foi cancelado oferecia o
+  // formulário de aceite — e o POST recusava depois de a pessoa preencher. O
+  // aceite só existe com a transferência aguardando E o ingresso valendo.
+  const ingressoMorto = status === 'aguardando' && tr.ingresso_status !== 'valido'
   return {
     status,
-    statusTexto: STATUS_LEGIVEL[status] ?? status,
-    podeAceitar: status === 'aguardando',
+    statusTexto: ingressoMorto
+      ? (tr.ingresso_status === 'usado' ? 'Ingresso já utilizado' : 'Ingresso cancelado')
+      : STATUS_LEGIVEL[status] ?? status,
+    podeAceitar: status === 'aguardando' && !ingressoMorto,
+    /** por que não dá pra aceitar, quando é o INGRESSO (e não o link) que morreu */
+    motivo: ingressoMorto
+      ? (tr.ingresso_status === 'usado'
+          ? 'Este ingresso já foi usado na entrada e não pode mais ser transferido.'
+          : 'Este ingresso foi cancelado e não pode mais ser transferido.')
+      : null,
     venceEm: tr.expires_at,
     de: { nome: tr.de_nome, email: meioEscondido(tr.de_email) },
     para: { nome: tr.para_nome, email: meioEscondido(tr.para_email) },
     evento: {
       nome: tr.evento, comecaEm: tr.starts_at, slug: tr.slug,
       local: tr.venue_name, cidade: tr.city, estado: tr.state,
+      /** B24: a tela escreve a data no fuso do EVENTO, não no do navegador */
+      fuso: tr.timezone || 'America/Bahia',
     },
     ingresso: {
       setor: tr.setor, lote: tr.lote, tipo: tr.tipo,

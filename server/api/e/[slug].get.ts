@@ -31,6 +31,7 @@ import { disponivel } from '../../utils/estoque'
 import { emData } from '../../utils/cupom'
 import { faceDoTipo, precificar, type ModoTaxa } from '../../utils/dinheiro'
 import { cotaDeMeias } from '../../utils/meia-entrada'
+import { pagamentoOnline } from '../../utils/asaas'
 
 /** Abaixo disto a vitrine avisa "últimas unidades" — faixa, nunca o número. */
 export const LIMIAR_ULTIMAS = 10
@@ -570,7 +571,10 @@ export default defineEventHandler(async (event) => {
             -- tetoDeCompra. (Sem crase em comentario de SQL: ela fecha a
             -- template literal e o arquivo inteiro para de compilar.)
             e.max_per_order, e.max_per_customer,
-            o.name AS organizacao
+            o.name AS organizacao,
+            -- só pra decidir se há como cobrar online (PROD-06): a chave nunca
+            -- sai desta rota
+            o.asaas_api_key, o.asaas_env
        FROM events e JOIN organizations o ON o.id = e.org_id
       WHERE e.slug = $1`, [slug])
 
@@ -740,6 +744,15 @@ export default defineEventHandler(async (event) => {
       descricao: ev.description,
       vendasAbertas: abertas,
       avisoDeVenda: avisoDeVendaFechada(ev, agora),
+      // PROD-06: dá pra cobrar online agora? A vitrine não oferece pagamento
+      // que vai falhar — era no último clique, depois do CPF. Só SIM/NÃO e a
+      // frase: nem a chave nem o motivo técnico saem daqui.
+      pagamentoOnline: (() => {
+        const p = pagamentoOnline(ev)
+        return p.ok ? { disponivel: true } : { disponivel: false, recado: p.recado }
+      })(),
+      /** fuso do evento (B24): a tela escreve a data na hora do PARQUE, não na do navegador */
+      fuso: ev.timezone || 'America/Bahia',
       // Quantos ingressos cabem num pedido, somando TODAS as linhas. A tela
       // precisa dele porque o teto por linha não fecha a conta do carrinho:
       // com `max_per_order = 6`, 6 inteiras + 6 meias passam nas duas linhas,

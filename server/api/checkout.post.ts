@@ -23,10 +23,9 @@
  * de lote isso trava a fila inteira.
  */
 import type { PoolClient } from 'pg'
-import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { q, q1, tx } from '../utils/db'
-import { CadastroInvalido, prepararCadastro } from '../utils/cadastro'
+import { CadastroInvalido, prepararCadastro, type Cadastro } from '../utils/cadastro'
 import {
   EstoqueInsuficiente, liberar, LoteIndisponivel, prazoDeReserva, reservar,
 } from '../utils/estoque'
@@ -35,9 +34,11 @@ import {
   aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
 import {
-  acharOuCriarCliente, cancelarCobranca, centavosParaReais, criarCobranca, valorDaCobranca,
-  qrCodePix, vencimentoEmDias, type ConfigAsaas,
+  acharOuCriarCliente, centavosParaReais, criarCobranca, pagamentoOnline, qrCodePix,
+  recusaDeDadoDoComprador, telefoneParaAsaas, valorDaCobranca, vencimentoEmDias,
+  type ConfigAsaas,
 } from '../utils/asaas'
+import { conferirFreio, frearPortaPublica, marcarNoFreio } from '../utils/sessao'
 import {
   conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, MOTIVOS,
   MOTIVOS_EM_TEXTO, motivoValido,
@@ -92,7 +93,7 @@ export function parcelasDoPedido(forma: 'pix' | 'credito', pedidas: number, tota
   return Math.min(Math.max(1, Math.floor(Number(pedidas) || 1)), maxParcelas(totalCents))
 }
 
-const Entrada = z.object({
+export const Entrada = z.object({
   eventSlug: z.string().min(1),
   itens: z.array(z.object({
     lotId: z.string().uuid(),
@@ -138,6 +139,13 @@ const Entrada = z.object({
       estado: z.string().max(2).optional(),
       complemento: z.string().max(80).optional(),
     }).optional(),
+    /**
+     * IGNORADA desde 27/09 (B17). Não existe login de cliente: a senha era
+     * coleta sem finalidade (LGPD) e deixava qualquer um gravar a PRIMEIRA
+     * senha de um e-mail alheio — a conta nasceria com a senha do invasor no
+     * dia em que o login existisse. Continua aceita no corpo só pra página
+     * antiga em cache não levar 400; nada dela é conferido nem gravado.
+     */
     senha: z.string().max(200).optional(),
     /** `true`/`false` só quando a pessoa marcou/desmarcou; ausente NÃO mexe no consentimento. */
     aceitaNovidades: z.boolean().optional(),
@@ -149,23 +157,32 @@ const Entrada = z.object({
 })
 
 export default defineEventHandler(async (event) => {
+  // B03: a porta pública mais cara do sistema — cada pedido segura estoque e
+  // fala com o Asaas — não tinha freio nenhum. Antes de qualquer trabalho.
+  frearPortaPublica(event, 'checkout')
+
   const body = await readBody(event)
   const p = Entrada.safeParse(body)
-  if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
-  }
+  if (!p.success) throw recusaDeFormato(p.error)
   const dados = p.data
   const documento = dados.comprador.documento.replace(/\D/g, '')
   if (!cpfValido(documento)) {
-    throw createError({ statusCode: 400, statusMessage: 'CPF inválido' })
+    throw createError({ statusCode: 400, statusMessage: 'CPF inválido. Confira os 11 números.',
+      data: { tipo: 'cadastro', campo: 'documento' } })
   }
 
-  // O cadastro é conferido ANTES de qualquer trava, e o hash da senha é feito
-  // AQUI FORA: o bcrypt custa dezenas de milissegundos de CPU, e dentro da
-  // transação isso seria tempo com o lote travado — numa virada de lote, a fila.
-  let cadastro: ReturnType<typeof prepararCadastro>
+  // B04: quem testa dicionário de cupom não usa o checkout de atalho; e o
+  // balde de INGRESSOS é o que segura o estoque de verdade (B03) — pedido de
+  // um é barato, sessenta lugares presos por um script não.
+  if (dados.cupom) conferirFreio(event, 'cupom_errado')
+  const ingressosPedidos = dados.itens.reduce((soma, i) => soma + i.quantidade, 0)
+  conferirFreio(event, 'checkout_ingressos', ingressosPedidos)
+
+  // O cadastro é conferido ANTES de qualquer trava. A senha NÃO entra (B17):
+  // sem login de cliente ela não tem finalidade — ver o campo no `Entrada`.
+  let cadastro: Cadastro
   try {
-    cadastro = prepararCadastro(dados.comprador, {
+    cadastro = prepararCadastro({ ...dados.comprador, senha: null }, {
       email: dados.comprador.email, documento })
   } catch (e) {
     if (e instanceof CadastroInvalido) {
@@ -174,7 +191,6 @@ export default defineEventHandler(async (event) => {
     }
     throw e
   }
-  const senhaHash = cadastro.senha ? await bcrypt.hash(cadastro.senha, 10) : null
 
   // ------------------------------------------------------------- 1. evento
   const ev = await q1<any>(
@@ -266,6 +282,23 @@ export default defineEventHandler(async (event) => {
   // ------------------------------------------- 3. teto de ingressos por pedido
   conferirTetoPorPedido(ev, dados.itens)
 
+  // ---------------------------------- 3a. dá pra cobrar online? (PROD-06)
+  // Sem jeito de cobrar, a recusa sai AQUI — antes de reservar estoque e de
+  // gravar cadastro. Era no último clique, com o formulário inteiro preenchido,
+  // o cadastro já gravado e o lugar reservado e devolvido. Pedido que pode
+  // fechar em zero (cupom, lote gratuito) não precisa de gateway: só recusa
+  // quando há face a cobrar e nenhum cupom que possa zerá-la — o cupom é
+  // conferido lá dentro, e o que sobrar é recusado depois dele.
+  const online = pagamentoOnline(ev)
+  if (!online.ok) {
+    const face = linhas.reduce((soma, l) => soma + l.faceUnitCents * l.quantidade, 0)
+    if (face > 0 && !dados.cupom) {
+      console.warn(`[checkout] pagamento online indisponível em ${ev.slug}: ${online.motivo}`)
+      throw createError({ statusCode: 503, statusMessage: online.recado,
+        data: { tipo: 'pagamento_indisponivel', motivo: online.motivo } })
+    }
+  }
+
   // ------------------------------- 3b. quem declarou direito a meia-entrada
   // Aritmética pura sobre o que já foi lido do banco: pode ficar aqui fora.
   // A COTA não — ela é soma sobre o lote e só decide coisa com a trava do
@@ -322,92 +355,12 @@ export default defineEventHandler(async (event) => {
       await conferirCotaDeMeia(c, lotId, quantas)
     }
 
-    // O CPF da linha do cliente NÃO é reescrito por quem chegou depois.
-    //
-    // Era `COALESCE(EXCLUDED.document, customers.document)`, ou seja: o último
-    // a comprar com aquele e-mail carimbava o CPF dele na linha. E como quem
-    // responde "quanto este CPF já tem" é um JOIN em `customers` (a conferência
-    // aqui embaixo e a contagem do cupom em utils/cupom.ts), reescrever o
-    // documento REESCREVIA O PASSADO: os pedidos antigos daquele e-mail
-    // passavam a contar pro CPF novo e paravam de contar pro antigo.
-    //
-    // Duas consequências medidas, as duas na mesma origem:
-    //   1. o teto por CPF virava piada — com `max_per_customer = 2`, alternar
-    //      dois CPFs no MESMO e-mail dava 2 ingressos por rodada pra sempre,
-    //      porque cada compra zerava a contagem do CPF da compra anterior;
-    //   2. o cupom recusava quem nunca usou — o resgate roda DEPOIS deste
-    //      upsert, então o CPF novo já herdava o uso do CPF antigo e lia
-    //      "Este CPF já usou o cupom", que é mentira na cara do comprador.
-    //
-    // `COALESCE(customers.document, EXCLUDED.document)` só PREENCHE documento
-    // vazio (cliente que nasceu no balcão sem CPF). Quando o e-mail já tem
-    // dono, a compra para aqui com um recado que diz o que fazer — em vez de
-    // trocar em silêncio o CPF gravado em `tickets.holder_document`, que é o
-    // documento que a portaria confere na meia-entrada.
-    //
-    // O `ON CONFLICT` é quem trava a linha, então a decisão é atômica: não
-    // existe janela entre ler o dono e gravar.
-    //
-    // O CADASTRO (migração 027) entra nesta mesma linha, com quatro regras que
-    // valem mais que as colunas:
-    //   · o que a pessoa não mandou NÃO apaga o que já tinha (COALESCE) — quem
-    //     compra de novo só com nome e CPF não zera o endereço do cadastro;
-    //   · o endereço é UM bloco: chegou cidade nova, vem rua, número e CEP
-    //     juntos. Mesclar campo a campo dava "Rua A" de uma cidade com "Salvador"
-    //     de outra;
-    //   · a SENHA já gravada nunca é trocada por quem chegou depois. Este
-    //     formulário não prova que o e-mail é de quem digitou (ver 027), então
-    //     deixar a última compra reescrever a senha seria entregar a conta;
-    //   · o consentimento de novidades só muda quando a pessoa se manifestou, e
-    //     o carimbo só anda quando o valor MUDA — é a prova de quando disse sim.
-    const end = cadastro.endereco
-    const cliente = await c.query(
-      `INSERT INTO customers (org_id, name, email, document, phone,
-                              birth_date, instagram,
-                              zip_code, street, address_number, neighborhood, city, state,
-                              address_complement,
-                              password_hash, registered_at,
-                              marketing_opt_in, marketing_opt_in_at)
-       VALUES ($1,$2,$3,$4,$5, $6,$7, $8,$9,$10,$11,$12,$13, $14,
-               $15, CASE WHEN $15::text IS NULL THEN NULL ELSE now() END,
-               COALESCE($16::boolean, false), CASE WHEN $16::boolean IS NULL THEN NULL ELSE now() END)
-       ON CONFLICT (org_id, email) DO UPDATE
-         SET name = EXCLUDED.name,
-             document = COALESCE(customers.document, EXCLUDED.document),
-             phone = COALESCE(EXCLUDED.phone, customers.phone),
-             birth_date = COALESCE(EXCLUDED.birth_date, customers.birth_date),
-             instagram = COALESCE(EXCLUDED.instagram, customers.instagram),
-             zip_code = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.zip_code ELSE customers.zip_code END,
-             street = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.street ELSE customers.street END,
-             address_number = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.address_number ELSE customers.address_number END,
-             neighborhood = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.neighborhood ELSE customers.neighborhood END,
-             address_complement = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.address_complement ELSE customers.address_complement END,
-             state = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.state ELSE customers.state END,
-             city = CASE WHEN EXCLUDED.city IS NOT NULL THEN EXCLUDED.city ELSE customers.city END,
-             password_hash = COALESCE(customers.password_hash, EXCLUDED.password_hash),
-             registered_at = COALESCE(customers.registered_at, EXCLUDED.registered_at),
-             marketing_opt_in = COALESCE($16::boolean, customers.marketing_opt_in),
-             marketing_opt_in_at = CASE
-               WHEN $16::boolean IS NOT NULL AND $16::boolean IS DISTINCT FROM customers.marketing_opt_in
-                 THEN now() ELSE customers.marketing_opt_in_at END
-       RETURNING id, asaas_customer_id, document`,
-      [ev.org_id, dados.comprador.nome, dados.comprador.email.toLowerCase(),
-       documento, dados.comprador.telefone ?? null,
-       cadastro.nascimento, cadastro.instagram,
-       end?.cep ?? null, end?.rua ?? null, end?.numero ?? null, end?.bairro ?? null,
-       end?.cidade ?? null, end?.estado ?? null, end?.complemento ?? null,
-       senhaHash, cadastro.aceitaNovidades])
-
-    if (cliente.rows[0].document !== documento) {
-      // Sem nenhum pedaço do CPF gravado: esta resposta sai pra quem digitar
-      // QUALQUER e-mail, e "final 42" junto do e-mail de outra pessoa é dado
-      // pessoal dela entregue a um desconhecido (dá pra montar o CPF inteiro
-      // cruzando com outros vazamentos). Quem é o dono sabe o próprio CPF.
-      throw createError({ statusCode: 409,
-        statusMessage: 'Este e-mail já está cadastrado com outro CPF. '
-          + 'Use o CPF do cadastro ou outro e-mail.',
-        data: { tipo: 'email_de_outro_cpf' } })
-    }
+    // O CLIENTE — quem é dono do e-mail, e o que dá pra escrever nele ANTES de
+    // pagar. As regras moram em `gravarCliente`, logo abaixo do handler.
+    const cliente = await gravarCliente(c, {
+      orgId: ev.org_id, email: dados.comprador.email.toLowerCase(), documento,
+      nome: dados.comprador.nome, telefone: dados.comprador.telefone ?? null, cadastro,
+    })
 
     // O cupom é o ÚLTIMO a ser travado, depois do cliente, porque o balcão
     // pega esses dois na mesma ordem (utils não, rota: pdv/venda.post.ts).
@@ -424,16 +377,26 @@ export default defineEventHandler(async (event) => {
     // Sobre o total JÁ com cupom: é ele que o gateway parcela.
     const parcelas = parcelasDoPedido(dados.forma, dados.parcelas, total.totalCents)
 
+    // `cadastro_pendente` (B14, db/028): o formulário inteiro vai com o PEDIDO,
+    // e o gatilho `pedido_pago_aplica_cadastro` passa pro cadastro quando o
+    // pedido vira 'pago' — inclusive o consentimento de novidades, que agora só
+    // vale com a compra paga. O que foi escrito no cliente antes disso é só o
+    // que ninguém precisou provar (ver `gravarCliente`).
     const ord = await c.query(
       `INSERT INTO orders (org_id, event_id, customer_id, code, status, channel,
                            face_cents, fee_cents, platform_cents, discount_cents, total_cents,
-                           payment_method, installments, promo_code_id, promoter_id, expires_at)
-       VALUES ($1,$2,$3,$4,'aguardando_pagamento','online',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                           payment_method, installments, promo_code_id, promoter_id, expires_at,
+                           cadastro_pendente)
+       VALUES ($1,$2,$3,$4,'aguardando_pagamento','online',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+               $15::jsonb)
        RETURNING id, code`,
-      [ev.org_id, ev.id, cliente.rows[0].id, codigo,
+      [ev.org_id, ev.id, cliente.id, codigo,
        total.faceCents, total.feeCents, total.platformCents, total.discountCents, total.totalCents,
        dados.forma === 'pix' ? 'pix' : 'credito', parcelas,
-       cupom?.id ?? null, promoter?.id ?? null, expiraEm])
+       cupom?.id ?? null, promoter?.id ?? null, expiraEm,
+       JSON.stringify(cadastroPendente({
+         documento, nome: dados.comprador.nome, telefone: dados.comprador.telefone ?? null, cadastro,
+       }))])
 
     for (let i = 0; i < dados.itens.length; i++) {
       const it = dados.itens[i]
@@ -457,10 +420,12 @@ export default defineEventHandler(async (event) => {
     // gravado porque as telas do painel mostram ele.
     if (cupom) await c.query(`UPDATE promo_codes SET uses = uses + 1 WHERE id = $1`, [cupom.id])
 
-    return { id: ord.rows[0].id, code: ord.rows[0].code, customerId: cliente.rows[0].id,
-             asaasCustomerId: cliente.rows[0].asaas_customer_id, total, parcelas }
+    return { id: ord.rows[0].id, code: ord.rows[0].code, customerId: cliente.id,
+             asaasCustomerId: cliente.asaas_customer_id, total, parcelas }
   }).catch((e) => {
     if (e instanceof CupomRecusado) {
+      // código que não existe é o sinal de dicionário (B04)
+      if (e.motivo === 'inexistente') marcarNoFreio(event, 'cupom_errado')
       throw createError({ statusCode: e.status, statusMessage: e.recado,
         data: { tipo: 'cupom', motivo: e.motivo } })
     }
@@ -500,6 +465,10 @@ export default defineEventHandler(async (event) => {
     throw e
   })
 
+  // O pedido nasceu e o estoque está reservado: agora conta no balde de
+  // ingressos deste endereço (B03).
+  marcarNoFreio(event, 'checkout_ingressos', ingressosPedidos)
+
   // A conta fechada saiu de dentro da transação: é ela que foi gravada no
   // pedido, com o cupom já travado e o teto de desconto já aplicado. Recalcular
   // aqui fora daria uma segunda verdade sobre o mesmo dinheiro.
@@ -516,22 +485,23 @@ export default defineEventHandler(async (event) => {
     apiKey: ev.asaas_api_key, environment: ev.asaas_env, walletId: ev.asaas_wallet,
   }
 
-  // Sem chave: em produção isso é indisponibilidade, e o pedido tem que morrer
-  // liberando o estoque. Só na máquina, com PAGAMENTO_SIMULADO=1, o fluxo segue
-  // por um gateway de mentira pra a tela poder ser exercitada ponta a ponta.
-  if (!cfg.apiKey) {
-    if (!simulado.ligado()) {
-      await desfazer(pedido.id, 'Organização sem Asaas configurado')
-      throw createError({ statusCode: 503, statusMessage: 'Pagamento indisponível no momento' })
-    }
-    return await cobrarSimulado(pedido, ev, total, dados, expiraEm)
+  // Sem jeito de cobrar (sem chave, ou chave de teste em produção — PROD-06):
+  // o pedido morre liberando o estoque. Só chega aqui o pedido COM cupom (o
+  // resto foi recusado antes da transação) que não fechou em zero. Na máquina,
+  // com PAGAMENTO_SIMULADO=1, o fluxo segue por um gateway de mentira pra a
+  // tela poder ser exercitada ponta a ponta.
+  if (!online.ok) {
+    await desfazer(pedido.id, `pagamento online indisponível: ${online.motivo}`)
+    throw createError({ statusCode: 503, statusMessage: online.recado,
+      data: { tipo: 'pagamento_indisponivel', motivo: online.motivo } })
   }
+  if (!cfg.apiKey) return await cobrarSimulado(pedido, ev, total, dados, expiraEm)
 
   let cobranca: any
   try {
     const asaasCustomer = pedido.asaasCustomerId || await acharOuCriarCliente(cfg, {
       name: dados.comprador.nome, email: dados.comprador.email,
-      cpfCnpj: documento, mobilePhone: dados.comprador.telefone,
+      cpfCnpj: documento, ...telefoneParaAsaas(dados.comprador.telefone),
     })
     if (!pedido.asaasCustomerId) {
       await q(`UPDATE customers SET asaas_customer_id = $2 WHERE id = $1`,
@@ -556,6 +526,13 @@ export default defineEventHandler(async (event) => {
     // Gateway caiu: devolve o estoque na hora. Sem isso, cada erro do Asaas
     // queima ingresso que ninguém comprou até a varredura de expirados passar.
     await desfazer(pedido.id, `Asaas: ${e.message}`)
+    // B12: recusa de DADO do comprador (celular, e-mail, CPF, nome) diz qual
+    // campo e o que o gateway disse — tentar de novo igual daria o mesmo.
+    const recusa = recusaDeDadoDoComprador(e)
+    if (recusa) {
+      throw createError({ statusCode: 422, statusMessage: recusa.recado,
+        data: { tipo: 'cadastro', campo: recusa.campo, origem: 'gateway' } })
+    }
     throw createError({ statusCode: 502, statusMessage: 'Não foi possível gerar a cobrança. Tente de novo.' })
   }
 
@@ -564,10 +541,14 @@ export default defineEventHandler(async (event) => {
     try { pix = await qrCodePix(cfg, cobranca.id) } catch { pix = null }
   }
 
+  // `invoice_url` (B08): a fatura do cartão fica no PEDIDO, não só na memória
+  // da aba — a página do pedido oferece o link de qualquer aparelho.
   await q(
-    `UPDATE orders SET asaas_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4
+    `UPDATE orders SET asaas_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4,
+                       invoice_url = $5
       WHERE id = $1`,
-    [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null])
+    [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null,
+     cobranca.invoiceUrl ?? null])
 
   return {
     ok: true,
@@ -605,11 +586,14 @@ async function cobrarSimulado(
   const pix = dados.forma === 'pix'
     ? await simulado.pixSimulado(centavosParaReais(total.totalCents), pedido.code)
     : null
+  // o cartão do simulado também tem "fatura" (B08): sem ela o caminho do cartão
+  // não tinha como ser exercitado na máquina
+  const fatura = dados.forma === 'credito' ? simulado.faturaSimulada(pedido.code) : null
 
   await q(
-    `UPDATE orders SET asaas_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4
+    `UPDATE orders SET asaas_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4, invoice_url = $5
       WHERE id = $1`,
-    [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null])
+    [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null, fatura])
 
   return {
     ok: true,
@@ -627,7 +611,7 @@ async function cobrarSimulado(
       forma: dados.forma,
       pixPayload: pix?.payload ?? null,
       pixQrBase64: pix?.encodedImage ?? null,
-      linkFatura: null,
+      linkFatura: fatura,
     },
   }
 }
@@ -652,6 +636,205 @@ function recadoDeEstoque(e: EstoqueInsuficiente): string {
   const resta = e.disponivel === 1 ? 'Restou 1 ingresso' : `Restaram ${e.disponivel} ingressos`
   return `${resta} de "${e.nome}" e você pediu ${e.pedido}. `
     + `Mude a quantidade para ${e.disponivel} ou escolha outra opção.`
+}
+
+/**
+ * A recusa de FORMATO do corpo, com o campo e o que fazer (B11).
+ *
+ * Era `400 "Dados inválidos"` com o `flatten()` do Zod no `data` — a tela não
+ * lia aquilo e mostrava só a frase, então quem digitou o celular sem DDD, ou
+ * uma rua de 121 letras, ou 2 letras no documento da meia, não sabia o que
+ * corrigir. Agora sai UMA frase (a do primeiro problema, na ordem do
+ * formulário) e `data.campo` com o nome que a página usa pra marcar o campo —
+ * o mesmo vocabulário de `CadastroInvalido` (`utils/cadastro.ts`).
+ */
+const CAMPOS_DO_FORMULARIO: Record<string, { campo: string; rotulo: string }> = {
+  'comprador.nome': { campo: 'nome', rotulo: 'o nome' },
+  'comprador.email': { campo: 'email', rotulo: 'o e-mail' },
+  'comprador.documento': { campo: 'documento', rotulo: 'o CPF' },
+  'comprador.telefone': { campo: 'telefone', rotulo: 'o celular' },
+  'comprador.nascimento': { campo: 'nascimento', rotulo: 'a data de nascimento' },
+  'comprador.instagram': { campo: 'instagram', rotulo: 'o Instagram' },
+  'comprador.endereco.cep': { campo: 'cep', rotulo: 'o CEP' },
+  'comprador.endereco.rua': { campo: 'rua', rotulo: 'a rua' },
+  'comprador.endereco.numero': { campo: 'numero', rotulo: 'o número' },
+  'comprador.endereco.bairro': { campo: 'bairro', rotulo: 'o bairro' },
+  'comprador.endereco.cidade': { campo: 'cidade', rotulo: 'a cidade' },
+  'comprador.endereco.estado': { campo: 'estado', rotulo: 'o estado' },
+  'comprador.endereco.complemento': { campo: 'complemento', rotulo: 'o complemento' },
+  cupom: { campo: 'cupom', rotulo: 'o cupom' },
+  promoter: { campo: 'promoter', rotulo: 'o código do promoter' },
+}
+
+const inicial = (t: string) => t.charAt(0).toUpperCase() + t.slice(1)
+
+export function recusaDeFormato(erro: z.ZodError) {
+  const issue = erro.issues[0]
+  const caminho = issue?.path ?? []
+  let campo: string | null = null
+  let item: number | undefined
+  let frase: string
+
+  // `itens.N.meia.documento` / `itens.N.meia.motivo`: o que a pessoa digita
+  // na linha da meia-entrada
+  if (caminho[0] === 'itens' && typeof caminho[1] === 'number' && caminho[2] === 'meia') {
+    item = caminho[1]
+    if (caminho[3] === 'documento') {
+      campo = 'meia_documento'
+      frase = 'Confira o documento da meia-entrada: digite o número da carteirinha ou do '
+        + 'documento, de 3 a 40 caracteres.'
+    } else {
+      campo = 'meia_motivo'
+      frase = 'Escolha o motivo da meia-entrada.'
+    }
+  } else {
+    const alvo = CAMPOS_DO_FORMULARIO[caminho.join('.')]
+    if (!alvo) {
+      // O resto (lote, tipo, quantidade, forma, parcelas) quem monta é a tela,
+      // não a pessoa: recusa aqui é página velha ou requisição feita à mão.
+      frase = 'Não deu pra ler o pedido. Recarregue a página e monte a compra de novo.'
+    } else {
+      campo = alvo.campo
+      const i = issue as any
+      if (campo === 'email') {
+        frase = 'Confira o e-mail: ele precisa ter o formato nome@provedor.com.br.'
+      } else if (campo === 'nome' && i.code === 'too_small') {
+        frase = 'Digite o nome completo, como está no documento.'
+      } else if (campo === 'documento') {
+        frase = 'CPF inválido. Confira os 11 números.'
+      } else if (campo === 'telefone') {
+        frase = 'Confira o celular: DDD + número (ex.: (73) 99999-0000).'
+      } else if (i.code === 'too_big') {
+        frase = `${inicial(alvo.rotulo)} passou do limite de ${i.maximum} caracteres. Abrevie.`
+      } else if (i.code === 'too_small') {
+        frase = `${inicial(alvo.rotulo)} está curto demais: use pelo menos ${i.minimum} caracteres.`
+      } else if (i.code === 'invalid_type' && i.received === 'undefined') {
+        frase = `Preencha ${alvo.rotulo}.`
+      } else {
+        frase = `Confira ${alvo.rotulo}.`
+      }
+    }
+  }
+  return createError({ statusCode: 400, statusMessage: frase,
+    data: { tipo: 'cadastro', campo, ...(item !== undefined ? { item } : {}) } })
+}
+
+/**
+ * O cliente do pedido — e o que se escreve nele ANTES de pagar (B14).
+ *
+ * O checkout gravava o cadastro inteiro na hora do formulário. O formulário
+ * não prova que o e-mail é de quem digitou, e isso dava duas coisas:
+ *
+ *   1. **O e-mail sequestrado.** O primeiro CPF digitado com um e-mail ficava
+ *      carimbado na linha pra sempre: bastava gerar um checkout com o e-mail de
+ *      alguém e um CPF válido qualquer, sem pagar, e o dono de verdade levava
+ *      "Este e-mail já está cadastrado com outro CPF" toda vez que tentasse
+ *      comprar.
+ *   2. **O cadastro reescrito.** Quem sabia e-mail + CPF reescrevia nome,
+ *      telefone, nascimento, Instagram, endereço e o CONSENTIMENTO de
+ *      novidades da pessoa, sem pagar nada.
+ *
+ * A régua agora é o pagamento: custa dinheiro no nome de alguém. O formulário
+ * inteiro vai pro PEDIDO (`cadastro_pendente`, db/028) e só passa pro cadastro
+ * quando o pedido vira 'pago'. Aqui, antes de pagar, só o mínimo pra o pedido
+ * ter dono:
+ *
+ *   · e-mail novo → nasce com nome, CPF e telefone. Sem consentimento, sem
+ *     senha, sem o resto (chega no pagamento);
+ *   · cliente sem CPF (nasceu no balcão) → o CPF é preenchido, como sempre
+ *     foi: é ele que conta o teto por CPF e o uso de cupom;
+ *   · mesmo CPF → nada muda aqui. O cadastro novo vale no pagamento;
+ *   · CPF diferente, e o e-mail NUNCA pagou nada e não tem pedido de pé → o
+ *     e-mail é de quem chegou agora: a linha troca de CPF e o perfil de antes
+ *     (que ninguém provou) é zerado, inclusive o cliente do Asaas, que foi
+ *     criado com o CPF antigo. É isso que devolve o e-mail ao dono quando um
+ *     desconhecido o usou sem pagar;
+ *   · CPF diferente, e o e-mail já pagou (ou tem pedido de pé) → 409, como
+ *     antes. O pedido de pé segura o CPF porque o teto e o cupom contam pelo
+ *     CPF da linha do cliente: trocar agora mudaria de dono o que está em jogo.
+ *
+ * A linha do cliente é TRAVADA antes da decisão (`FOR UPDATE`), e o "já pagou
+ * / tem pedido de pé" é lido num segundo comando, DEPOIS da trava: em READ
+ * COMMITTED cada comando enxerga o que foi confirmado até ele começar, então
+ * o pedido que outra compra do mesmo e-mail acabou de gravar entra na conta.
+ */
+async function gravarCliente(c: PoolClient, d: {
+  orgId: string; email: string; documento: string; nome: string
+  telefone: string | null; cadastro: Cadastro
+}): Promise<{ id: string; asaas_customer_id: string | null }> {
+  const novo = await c.query(
+    `INSERT INTO customers (org_id, name, email, document, phone)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (org_id, email) DO NOTHING
+     RETURNING id, asaas_customer_id`,
+    [d.orgId, d.nome, d.email, d.documento, d.telefone])
+  if (novo.rows[0]) return novo.rows[0]
+
+  const { rows: [cli] } = await c.query(
+    `SELECT id, document, asaas_customer_id FROM customers
+      WHERE org_id = $1 AND email = $2 FOR UPDATE`, [d.orgId, d.email])
+  if (!cli.document) {
+    await c.query(`UPDATE customers SET document = $2 WHERE id = $1`, [cli.id, d.documento])
+    return cli
+  }
+  if (cli.document === d.documento) return cli
+
+  const { rows: [situacao] } = await c.query(
+    `SELECT EXISTS (SELECT 1 FROM orders WHERE customer_id = $1 AND paid_at IS NOT NULL) AS pagou,
+            EXISTS (SELECT 1 FROM orders WHERE customer_id = $1 AND status = ANY($2::text[])) AS de_pe`,
+    [cli.id, PEDIDO_EM_PE as unknown as string[]])
+  if (situacao.pagou || situacao.de_pe) {
+    // Sem nenhum pedaço do CPF gravado: esta resposta sai pra quem digitar
+    // QUALQUER e-mail, e "final 42" junto do e-mail de outra pessoa é dado
+    // pessoal dela entregue a um desconhecido. Quem é o dono sabe o próprio CPF.
+    throw createError({ statusCode: 409,
+      statusMessage: 'Este e-mail já está cadastrado com outro CPF. '
+        + 'Use o CPF do cadastro ou outro e-mail.',
+      data: { tipo: 'email_de_outro_cpf' } })
+  }
+
+  await c.query(
+    `UPDATE customers SET document = $2, name = $3, phone = $4,
+            birth_date = NULL, instagram = NULL,
+            zip_code = NULL, street = NULL, address_number = NULL, neighborhood = NULL,
+            city = NULL, state = NULL, address_complement = NULL,
+            password_hash = NULL, registered_at = NULL,
+            marketing_opt_in = false, marketing_opt_in_at = NULL,
+            asaas_customer_id = NULL
+      WHERE id = $1`,
+    [cli.id, d.documento, d.nome, d.telefone])
+  // Sem o CPF de ninguém no registro: o que importa pra quem investiga é que
+  // o e-mail mudou de dono, e quando.
+  await c.query(
+    `INSERT INTO audit_log (entity, entity_id, action, after)
+     VALUES ('customer', $1, 'email_reassumido', $2::jsonb)`,
+    [cli.id, JSON.stringify({ motivo: 'CPF novo; o anterior nunca pagou e não tinha pedido de pé' })])
+  return { id: cli.id, asaas_customer_id: null }
+}
+
+/**
+ * O formulário do cadastro como ele vai pro pedido (`orders.cadastro_pendente`).
+ * Quem lê é o gatilho `aplicar_cadastro_do_pedido_pago` (db/028): as chaves
+ * daqui são o contrato com ele.
+ *
+ * `cadastroDoSite` é o que marca "cadastrado pelo site" (`registered_at`, o
+ * filtro de clientes): era a senha, que saiu (B17). Quem mandou nascimento ou
+ * endereço passou pelo formulário completo da página.
+ */
+export function cadastroPendente(d: {
+  documento: string; nome: string; telefone: string | null; cadastro: Cadastro
+}) {
+  const e = d.cadastro.endereco
+  return {
+    documento: d.documento,
+    nome: d.nome,
+    telefone: d.telefone,
+    nascimento: d.cadastro.nascimento,
+    instagram: d.cadastro.instagram,
+    endereco: e ? { ...e } : null,
+    aceitaNovidades: d.cadastro.aceitaNovidades,
+    cadastroDoSite: !!(d.cadastro.nascimento || e),
+  }
 }
 
 /** Desfaz pedido que não virou cobrança: libera estoque e marca como falhou. */

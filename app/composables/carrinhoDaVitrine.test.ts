@@ -19,10 +19,11 @@ import { readFileSync } from 'node:fs'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { db, q, q1 } from '../../server/utils/db'
 import {
-  ajustarQuantidade, carimboDePago, chaveDaLinha, destinoSemCarrinho,
-  faltaNaDeclaracao, impedimentoDaLinha, itensDoCheckout, minimoDaLinha,
-  pedeDeclaracaoDeMeia, pendenciasDoCarrinho, tetoDaLinha, totaisDoCarrinho,
-  type LinhaDoPedido,
+  ajustarQuantidade, caminhoDoErro, carimboDePago, carrinhoParaGuardar, chaveDaLinha, codigoDePromoter,
+  dataNoFuso, destinoSemCarrinho, enderecoDoLocal, falhaDaConsulta, faltaNaDeclaracao,
+  impedimentoDaLinha, itensDoCheckout, minimoDaLinha, paginaDeErro, pedeDeclaracaoDeMeia,
+  pendenciasDoCarrinho, restaurarCarrinho, situacaoDaCobranca, situacaoDoPedido, tetoDaLinha,
+  totaisDoCarrinho, VERSAO_DO_CARRINHO, type LinhaDoPedido,
 } from './carrinhoDaVitrine'
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
@@ -207,6 +208,185 @@ describe('mínimo do lote — a trava que só existe na tela', () => {
   })
 })
 
+describe('B32 · o mínimo é do LOTE, pela soma das linhas', () => {
+  const lote = { id: 'L', minPorCompra: 4, maxPorCompra: 10 }
+  const v = { tipoId: 'M', maxPorCompra: 10 }
+  it('com 2 meias no carrinho, as inteiras do mesmo lote começam em 2 (não em 4)', () => {
+    expect(ajustarQuantidade(0, 1, lote, v, 2)).toBe(2)
+    expect(ajustarQuantidade(0, 1, lote, v)).toBe(4)
+  })
+  it('descer abaixo do que falta pro mínimo tira a linha', () => {
+    expect(ajustarQuantidade(2, -1, lote, v, 2)).toBe(0)
+    expect(ajustarQuantidade(3, -1, lote, v, 2)).toBe(2)
+  })
+  it('uma linha com 2 na prateleira compra se outra linha do lote completa o mínimo', () => {
+    const poucas = { tipoId: 'M', maxPorCompra: 2 }
+    expect(impedimentoDaLinha(lote, poucas)).toMatch(/Mínimo de 4/)
+    expect(impedimentoDaLinha(lote, poucas, 2)).toBeNull()
+  })
+  it('a pendência do carrinho soma o lote e diz quanto falta', () => {
+    const linha = (tipoId: string, quantidade: number): LinhaDoPedido => ({
+      loteId: 'L', tipoId, quantidade, nome: tipoId, setor: 'S', lote: 'Lote 1', minDoLote: 4,
+      unitFaceCents: 1000, unitTaxaCents: 100, unitTotalCents: 1100, pedeMeia: false, declaracao: null,
+    })
+    expect(pendenciasDoCarrinho([linha('I', 2), linha('M', 2)])).toEqual([])
+    expect(pendenciasDoCarrinho([linha('I', 1), linha('M', 2)])).toEqual(
+      ['Lote 1: o mínimo por compra é 4 — faltam 1'])
+  })
+})
+
+describe('B24 · a data no fuso do EVENTO, não no do navegador', () => {
+  it('9h da manhã em Salvador é 9h — mesmo com o processo em outro fuso', () => {
+    const instante = '2026-10-04T12:00:00.000Z' // 09:00 em America/Bahia (UTC−3)
+    expect(dataNoFuso(instante, 'America/Bahia')).toMatch(/04 de outubro de 2026.*09:00/)
+    expect(dataNoFuso(instante, 'America/Manaus')).toMatch(/08:00/)
+    expect(dataNoFuso(instante, 'America/Bahia', 'curta')).toMatch(/04\/10\/2026.*09:00/)
+  })
+  it('fuso torto cai no do parque; data vazia ou inválida vira travessão', () => {
+    expect(dataNoFuso('2026-10-04T12:00:00.000Z', 'Lua/Cheia')).toMatch(/09:00/)
+    expect(dataNoFuso(null, 'America/Bahia')).toBe('—')
+    expect(dataNoFuso('não é data', 'America/Bahia')).toBe('—')
+  })
+})
+
+describe('B07 · o código do promoter no link', () => {
+  it('lê ?promoter=, em maiúsculas; lixo não vira código', () => {
+    expect(codigoDePromoter('ubata')).toBe('UBATA')
+    expect(codigoDePromoter(['ibira', 'outro'])).toBe('IBIRA')
+    expect(codigoDePromoter('')).toBeNull()
+    expect(codigoDePromoter(undefined)).toBeNull()
+    expect(codigoDePromoter('<script>')).toBeNull()
+    expect(codigoDePromoter('x'.repeat(41))).toBeNull()
+  })
+})
+
+describe('B19 · o carrinho sobrevive ao F5 e ao Voltar', () => {
+  const setores = [{ lotes: [
+    { id: 'L1', situacao: 'disponivel', minPorCompra: 1, maxPorCompra: 5, variacoes: [
+      { tipoId: 'I', maxPorCompra: 5, esgotado: false },
+      { tipoId: 'M', maxPorCompra: 3, esgotado: false }] },
+    { id: 'L2', situacao: 'esgotado', minPorCompra: 1, maxPorCompra: 0, variacoes: [
+      { tipoId: null, maxPorCompra: 0, esgotado: true }] },
+  ] }]
+  const linha = (loteId: string, tipoId: string | null, quantidade: number, declaracao: any = null): LinhaDoPedido => ({
+    loteId, tipoId, quantidade, nome: 'x', setor: 'S', unitFaceCents: 1000, unitTaxaCents: 100,
+    unitTotalCents: 1100, pedeMeia: !!declaracao, declaracao,
+  })
+
+  it('volta o que a vitrine de agora ainda vende, nunca acima do teto de agora', () => {
+    const salvo = carrinhoParaGuardar('ev', [
+      linha('L1', 'I', 2), linha('L1', 'M', 9, { motivo: 'estudante', documento: '123' }),
+      linha('L2', null, 1), linha('L9', null, 1),
+    ], 'UBATA', { comDocumento: true })
+    const r = restaurarCarrinho(salvo, 'ev', setores)
+    expect(r.quantidades).toEqual({ [chaveDaLinha('L1', 'I')]: 2, [chaveDaLinha('L1', 'M')]: 3 })
+    expect(r.declaracoes[chaveDaLinha('L1', 'M')]).toEqual({ motivo: 'estudante', documento: '123' })
+  })
+  it('carrinho de outro evento ou de versão velha não restaura nada', () => {
+    const salvo = carrinhoParaGuardar('ev', [linha('L1', 'I', 2)], null, { comDocumento: true })
+    expect(restaurarCarrinho(salvo, 'outro', setores).quantidades).toEqual({})
+    expect(restaurarCarrinho({ ...salvo, versao: VERSAO_DO_CARRINHO - 1 }, 'ev', setores).quantidades).toEqual({})
+    expect(restaurarCarrinho(null, 'ev', setores).quantidades).toEqual({})
+  })
+  it('a gravação de cada mudança deixa de fora o número do documento da meia', () => {
+    const salvo = carrinhoParaGuardar('ev', [linha('L1', 'M', 1, { motivo: 'estudante', documento: '123' })],
+      'UBATA', { comDocumento: false })
+    expect(salvo.linhas[0].declaracao).toEqual({ motivo: 'estudante', documento: '' })
+    expect(salvo.promoter).toBe('UBATA')
+    expect(JSON.stringify(salvo)).not.toContain('123')
+  })
+})
+
+describe('B10 · a falha da consulta não vira "não encontrado"', () => {
+  it('só 404 (e o 400 do link incompleto) é "não existe"; 429 é o freio; o resto é fora do ar', () => {
+    expect(falhaDaConsulta(null)).toBeNull()
+    expect(falhaDaConsulta({ statusCode: 404 })).toBe('nao_encontrado')
+    expect(falhaDaConsulta({ statusCode: 400 })).toBe('nao_encontrado')
+    expect(falhaDaConsulta({ statusCode: 429 })).toBe('freio')
+    // banco fora do ar, gateway, rede: quem tem o link certo NÃO lê "não existe"
+    expect(falhaDaConsulta({ statusCode: 500 })).toBe('fora_do_ar')
+    expect(falhaDaConsulta({ statusCode: 503 })).toBe('fora_do_ar')
+    expect(falhaDaConsulta({ message: 'fetch failed' })).toBe('fora_do_ar')
+    expect(falhaDaConsulta({ response: { status: 404 } })).toBe('nao_encontrado')
+  })
+})
+
+describe('B25 · a página de erro do site, em português', () => {
+  it('404 diz o que não achou, pelo caminho; 5xx pede pra tentar de novo', () => {
+    expect(paginaDeErro(404, '/e/nao-existe').titulo).toBe('Evento não encontrado')
+    expect(paginaDeErro(404, '/ingressos/PED-X').titulo).toBe('Pedido não encontrado')
+    expect(paginaDeErro(404, '/transferencia/abc').titulo).toBe('Link não encontrado')
+    expect(paginaDeErro(404, '/qualquer-coisa')).toMatchObject({ titulo: 'Página não encontrada', tentarDeNovo: false })
+    expect(paginaDeErro(500, '/e/x')).toMatchObject({ titulo: 'A bilheteria não respondeu agora', tentarDeNovo: true })
+    expect(paginaDeErro(undefined).tentarDeNovo).toBe(true)
+    expect(paginaDeErro(403, '/x').tentarDeNovo).toBe(false)
+  })
+  it('quem estava no painel volta pro painel; o comprador volta pros eventos', () => {
+    expect(paginaDeErro(404, '/admin/eventos').voltar).toEqual({ para: '/admin', rotulo: 'Voltar ao painel' })
+    expect(paginaDeErro(404, '/e/x').voltar.para).toBe('/')
+  })
+  it('o caminho do erro: no navegador vale a barra de endereço, não a rota de antes da navegação', () => {
+    // a navegação pelo roteador pra um evento que não existe: a rota "atual" ainda é a home
+    expect(caminhoDoErro({ enderecoDoNavegador: '/e/nao-existe', rota: '/' })).toBe('/e/nao-existe')
+    expect(paginaDeErro(404, caminhoDoErro({ enderecoDoNavegador: '/e/nao-existe', rota: '/' })).titulo)
+      .toBe('Evento não encontrado')
+    // no servidor: a rota; sem rota, a URL inteira do erro
+    expect(caminhoDoErro({ rota: '/ingressos/PED-X' })).toBe('/ingressos/PED-X')
+    expect(caminhoDoErro({ url: 'http://127.0.0.1:3121/transferencia/abc?x=1' })).toBe('/transferencia/abc')
+    expect(caminhoDoErro({})).toBe('/')
+  })
+  it('nada de inglês em frase nenhuma', () => {
+    for (const [s, c] of [[404, '/'], [404, '/e/x'], [500, '/'], [400, '/'], [404, '/admin']] as const) {
+      const p = paginaDeErro(s, c)
+      expect(`${p.titulo} ${p.frase}`).not.toMatch(/\b(not found|error|page)\b/i)
+    }
+  })
+})
+
+describe('B31 · o endereço sem pedaço solto', () => {
+  it('sem logradouro sai só "Cidade/UF"; sem nada, vazio', () => {
+    expect(enderecoDoLocal({ endereco: 'Rua A, 10', cidade: 'Salvador', estado: 'BA' })).toBe('Rua A, 10 — Salvador/BA')
+    expect(enderecoDoLocal({ endereco: '', cidade: 'Salvador', estado: 'BA' })).toBe('Salvador/BA')
+    expect(enderecoDoLocal({ endereco: 'Rua A', cidade: 'Salvador', estado: null })).toBe('Rua A — Salvador')
+    expect(enderecoDoLocal({ endereco: null, cidade: null, estado: null })).toBe('')
+    expect(enderecoDoLocal(null)).toBe('')
+  })
+})
+
+describe('B01/B10 · a situação do pedido na página dos ingressos', () => {
+  it('estorno PARCIAL é venda de pé: ingressos aparecem, com quanto voltou', () => {
+    const s = situacaoDoPedido('estornado_parcial', { estornadoCents: 2000 })
+    expect(s.vivo, 'o estorno de R$ 20 sumia com os ingressos que continuam valendo').toBe(true)
+    expect(s.frase).toContain('R$ 20,00')
+    expect(s.frase).toContain('continuam valendo')
+    expect(s.rotuloDoTotal).toBe('Total pago')
+  })
+  it('cada status fora do ar diz o QUE houve — nenhum lê "ainda não foi pago"', () => {
+    const esperado: Record<string, RegExp> = {
+      em_analise: /em análise/, expirado: /prazo para pagar/, cancelado: /cancelado/,
+      falhou: /não foi aprovado/, estornado: /devolvido/, chargeback: /contestado/, disputa: /contestado/,
+    }
+    for (const [status, frase] of Object.entries(esperado)) {
+      const s = situacaoDoPedido(status)
+      expect(s.vivo, status).toBe(false)
+      expect(s.frase, status).toMatch(frase)
+      expect(s.frase, status).not.toContain('ainda não foi pago')
+      expect(s.rotuloDoTotal, status).toBe('Total')
+    }
+    expect(situacaoDoPedido('aguardando_pagamento').frase).toContain('ainda não foi pago')
+    expect(situacaoDoPedido('pago')).toMatchObject({ vivo: true, frase: null, selo: { classe: 'selo-ok' } })
+  })
+  it('PIX pago depois do prazo não é "expirou" (a página tem o bloco dele)', () => {
+    expect(situacaoDoPedido('expirado', { pagoSemIngresso: true })).toMatchObject({
+      frase: null, selo: { texto: 'PAGAMENTO RECEBIDO' } })
+  })
+  it('na cobrança, o estorno parcial não é "pagamento devolvido, ingressos não valem"', () => {
+    expect(situacaoDaCobranca('estornado_parcial')).toBeNull()
+    expect(situacaoDaCobranca('estornado')?.final).toBe(true)
+    expect(carimboDePago('ev', { status: 'estornado_parcial', pedido: 'PED-1' })).toEqual({ slug: 'ev', pedido: 'PED-1' })
+  })
+})
+
 describe('declaração de meia-entrada', () => {
   it('a lista de motivos é a da lei — motivo inventado não passa', () => {
     expect(faltaNaDeclaracao({ motivo: '', documento: '' })).toMatch(/Escolha o motivo/)
@@ -221,6 +401,26 @@ describe('declaração de meia-entrada', () => {
     expect(faltaNaDeclaracao({ motivo: 'estudante', documento: '  ' }))
       .toMatch(/Informe o número/)
     expect(faltaNaDeclaracao({ motivo: 'estudante', documento: '2024-118822' })).toBeNull()
+  })
+
+  it('matriz 23 · número com 2 caracteres trava na vitrine — a porta recusa menos de 3', () => {
+    // trava: o `documento.length < 3` (sem ele, "AB" passava daqui e morria num 400 no pagamento)
+    expect(faltaNaDeclaracao({ motivo: 'estudante', documento: 'AB' })).toMatch(/pelo menos 3 caracteres/)
+    expect(faltaNaDeclaracao({ motivo: 'estudante', documento: ' AB ' })).toMatch(/pelo menos 3 caracteres/)
+    expect(faltaNaDeclaracao({ motivo: 'estudante', documento: 'ABC' })).toBeNull()
+  })
+
+  it('matriz 23 · o número que sobrou ESCONDIDO (Estudante → Idoso) não trava nem vai pra porta', () => {
+    // travas: o `if (!MOTIVOS[motivo].exigeNumero) return null` e o `comNumero` de
+    // itensDoCheckout — sem eles a pessoa ficava presa num campo que a tela não mostra mais
+    expect(faltaNaDeclaracao({ motivo: 'idoso', documento: 'AB' }),
+      'cobrou o número de um campo escondido').toBeNull()
+    const lote = { id: 'lote-1' }
+    const meia = { tipoId: 'tipo-1', nome: 'Meia-entrada', exigeDocumento: true, totalCents: 1650 }
+    const [item] = itensDoCheckout([linha(lote, meia, 1, { motivo: 'idoso', documento: 'CART-123' })]) as any[]
+    expect(item.meia, 'o número escondido foi pro ingresso de idoso').toEqual({ motivo: 'idoso', documento: undefined })
+    const [estudante] = itensDoCheckout([linha(lote, meia, 1, { motivo: 'estudante', documento: ' CART-123 ' })]) as any[]
+    expect(estudante.meia).toEqual({ motivo: 'estudante', documento: 'CART-123' })
   })
 
   it('gratuidade não é meia: total zero não pede motivo', () => {

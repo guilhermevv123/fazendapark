@@ -41,6 +41,7 @@ import { aplicarCupom, CupomRecusado, resgatarCupom } from '../../utils/cupom'
 import { faceDoTipo, type ModoTaxa } from '../../utils/dinheiro'
 import { cpfValido } from '../../utils/documento'
 import { estaPublicado, portaDeVenda } from '../e/[slug].get'
+import { conferirFreio, frearPortaPublica, marcarNoFreio } from '../../utils/sessao'
 
 const Entrada = z.object({
   eventSlug: z.string().min(1),
@@ -66,6 +67,12 @@ const Entrada = z.object({
 })
 
 export default defineEventHandler(async (event) => {
+  // B04: sem freio, esta rota era um dicionário de cupons — "não encontramos"
+  // × "venceu/esgotou/vale" responde se o código existe. Dois baldes por IP:
+  // conferências no geral, e códigos que não existem (o sinal do dicionário).
+  frearPortaPublica(event, 'cupom')
+  conferirFreio(event, 'cupom_errado')
+
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
     throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
@@ -129,6 +136,7 @@ export default defineEventHandler(async (event) => {
     }
   } catch (e: any) {
     if (e instanceof CupomRecusado) {
+      if (e.motivo === 'inexistente') marcarNoFreio(event, 'cupom_errado')
       return { ok: false, codigo, motivo: e.motivo, recado: e.recado, parcial: false }
     }
     throw e
