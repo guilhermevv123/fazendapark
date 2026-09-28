@@ -33,7 +33,8 @@
  * régua do que é "pedido com dinheiro" é `PEDIDO_VIVO()` de `utils/liquido.ts`,
  * a mesma do borderô e do teto do saque.
  */
-import { q, q1 } from '../../utils/db'
+import { FUSO_DO_BANCO, q, q1 } from '../../utils/db'
+import { ehChavePeriodo, faixaDoPeriodo, hojeNoFuso } from '../../../app/composables/painelPeriodo'
 import { ligado as simuladoLigado } from '../../utils/gateway-simulado'
 import {
   CATALOGO, SQL_AVISOS_GUARDADOS, SQL_EXTRATO_SIMULADO, SQL_PEDIDOS_DO_PERIODO,
@@ -68,9 +69,22 @@ export default defineEventHandler(async (event) => {
 
   const busca = getQuery(event)
 
+  // Proposta 10: o atalho de período fala o vocabulário do painel (Hoje, 7 dias, 30 dias, Este
+  // mês, Mês passado, Este ano), resolvido no calendário do PARQUE. "Tudo" não existe aqui: a
+  // conferência lê o extrato do gateway, que precisa de janela com começo. Data à mão ganha do
+  // atalho; sem nada, o padrão de sempre (este mês).
+  const chave = typeof busca.periodo === 'string' ? busca.periodo : ''
+  if (chave && (!ehChavePeriodo(chave) || chave === 'tudo')) {
+    throw createError({ statusCode: 400, statusMessage: 'Período desconhecido. Escolha um dos atalhos da tela.' })
+  }
+  let de = busca.de
+  let ate = busca.ate
+  const periodo = !de && !ate && ehChavePeriodo(chave) ? chave : null
+  if (periodo) ({ de, ate } = faixaDoPeriodo(periodo, hojeNoFuso(FUSO_DO_BANCO)) as { de: string; ate: string })
+
   let janela
   try {
-    janela = lerJanela(busca.de, busca.ate)
+    janela = lerJanela(de, ate)
   } catch (e: any) {
     throw createError({ statusCode: 400, statusMessage: e?.message ?? 'Período inválido.' })
   }
@@ -261,7 +275,7 @@ export default defineEventHandler(async (event) => {
       ORDER BY created_at DESC LIMIT 1`, [orgId])
 
   return {
-    periodo: { de: janela.de, ate: janela.ate, dias: janela.dias },
+    periodo: { de: janela.de, ate: janela.ate, dias: janela.dias, atalho: periodo },
     evento: evento ? { id: evento.id, nome: evento.name } : null,
     organizacao: org?.name ?? null,
     fonte: {

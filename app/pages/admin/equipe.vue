@@ -9,6 +9,8 @@
  */
 definePageMeta({ layout: 'admin' })
 
+import PainelFalha from '~/components/painel/Falha.vue'
+
 const { data, refresh, pending, error: falha } = await useFetch<any>('/api/admin/equipe')
 
 const erro = ref('')
@@ -81,15 +83,44 @@ async function mudar(p: any, corpo: any) {
   }
 }
 
+/**
+ * EQP-01: trocar o papel no select PEDE confirmação antes de gravar.
+ *
+ * Gravar derruba todas as sessões da pessoa (`equipe/index.patch.ts`: quem foi rebaixado não pode
+ * seguir com a tela velha aberta) — e antes isso acontecia no primeiro toque no select: mudar a
+ * portaria pra Operação no meio do evento desconectava o celular do portão sem aviso. Agora o select
+ * só ARMA a troca; a linha mostra o que vai acontecer, com o nome, e grava no "Confirmar troca".
+ * Cancelar devolve o select ao papel verdadeiro (a `key` da linha muda e ele é recriado).
+ */
+const trocaDePapel = ref<{ id: string; nome: string; de: string; para: string; sessoes: number } | null>(null)
+function armarTroca(p: any, para: string) {
+  confirmando.value = ''
+  confirmandoSenha.value = ''
+  if (para === p.papel) { trocaDePapel.value = null; return }
+  trocaDePapel.value = { id: p.id, nome: p.nome, de: p.papel, para, sessoes: Number(p.sessoesAbertas) || 0 }
+}
+function cancelarTroca() {
+  trocaDePapel.value = null
+  versaoDasLinhas.value++
+}
+async function confirmarTroca(p: any) {
+  const t = trocaDePapel.value
+  if (!t || t.id !== p.id) return
+  trocaDePapel.value = null
+  await mudar(p, { papel: t.para })
+}
+
 /** "Nova senha": primeiro clique arma, segundo sorteia. Derruba as sessões da pessoa. */
 function pedirNovaSenha(p: any) {
   confirmando.value = ''
+  if (trocaDePapel.value) cancelarTroca()
   if (confirmandoSenha.value === p.id) return mudar(p, { novaSenha: true })
   confirmandoSenha.value = p.id
 }
 
 function pedirDesativar(p: any) {
   confirmandoSenha.value = ''
+  if (trocaDePapel.value) cancelarTroca()
   if (!p.ativo) return mudar(p, { ativo: true })
   if (confirmando.value === p.id) return mudar(p, { ativo: false })
   confirmando.value = p.id
@@ -181,11 +212,35 @@ useHead({ title: 'Equipe' })
                 <p class="text-xs text-tinta-fraca">{{ p.email }}</p>
               </td>
               <td class="px-3 py-3">
-                <select :key="`${p.id}-${versaoDasLinhas}`" :value="p.papel" class="campo py-1 text-sm"
+                <select :key="`${p.id}-${versaoDasLinhas}`" :value="p.papel" class="campo min-h-[40px] py-1 text-sm"
+                        data-parte="papel" :aria-label="`Papel de ${p.nome}`"
                         :disabled="salvando || p.id === data.eu"
-                        @change="mudar(p, { papel: ($event.target as HTMLSelectElement).value })">
+                        :title="p.id === data.eu ? 'O próprio papel não se muda aqui — peça a outro master.' : undefined"
+                        @change="armarTroca(p, ($event.target as HTMLSelectElement).value)">
                   <option v-for="o in papeis" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
                 </select>
+                <!-- EQP-01: a troca só grava depois daqui, e diz o que vai acontecer com quem está dentro -->
+                <div v-if="trocaDePapel?.id === p.id" class="mt-2 max-w-[18rem] rounded-card border border-alerta bg-alerta-claro px-3 py-2 text-xs text-tinta"
+                     role="alert" data-parte="confirmar-papel">
+                  <p>
+                    Mudar <strong>{{ p.nome }}</strong> de {{ rotuloDoPapel(trocaDePapel.de) }} para
+                    <strong>{{ rotuloDoPapel(trocaDePapel.para) }}</strong>?
+                    {{ trocaDePapel.sessoes
+                      ? `Isso desconecta ${p.nome} agora (${trocaDePapel.sessoes} ${trocaDePapel.sessoes === 1 ? 'sessão aberta' : 'sessões abertas'}); `
+                      : `Se ${p.nome} estiver dentro, sai na hora; ` }}
+                    entra de novo com a mesma senha, já com o menu novo.
+                  </p>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <button type="button" class="btn-primario min-h-[40px] px-3 py-1 text-xs" data-acao="confirmar-papel"
+                            :disabled="salvando" @click="confirmarTroca(p)">
+                      Confirmar troca
+                    </button>
+                    <button type="button" class="btn-secundario min-h-[40px] px-3 py-1 text-xs" data-acao="cancelar-papel"
+                            @click="cancelarTroca">
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
               </td>
               <td class="px-3 py-3 text-xs text-tinta-suave">
                 {{ quando(p.ultimaEntrada) }}
@@ -200,14 +255,16 @@ useHead({ title: 'Equipe' })
               <td class="px-4 py-3 text-right">
                 <!-- Na linha "você" fica travado: sortear a própria senha derrubava
                      a sessão de quem clicou. A própria se troca no menu da conta. -->
-                <button type="button" class="px-2 text-sm disabled:opacity-30"
+                <button type="button" class="min-h-[40px] px-2 text-sm disabled:opacity-30"
+                        data-acao="nova-senha"
                         :class="confirmandoSenha === p.id ? 'font-semibold text-acao' : 'text-tinta-fraca hover:text-acao'"
                         :disabled="salvando || p.id === data.eu"
                         :title="p.id === data.eu ? 'Pra trocar a sua senha, use “Trocar senha” no menu da conta.' : undefined"
                         @click="pedirNovaSenha(p)">
                   {{ confirmandoSenha === p.id ? 'Confirmar nova senha' : 'Nova senha' }}
                 </button>
-                <button type="button" class="px-2 text-sm disabled:opacity-30"
+                <button type="button" class="min-h-[40px] px-2 text-sm disabled:opacity-30"
+                        data-acao="desativar"
                         :class="confirmando === p.id ? 'font-semibold text-erro' : 'text-tinta-fraca hover:text-erro'"
                         :disabled="salvando || p.id === data.eu"
                         @click="pedirDesativar(p)">
@@ -274,13 +331,8 @@ useHead({ title: 'Equipe' })
 
     <p v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</p>
 
-    <div v-else class="card mt-6">
-      <p class="rotulo-kpi text-erro">Não foi possível carregar a equipe</p>
-      <p class="mt-1 text-sm text-tinta-suave">
-        {{ (falha as any)?.data?.statusMessage || (falha as any)?.message || 'Erro desconhecido.' }}
-      </p>
-      <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
-    </div>
+    <!-- GER-01: 403 diz o motivo sem "Tentar de novo"; sessão vencida leva ao login -->
+    <PainelFalha v-else :falha="falha" o-que="a equipe" :tentar="refresh" />
   </div>
 </template>
 

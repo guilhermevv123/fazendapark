@@ -20,6 +20,7 @@
  */
 import { q } from '../../utils/db'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../utils/liquido'
+import { ambienteDivergente, ambienteEfetivo } from '../../utils/asaas-ambiente'
 
 export default defineEventHandler(async (event) => {
   const orgId = (event.context as any).sessao?.orgId
@@ -27,7 +28,7 @@ export default defineEventHandler(async (event) => {
 
   const linhas = await q<any>(
     `SELECT o.id, o.name, o.slug, o.document, o.asaas_env, o.created_at,
-            (o.asaas_api_key IS NOT NULL) AS tem_asaas,
+            o.asaas_api_key, (o.asaas_api_key IS NOT NULL) AS tem_asaas,
             (SELECT count(*)::int FROM events e WHERE e.org_id = o.id) AS eventos,
             (SELECT count(*)::int FROM events e
               WHERE e.org_id = o.id AND e.status = 'ativo') AS eventos_ativos,
@@ -43,6 +44,10 @@ export default defineEventHandler(async (event) => {
   return linhas.map((o) => ({
     id: o.id, nome: o.name, slug: o.slug, documento: o.document,
     ambienteAsaas: o.asaas_env, temAsaas: o.tem_asaas,
+    // o selo "RECEBENDO / EM TESTES" lê o ambiente EFETIVO (prefixo da chave), não o
+    // `<select>` — ver `utils/asaas-ambiente.ts` (auditoria ORG-01). A chave não sai.
+    ambienteEfetivo: ambienteEfetivo(o.asaas_api_key, o.asaas_env),
+    ambienteDivergente: ambienteDivergente(o.asaas_api_key, o.asaas_env),
     eventos: o.eventos, eventosAtivos: o.eventos_ativos, pessoas: o.pessoas,
     // faturado = o que os compradores pagaram; líquido = o que sobra pro
     // produtor depois de taxa e devolução. Os dois com nome, porque um total

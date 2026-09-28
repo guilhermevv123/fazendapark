@@ -67,10 +67,15 @@ const emit = defineEmits<{ voltar: []; avancar: []; sair: [] }>()
             </li>
           </ol>
         </div>
-        <p class="mt-4 px-1 text-sm text-ink-500">
-          Precisa de ajuda?
-          <NuxtLink to="/admin/suporte" class="font-semibold text-pool-700 hover:text-pool-800">
-            Saiba como configurar o evento
+        <!-- EVT-12: o link prometia "Saiba como configurar o evento" e abria o Suporte do dia do
+             evento (as situações da porta) — guia de configuração não existe. O texto agora diz o
+             que é verdade: cada passo explica o que pede, tudo se ajusta depois de publicado, e o
+             Suporte é o de quando algo dá errado. -->
+        <p class="mt-4 px-1 text-sm text-ink-500" data-parte="ajuda-da-criacao">
+          Cada passo explica o que pede. Preços, lotes e datas continuam editáveis depois de
+          publicar, em Ingressos e Configurações do evento.
+          <NuxtLink to="/admin/suporte" class="mt-1 block font-semibold text-pool-700 hover:text-pool-800">
+            Suporte: o que fazer quando algo dá errado
           </NuxtLink>
         </p>
       </aside>

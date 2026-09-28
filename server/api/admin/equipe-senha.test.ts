@@ -172,7 +172,9 @@ describe('organização: autor na auditoria e nome sem espaços', () => {
     const vazio = await bater(cookie, '/api/admin/organizacao', 'PATCH', { nome: '   ' })
     expect(vazio.status, vazio.msg).toBe(400)
 
-    const ok = await bater(cookie, '/api/admin/organizacao', 'PATCH', { documento: '12345678000199' })
+    // CNPJ com dígito verificador certo: desde CFG-02 (27/09) o PATCH confere o dígito, e o
+    // '…000199' que este teste usava é recusado com frase
+    const ok = await bater(cookie, '/api/admin/organizacao', 'PATCH', { documento: '12345678000195' })
     expect(ok.status, ok.msg).toBe(200)
 
     const linha = await q1<any>(
@@ -181,7 +183,7 @@ describe('organização: autor na auditoria e nome sem espaços', () => {
         ORDER BY id DESC LIMIT 1`, [ORG])
     expect(linha?.user_id, 'auditoria da organização sem autor').toBe(PESSOAS.master.id)
     expect(linha?.actor_email).toBe(PESSOAS.master.email)
-    expect(linha?.after).toMatchObject({ documento: '12345678000199' })
+    expect(linha?.after).toMatchObject({ documento: '12345678000195' })
     expect(linha?.before).toMatchObject({ documento: null })
   }, PRAZO)
 })

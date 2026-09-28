@@ -48,13 +48,22 @@ import { randomInt } from 'node:crypto'
 import { q1, tx } from '../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 import { PAPEIS, ROTULO, roleLegado } from '../../../utils/papeis'
+import { explicarErro } from '../evento/index.post'
 
 const Entrada = z.object({
   // trim ANTES do min: "   " passava no min(2) e virava acesso sem nome
   nome: z.string().trim().min(2).max(120),
-  email: z.string().email().max(160),
+  // CFG-04: trim ANTES do formato. "pessoa@empresa.com.br " (o espaço que o celular põe depois do
+  // autocompletar) voltava 400 "Dados inválidos" — sem dizer o campo nem o que fazer.
+  email: z.string().trim().toLowerCase()
+    .email('formato errado — confira o endereço (ex.: pessoa@empresa.com.br)').max(160),
   papel: z.enum(PAPEIS as [string, ...string[]]),
 })
+
+/** o nome do campo como a tela escreve, pra recusa dizer QUAL (CFG-04) */
+export const ROTULOS_DA_EQUIPE: Record<string, string> = {
+  id: 'Pessoa', nome: 'Nome', email: 'E-mail', papel: 'Papel', ativo: 'Situação', novaSenha: 'Nova senha',
+}
 
 /**
  * Sem I, l, O, 0, 1: a senha vai ser LIDA em voz alta ou copiada de um print,
@@ -77,7 +86,7 @@ export default defineEventHandler(async (event) => {
 
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS_DA_EQUIPE), data: p.error.flatten() })
   }
   const d = p.data
   const papel = d.papel as (typeof PAPEIS)[number]

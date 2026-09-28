@@ -3,40 +3,46 @@
  * Organização — a conta de produtor desta sessão (no menu o nome é singular:
  * o parque é uma organização só, com vários eventos).
  *
- * Hoje é sempre uma: a rota recorta pela organização da sessão, de propósito
- * (ver o comentário em server/api/admin/organizacoes.get.ts — ela já devolveu
- * a lista inteira do banco pra qualquer login). A tela é TABELA mesmo assim
- * — busca, filtro e Ações inclusos — porque o dia em que uma pessoa operar
- * duas produtoras, é esta a porta; uma tabela de uma linha só continua certa,
- * uma lista de cartões-resumo de uma linha só não escala pra dez.
+ * A rota recorta pela organização da sessão, de propósito (ver o comentário em
+ * server/api/admin/organizacoes.get.ts — ela já devolveu a lista inteira do banco
+ * pra qualquer login). Por isso a tela é um CARTÃO da organização, e não mais uma
+ * tabela com busca e chips (auditoria ORG-02): busca e filtro sobre uma linha só
+ * eram controle sem efeito, e ainda moravam fora da URL. Se um dia a sessão
+ * enxergar mais de uma organização, cada uma vira um cartão igual a este.
+ *
+ * Os números são os MESMOS da Visão geral com "Tudo" (e do Financeiro): cobrado é
+ * o que os compradores pagaram nos pedidos vivos; líquido é `SQL_LIQUIDO` — o que
+ * sobra pro produtor depois da taxa da plataforma e do que voltou. Mesmo nome,
+ * mesma conta, em qualquer tela.
  */
+import PainelFalha from '~/components/painel/Falha.vue'
+import PainelKpi from '~/components/painel/Kpi.vue'
+import PainelVazio from '~/components/painel/Vazio.vue'
+import { ehDocumentoDeExemplo } from '~/composables/dadosDaEmpresa'
+
 definePageMeta({ layout: 'admin' })
 
 const { data, pending, error: falha, refresh } = await useFetch<any[]>('/api/admin/organizacoes')
 
-const brl = (c: number) => (c / 100).toLocaleString('pt-BR',
-  { style: 'currency', currency: 'BRL' })
-
 /**
- * A situação de cobrança, numa função só: decide a cor do selo E a chave do
- * filtro, pra elas nunca dizerem coisas diferentes uma da outra.
+ * A situação de cobrança pelo ambiente EFETIVO (prefixo da chave): o `<select>`
+ * cru já pintou "EM TESTES" numa conta cobrando de verdade (ORG-01).
  */
-function situacao(o: any): { chave: 'sem' | 'testes' | 'recebendo'; t: string; c: string } {
-  if (!o.temAsaas) return { chave: 'sem', t: 'SEM COBRANÇA', c: 'selo-erro' }
-  return o.ambienteAsaas === 'production'
-    ? { chave: 'recebendo', t: 'RECEBENDO', c: 'selo-ok' }
-    : { chave: 'testes', t: 'EM TESTES', c: 'selo-alerta' }
+function situacao(o: any): { t: string; c: string; frase: string } {
+  if (!o.temAsaas) return { t: 'SEM COBRANÇA', c: 'selo-erro', frase: 'Sem chave do Asaas — nenhuma cobrança sai daqui.' }
+  return (o.ambienteEfetivo ?? o.ambienteAsaas) === 'production'
+    ? { t: 'RECEBENDO', c: 'selo-ok', frase: 'A cobrança vai para a conta de produção do Asaas.' }
+    : { t: 'EM TESTES', c: 'selo-alerta', frase: 'Chave de testes (sandbox): ninguém é cobrado de verdade.' }
 }
 
-const busca = ref('')
-const filtro = ref<'todos' | 'sem' | 'testes' | 'recebendo'>('todos')
-const temFiltro = computed(() => !!busca.value.trim() || filtro.value !== 'todos')
-
-const lista = computed(() => (data.value ?? []).filter((o: any) => {
-  if (filtro.value !== 'todos' && situacao(o).chave !== filtro.value) return false
-  const t = busca.value.trim().toLowerCase()
-  return !t || `${o.nome} ${o.slug} ${o.documento ?? ''}`.toLowerCase().includes(t)
-}))
+/** documento como a pessoa lê — o de exemplo da instalação não é documento de ninguém */
+function documentoLegivel(d: string | null | undefined): string | null {
+  if (!d || ehDocumentoDeExemplo(d)) return null
+  const x = d.replace(/[^0-9A-Za-z]/g, '').toUpperCase()
+  if (x.length === 14) return `${x.slice(0, 2)}.${x.slice(2, 5)}.${x.slice(5, 8)}/${x.slice(8, 12)}-${x.slice(12)}`
+  if (x.length === 11) return `${x.slice(0, 3)}.${x.slice(3, 6)}.${x.slice(6, 9)}-${x.slice(9)}`
+  return d
+}
 
 useHead({ title: 'Organização' })
 </script>
@@ -47,98 +53,69 @@ useHead({ title: 'Organização' })
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Organização</h1>
         <p class="mt-1 text-tinta-suave">
-          A conta do parque: eventos, clientes e dinheiro num lugar só.
+          A conta do parque: eventos, equipe e dinheiro num lugar só.
         </p>
       </div>
-      <NuxtLink to="/admin/configuracoes" class="btn-secundario">Configurações</NuxtLink>
+      <NuxtLink to="/admin/configuracoes" class="btn-secundario min-h-[40px]" data-acao="editar">
+        <IconeMenu nome="lapis" :tamanho="16" /> Editar em Dados e cobrança
+      </NuxtLink>
     </div>
 
-    <p v-if="!data.length" class="card mt-2 py-12 text-center text-tinta-suave">
-      Nenhuma organização no seu acesso.
-    </p>
+    <PainelVazio v-if="!data.length" icone="config" titulo="Nenhuma organização no seu acesso"
+                 texto="A sessão não está ligada a nenhuma conta de produtor. Entre de novo ou fale com quem administra o painel." />
 
-    <template v-else>
-      <div class="mb-4 flex flex-wrap items-center gap-2">
-        <div class="relative">
-          <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-tinta-fraca">
-            <IconeMenu nome="busca" :tamanho="18" />
-          </span>
-          <input v-model="busca" class="campo w-72 pl-10" placeholder="Buscar por nome, slug ou documento…"
-                 aria-label="Buscar organização">
+    <section v-for="o in data" :key="o.id" class="card grid gap-5" data-parte="organizacao">
+      <header class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="titulo text-xl font-semibold text-ink-900">{{ o.nome }}</p>
+          <p class="mt-0.5 font-mono text-xs text-tinta-fraca">/{{ o.slug }}</p>
+          <p class="mt-1 text-sm text-tinta-suave" data-parte="documento">
+            <template v-if="documentoLegivel(o.documento)">CNPJ/CPF {{ documentoLegivel(o.documento) }}</template>
+            <template v-else>CNPJ/CPF a preencher em Dados e cobrança</template>
+          </p>
         </div>
-        <button v-for="f in (['todos', 'recebendo', 'testes', 'sem'] as const)" :key="f"
-                type="button" :class="filtro === f ? 'chip-ativo' : 'chip'" @click="filtro = f">
-          {{ f === 'todos' ? 'Todos'
-             : f === 'recebendo' ? 'Recebendo'
-             : f === 'testes' ? 'Em testes' : 'Sem cobrança' }}
-        </button>
-      </div>
+        <div class="grid justify-items-end gap-1 text-right">
+          <span :class="situacao(o).c" data-parte="selo-situacao">{{ situacao(o).t }}</span>
+          <p class="max-w-xs text-xs text-tinta-suave">{{ situacao(o).frase }}</p>
+        </div>
+      </header>
 
-      <p v-if="!lista.length" class="card py-12 text-center text-tinta-suave">
-        Nenhuma organização com esses filtros.
+      <p v-if="o.ambienteDivergente" class="faixa-erro text-sm" data-parte="ambiente-divergente">
+        A chave gravada e o ambiente marcado discordam — a cobrança vai para
+        {{ o.ambienteEfetivo === 'production' ? 'PRODUÇÃO' : 'TESTES' }}. Corrija em Dados e cobrança.
       </p>
 
-      <div v-else class="card p-0">
-        <div class="overflow-x-auto">
-          <table class="w-full min-w-[52rem] text-sm">
-            <thead>
-              <tr class="border-b border-linha text-left text-xs text-tinta-fraca">
-                <th class="px-4 py-3 font-semibold">Organização</th>
-                <th class="px-3 py-3 font-semibold">Documento</th>
-                <th class="px-3 py-3 text-right font-semibold">Eventos</th>
-                <th class="px-3 py-3 text-right font-semibold">Faturado</th>
-                <th class="px-3 py-3 font-semibold">Situação</th>
-                <th class="px-4 py-3 text-right font-semibold">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="o in lista" :key="o.id" class="border-b border-linha align-top last:border-0 hover:bg-fundo-cinza">
-                <td class="px-4 py-3">
-                  <p class="font-medium text-tinta">{{ o.nome }}</p>
-                  <p class="font-mono text-xs text-tinta-fraca">/{{ o.slug }}</p>
-                  <p v-if="!o.temAsaas" class="mt-1 text-xs font-medium text-alerta">
-                    Sem chave do Asaas — nenhuma cobrança sai daqui.
-                  </p>
-                </td>
-                <td class="px-3 py-3 text-tinta-suave">{{ o.documento || '—' }}</td>
-                <td class="px-3 py-3 text-right tabular-nums">
-                  <p class="text-tinta">{{ o.eventos }}</p>
-                  <p v-if="o.eventosAtivos" class="text-xs text-ok">
-                    {{ o.eventosAtivos }} ativo{{ o.eventosAtivos > 1 ? 's' : '' }}
-                  </p>
-                </td>
-                <td class="px-3 py-3 text-right tabular-nums">
-                  <p class="font-medium text-tinta">{{ brl(o.faturadoCents) }}</p>
-                  <!-- o que o comprador pagou (linha de cima) e o que sobra pro
-                       produtor depois de taxa e devolução (esta) são números
-                       diferentes de propósito — ver o comentário da rota. -->
-                  <p class="text-xs text-tinta-fraca">líquido {{ brl(o.liquidoCents) }}</p>
-                </td>
-                <td class="px-3 py-3">
-                  <span :class="situacao(o).c">{{ situacao(o).t }}</span>
-                </td>
-                <td class="px-4 py-3 text-right">
-                  <NuxtLink to="/admin/configuracoes"
-                            class="inline-grid size-8 place-items-center rounded-lg text-tinta-fraca transition-colors hover:bg-fundo-cinza hover:text-tinta"
-                            aria-label="Editar organização">
-                    <IconeMenu nome="lapis" :tamanho="16" />
-                  </NuxtLink>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+      <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <PainelKpi rotulo="Líquido do produtor" :valor="reais(o.liquidoCents)" tom="grape" icone="financeiro" compacto destaque
+                   data-kpi="liquido">
+          desde o começo, depois da taxa e das devoluções
+        </PainelKpi>
+        <PainelKpi rotulo="Total cobrado" :valor="reais(o.faturadoCents)" tom="pool" icone="vendas" compacto
+                   data-kpi="cobrado">
+          o que os compradores pagaram
+        </PainelKpi>
+        <PainelKpi rotulo="Eventos" :valor="o.eventos.toLocaleString('pt-BR')" tom="sun" icone="calendario" compacto
+                   data-kpi="eventos">
+          {{ o.eventosAtivos ? `${o.eventosAtivos} publicado${o.eventosAtivos > 1 ? 's' : ''}` : 'nenhum publicado' }}
+        </PainelKpi>
+        <PainelKpi rotulo="Pessoas na equipe" :valor="o.pessoas.toLocaleString('pt-BR')" tom="citrus" icone="pessoas" compacto
+                   data-kpi="pessoas">
+          com acesso ativo ao painel
+        </PainelKpi>
       </div>
-    </template>
+
+      <footer class="flex flex-wrap gap-2 border-t border-linha pt-4">
+        <NuxtLink :to="{ path: '/admin/relatorios', query: { periodo: 'tudo' } }" class="btn-secundario min-h-[40px]">
+          Ver na Visão geral
+        </NuxtLink>
+        <NuxtLink to="/admin/financeiro" class="btn-secundario min-h-[40px]">Financeiro</NuxtLink>
+        <NuxtLink to="/admin/equipe" class="btn-secundario min-h-[40px]">Equipe</NuxtLink>
+      </footer>
+    </section>
   </div>
 
   <p v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</p>
 
-  <div v-else class="card mt-6">
-    <p class="rotulo-kpi text-erro">Não foi possível carregar</p>
-    <p class="mt-1 text-sm text-tinta-suave">
-      {{ (falha as any)?.data?.statusMessage || (falha as any)?.message || 'Erro desconhecido.' }}
-    </p>
-    <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
-  </div>
+  <!-- GER-01: 403 diz o motivo sem "Tentar de novo"; sessão vencida leva ao login -->
+  <PainelFalha v-else :falha="falha" o-que="a organização" :tentar="refresh" />
 </template>

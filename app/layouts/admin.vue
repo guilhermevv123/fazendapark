@@ -11,7 +11,8 @@
  * (`telas.test.ts`) conta os endereços do menu, e duas cópias dariam contagem
  * dobrada que ninguém saberia ler.
  */
-import { ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
+import { decidirAcesso, ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
+import { prenderTab, soltarRolagem, travarRolagem } from '~/composables/painelFoco'
 
 /**
  * O componente de link do item do menu — resolvido AQUI, antes de qualquer
@@ -38,13 +39,33 @@ const route = useRoute()
 const eventoId = computed(() => route.params.id as string | undefined)
 const base = computed(() => (eventoId.value ? `/admin/evento/${eventoId.value}` : '/admin'))
 
-const { data: evento } = await useFetch<any>(
-  () => (eventoId.value ? `/api/admin/evento/${eventoId.value}/resumo` : ''),
-  { immediate: !!eventoId.value, watch: [eventoId] })
-
 // Mesma `key` do middleware de rota: o Nuxt reaproveita a resposta em vez de
 // bater na rota duas vezes por navegação.
 const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+
+/**
+ * O papel de quem está logado — o MESMO que o servidor usa pra trancar a rota
+ * (`users.papel`), agora que `/api/auth/eu` devolve a coluna certa.
+ */
+const papel = computed<Papel | null>(() => {
+  const p = eu.value?.usuario?.papel
+  return ehPapel(p) ? p : null
+})
+
+/**
+ * O resumo do evento (nome e situação, pra trilha e o selo) só é pedido por quem a rota ATENDE
+ * (ADM-56): a portaria recebia 403 nele em toda tela do leitor — pedido perdido e erro no console.
+ * Mesma régua do servidor (`decidirAcesso`), sem lista paralela.
+ */
+const urlDoResumo = computed(() => {
+  const id = eventoId.value
+  if (!id || !papel.value) return ''
+  const url = `/api/admin/evento/${id}/resumo`
+  return decidirAcesso(papel.value, url).liberado ? url : ''
+})
+const { data: evento, refresh: recarregarEvento } = await useFetch<any>(
+  () => urlDoResumo.value, { immediate: !!urlDoResumo.value, watch: false })
+watch(urlDoResumo, (u) => { if (u) recarregarEvento(); else evento.value = null })
 
 const iniciais = computed(() => {
   const n = eu.value?.usuario?.nome
@@ -79,6 +100,8 @@ const gavetaAberta = ref(false)
  * empurra nada.
  */
 const railAberta = ref(false)
+const lateral = ref<HTMLElement | null>(null)
+const botaoDoMenu = ref<HTMLElement | null>(null)
 let temporizadorRecolherRail: ReturnType<typeof setTimeout> | null = null
 function abrirRail() {
   if (temporizadorRecolherRail) { clearTimeout(temporizadorRecolherRail); temporizadorRecolherRail = null }
@@ -87,6 +110,16 @@ function abrirRail() {
 function recolherRail() {
   if (temporizadorRecolherRail) clearTimeout(temporizadorRecolherRail)
   temporizadorRecolherRail = setTimeout(() => { railAberta.value = false }, 200)
+}
+/**
+ * NAV-01: quem navega por TECLADO também abre o trilho. Sem mouse não há hover: com o trilho
+ * recolhido, os filhos dos grupos (Financeiro, Organização, Equipe) ficavam `lg:hidden` e o Tab
+ * não os alcançava. O foco entrando na lateral expande; saindo dela, recolhe.
+ */
+function aoFocarNaLateral() { abrirRail() }
+function aoSairDoFocoDaLateral(e: FocusEvent) {
+  const para = e.relatedTarget as Node | null
+  if (!para || !lateral.value?.contains(para)) recolherRail()
 }
 
 /** Linha do menu com o rail recolhido: ícone centralizado, sem respiro extra. */
@@ -106,6 +139,30 @@ const classeRotuloRail = computed(() => [
 watch(() => route.path, () => {
   gavetaAberta.value = false
   contaAberta.value = false
+})
+
+/**
+ * NAV-05: a gaveta do celular é um painel por cima da tela — Esc fecha, a rolagem do fundo trava,
+ * o Tab fica dentro dela, e ao fechar o foco volta pro botão que abriu.
+ */
+function teclaDaGaveta(e: KeyboardEvent) {
+  if (!gavetaAberta.value) return
+  if (e.key === 'Escape') { gavetaAberta.value = false; return }
+  prenderTab(lateral.value, e)
+}
+watch(gavetaAberta, (aberta, antes) => {
+  if (aberta) {
+    travarRolagem()
+    nextTick(() => lateral.value?.querySelector<HTMLElement>('button, a[href]')?.focus())
+  } else if (antes) {
+    soltarRolagem()
+    nextTick(() => botaoDoMenu.value?.focus())
+  }
+})
+onMounted(() => document.addEventListener('keydown', teclaDaGaveta))
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', teclaDaGaveta)
+  if (gavetaAberta.value) soltarRolagem()
 })
 
 /**
@@ -159,8 +216,29 @@ async function enviarTrocaDeSenha() {
   }
 }
 
+/**
+ * NAV-04: "Sair" sem rede não fazia nada e não dizia nada — o `$fetch` recusava e a promessa
+ * morria calada. Agora a falha vira recado no próprio menu (a sessão continua aberta NESTE
+ * aparelho, e a pessoa precisa saber disso num computador compartilhado da bilheteria). 401 é
+ * sessão que já tinha acabado: é o mesmo que ter saído, segue pro login.
+ */
+const erroAoSair = ref('')
+const saindo = ref(false)
 async function sair() {
-  await $fetch('/api/auth/sair', { method: 'POST' })
+  if (saindo.value) return
+  erroAoSair.value = ''
+  saindo.value = true
+  try {
+    await $fetch('/api/auth/sair', { method: 'POST' })
+  } catch (e: any) {
+    const status = Number(e?.statusCode ?? e?.status ?? e?.response?.status ?? 0)
+    if (status !== 401) {
+      erroAoSair.value = 'Não consegui sair agora — confira a internet e tente de novo. '
+        + 'Até lá, a sessão continua aberta neste aparelho.'
+      saindo.value = false
+      return
+    }
+  }
   // Recarrega de verdade em vez de navegar: `navigateTo` manteria em memória
   // o cache do useFetch com o usuário antigo, e a tela de login apareceria
   // com o nome de quem acabou de sair no canto.
@@ -199,8 +277,9 @@ const itensDoPainel = computed<Item[]>(() => eventoId.value
       // Organização e Equipe entram aqui — a chave do Asaas (quando existir)
       // é da PLATAFORMA inteira, não de cada organização; deixou de fazer
       // sentido ser um assunto próprio no menu.
+      // proposta 17: um nome só por tela — o menu diz o que o h1 e a aba dizem ("Dados e cobrança")
       { nome: 'Configurações', icone: 'config', para: '/admin/configuracoes', filhos: [
-        { nome: 'Geral e cobrança', para: '/admin/configuracoes' },
+        { nome: 'Dados e cobrança', para: '/admin/configuracoes' },
         { nome: 'Organização', para: '/admin/organizacoes' },
         { nome: 'Equipe', para: '/admin/equipe' },
       ] },
@@ -210,15 +289,6 @@ const itensDoPainel = computed<Item[]>(() => eventoId.value
       // do menu" não é "apagar a tela": quem sabe o endereço, ou um link de
       // fora, ainda entra — só não sobra mais como assunto na lateral.
     ])
-
-/**
- * O papel de quem está logado — o MESMO que o servidor usa pra trancar a rota
- * (`users.papel`), agora que `/api/auth/eu` devolve a coluna certa.
- */
-const papel = computed<Papel | null>(() => {
-  const p = eu.value?.usuario?.papel
-  return ehPapel(p) ? p : null
-})
 
 /**
  * O menu filtrado pelo papel.
@@ -288,6 +358,14 @@ const podeAbrir = (para: string) => !!papel.value && podeAbrirPagina(papel.value
 const ativo = (para: string) => para === '/admin'
   ? route.path === para
   : route.path === para || route.path.startsWith(para + '/')
+/**
+ * NAV-03: o cabeçalho do GRUPO acende quando a tela aberta é qualquer filho dele — não só quando
+ * o endereço começa com o do grupo. "Financeiro" (/admin/financeiro) é filho de Relatórios
+ * (/admin/relatorios): pelo prefixo, o grupo ficava apagado e a lateral não dizia em que assunto a
+ * pessoa estava.
+ */
+const grupoAtivo = (i: Item) => !!i.filhos?.some((f) => ativo(f.para)) || ativo(i.para)
+const acesa = (i: Item) => (i.filhos ? grupoAtivo(i) : ativo(i.para))
 
 /**
  * Grupo aberto. Abre sozinho quando a rota atual está dentro dele — senão,
@@ -316,33 +394,60 @@ function alternar(i: Item) {
  */
 /** o segmento da URL não tem acento; o nome que a pessoa lê na trilha tem */
 const NOME_DA_TELA: Record<string, string> = {
-  relatorios: 'Relatórios', organizacoes: 'Organização', configuracoes: 'Configurações',
+  // proposta 17: o mesmo nome do menu, do h1 e da aba
+  relatorios: 'Visão geral', organizacoes: 'Organização', configuracoes: 'Dados e cobrança',
   reconciliacao: 'Reconciliação', sessoes: 'Sessões', transferencias: 'Transferências',
   validacao: 'Validação', historico: 'Histórico', promocionais: 'Promocionais',
   agentes: 'Atendimento IA',
+  // ADM-56: a trilha do borderô saía "BORDERO", sem acento
+  bordero: 'Borderô', pdv: 'Pontos de venda', vender: 'Balcão', caixa: 'Conferência de caixa',
+  auditoria: 'Auditoria', suporte: 'Suporte', filas: 'Filas', clientes: 'Clientes',
+  equipe: 'Equipe', financeiro: 'Financeiro',
 }
 
-const trilha = computed(() => {
-  const degrau = (texto: string, para: string) =>
-    ({ texto, para: podeAbrir(para) ? para : undefined })
-
-  const t: { texto: string; para?: string }[] = [degrau('EVENTOS', '/admin')]
-  if (evento.value?.nome) {
-    t.push(degrau(evento.value.nome.toUpperCase(), `${base.value}/dashboard`))
-  }
+type Degrau = { texto: string; para?: string }
+const trilha = computed<Degrau[]>(() => {
+  const degrau = (texto: string, para: string): Degrau =>
+    ({ texto, para: podeAbrir(para) && para !== route.path ? para : undefined })
   const ultima = route.path.split('/').filter(Boolean).pop()
-  // 'admin' e o próprio id não são página: viram ruído na trilha.
-  if (ultima && ultima !== 'admin' && ultima !== eventoId.value) {
-    t.push({ texto: (NOME_DA_TELA[ultima] ?? ultima.replace(/-/g, ' ')).toUpperCase() })
+  const nomeDaUltima = () => (NOME_DA_TELA[ultima!] ?? ultima!.replace(/-/g, ' ')).toUpperCase()
+
+  // Dentro de um evento: EVENTOS / NOME DO EVENTO / TELA (a lista de eventos é o caminho de volta)
+  if (eventoId.value) {
+    const t: Degrau[] = [degrau('EVENTOS', '/admin')]
+    if (evento.value?.nome) t.push(degrau(evento.value.nome.toUpperCase(), `${base.value}/dashboard`))
+    // 'admin' e o próprio id não são página: viram ruído na trilha.
+    if (ultima && ultima !== 'admin' && ultima !== eventoId.value) t.push({ texto: nomeDaUltima() })
+    return t
   }
-  return t
+
+  // NAV-02: fora de evento, a trilha começa no ASSUNTO da tela — não sempre em "EVENTOS". Em
+  // Configurações ela dizia "EVENTOS / CONFIGURAÇÕES", como se a tela morasse dentro de um evento.
+  if (route.path === '/admin') return [{ texto: 'EVENTOS' }]
+  // o assistente de criação só usa este layout pra dizer a quem não cria que não é o acesso dele —
+  // sem isto a trilha dizia o pedaço cru do endereço, "NOVO"
+  if (route.path === '/admin/evento/novo') return [degrau('EVENTOS', '/admin'), { texto: 'CRIAR EVENTO' }]
+  for (const i of itensDoPainel.value) {
+    const filho = i.filhos?.find((f) => f.para === route.path)
+    if (filho) return [degrau(i.nome.toUpperCase(), i.para), { texto: filho.nome.toUpperCase() }]
+    if (!i.filhos && i.para === route.path) return [{ texto: i.nome.toUpperCase() }]
+  }
+  // telas fora do menu (Auditoria, Suporte, Filas, Reconciliação): só o nome delas
+  return ultima && ultima !== 'admin' ? [{ texto: nomeDaUltima() }] : []
 })
 
+/**
+ * O selo da situação do evento no topo: um pra cada status que o banco tem (ADM-56). O "pausado"
+ * que morava aqui não existe no banco; cancelado, adiado e oculto existiam e não tinham selo — um
+ * evento cancelado não se anunciava em tela nenhuma dele.
+ */
 const situacao: Record<string, { texto: string; classe: string }> = {
   ativo: { texto: 'PUBLICADO', classe: 'selo-ok' },
   rascunho: { texto: 'RASCUNHO', classe: 'selo-neutro' },
-  pausado: { texto: 'PAUSADO', classe: 'selo-alerta' },
   encerrado: { texto: 'ENCERRADO', classe: 'selo-neutro' },
+  cancelado: { texto: 'CANCELADO', classe: 'selo-erro' },
+  adiado: { texto: 'ADIADO', classe: 'selo-alerta' },
+  oculto: { texto: 'OCULTO', classe: 'selo-neutro' },
 }
 </script>
 
@@ -364,8 +469,14 @@ const situacao: Record<string, { texto: string; classe: string }> = {
              gavetaAberta ? 'visible translate-x-0' : 'invisible -translate-x-full lg:visible lg:translate-x-0',
              railAberta ? 'lg:w-72' : 'lg:w-20',
            ]"
+           ref="lateral"
+           :aria-modal="gavetaAberta ? 'true' : undefined"
+           :role="gavetaAberta ? 'dialog' : undefined"
+           :aria-label="gavetaAberta ? 'Menu do painel' : undefined"
            @mouseenter="abrirRail"
-           @mouseleave="recolherRail">
+           @mouseleave="recolherRail"
+           @focusin="aoFocarNaLateral"
+           @focusout="aoSairDoFocoDaLateral">
       <div class="flex h-full flex-col overflow-hidden bg-white px-3 py-5 shadow-pop lg:rounded-2xl lg:shadow-lateral lg:ring-1 lg:ring-ink-200/60">
         <div class="flex items-center justify-between px-3" :class="!railAberta && 'lg:justify-center lg:px-0'">
           <NuxtLink to="/admin" class="flex w-fit shrink-0 items-center">
@@ -389,7 +500,8 @@ const situacao: Record<string, { texto: string; classe: string }> = {
         <!-- `select-none`: rótulo de menu não é texto pra copiar; sem isto, um
              clique duplo arrastado pinta o nome de azul em vez de abrir a tela -->
         <nav aria-label="Menu do painel" class="-mx-1 mt-7 flex flex-1 select-none flex-col overflow-y-auto px-1">
-          <NuxtLink v-if="eventoId" to="/admin"
+          <!-- ADM-56: sem "Voltar aos eventos" pra quem a lista de eventos recusa (portaria) -->
+          <NuxtLink v-if="eventoId && podeAbrir('/admin')" to="/admin"
                     class="mb-3 flex items-center gap-3 rounded-lg px-3 py-2 text-[14px] font-medium text-ink-500 transition-colors hover:bg-ink-100/80 hover:text-ink-900"
                     :class="classeLinhaRail">
             <IconeMenu nome="voltar" :tamanho="18" class="shrink-0" />
@@ -413,16 +525,17 @@ const situacao: Record<string, { texto: string; classe: string }> = {
                          :type="i.filhos ? 'button' : undefined"
                          :aria-current="!i.filhos && route.path === i.para ? 'page' : undefined"
                          :aria-expanded="i.filhos ? abertos.includes(i.nome) : undefined"
+                         :data-aceso="acesa(i) ? 'sim' : undefined"
                          class="group relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] transition-colors"
                          :class="[
-                           ativo(i.para)
+                           acesa(i)
                              ? (i.filhos ? 'bg-pool-50 font-semibold text-pool-800' : 'bg-pool-700 font-semibold text-white shadow-sm')
                              : 'font-medium text-ink-700 hover:bg-ink-100/80 hover:text-ink-900',
                            classeLinhaRail,
                          ]"
                          @click="i.filhos && alternar(i)">
                 <IconeMenu :nome="i.icone" :tamanho="22" class="shrink-0"
-                           :class="ativo(i.para) ? (i.filhos ? 'text-pool-700' : 'text-white') : 'text-pool-600 group-hover:text-pool-700'" />
+                           :class="acesa(i) ? (i.filhos ? 'text-pool-700' : 'text-white') : 'text-pool-600 group-hover:text-pool-700'" />
                 <span class="flex-1 truncate" :class="classeRotuloRail">{{ i.nome }}</span>
                 <IconeMenu v-if="i.filhos" nome="seta" :tamanho="16"
                            class="shrink-0 text-ink-400 transition-transform"
@@ -466,7 +579,7 @@ const situacao: Record<string, { texto: string; classe: string }> = {
              volta a ser transparente, a lateral já carrega a marca. -->
         <header data-parte="topo" class="flex h-16 items-center gap-2 rounded-2xl bg-gradient-to-r from-pool-700 to-grape-700 px-2 text-white shadow-lateral
                        sm:gap-3 sm:px-4 lg:h-auto lg:min-h-[40px] lg:rounded-none lg:bg-none lg:px-0 lg:text-ink-900 lg:shadow-none">
-          <button type="button"
+          <button ref="botaoDoMenu" type="button"
                   class="grid size-11 shrink-0 place-items-center rounded-xl text-white transition-colors hover:bg-white/15 lg:hidden"
                   aria-label="Abrir menu"
                   aria-controls="menu-lateral"
@@ -548,12 +661,18 @@ const situacao: Record<string, { texto: string; classe: string }> = {
                     <IconeMenu nome="lapis" :tamanho="16" class="text-ink-500" />
                     Trocar senha
                   </button>
-                  <button type="button" role="menuitem"
+                  <button type="button" role="menuitem" data-acao="sair"
                           class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900"
+                          :disabled="saindo"
                           @click="sair">
                     <IconeMenu nome="sair" :tamanho="16" class="text-ink-500" />
-                    Sair
+                    {{ saindo ? 'Saindo…' : 'Sair' }}
                   </button>
+                  <!-- NAV-04: sem rede, o clique diz que NÃO saiu (e que a sessão segue aberta aqui) -->
+                  <p v-if="erroAoSair" class="mx-1 mb-1 mt-1 rounded-lg bg-erro-claro px-3 py-2 text-xs text-erro" role="alert"
+                     data-parte="erro-ao-sair">
+                    {{ erroAoSair }}
+                  </p>
                 </template>
                 <NuxtLink v-else to="/entrar" role="menuitem"
                           class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900">

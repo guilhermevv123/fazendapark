@@ -10,10 +10,12 @@
  *
  * ## Quem pode
  *
- * Ninguém classificou `/api/admin/payout` em `utils/papeis.ts`, e isso é a
- * decisão, não o esquecimento: rota não classificada só abre pro master (ver
- * `areaDaRota`, que devolve `null` e `decidirAcesso`, que nega `null` pra todo
- * mundo menos ele). Mandar dinheiro embora é ato de dono.
+ * Master e financeiro: `utils/papeis.ts` classifica `/api/admin/payout` como
+ * área `dinheiro` (antes a rota não tinha classificação e só abria pro master;
+ * a fila passou a ser trabalho do financeiro — ver o comentário ao lado da
+ * linha em `papeis.ts`). Operação e portaria recebem 403 no
+ * `middleware/03.papel.ts`, antes de chegar aqui. A tela esconde o botão pela
+ * MESMA régua (`papelPode(papel, 'dinheiro')` em `financeiro.vue`).
  *
  * **A cerca de organização não cobre este caminho.** O `middleware/02.tenant`
  * só cerca `/api/admin/evento/:id` e `/api/admin/pedido/:id`, que têm o id na

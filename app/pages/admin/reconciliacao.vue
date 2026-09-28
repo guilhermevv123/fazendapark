@@ -30,17 +30,37 @@
  */
 definePageMeta({ layout: 'admin' })
 
+import PainelFalha from '~/components/painel/Falha.vue'
+import PainelPeriodo from '~/components/painel/Periodo.vue'
+import { ehChavePeriodo, type ChavePeriodo } from '~/composables/painelPeriodo'
+
 const route = useRoute()
 
-const de = ref(String(route.query.de ?? ''))
-const ate = ref(String(route.query.ate ?? ''))
-const eventoId = ref(String(route.query.eventoId ?? ''))
+/**
+ * O recorte é o que a URL diz — a cada troca, não só na montagem (REL-07, o mesmo padrão da
+ * Visão geral e da Auditoria). O período fala o vocabulário do painel (proposta 10), sem "Tudo":
+ * a conferência lê o extrato do gateway, que precisa de janela com começo. Padrão: este mês.
+ * O "Hoje" é o dia do parque, resolvido pela rota — não o do navegador.
+ */
+const PADRAO: ChavePeriodo = 'mes'
+const texto = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+const filtro = computed(() => {
+  const q = route.query
+  const de = texto(q.de)
+  const ate = texto(q.ate)
+  const chave = ehChavePeriodo(q.periodo) && q.periodo !== 'tudo' ? q.periodo : PADRAO
+  return { de, ate, periodo: (de || ate ? null : chave) as ChavePeriodo | null, eventoId: texto(q.eventoId) }
+})
 
-const params = computed(() => ({
-  de: de.value || undefined,
-  ate: ate.value || undefined,
-  eventoId: eventoId.value || undefined,
-}))
+const params = computed(() => {
+  const f = filtro.value
+  const p: Record<string, string> = {}
+  if (f.periodo && f.periodo !== PADRAO) p.periodo = f.periodo
+  if (f.de) p.de = f.de
+  if (f.ate) p.ate = f.ate
+  if (f.eventoId) p.eventoId = f.eventoId
+  return p
+})
 
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   '/api/admin/reconciliacao', { query: params })
@@ -48,42 +68,22 @@ const { data, pending, error: falha, refresh } = await useFetch<any>(
 // a rota devolve o array cru, não um objeto com `eventos` dentro
 const { data: eventos } = await useFetch<any[]>('/api/admin/eventos')
 
-watch(params, (p) => {
-  navigateTo({ query: Object.fromEntries(Object.entries(p).filter(([, v]) => v)) },
-    { replace: true })
-})
+type Mudanca = Partial<{ periodo: string | null; de: string; ate: string; eventoId: string }>
+function irPara(m: Mudanca) {
+  const f = { ...filtro.value, ...m }
+  const query: Record<string, string> = {}
+  if (f.de || f.ate) {
+    if (f.de) query.de = f.de
+    if (f.ate) query.ate = f.ate
+  } else if (f.periodo && f.periodo !== PADRAO) query.periodo = f.periodo
+  if (f.eventoId) query.eventoId = f.eventoId
+  return navigateTo({ path: '/admin/reconciliacao', query }, { replace: true })
+}
+const escolherPeriodo = (chave: string) => irPara({ periodo: chave, de: '', ate: '' })
+const escolherDatas = (p: { de: string | null; ate: string | null }) => irPara({ periodo: null, de: p.de ?? '', ate: p.ate ?? '' })
+const limpar = () => navigateTo({ path: '/admin/reconciliacao' }, { replace: true })
 
 const brl = reais
-
-/* ------------------------------------------------------------- período */
-
-const ATALHOS = { hoje: 'Hoje', semana: '7 dias', mes: 'Este mês', passado: 'Mês passado' } as const
-type Atalho = keyof typeof ATALHOS
-
-function faixaDo(qual: Atalho): [string, string] {
-  const hoje = new Date()
-  if (qual === 'hoje') return [diaLocal(hoje), diaLocal(hoje)]
-  if (qual === 'semana') return [diaLocalMais(-6, hoje), diaLocal(hoje)]
-  if (qual === 'mes') return [primeiroDiaDoMes(hoje), diaLocal(hoje)]
-  const primeiroDesteMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
-  const fimDoPassado = new Date(primeiroDesteMes)
-  fimDoPassado.setDate(0)
-  return [primeiroDiaDoMes(fimDoPassado), diaLocal(fimDoPassado)]
-}
-
-function periodo(qual: Atalho) {
-  const [d, a] = faixaDo(qual)
-  de.value = d
-  ate.value = a
-}
-
-const atalhoAtivo = computed<Atalho | null>(() => {
-  for (const k of Object.keys(ATALHOS) as Atalho[]) {
-    const [d, a] = faixaDo(k)
-    if (d === de.value && a === ate.value) return k
-  }
-  return null
-})
 
 /* --------------------------------------------------------- leitura da tela */
 
@@ -160,10 +160,11 @@ async function registrar() {
   registrando.value = true
   registroFalhou.value = null
   try {
+    // o período que a ROTA resolveu (o atalho vira datas do parque) — é ele que o livro guarda
     const busca: Record<string, string> = { registrar: '1' }
-    if (de.value) busca.de = de.value
-    if (ate.value) busca.ate = ate.value
-    if (eventoId.value) busca.eventoId = eventoId.value
+    if (data.value?.periodo?.de) busca.de = data.value.periodo.de
+    if (data.value?.periodo?.ate) busca.ate = data.value.periodo.ate
+    if (filtro.value.eventoId) busca.eventoId = filtro.value.eventoId
 
     const r = await $fetch<any>('/api/admin/reconciliacao', {
       query: busca,
@@ -207,10 +208,31 @@ const SELO_STATUS: Record<string, string> = {
   chargeback: 'selo-erro', disputa: 'selo-erro', falhou: 'selo-erro',
 }
 
-/** link pro pedido dentro do evento dele — a lista de vendas busca pelo código */
+/**
+ * A situação do pedido com o nome de gente — o mesmo dicionário de Clientes e da Visão geral
+ * (status de pedido é um vocabulário só). A linha imprimia o valor cru do banco em caixa alta
+ * ("ESTORNADO_PARCIAL", "AGUARDANDO_PAGAMENTO"), o mesmo defeito do FIN-07 no Financeiro.
+ */
+const ROTULO_STATUS: Record<string, string> = {
+  pago: 'Pago', aguardando_pagamento: 'Aguardando pagamento', em_analise: 'Em análise',
+  expirado: 'Expirou sem pagar', cancelado: 'Cancelado', falhou: 'Pagamento falhou',
+  estornado: 'Estornado', estornado_parcial: 'Estornado em parte',
+  chargeback: 'Chargeback', disputa: 'Em disputa',
+}
+const rotuloDoStatus = (s: string | null | undefined) =>
+  s ? (ROTULO_STATUS[s] ?? s.replace(/_/g, ' ')) : 'Não existe aqui'
+
+/**
+ * Link pro pedido dentro do evento dele. É o `?pedido=<id>` que a lista de Vendas LÊ (abre a
+ * ficha do pedido direto); o `?busca=<código>` sozinho, que ia antes, a tela de Vendas ignora —
+ * "Abrir o pedido" caía na lista inteira, sem busca nenhuma. O código segue junto, pra quem ler
+ * o endereço saber de que pedido se trata.
+ */
 function linkDoPedido(d: any): string | null {
-  if (!d.eventoId || !d.pedidoCodigo) return null
-  return `/admin/evento/${d.eventoId}/vendas?busca=${encodeURIComponent(d.pedidoCodigo)}`
+  if (!d.eventoId || !d.pedidoId) return null
+  const q = new URLSearchParams({ pedido: d.pedidoId })
+  if (d.pedidoCodigo) q.set('busca', d.pedidoCodigo)
+  return `/admin/evento/${d.eventoId}/vendas?${q}`
 }
 
 /** o que dizer da linha: o aviso do gateway está guardado aqui ou nunca chegou? */
@@ -236,7 +258,7 @@ function exportar() {
     : `reconciliacao-${periodoNoNome}`
   const linhas = (data.value?.divergencias ?? []).map((d: any) => [
     CATALOGO_ROTULO(d.tipo), d.cobrancaId ?? '', d.pedidoCodigo ?? '', d.evento ?? '',
-    d.nossoStatus ?? '', d.statusNoGateway ?? '',
+    rotuloDoStatus(d.nossoStatus), d.statusNoGateway ?? '',
     d.nossoCents == null ? '' : brl(d.nossoCents),
     d.gatewayCents == null ? '' : brl(d.gatewayCents),
     brl(d.diferencaCents), dataHora(d.quando, ''), d.explicacao,
@@ -275,25 +297,14 @@ useHead({ title: 'Reconciliação' })
 
     <!-- ----------------------------------------------------------- filtros -->
     <div class="card">
-      <div class="flex flex-wrap items-end gap-3">
-        <div class="flex flex-wrap gap-2">
-          <button v-for="(rotulo, chave) in ATALHOS" :key="chave" type="button"
-                  :class="atalhoAtivo === chave ? 'chip-ativo' : 'chip'"
-                  @click="periodo(chave as any)">
-            {{ rotulo }}
-          </button>
-        </div>
-        <div>
-          <label class="rotulo" for="rec-de">De</label>
-          <input id="rec-de" v-model="de" type="date" class="campo w-[170px]">
-        </div>
-        <div>
-          <label class="rotulo" for="rec-ate">Até</label>
-          <input id="rec-ate" v-model="ate" type="date" class="campo w-[170px]">
-        </div>
+      <PainelPeriodo :periodo="filtro.periodo" :de="data.periodo?.de ?? null" :ate="data.periodo?.ate ?? null"
+                     :carregando="pending" :sem="['tudo']"
+                     @escolher="escolherPeriodo" @datas="escolherDatas" />
+      <div class="mt-3 flex flex-wrap items-end gap-3 border-t border-linha pt-3">
         <div>
           <label class="rotulo" for="rec-evento">Evento</label>
-          <select id="rec-evento" v-model="eventoId" class="campo w-[260px]">
+          <select id="rec-evento" :value="filtro.eventoId" class="campo w-full sm:w-[260px]" data-parte="filtro-evento"
+                  @change="irPara({ eventoId: ($event.target as HTMLSelectElement).value })">
             <option value="">Todos os eventos</option>
             <option v-for="e in (eventos ?? [])" :key="e.id" :value="e.id">
               {{ e.nome }}
@@ -312,7 +323,8 @@ useHead({ title: 'Reconciliação' })
       <!-- O veredito em voz alta, no tamanho do resto da tela: é ele que
            separa "conferi e fecha" de "não conferi nada". -->
       <p class="mt-3 flex flex-wrap items-center gap-2 text-xs text-tinta-fraca">
-        <span :class="TOM_SELO[veredito.tom]">{{ veredito.selo }}</span>
+        <!-- no celular o veredito quebra linha em vez de vazar do cartão -->
+        <span class="max-w-full whitespace-normal" :class="TOM_SELO[veredito.tom]" data-parte="veredito">{{ veredito.selo }}</span>
         <span>
           Fonte: <strong class="text-tinta-suave">{{ data.fonte.rotulo }}</strong>
           <template v-if="data.fonte.ambiente"> ({{ data.fonte.ambiente }})</template>
@@ -479,8 +491,8 @@ useHead({ title: 'Reconciliação' })
                   <span class="block text-xs text-tinta-fraca">{{ d.explicacao }}</span>
                 </td>
                 <td class="px-3 py-3">
-                  <span :class="SELO_STATUS[d.nossoStatus] ?? 'selo-neutro'">
-                    {{ (d.nossoStatus ?? 'não existe').toUpperCase() }}
+                  <span :class="SELO_STATUS[d.nossoStatus] ?? 'selo-neutro'" data-parte="situacao-pedido">
+                    {{ rotuloDoStatus(d.nossoStatus) }}
                   </span>
                   <span v-if="d.quando" class="mt-1 block text-xs text-tinta-fraca">
                     {{ dataHora(d.quando) }}
@@ -551,12 +563,6 @@ useHead({ title: 'Reconciliação' })
 
   <p v-else-if="pending" class="card mt-6 text-tinta-suave">Conferindo…</p>
 
-  <div v-else class="card mt-6">
-    <p class="rotulo-kpi text-erro">Não foi possível conferir</p>
-    <p class="mt-1 text-sm text-tinta-suave">
-      {{ (falha as any)?.data?.statusMessage || (falha as any)?.statusMessage
-         || (falha as any)?.message || 'Erro desconhecido.' }}
-    </p>
-    <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
-  </div>
+  <!-- GER-01: 403 diz o motivo sem "Tentar de novo"; período torto na URL oferece limpar -->
+  <PainelFalha v-else :falha="falha" o-que="a reconciliação" :tentar="refresh" :limpar="limpar" />
 </template>

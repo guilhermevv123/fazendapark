@@ -14,17 +14,34 @@
  * alerta amarelo embaixo do campo. O campo preenche pelos centavos, então quem
  * digita "30" pensando em trinta reais fica com R$ 0,30 — e sem o alerta isso
  * só aparece quando o primeiro ingresso sai por trinta centavos.
+ *
+ * GER-02 (27/09): a máscara formatava DIVIDINDO em float (`centavos / 100`), aceitava 11 dígitos
+ * (R$ 999 milhões, contra o teto de R$ 100.000,00 do servidor — que respondia 400 com o número em
+ * centavos) e colar "1234.5" virava R$ 123,45. Agora: a conta é a do formatador único
+ * (`centavosParaTexto`, inteira), o campo aceita um TETO (`maximo`) e diz qual é quando a tecla
+ * passaria dele, e colar lê o texto como VALOR (`paraCentavos`: "1234.5" é R$ 1.234,50;
+ * "R$ 1.234,50" também), não como uma fila de dígitos.
+ *
+ * O teto padrão continua o de antes (11 dígitos): este campo também é o do saque e o do fundo de
+ * caixa, que não têm o teto do preço de ingresso. Quem é PREÇO passa `:maximo="TETO_DO_INGRESSO"`
+ * (R$ 100.000,00, o mesmo `faceCents` ≤ 100_000_00 do servidor).
  */
+import { centavosDigitados, centavosParaTexto, paraCentavos } from '~/composables/formato'
+
 const props = defineProps<{
   modelValue: number; id?: string; disabled?: boolean; conferirAbaixo?: number
+  /** teto em centavos (preço de ingresso: 100_000_00, o do servidor); padrão: 11 dígitos */
+  maximo?: number
 }>()
+const TETO_PADRAO = 99_999_999_999
+const teto = computed(() => props.maximo ?? TETO_PADRAO)
+const passouDoTeto = ref(false)
 
 const conferir = computed(() =>
   !!props.conferirAbaixo && props.modelValue > 0 && props.modelValue < props.conferirAbaixo)
 const emit = defineEmits<{ 'update:modelValue': [number] }>()
 
-const formatar = (centavos: number) =>
-  (centavos / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const formatar = (centavos: number) => centavosParaTexto(centavos || 0)
 
 const texto = ref(formatar(props.modelValue ?? 0))
 
@@ -35,13 +52,30 @@ watch(() => props.modelValue, (v) => {
   if (v !== atual) texto.value = formatar(v ?? 0)
 })
 
-function aoDigitar(e: Event) {
-  const el = e.target as HTMLInputElement
-  const digitos = el.value.replace(/\D/g, '').slice(0, 11)
-  const centavos = Number(digitos || '0')
+function aplicar(el: HTMLInputElement, centavos: number) {
+  if (centavos > teto.value) {
+    // a tecla (ou o colado) passaria do teto: o campo fica com o que tinha e DIZ o limite
+    passouDoTeto.value = true
+    el.value = texto.value
+    return
+  }
+  passouDoTeto.value = false
   texto.value = formatar(centavos)
   el.value = texto.value
   emit('update:modelValue', centavos)
+}
+
+function aoDigitar(e: Event) {
+  const el = e.target as HTMLInputElement
+  aplicar(el, centavosDigitados(el.value))
+}
+
+/** colar é VALOR, não tecla: "1234.5" é R$ 1.234,50 (e substitui o que estava no campo) */
+function aoColar(e: ClipboardEvent) {
+  const colado = e.clipboardData?.getData('text') ?? ''
+  if (!/\d/.test(colado)) return
+  e.preventDefault()
+  aplicar(e.target as HTMLInputElement, Math.max(0, paraCentavos(colado)))
 }
 </script>
 
@@ -52,11 +86,15 @@ function aoDigitar(e: Event) {
         R$
       </span>
       <input :id="id" :value="texto" :disabled="disabled" inputmode="numeric"
-             class="campo pl-9 text-right tabular-nums" @input="aoDigitar">
+             class="campo pl-9 text-right tabular-nums" @input="aoDigitar" @paste="aoColar">
     </div>
     <p v-if="conferir" role="status"
        class="mt-1 rounded-card border border-alerta bg-alerta-claro px-2 py-1 text-xs font-medium text-alerta">
       Confira o valor: R$ {{ formatar(modelValue) }}
+    </p>
+    <p v-if="passouDoTeto" role="status" data-parte="teto"
+       class="mt-1 rounded-card border border-alerta bg-alerta-claro px-2 py-1 text-xs font-medium text-alerta">
+      O máximo aqui é R$ {{ formatar(teto) }}.
     </p>
   </div>
 </template>

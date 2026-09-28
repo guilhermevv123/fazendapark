@@ -26,8 +26,9 @@
  *   ingresso" tem o CÓDIGO do ingresso na mão, não o UUID — e o código está
  *   dentro do payload. Sem isso a tela responde uma pergunta que ninguém faz.
  */
-import { q, q1 } from '../../utils/db'
+import { FUSO_DO_BANCO, q, q1 } from '../../utils/db'
 import { podeFazer } from '../../utils/sessao'
+import { ehChavePeriodo, faixaDoPeriodo, hojeNoFuso } from '../../../app/composables/painelPeriodo'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -89,8 +90,27 @@ export default defineEventHandler(async (event) => {
     const s = String(v ?? '').trim()
     return s ? s : ''
   }
-  const de = dia(texto(p.de), 'De')
-  const ate = dia(texto(p.ate), 'Até')
+  let de = dia(texto(p.de), 'De')
+  let ate = dia(texto(p.ate), 'Até')
+  if (de && ate && de > ate) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'A data "De" do filtro vem depois da "Até". Troque as duas de lugar.',
+    })
+  }
+  // O atalho de período (`?periodo=hoje`, `7d`, `30d`, `mes`, `mes_passado`, `ano`, `tudo`) é o
+  // MESMO vocabulário da Visão geral e do Financeiro, resolvido no calendário do PARQUE: o "Hoje"
+  // das 22h de Ubatã é hoje, não amanhã de UTC (AUD-01). Data à mão ganha do atalho.
+  const chave = texto(p.periodo)
+  if (chave && !ehChavePeriodo(chave)) {
+    throw createError({ statusCode: 400, statusMessage: 'Período desconhecido. Escolha um dos atalhos da tela.' })
+  }
+  const periodo = !de && !ate && ehChavePeriodo(chave) ? chave : null
+  if (periodo) {
+    const faixa = faixaDoPeriodo(periodo, hojeNoFuso(FUSO_DO_BANCO))
+    de = faixa.de ?? ''
+    ate = faixa.ate ?? ''
+  }
   const pessoa = texto(p.pessoa)
   const ato = texto(p.ato)
   const entidade = texto(p.entidade)
@@ -186,7 +206,7 @@ export default defineEventHandler(async (event) => {
   if (truncado) linhas.pop()
 
   return {
-    filtros: { de, ate, pessoa, ato, entidade, busca, limite },
+    filtros: { periodo, de, ate, pessoa, ato, entidade, busca, limite },
     opcoes: {
       pessoas: pessoas.map((x) => ({
         id: x.user_id, nome: x.nome ?? x.actor_email ?? 'sem nome',
