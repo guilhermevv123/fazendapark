@@ -36,6 +36,7 @@
  * atrasaria a descoberta do que está parado pra todo mundo.
  */
 import { q1 } from '../../utils/db'
+import { PEDIDO_VIVO } from '../../utils/liquido'
 import {
   FILA_DE_ENVIO, FILA_DE_ESTORNO, emPortugues, vereditoDaFila,
 } from '../../utils/envio'
@@ -82,10 +83,23 @@ const FILAS = [
     sql: `
       WITH linhas AS (SELECT * FROM email_sends WHERE org_id = $1),
            por_pedido AS (
-             SELECT bool_or(status = 'enviado')                AS teve_saida,
-                    bool_or(status IN ('na_fila','enviando'))  AS tem_pendente,
-                    bool_or(status = 'falhou')                 AS teve_falha
-               FROM linhas WHERE order_id IS NOT NULL GROUP BY order_id
+             -- Gente sem ingresso é quem AINDA tem ingresso pra receber: pedido vivo (a régua
+             -- da entrega) com pelo menos um ingresso que o e-mail levaria — não cancelado e
+             -- sem transferência concluída. O e-mail do pedido estornado antes de sair, ou do
+             -- que passou tudo adiante, falha DE VEZ por desenho (envio.ts): contá-lo deixava
+             -- este painel em "N sem o e-mail na mão" pra sempre depois do primeiro estorno
+             -- rápido. É o mesmo critério da /api/saude (frota F1, 28/09).
+             SELECT bool_or(l.status = 'enviado')                AS teve_saida,
+                    bool_or(l.status IN ('na_fila','enviando'))  AS tem_pendente,
+                    bool_or(l.status = 'falhou')                 AS teve_falha
+               FROM linhas l
+               JOIN orders o ON o.id = l.order_id
+              WHERE ${PEDIDO_VIVO('o.')}
+                AND EXISTS (SELECT 1 FROM tickets t
+                             WHERE t.order_id = o.id AND t.status <> 'cancelado'
+                               AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr
+                                                WHERE tr.ticket_id = t.id AND tr.status = 'concluido'))
+              GROUP BY l.order_id
              UNION ALL
              -- Linha sem pedido não tem irmã: cada uma é um caso por si.
              -- Agrupar todas no mesmo \`order_id\` nulo juntaria gente

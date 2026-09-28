@@ -2179,3 +2179,50 @@ describe('a tela /admin/filas', () => {
     expect(fonte).toContain('dataHora(')
   })
 })
+
+describe('GET /api/admin/filas · "sem o e-mail na mão" é só quem ainda tem ingresso pra receber', () => {
+  // O mesmo critério da /api/saude (frota F1, aeb4e48), agora no painel de Filas: o e-mail do
+  // pedido estornado antes de sair, em disputa, ou que passou tudo adiante falha DE VEZ por
+  // desenho — contá-lo como "perdido" deixava o painel vermelho pra sempre, mandando o operador
+  // procurar cliente que já recebeu o dinheiro de volta (auditoria 28/09).
+  // Mutação conferida: sem o `WHERE PEDIDO_VIVO` e o EXISTS do ingresso em filas.get.ts, o
+  // primeiro `expect` vira 3.
+  it('estornado, em disputa e todo transferido NÃO contam; pago com ingresso a entregar conta', async () => {
+    if (semRota()) return
+    const daFila = (c: any) => c.filas.find((f: any) => f.nome === FILA_DE_ENVIO)
+    await q(`UPDATE email_sends SET available_at = now() + interval '2 hours'
+              WHERE org_id = $1 AND status = 'na_fila'`, [orgId])
+    const antes = await comSessao('/api/admin/filas').then((r) => r.json())
+
+    async function falhouDeVez(depois: (pedidoId: string) => Promise<void>) {
+      const p = await pedidoPendente(1)
+      await pagar(p.id)
+      await depois(p.id)
+      await q(`UPDATE email_sends SET status = 'falhou', attempts = 5, last_error = 'zz'
+                WHERE order_id = $1`, [p.id])
+    }
+    await falhouDeVez(async (id) => {
+      await q(`UPDATE orders SET status = 'estornado', refunded_cents = total_cents WHERE id = $1`, [id])
+    })
+    await falhouDeVez(async (id) => {
+      await q(`UPDATE orders SET status = 'disputa' WHERE id = $1`, [id])
+    })
+    await falhouDeVez(async (id) => {
+      const t = (await q1<any>(`SELECT id, event_id FROM tickets WHERE order_id = $1 LIMIT 1`, [id]))!
+      await q(`INSERT INTO ticket_transfers (org_id, event_id, ticket_id, para_nome, para_email, code, status)
+               VALUES ($1,$2,$3,'Recebe','recebe.filas@teste.invalido','tr_zz_filas_' || gen_random_uuid(),
+                       'concluido')`, [orgId, t.event_id, t.id])
+    })
+    const tres = await comSessao('/api/admin/filas').then((r) => r.json())
+    expect(daFila(tres).perdidos - daFila(antes).perdidos,
+      'contou como perdido quem não tem mais ingresso pra receber').toBe(0)
+    expect(daFila(tres).falharam - daFila(antes).falharam,
+      'a contagem de ITEM (o tamanho do trabalho da fila) tem que seguir contando as três').toBe(3)
+
+    await falhouDeVez(async () => {})
+    const quatro = await comSessao('/api/admin/filas').then((r) => r.json())
+    expect(daFila(quatro).perdidos - daFila(tres).perdidos,
+      'o pago com ingresso a entregar sumiu da conta').toBe(1)
+    expect(quatro.ok, 'com um comprador que pagou e nunca vai receber, `ok` não pode ser true').toBe(false)
+  }, 60_000)
+})
