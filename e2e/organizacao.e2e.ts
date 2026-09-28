@@ -216,6 +216,7 @@ test.describe('menu por papel (layout)', () => {
       await expect(aviso).toContainText('Seu acesso é de Financeiro')
       await expect(page.locator('#nome')).toHaveCount(0)
       await expect(page.getByRole('button', { name: 'Prosseguir' })).toHaveCount(0)
+      expect(await textoDaTrilha(page)).toBe('EVENTOS / CRIAR EVENTO')
     })
   })
 

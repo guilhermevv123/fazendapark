@@ -424,6 +424,9 @@ const trilha = computed<Degrau[]>(() => {
   // NAV-02: fora de evento, a trilha começa no ASSUNTO da tela — não sempre em "EVENTOS". Em
   // Configurações ela dizia "EVENTOS / CONFIGURAÇÕES", como se a tela morasse dentro de um evento.
   if (route.path === '/admin') return [{ texto: 'EVENTOS' }]
+  // o assistente de criação só usa este layout pra dizer a quem não cria que não é o acesso dele —
+  // sem isto a trilha dizia o pedaço cru do endereço, "NOVO"
+  if (route.path === '/admin/evento/novo') return [degrau('EVENTOS', '/admin'), { texto: 'CRIAR EVENTO' }]
   for (const i of itensDoPainel.value) {
     const filho = i.filhos?.find((f) => f.para === route.path)
     if (filho) return [degrau(i.nome.toUpperCase(), i.para), { texto: filho.nome.toUpperCase() }]

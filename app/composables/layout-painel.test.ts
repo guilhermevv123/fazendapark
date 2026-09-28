@@ -55,6 +55,11 @@ describe('trilha do topo (NAV-02) e nomes (proposta 17)', () => {
     limparTela()
     tela = await layout('/admin')
     expect(trilhaDe(tela)).toEqual(['EVENTOS'])
+    limparTela()
+    // a recusa do assistente (quem não cria evento) mora neste layout: nada de "NOVO" cru
+    tela = await layout('/admin/evento/novo', 'financeiro')
+    expect(trilhaDe(tela)).toEqual(['EVENTOS', 'CRIAR EVENTO'])
+    expect(tela.find('nav[aria-label="Onde você está"] a').attributes('href')).toBe('/admin')
   })
 
   it('o item do menu diz "Dados e cobrança", como o h1 e a aba', async () => {
