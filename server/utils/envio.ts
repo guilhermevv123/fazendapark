@@ -47,7 +47,7 @@ import { db, q, q1 } from './db'
 import { montarQr } from './ingresso'
 import { PEDIDO_VIVO } from './liquido'
 import {
-  entregar, montarConfirmacao, type Entrega, type IngressoNoEmail, type Mensagem,
+  diaDaSessao, entregar, montarConfirmacao, type Entrega, type IngressoNoEmail, type Mensagem,
   type Transporte, transporteEscolhido,
 } from './email'
 
@@ -186,7 +186,8 @@ export async function montarMensagemDoPedido(
     `SELECT o.id, o.code, o.status, o.total_cents, o.event_id,
             (${PEDIDO_VIVO('o.')}) AS vale_ingresso,
             c.name AS comprador, c.email AS comprador_email,
-            e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.ticket_noun
+            e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.ticket_noun,
+            e.timezone
        FROM orders o
        JOIN events e ON e.id = o.event_id
        LEFT JOIN customers c ON c.id = o.customer_id
@@ -200,6 +201,13 @@ export async function montarMensagemDoPedido(
     throw new ErroDefinitivo(`o pedido saiu de pago (está ${o.status}) antes do e-mail sair`)
   }
 
+  // Só o ingresso que ainda é DESTE comprador (B02). O transferido e aceito
+  // continua `valido` — é o destinatário que entra com ele, com código NOVO —,
+  // e quem responde "ainda é de quem comprou?" é a transferência concluída, a
+  // mesma régua de `GET /api/pedido`. Sem ela, "reenviar o e-mail do pedido"
+  // entregava ao remetente o QR que agora é do destinatário: os dois entravam
+  // (o primeiro que chegasse), que é exatamente o que a troca de código no
+  // aceite existe pra impedir.
   const ingressos = await q<any>(
     `SELECT t.id, t.code, t.status, t.holder_name,
             s.name AS setor, l.name AS lote, tt.name AS tipo,
@@ -210,12 +218,21 @@ export async function montarMensagemDoPedido(
        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
        LEFT JOIN event_sessions ses ON ses.id = s.session_id
       WHERE t.order_id = $1 AND t.status <> 'cancelado'
+        AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr
+                         WHERE tr.ticket_id = t.id AND tr.status = 'concluido')
       ORDER BY s.sort_order, t.issued_at, t.code`, [orderId])
 
-  // Sem ingresso não existe e-mail de ingresso. Isto é retentável de
-  // propósito: se a emissão ainda estiver acontecendo, a próxima tentativa
-  // encontra tudo no lugar.
-  if (!ingressos.length) throw new Error('o pedido ainda não tem ingresso emitido')
+  if (!ingressos.length) {
+    // Todos passaram adiante (ou foram cancelados): não há o que mandar, e
+    // repetir não muda isso. Só é retentável quando o pedido ainda não tem
+    // ingresso NENHUM — aí a emissão pode estar acontecendo agora.
+    const emitidos = await q1<any>(`SELECT count(*)::int AS n FROM tickets WHERE order_id = $1`, [orderId])
+    if (Number(emitidos?.n ?? 0) > 0) {
+      throw new ErroDefinitivo('os ingressos deste pedido foram transferidos ou cancelados: '
+        + 'não sobrou nenhum pra mandar a quem comprou')
+    }
+    throw new Error('o pedido ainda não tem ingresso emitido')
+  }
 
   const comQr: IngressoNoEmail[] = []
   for (const t of ingressos) {
@@ -225,7 +242,9 @@ export async function montarMensagemDoPedido(
       setor: t.setor,
       lote: t.lote,
       tipo: t.tipo,
-      sessao: t.sessao ?? (t.sessao_inicio ? String(t.sessao_inicio) : null),
+      // B28: sessão sem título saía como `String(Date)` ("Sat Oct 04 2026
+      // 09:00:00 GMT-0300 (…)"). A data vai escrita em português, no fuso do evento.
+      sessao: t.sessao ?? (t.sessao_inicio ? diaDaSessao(t.sessao_inicio, o.timezone) : null),
       titular: t.holder_name,
       qrPng: await QRCode.toBuffer(montarQr(t.code, o.event_id), {
         margin: 1, width: 360, errorCorrectionLevel: 'M',
@@ -246,13 +265,32 @@ export async function montarMensagemDoPedido(
     totalCents: Number(o.total_cents),
     substantivo: o.ticket_noun,
     ingressos: comQr,
-    linkIngressos: `${baseDoSite()}/ingressos/${o.code}`,
+    // Sem a URL pública (produção sem PUBLIC_BASE_URL), o e-mail sai SEM o
+    // link — com os QRs anexados, que são a entrada — em vez de um link pra
+    // http://localhost:3100 que não abre em celular nenhum (PROD-04). A falta
+    // grita no boot e em `/api/saude`.
+    linkIngressos: baseDoSite() ? `${baseDoSite()}/ingressos/${o.code}` : null,
+    fuso: o.timezone,
   })
 }
 
-/** A URL pública do site. Sem ela o link do e-mail apontaria pro vazio. */
-export function baseDoSite(): string {
-  return (process.env.PUBLIC_BASE_URL || 'http://localhost:3100').replace(/\/+$/, '')
+/**
+ * A URL pública do site (sem barra no fim), ou `null` quando ela não serve.
+ *
+ * Fora de produção, sem a variável, é o servidor local de sempre. EM PRODUÇÃO,
+ * sem a variável, com valor que não é URL, ou apontando pra esta máquina
+ * (localhost), é `null` — PROD-04: o link do e-mail ia pra
+ * `http://localhost:3100/ingressos/…`, que não abre no celular de ninguém.
+ */
+export function baseDoSite(): string | null {
+  const cru = String(process.env.PUBLIC_BASE_URL ?? '').trim().replace(/\/+$/, '')
+  const producao = process.env.NODE_ENV === 'production'
+  let url: URL | null = null
+  try { url = cru ? new URL(cru) : null } catch { url = null }
+  const valida = !!url && /^https?:$/.test(url.protocol)
+  if (!producao) return valida ? cru : 'http://localhost:3100'
+  const local = valida && /^(localhost|127\.|\[::1\]$)/.test(url!.hostname)
+  return valida && !local ? cru : null
 }
 
 /* ------------------------------------------------------------ processar */
