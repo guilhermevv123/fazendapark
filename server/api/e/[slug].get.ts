@@ -124,8 +124,15 @@ export function fimDasVendas(ev: EventoParaVenda): Date | null {
   if (ev.sales_end_minutes_after != null) {
     return new Date(new Date(ev.starts_at).getTime() + Number(ev.sales_end_minutes_after) * 60_000)
   }
+  // Regra do dono (28/09): sem encerramento escolhido, o site vende até UM DIA antes do término —
+  // evento de 15 a 20 vende até o dia 19. Antes disso o "em branco" gravava "fecha no início", e
+  // o evento criado com início já passado nascia com as vendas encerradas (e sumia do site).
+  if (ev.ends_at) return new Date(new Date(ev.ends_at).getTime() - VENDA_PARA_ANTES_DO_FIM_MS)
   return null
 }
+
+/** Quanto antes do término do evento o site para de vender, quando o painel não diz outra coisa. */
+export const VENDA_PARA_ANTES_DO_FIM_MS = 24 * 3600_000
 
 /** Por que a porta está fechada. Vocabulário interno, nunca sai na resposta. */
 export type MotivoDeFechamento =

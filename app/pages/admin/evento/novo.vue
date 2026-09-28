@@ -102,7 +102,7 @@ const f = reactive({
   fimData: '', fimHora: '23:59',
   fuso: 'America/Bahia',
   esconderFim: false,
-  encerramento: 'inicio' as 'inicio' | 'minutos' | 'data',
+  encerramento: 'padrao' as 'padrao' | 'minutos' | 'data',
   encerraMinutos: 60,
   encerraData: '', encerraHora: '',
 })
@@ -356,13 +356,13 @@ const fimCampo = computed({
   get: () => juntar(f.fimData, f.fimHora),
   set: (v: string) => { const [d, h] = (v || '').split('T'); f.fimData = d || ''; if (h) f.fimHora = h.slice(0, 5) },
 })
-/** preenchido = encerra nessa data; em branco = encerra quando o evento começa */
+/** preenchido = encerra nessa data; em branco = o site vende até 1 dia antes do término (`fimDasVendas`) */
 const encerraCampo = computed({
   get: () => f.encerramento === 'data' ? juntar(f.encerraData, f.encerraHora) : '',
   set: (v: string) => {
     const [d, h] = (v || '').split('T')
     if (d) { f.encerramento = 'data'; f.encerraData = d; f.encerraHora = (h || '').slice(0, 5) }
-    else { f.encerramento = 'inicio'; f.encerraData = ''; f.encerraHora = '' }
+    else { f.encerramento = 'padrao'; f.encerraData = ''; f.encerraHora = '' }
   },
 })
 
@@ -394,7 +394,7 @@ async function publicar() {
       fuso: f.fuso,
       esconderFim: f.esconderFim,
       encerraVendasEm: f.encerramento === 'data' ? iso(f.encerraData, f.encerraHora || '23:59') : null,
-      encerraVendasMinutosApos: f.encerramento === 'minutos' ? f.encerraMinutos : (f.encerramento === 'inicio' ? 0 : null),
+      encerraVendasMinutosApos: f.encerramento === 'minutos' ? f.encerraMinutos : null,
       faixaEtaria: f.faixaEtaria,
       substantivo: f.substantivo.trim() || 'Ingressos',
       categoria: f.categoria || undefined,
@@ -1048,7 +1048,7 @@ useHead({ title: 'Criar evento' })
         <div class="mt-2 max-w-sm">
           <label for="encerra" class="rotulo">Data de encerramento das vendas</label>
           <input id="encerra" v-model="encerraCampo" type="datetime-local" class="campo">
-          <p class="mt-1 text-[12.5px] text-tinta-suave">Em branco: as vendas no site param quando o evento começa. A bilheteria não para.</p>
+          <p class="mt-1 text-[12.5px] text-tinta-suave">Em branco: o site vende até 1 dia antes do término do evento. A bilheteria não para.</p>
         </div>
 
       </section>
