@@ -28,6 +28,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { q1 } from '../utils/db'
+import { PEDIDO_VIVO } from '../utils/liquido'
 import { conferirConfiguracao, eventosSemPagamentoOnline } from '../utils/asaas'
 import { emPortugues, FILA_DE_ENVIO, vereditoDaFila } from '../utils/envio'
 
@@ -110,12 +111,26 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
 
   // ------------------------------------------------------- fila de e-mail
   // Global (todas as organizações): o monitor pergunta pelo servidor, não por loja.
+  //
+  // "Perdido" é quem AINDA tem ingresso pra receber: pedido vivo (a mesma régua da entrega,
+  // PEDIDO_VIVO) com pelo menos um ingresso que o e-mail levaria — não cancelado e sem
+  // transferência concluída (B02). O e-mail do pedido estornado antes de sair, ou do pedido
+  // que passou tudo adiante, falha DE VEZ por desenho (envio.ts) — e contá-lo aqui deixava
+  // a saúde em 503 PRA SEMPRE depois do primeiro estorno rápido (não há reenvio pra ele),
+  // dizendo "quem pagou continua sem" de quem recebeu o dinheiro de volta.
   const n = await q1<any>(
     `WITH por_pedido AS (
-       SELECT bool_or(status = 'enviado')               AS teve_saida,
-              bool_or(status IN ('na_fila','enviando')) AS tem_pendente,
-              bool_or(status = 'falhou')                AS teve_falha
-         FROM email_sends WHERE order_id IS NOT NULL GROUP BY order_id)
+       SELECT bool_or(es.status = 'enviado')               AS teve_saida,
+              bool_or(es.status IN ('na_fila','enviando')) AS tem_pendente,
+              bool_or(es.status = 'falhou')                AS teve_falha
+         FROM email_sends es
+         JOIN orders o ON o.id = es.order_id
+        WHERE ${PEDIDO_VIVO('o.')}
+          AND EXISTS (SELECT 1 FROM tickets t
+                       WHERE t.order_id = o.id AND t.status <> 'cancelado'
+                         AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr
+                                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido'))
+        GROUP BY es.order_id)
      SELECT count(*) FILTER (WHERE status = 'na_fila')::int                          AS na_fila,
             count(*) FILTER (WHERE status = 'na_fila' AND available_at <= now())::int AS maduros,
             COALESCE(EXTRACT(epoch FROM now() - min(available_at)

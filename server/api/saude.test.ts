@@ -101,6 +101,59 @@ describe('/api/saude · os sinais que o dono só descobria pelo telefone', () =>
   })
 })
 
+describe('/api/saude · e-mail que desistiu só é alarme quando ainda há ingresso pra entregar', () => {
+  /**
+   * Um pedido com o e-mail de confirmação em `falhou` (teto de tentativas), sem saída nem
+   * pendência — é o "perdido" que derruba a fila. `ingresso` diz como fica o único ingresso.
+   */
+  async function falhouDeVez(status: string, ingresso: 'valido' | 'cancelado' | 'transferido') {
+    const setor = (await q1<any>(`INSERT INTO sectors (event_id, name) VALUES ($1,'ZZ') RETURNING id`, [eventId]))!.id
+    const lote = (await q1<any>(`INSERT INTO lots (sector_id, name, price_cents, quantity)
+      VALUES ($1,'ZZ',100,10) RETURNING id`, [setor]))!.id
+    const pedidoId = (await q1<any>(
+      `INSERT INTO orders (org_id, event_id, code, status, channel, face_cents, fee_cents, platform_cents,
+                           discount_cents, total_cents, paid_at)
+       VALUES ($1,$2,'PED-ZZSE-' || upper(substr(md5(random()::text),1,4)),$3,'online',100,0,0,0,100, now())
+       RETURNING id`, [orgId, eventId, status]))!.id
+    const t = (await q1<any>(
+      `INSERT INTO tickets (org_id, event_id, sector_id, lot_id, order_id, code, qr_secret, status)
+       VALUES ($1,$2,$3,$4,$5,'ZZSE-' || upper(substr(md5(random()::text),1,8)),'teste',$6) RETURNING id`,
+      [orgId, eventId, setor, lote, pedidoId, ingresso === 'cancelado' ? 'cancelado' : 'valido']))!.id
+    if (ingresso === 'transferido') {
+      await q(`INSERT INTO ticket_transfers (org_id, event_id, ticket_id, para_nome, para_email, code, status)
+               VALUES ($1,$2,$3,'Recebe','recebe.saude@teste.invalido','tr_zz_saude_' || gen_random_uuid(),
+                       'concluido')`, [orgId, eventId, t])
+    }
+    await q(`INSERT INTO email_sends (org_id, event_id, order_id, kind, to_email, status, attempts, last_error)
+             VALUES ($1,$2,$3,'confirmacao_pedido','zz.saude@teste.invalido','falhou',5,'zz')`,
+      [orgId, eventId, pedidoId])
+  }
+  const perdidos = async () => Number((await medir()).corpo.filaDeEnvio.pedidosSemEmailDeVez)
+
+  afterEach(async () => {
+    await q(`DELETE FROM email_sends WHERE org_id = $1`, [orgId])
+    await q(`DELETE FROM ticket_transfers WHERE org_id = $1`, [orgId])
+    await q(`DELETE FROM tickets WHERE org_id = $1`, [orgId])
+  })
+
+  it('estornado, em disputa ou todo transferido NÃO contam; pago com ingresso pra entregar conta', async () => {
+    // travas: `WHERE PEDIDO_VIVO('o.')` e o EXISTS do ingresso entregável (não cancelado, sem
+    // transferência concluída) no `por_pedido` de saude.get.ts. Sem elas, o PRIMEIRO estorno
+    // antes de o e-mail sair deixava a saúde em 503 pra sempre (a contagem não tem janela e o
+    // pedido estornado não tem reenvio) — medido no servidor da bateria: 21 "perdidos" assim.
+    // A contagem é do servidor inteiro (todas as organizações): o teste mede a DIFERENÇA.
+    const antes = await perdidos()
+    await falhouDeVez('estornado', 'cancelado')    // o estorno cancelou o ingresso
+    await falhouDeVez('disputa', 'valido')         // a entrega recusa pedido fora de PEDIDO_VIVO
+    await falhouDeVez('pago', 'transferido')       // B02: o ingresso é de outra pessoa agora
+    expect(await perdidos(), 'e-mail que falhou de propósito virou alarme').toBe(antes)
+    await falhouDeVez('pago', 'valido')
+    expect(await perdidos(), 'quem pagou e ficou sem o e-mail sumiu do alarme').toBe(antes + 1)
+    await falhouDeVez('estornado_parcial', 'valido')
+    expect(await perdidos(), 'estorno parcial ainda tem ingresso pra entregar').toBe(antes + 2)
+  })
+})
+
 describe('/api/saude · em produção o diagnóstico é do monitor', () => {
   const TOKEN = 'monitor-ZZ-0123456789-0123456789-0123456789'
   it('monitorAutorizado: fora de produção sempre; em produção só com o token certo (32+)', () => {
