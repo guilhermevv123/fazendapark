@@ -431,6 +431,27 @@ describe('o QR que a casa emite, lido sem rede', () => {
     expect(codigoDoQr(' con-aaaa-bbbb '))
       .toEqual({ codigo: 'CON-AAAA-BBBB', eventoDoQr: null, digitado: true })
   })
+
+  it('QR torto (partes a mais ou a menos, versão que não existe) não vira código de outro ingresso', async () => {
+    const { codigoDoQr } = await tela()
+    // cada um cai como "digitado", com o texto inteiro: sem rede ele não acha nada na lista (fora da
+    // lista, chame o supervisor) e com rede o servidor recusa — nunca um pedaço vira código válido
+    for (const torto of [
+      'DT2:k2:ev-1:CON-AAAA-BBBB',                 // DT2 sem a assinatura (4 partes)
+      'DT2:k2:ev-1:CON-AAAA-BBBB:SIG:EXTRA',       // DT2 com parte a mais
+      'DT1:ev-1:CON-AAAA-BBBB',                    // DT1 sem a assinatura
+      'DT1:ev-1:CON-AAAA-BBBB:SIG:EXTRA',          // DT1 com parte a mais (5 partes, parece DT2)
+      'DT3:k2:ev-1:CON-AAAA-BBBB:SIG',             // versão que não existe
+      'dt2:k2:ev-1:CON-AAAA-BBBB:SIG',             // prefixo em minúsculas
+      'https://exemplo.invalido/ingresso?c=CON-AAAA-BBBB',
+    ]) {
+      const r = codigoDoQr(torto)
+      expect(r.digitado, `"${torto}" foi lido como QR assinado`).toBe(true)
+      expect(r.eventoDoQr).toBeNull()
+      expect(r.codigo, `"${torto}" virou só o código de dentro`).toBe(torto.trim().toUpperCase())
+    }
+    expect(codigoDoQr('').codigo).toBe('')
+  })
 })
 
 describe('leitor montado com a lista de chaves (ADM-25)', () => {
