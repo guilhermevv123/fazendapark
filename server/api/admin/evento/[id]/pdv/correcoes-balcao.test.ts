@@ -362,6 +362,10 @@ describe('cancelamento administrativo: nenhum pedido fica sem quem cancele', () 
     const cedo = await cancelarAdmin(v.corpo.pedidoId)
     expect(cedo.status).toBe(409)
     expect(mensagem(cedo.corpo)).toMatch(/ainda está aberto/i)
+    // na ficha o botão aparece e, clicado, diz por que ainda não — em vez de sumir sem explicação
+    const fichaCedo = (await json(await chamar(`/api/admin/pedido/${v.corpo.pedidoId}`))).corpo
+    expect(fichaCedo.acoes).toMatchObject({ mostrarCancelar: true, cancelar: false })
+    expect(fichaCedo.acoes.impedimento).toMatch(/ainda está aberto/i)
 
     const fechou = await json(await pdv('/turno', {
       method: 'PATCH', body: JSON.stringify({ turnoId: turno, contadoCents: 2 * FACE }),
@@ -379,7 +383,11 @@ describe('cancelamento administrativo: nenhum pedido fica sem quem cancele', () 
     // a ficha diz antes do clique
     const ficha = (await json(await chamar(`/api/admin/pedido/${v.corpo.pedidoId}`))).corpo
     expect(ficha.acoes.cancelar, ficha.acoes.impedimento).toBe(true)
+    expect(ficha.acoes.mostrarCancelar, 'o dono não vê o botão que funciona').toBe(true)
     expect(ficha.acoes.arrependimento, 'balcão não é compra a distância').toBe(false)
+    // e a ficha da Operação nem mostra o botão (a rota daria 403, logo abaixo)
+    const fichaOp = (await json(await chamar(`/api/admin/pedido/${v.corpo.pedidoId}`, {}, cookieOperacao))).corpo
+    expect(fichaOp.acoes.mostrarCancelar, 'botão que só dá 403 pra Operação').toBe(false)
 
     // operação não tem a área do dinheiro
     const semArea = await cancelarAdmin(v.corpo.pedidoId, 'operador tentando', cookieOperacao)
@@ -417,6 +425,9 @@ describe('cancelamento administrativo: nenhum pedido fica sem quem cancele', () 
     const outraVez = await cancelarAdmin(v.corpo.pedidoId)
     expect(outraVez.status).toBe(409)
     expect(mensagem(outraVez.corpo)).toMatch(/já foi cancelado/i)
+    // pedido estornado: a ficha já não oferece o botão
+    const fichaDepois = (await json(await chamar(`/api/admin/pedido/${v.corpo.pedidoId}`))).corpo
+    expect(fichaDepois.acoes.mostrarCancelar).toBe(false)
   })
 
   it('venda online fora do art. 49 também cancela, com estorno pelo gateway', async (ctx) => {

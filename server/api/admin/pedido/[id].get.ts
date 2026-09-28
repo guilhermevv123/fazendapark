@@ -122,7 +122,14 @@ export default defineEventHandler(async (event) => {
 
   return {
     acoes: {
-      /** quem pode tocar no botão de cancelar agora; senão, `impedimento` diz por quê */
+      /**
+       * O botão "Cancelar pedido" APARECE na ficha: pedido vivo e papel com a área do dinheiro —
+       * a mesma grade que tranca a rota de cancelar. Decidido aqui (28/09): a ficha repetia a
+       * regra no navegador, e uma mudança de papel ou de situação só num dos lados mostrava
+       * botão que dá 403, ou escondia o que funciona.
+       */
+      mostrarCancelar: vivo && podeDinheiro,
+      /** o clique vai agora; senão, `impedimento` diz por quê (com o botão à vista) */
       cancelar: !impedimento,
       impedimento,
       /** a desistência do comprador (CDC art. 49) vale para este pedido? */

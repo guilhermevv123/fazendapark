@@ -133,31 +133,32 @@ describe('vendas — filtro de contestação e "Cancelar pedido" só pra quem po
               criadoEm: '2026-09-20T12:00:00Z', pagoEm: '2026-09-20T12:01:00Z', canceladoEm: null, estornadoEm: null },
     cliente: { nome: 'Ana', email: 'ana@teste.invalido', documento: null, telefone: null },
     itens: [], ingressos: [], gateway: [],
-    acoes: { reimprimir: false, reenviar: false, cancelar: false,
+    acoes: { reimprimir: false, reenviar: false, mostrarCancelar: false, cancelar: false,
              impedimento: 'Cancelar pedido é do financeiro ou do dono da conta.', devolucaoPendente: false,
              aDevolverCents: 0, arrependimento: false, arrependimentoMotivo: '', passouPelaPlataforma: true },
   }
-  const abrir = async (papel: string) => montarTela(await import('../pages/admin/evento/[id]/vendas/index.vue'), {
+  // quem decide é o servidor (`acoes.mostrarCancelar`: pedido vivo e papel do dinheiro) — a
+  // tela só obedece; a decisão por papel é conferida em correcoes-balcao.test.ts
+  const abrir = async (mostrarCancelar: boolean) => montarTela(await import('../pages/admin/evento/[id]/vendas/index.vue'), {
     rota: { params: { id: EV }, query: { pedido: 'p1' } },
     respostas: {
       [`/api/admin/evento/${EV}/vendas`]: VENDAS,
-      '/api/admin/pedido/p1': FICHA,
-      '/api/auth/eu': { usuario: { papel } },
+      '/api/admin/pedido/p1': { ...FICHA, acoes: { ...FICHA.acoes, mostrarCancelar } },
     },
     stubs: { AbasSecao: true, ModalLateral: { template: '<div><slot /><slot name="acoes" /></div>' } },
   })
 
   it('o filtro de situação acha chargeback e disputa', async () => {
-    const w = await abrir('master')
+    const w = await abrir(true)
     const opcoes = w.findAll('select option').map((o) => o.attributes('value'))
     expect(opcoes, 'pedido contestado não se filtra').toEqual(expect.arrayContaining(['chargeback', 'disputa']))
   })
 
-  it('Operação não vê o botão que só devolveria "é do financeiro"; o dono vê', async () => {
-    const op = await abrir('operacao')
+  it('o botão segue o servidor: sem `mostrarCancelar` (Operação, pedido morto) não aparece; com, aparece', async () => {
+    const op = await abrir(false)
     expect(op.find('[data-parte="cancelar-pedido"]').exists(), 'botão que não funciona pra Operação').toBe(false)
     limparTela()
-    const dono = await abrir('master')
+    const dono = await abrir(true)
     expect(dono.find('[data-parte="cancelar-pedido"]').exists()).toBe(true)
   })
 })

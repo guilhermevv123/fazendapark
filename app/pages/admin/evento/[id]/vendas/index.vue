@@ -1,18 +1,3 @@
-<script lang="ts">
-import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
-
-/**
- * O botão "Cancelar pedido" só pra quem pode cancelar (ADM-64): a MESMA grade que tranca a rota
- * de cancelar no servidor (`decidirAcesso`, área `dinheiro`). Pra Operação o botão abria só o
- * recado "é do financeiro ou do dono" — botão que não funciona. Papel desconhecido: mostra, e o
- * servidor responde (como antes).
- */
-export function podeCancelarPedido(papel: unknown, eventoId: string): boolean {
-  if (!ehPapel(papel)) return true
-  return decidirAcesso(papel, `/api/admin/evento/${eventoId}/cancelar`).liberado
-}
-</script>
-
 <script setup lang="ts">
 /**
  * Vendas: a lista de pedidos, com a ficha completa num painel lateral.
@@ -61,10 +46,6 @@ watch([buscaDebounced, situacao, canal, pagina], () => {
   if (pedido) query.pedido = String(pedido)
   consultaDaTela.escrever(query)
 })
-
-// o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
-const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
-const podeCancelar = computed(() => podeCancelarPedido(eu.value?.usuario?.papel, id))
 
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/vendas`, {
@@ -382,7 +363,9 @@ useHead({ title: 'Vendas' })
                     @click="reenvio.aberto = !reenvio.aberto; reenvio.erro = ''; reenvio.resultado = ''">
               Reenviar ingresso
             </button>
-            <button v-if="podeCancelar && (ficha.pedido.situacao === 'pago' || ficha.pedido.situacao === 'estornado_parcial')"
+            <!-- ADM-64: só pra quem pode cancelar, decidido pelo servidor (`acoes.mostrarCancelar`):
+                 pra Operação o botão abria só o recado "é do financeiro ou do dono" -->
+            <button v-if="ficha.acoes.mostrarCancelar"
                     type="button" class="btn-erro" data-parte="cancelar-pedido"
                     @click="cancelamento.aberto = !cancelamento.aberto; cancelamento.erro = ''">
               {{ ficha.acoes.devolucaoPendente ? 'Tentar a devolução de novo' : 'Cancelar pedido' }}
