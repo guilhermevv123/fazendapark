@@ -58,7 +58,17 @@ export function criarConsultaNaUrl(rota: Rota, roteador: Roteador) {
     }
   }
 
-  return { atual, escrever }
+  /**
+   * Troca SÓ as chaves dadas e mantém as outras — partindo de `atual` (a última pedida), nunca de
+   * `route.query`, que ainda pode ser a de antes da troca anterior. Nulo/vazio tira a chave.
+   */
+  function trocar(mudanca: ConsultaPedida, caminho: string = rota.path) {
+    const base: ConsultaPedida = {}
+    for (const [chave, valor] of Object.entries(atual.value)) base[chave] = Array.isArray(valor) ? (valor[0] ?? null) : valor
+    return escrever({ ...base, ...mudanca }, caminho)
+  }
+
+  return { atual, escrever, trocar }
 }
 
 export function useConsultaNaUrl() {

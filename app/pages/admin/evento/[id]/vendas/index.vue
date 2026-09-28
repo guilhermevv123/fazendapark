@@ -22,14 +22,16 @@ export function podeCancelarPedido(papel: unknown, eventoId: string): boolean {
  * mesmo nome, qual deles pagou". Trocar de página a cada conferência perde o
  * filtro e o lugar da lista.
  */
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
-const router = useRouter()
 const id = route.params.id as string
 
 // Busca, filtros e página na URL (ADM-31): F5 e o link mandado pra equipe mantêm o recorte, em
-// vez de voltar pra primeira página de tudo. `replace`, não `push` — filtrar não é navegar.
+// vez de voltar pra primeira página de tudo. `replace`, não `push` — filtrar não é navegar. A
+// escrita é a da casa (consultaNaUrl.ts): sem ler a rota velha no meio de outra troca.
+const consultaDaTela = useConsultaNaUrl()
 const naUrl = (chave: string) => {
   const v = route.query[chave]
   return String((Array.isArray(v) ? v[0] : v) ?? '')
@@ -55,8 +57,9 @@ watch([buscaDebounced, situacao, canal, pagina], () => {
   if (canal.value) query.canal = canal.value
   if (pagina.value > 1) query.pagina = String(pagina.value)
   // o link da ficha (`?pedido=`) continua valendo enquanto ela estiver aberta
-  if (route.query.pedido) query.pedido = String(route.query.pedido)
-  router.replace({ query })
+  const pedido = consultaDaTela.atual.value.pedido
+  if (pedido) query.pedido = String(pedido)
+  consultaDaTela.escrever(query)
 })
 
 // o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
@@ -114,7 +117,7 @@ function fecharFicha() {
   abertoId.value = ''
   limparAcoes()
   // sem isto, recarregar a página reabria a ficha que a pessoa acabou de fechar
-  if (route.query.pedido) router.replace({ query: { ...route.query, pedido: undefined } })
+  if (consultaDaTela.atual.value.pedido) consultaDaTela.trocar({ pedido: null })
 }
 
 /* ------------------------------------------------ ações da ficha ----- */

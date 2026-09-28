@@ -137,11 +137,33 @@ describe('o que vai pra URL', () => {
   })
 })
 
+describe('trocar: só as chaves dadas, a partir da última pedida', () => {
+  it('mantém as outras chaves da consulta ATUAL (não da rota velha) e tira as que vêm vazias', async () => {
+    const rota = reactive({ path: '/admin/evento/e1/vendas', query: { canal: 'online', pedido: 'p1' } as LocationQuery })
+    const roteador = roteadorLento(rota)
+    const c = criarConsultaNaUrl(rota, roteador)
+    c.trocar({ busca: 'ana' })
+    // a segunda troca sai antes de a primeira chegar na rota: tem que levar a busca junto
+    c.trocar({ pedido: null })
+    expect(roteador.pendentes[1]!.para).toEqual({ path: '/admin/evento/e1/vendas', query: { canal: 'online', busca: 'ana' } })
+  })
+})
+
 describe('as telas usam esta régua', () => {
   // As telas do painel com filtro na URL. `navigateTo({ … query … })` em filtro é a armadilha 1
   // de volta; `route.query` montando a consulta nova é a armadilha 2.
   const TELAS = ['index', 'clientes', 'relatorios', 'financeiro', 'reconciliacao', 'auditoria', 'agentes']
   const pasta = new URL('../pages/admin/', import.meta.url)
+
+  it('as telas do evento que liam a rota velha no meio da troca também usam a régua', () => {
+    const doEvento = new URL('../pages/admin/evento/[id]/', import.meta.url)
+    for (const tela of ['ingressos/cortesias', 'ingressos/sessoes', 'vendas/index', 'relatorios/extrato']) {
+      const fonte = readFileSync(new URL(`${tela}.vue`, doEvento), 'utf8')
+      expect(fonte, tela).toContain('useConsultaNaUrl()')
+      expect(fonte, tela).not.toMatch(/navigateTo\(\{[^)]*query/)
+      expect(fonte, tela).not.toMatch(/\.\.\.route\.query/)
+    }
+  })
 
   it('nenhuma tela de filtro volta ao navigateTo com consulta, e todas leem `consulta.atual`', () => {
     const existentes = readdirSync(pasta).filter((f) => f.endsWith('.vue')).map((f) => f.replace(/\.vue$/, ''))

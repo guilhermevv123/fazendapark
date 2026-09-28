@@ -16,6 +16,7 @@
  * - **Exporta o que está na tela.** O CSV sai do recorte atual, não do
  *   evento inteiro — quem filtrou três dias quer os três dias.
  */
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
@@ -37,10 +38,10 @@ const params = computed(() => ({
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/extrato`, { query: params })
 
-watch(params, (p) => {
-  navigateTo({ query: Object.fromEntries(Object.entries(p).filter(([, v]) => v)) },
-    { replace: true })
-})
+// `navigateTo` chamado enquanto outra navegação ainda roda o middleware é engolido (a troca some
+// da URL): a escrita é a da casa, `consultaNaUrl.ts`
+const consultaDaTela = useConsultaNaUrl()
+watch(params, (p) => { consultaDaTela.escrever(p) })
 
 // `reais` é o de app/composables/formato.ts (ADM-48): uma escrita de dinheiro só no projeto
 

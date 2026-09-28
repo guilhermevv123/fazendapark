@@ -253,8 +253,9 @@ describe('filtros na URL — F5 e link mantêm o recorte (ADM-31)', () => {
     await w.findAll('select')[0].setValue('estornado')
     await espera()
     // (o temporizador de busca de uma tela de outro caso pode cair aqui: olha só as desta tela)
-    expect(navegacoes.filter((n) => 'situacao' in (n.query ?? {})).at(-1), 'o filtro não foi pra URL (a página volta pra 1)')
-      .toEqual({ query: { busca: 'ana', situacao: 'estornado', canal: 'online' } })
+    // a escrita é a da casa (consultaNaUrl.ts): vai com o caminho junto — o que importa é a consulta
+    expect(navegacoes.filter((n) => 'situacao' in (n.query ?? {})).at(-1)?.query, 'o filtro não foi pra URL (a página volta pra 1)')
+      .toEqual({ busca: 'ana', situacao: 'estornado', canal: 'online' })
   })
 
   it('histórico: resultado, portão e página vêm da URL e voltam pra ela', async () => {

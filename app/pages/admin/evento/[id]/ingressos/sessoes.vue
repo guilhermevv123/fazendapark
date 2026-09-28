@@ -18,10 +18,10 @@
  * quem administra o parque da Bahia pode estar em Lisboa, e "09:00" tem que
  * continuar sendo a hora em que o portão abre lá.
  */
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
-const router = useRouter()
 const id = route.params.id as string
 
 const { data, refresh, status, error: falha } = await useFetch<any>(
@@ -39,12 +39,10 @@ const diaLongo = (iso: string) =>
 const hora = (iso: string) => fmt(iso, { hour: '2-digit', minute: '2-digit' })
 
 // O filtro mora na URL: o operador precisa mandar o link do que está vendo.
-const verPassadas = computed(() => route.query.passadas === '1')
+const consultaDaTela = useConsultaNaUrl()
+const verPassadas = computed(() => consultaDaTela.atual.value.passadas === '1')
 function alternarPassadas() {
-  const q: any = { ...route.query }
-  if (verPassadas.value) delete q.passadas
-  else q.passadas = '1'
-  router.replace({ query: q })
+  consultaDaTela.trocar({ passadas: verPassadas.value ? null : '1' })
 }
 
 const agora = Date.now()

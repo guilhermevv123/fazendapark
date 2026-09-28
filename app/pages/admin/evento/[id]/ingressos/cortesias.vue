@@ -45,10 +45,10 @@ export const ROTULO_DO_STATUS: Record<string, string> = {
  * A busca fica na URL (`?q=`) porque o operador precisa mandar o link do que
  * está vendo — "as cortesias que o João pediu" tem que ser um endereço.
  */
+import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
-const router = useRouter()
 const id = route.params.id as string
 
 const { data, refresh, pending, error: falha } = await useFetch<any>(
@@ -81,10 +81,11 @@ const recado = (e: any, padrao: string) =>
 
 /* --------------------------------------------------------------- busca */
 
-const busca = ref(String(route.query.q ?? ''))
-watch(busca, (v) => {
-  router.replace({ query: { ...route.query, q: v || undefined } })
-})
+// a busca na URL pela régua da casa (consultaNaUrl.ts): parte da última consulta pedida, não da
+// rota de antes — espalhar `route.query` com outra troca a caminho apagava a outra
+const consultaDaTela = useConsultaNaUrl()
+const busca = ref(String(consultaDaTela.atual.value.q ?? ''))
+watch(busca, (v) => { consultaDaTela.trocar({ q: v }) })
 const listaFiltrada = computed(() => {
   const termo = busca.value.trim().toLowerCase()
   const todos = data.value?.ingressos ?? []
