@@ -29,6 +29,7 @@ const PRECO = 10_000
 const CPF_1 = '52998224725'
 const CPF_2 = '11144477735'
 const CPF_3 = '39053344705'
+const CPF_4 = '12345678909'
 
 let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
 let cookie = ''
@@ -86,6 +87,7 @@ beforeAll(async () => {
   await cupom('PORPESSOA', { porPessoa: 1 })
   await cupom('TETO', { value: 5000, teto: 1000 })
   await cupom('PLACAR', { maxUses: 3, uses: 3 })
+  await cupom('CANAIS', { porPessoa: 1 })
 
   const r = await fetch(`${BASE}/api/auth/entrar`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -136,6 +138,23 @@ describe('cupom no balcão: a régua do site', () => {
     expect(segunda.corpo.data?.motivo).toBe('uma_vez_por_pessoa')
     // outra pessoa continua podendo
     expect((await vender('PORPESSOA', CPF_1)).status).toBe(200)
+  }, 120_000)
+
+  // 28/09: o site contava o CPF só pelo cadastro do comprador — a venda de balcão sem e-mail (o
+  // CPF no ingresso) não entrava, e quem usou o "1 por pessoa" no guichê usava de novo online
+  it('quem usou o "1 por pessoa" no guichê não usa de novo no site — e quem nunca usou, usa', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const guiche = await vender('CANAIS', CPF_4)
+    expect(guiche.status, JSON.stringify(guiche.corpo)).toBe(200)
+    const conferir = async (documento?: string) => (await fetch(`${BASE}/api/cupom/conferir`, {
+      method: 'POST', headers: { origin: BASE, 'content-type': 'application/json' },
+      body: JSON.stringify({ eventSlug: `zzk-cupom-ev-${MARCA}`, codigo: 'CANAIS', ...(documento ? { documento } : {}) }),
+    })).json()
+    expect(await conferir(CPF_4), 'o site deixou o mesmo CPF usar de novo')
+      .toMatchObject({ ok: false, motivo: 'uma_vez_por_pessoa' })
+    expect(await conferir(CPF_2)).toMatchObject({ ok: true, parcial: false })
+    // sem CPF ainda: a conferência PARCIAL não conta pessoa nenhuma
+    expect(await conferir()).toMatchObject({ ok: true, parcial: true })
   }, 120_000)
 
   it('o teto de desconto segura o percentual', async (ctx) => {

@@ -22,7 +22,7 @@ import { q, q1, tx } from '../../../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../../utils/auditoria'
 import { EstoqueInsuficiente, LoteIndisponivel, reservar } from '../../../../../utils/estoque'
 import { faceDoTipo, type ModoTaxa } from '../../../../../utils/dinheiro'
-import { aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom } from '../../../../../utils/cupom'
+import { aplicarCupom, CupomRecusado, resgatarCupom } from '../../../../../utils/cupom'
 import { gerarCodigo } from '../../../../../utils/ingresso'
 import { emitirNaTransacao } from '../../../../../utils/emissao'
 import { SQL_FIM_DO_DIA_DO_LOTE, SQL_TRAVA_TURNO_ABERTO } from '../../../../../utils/caixa'
@@ -318,32 +318,8 @@ export default defineEventHandler(async (event) => {
           lotIdsDoPedido: d.itens.map((i) => i.lotId), fuso: ev.timezone,
         })
       : null
-    // "Um por pessoa" também vê a venda de BALCÃO. `resgatarCupom` conta o CPF pelo cadastro do
-    // cliente (`customers.document`), e o balcão sem e-mail não cria cadastro — o CPF vai no
-    // ingresso (`holder_document`). Sem esta conta, o mesmo CPF usava o cupom "1 por pessoa"
-    // no guichê quantas vezes quisesse. A linha do cupom já está travada pelo resgate.
-    if (cupom) {
-      const { rows: [uso] } = await c.query(
-        `SELECT pc.max_per_customer,
-                count(o.id) FILTER (WHERE cu.document = $2
-                                       OR (o.customer_id IS NULL AND EXISTS (
-                                             SELECT 1 FROM tickets t
-                                              WHERE t.order_id = o.id AND t.holder_document = $2)))::int
-                  AS da_pessoa
-           FROM promo_codes pc
-           LEFT JOIN orders o ON o.promo_code_id = pc.id AND o.status = ANY($3::text[])
-           LEFT JOIN customers cu ON cu.id = o.customer_id
-          WHERE pc.id = $1
-          GROUP BY pc.max_per_customer`, [cupom.id, documento, PEDIDO_EM_PE as unknown as string[]])
-      const porPessoa = Number(uso?.max_per_customer ?? 1)
-      if (Number(uso?.da_pessoa ?? 0) >= porPessoa) {
-        throw new CupomRecusado(
-          porPessoa === 1
-            ? `Este CPF já usou o cupom ${cupom.codigo}. Ele vale uma vez por pessoa.`
-            : `Este CPF já usou o cupom ${cupom.codigo} ${uso.da_pessoa} vezes — o limite é ${porPessoa} por pessoa.`,
-          'uma_vez_por_pessoa')
-      }
-    }
+    // "Um por pessoa" também vê a venda de BALCÃO sem cadastro (o CPF vai no ingresso,
+    // `holder_document`): a conta mora em `resgatarCupom`, a mesma do site desde 28/09.
     const total = aplicarCupom(linhas, Number(ev.fee_bps), modo, cupom)
 
     // ------------------------------------------------------------- o troco

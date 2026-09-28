@@ -160,9 +160,20 @@ export async function resgatarCupom(c: PoolClient, r: ResgateDeCupom): Promise<C
   // LEFT JOIN de propósito: venda de balcão sai sem cliente cadastrado e
   // mesmo assim gastou um uso do cupom. Com JOIN normal ela sumiria da conta
   // em silêncio e o cupom de 20 usos venderia 40.
+  //
+  // "Um por pessoa" em TODOS os canais: o CPF do cadastro do comprador, ou —
+  // no pedido de balcão sem cadastro (sem e-mail) — o CPF que foi no ingresso.
+  // Até 28/09 só o balcão via o ingresso (conta própria em pdv/venda.post.ts):
+  // quem usou o cupom "1 por pessoa" no guichê usava de novo no site. Sem CPF
+  // (a conferência PARCIAL do site), a pessoa não é contada — nem por engano
+  // contra um ingresso de CPF vazio.
   const { rows: contas } = await c.query(
-    `SELECT count(*)::int                                      AS usos,
-            count(*) FILTER (WHERE cu.document = $2)::int      AS usos_da_pessoa
+    `SELECT count(*)::int AS usos,
+            count(*) FILTER (WHERE $2 <> '' AND (
+              cu.document = $2
+              OR (o.customer_id IS NULL AND EXISTS (
+                    SELECT 1 FROM tickets t WHERE t.order_id = o.id AND t.holder_document = $2))))::int
+              AS usos_da_pessoa
        FROM orders o
        LEFT JOIN customers cu ON cu.id = o.customer_id
       WHERE o.promo_code_id = $1
