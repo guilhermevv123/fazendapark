@@ -313,16 +313,23 @@ test.describe('relatórios', () => {
               'pago', 'bilheteria', 1000, 0, 100, 0, 1000, 'dinheiro', now() - make_interval(mins => g)
          FROM events ev, generate_series(1, 305) g
         WHERE ev.id = $1`, [e.id])
-    await abrir(page, url(e.id, 'relatorios/extrato'))
-    const tabela = page.locator('table', { has: page.locator('th', { hasText: /^Pedido$/ }) })
-    await expect(page.getByText(/mostrando os 300 mais recentes/)).toBeVisible()
-    await expect(tabela.locator('tbody tr')).toHaveCount(300)
-    await expect(tabela.locator('tfoot')).toContainText('Total das linhas visíveis')
-    // o rodapé soma o que está na tela; o cartão de cima, o recorte inteiro
-    await expect(tabela.locator('tfoot')).toContainText('R$ 3.000,00')
-    const cobrado = page.locator('.card', { has: page.locator('.rotulo-kpi', { hasText: 'Cobrado do comprador' }) })
-    await expect(cobrado.locator('.numero-kpi')).toHaveText('R$ 3.050,00')
-    await expect(cobrado).toContainText('305 pedidos')
+    try {
+      await abrir(page, url(e.id, 'relatorios/extrato'))
+      const tabela = page.locator('table', { has: page.locator('th', { hasText: /^Pedido$/ }) })
+      await expect(page.getByText(/mostrando os 300 mais recentes/)).toBeVisible()
+      await expect(tabela.locator('tbody tr')).toHaveCount(300)
+      await expect(tabela.locator('tfoot')).toContainText('Total das linhas visíveis')
+      // o rodapé soma o que está na tela; o cartão de cima, o recorte inteiro
+      await expect(tabela.locator('tfoot')).toContainText('R$ 3.000,00')
+      const cobrado = page.locator('.card', { has: page.locator('.rotulo-kpi', { hasText: 'Cobrado do comprador' }) })
+      await expect(cobrado.locator('.numero-kpi')).toHaveText('R$ 3.050,00')
+      await expect(cobrado).toContainText('305 pedidos')
+    } finally {
+      // pedido pago sem ingresso é o alarme de "emissão" da /api/saude: os 305 deixavam a saúde
+      // da instância de E2E em 503 até o banco ser recriado
+      await sqlE2e(`DELETE FROM orders o WHERE o.event_id = $1 AND o.code LIKE 'ZZVAREVT-%'
+                      AND NOT EXISTS (SELECT 1 FROM tickets t WHERE t.order_id = o.id)`, [e.id])
+    }
   })
 
   test('#41 Relatórios › Lotes › Exportar: o CSV tem os mesmos números do borderô', async ({ page }) => {
