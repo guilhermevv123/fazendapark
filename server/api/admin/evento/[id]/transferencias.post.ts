@@ -15,6 +15,10 @@ import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditor
 import {
   gerarToken, mesmoEmail, RECUSA, venceEm,
 } from '../../../../utils/transferencia'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { ingressoId: 'Ingresso', codigo: 'Código', paraNome: 'Nome de quem recebe', paraEmail: 'E-mail de quem recebe', paraDocumento: 'Documento de quem recebe', paraTelefone: 'Telefone de quem recebe' }
 
 const Entrada = z.object({
   ingressoId: z.string().uuid().optional(),
@@ -32,7 +36,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
   const sessao = (event.context as any).sessao

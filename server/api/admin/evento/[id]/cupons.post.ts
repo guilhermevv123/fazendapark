@@ -7,6 +7,10 @@
  */
 import { z } from 'zod'
 import { q1 } from '../../../../utils/db'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { codigo: 'Código', tipo: 'Tipo de desconto', valor: 'Valor do desconto', maxUsos: 'Limite de usos', maxPorCliente: 'Limite por pessoa', comecaEm: 'Começa em', terminaEm: 'Termina em', loteIds: 'Lotes', ativo: 'Ativo' }
 
 const Entrada = z.object({
   codigo: z.string().min(3).max(32),
@@ -28,7 +32,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
 

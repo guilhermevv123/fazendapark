@@ -11,6 +11,10 @@
  */
 import { z } from 'zod'
 import { tx } from '../../../../utils/db'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { o: 'O que ordenar', setorId: 'Setor', ids: 'Ordem' }
 
 const Entrada = z.object({
   /** 'setor' reordena os setores do evento; 'lote', os lotes de UM setor. */
@@ -25,7 +29,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const { o, setorId, ids } = p.data
 

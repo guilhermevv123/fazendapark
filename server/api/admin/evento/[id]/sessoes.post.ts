@@ -30,6 +30,10 @@
 import { z } from 'zod'
 import { q, q1, tx } from '../../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria, type Autor } from '../../../../utils/auditoria'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { o: 'Ação', de: 'De', ate: 'Até', dias: 'Dias da semana', horarios: 'Horários', inicio: 'Início', fim: 'Fim', capacidade: 'Capacidade', titulo: 'Nome do dia', loteIds: 'Lotes', sessaoId: 'Dia', loteId: 'Lote', sessaoIds: 'Dias' }
 
 const DATA = /^\d{4}-\d{2}-\d{2}$/
 const HORA = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -80,7 +84,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
 

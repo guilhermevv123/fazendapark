@@ -11,6 +11,10 @@
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria, type Autor } from '../../../../utils/auditoria'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { o: 'O que apagar', id: 'Item' }
 
 const Entrada = z.object({
   o: z.enum(['setor', 'lote', 'tipo']),
@@ -20,7 +24,7 @@ const Entrada = z.object({
 export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
-  if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Dados inválidos' })
+  if (!p.success) throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS) })
   const { o, id } = p.data
 
   const autor = autorDaRequisicao(event)

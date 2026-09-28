@@ -19,6 +19,10 @@ import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditor
 import { gerarCodigo } from '../../../../utils/ingresso'
 import { DIAS_DE_RETENCAO, SQL_LIBERA_EM } from '../../../../utils/retencao'
 import { SQL_TRAVA_EVENTO, recusaDeSaque, saldoParaSaque } from '../../../../utils/saque'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { beneficiario: 'Beneficiário', documento: 'Documento', destinoTipo: 'Tipo de destino', destino: 'Destino (chave Pix ou conta)', valorCents: 'Valor', observacao: 'Observação' }
 
 const Entrada = z.object({
   beneficiario: z.string().min(2).max(140),
@@ -33,7 +37,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
   const sessao = (event.context as any).sessao

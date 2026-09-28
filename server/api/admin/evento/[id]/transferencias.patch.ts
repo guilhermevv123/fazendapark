@@ -15,6 +15,10 @@ import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { novoCodigoDoIngresso } from '../../../../utils/ingresso'
+import { explicarErro } from '../index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { transferenciaId: 'Transferência', acao: 'Ação', permitir: 'Permitir' }
 
 const Entrada = z.object({
   transferenciaId: z.string().uuid().optional(),
@@ -29,7 +33,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
 

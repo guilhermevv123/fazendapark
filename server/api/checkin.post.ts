@@ -25,6 +25,10 @@ import {
   SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA, SQL_PRIMEIRA_ENTRADA, SQL_PUBLICO, SQL_ULTIMA_ENTRADA,
 } from '../utils/catraca'
 import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingresso'
+import { explicarErro } from './admin/evento/index.post'
+
+/** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
+const ROTULOS: Record<string, string> = { qr: 'Código lido', eventId: 'Evento', gate: 'Portão', apenasConsultar: 'Só conferir', entradaId: 'Passagem', deviceId: 'Aparelho' }
 
 const Entrada = z.object({
   qr: z.string().min(4).max(200),
@@ -45,7 +49,7 @@ const Entrada = z.object({
 
 export default defineEventHandler(async (event) => {
   const p = Entrada.safeParse(await readBody(event))
-  if (!p.success) throw createError({ statusCode: 400, statusMessage: 'Dados inválidos' })
+  if (!p.success) throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS) })
   const { qr, eventId, gate, apenasConsultar, entradaId, deviceId } = p.data
 
   // Quem leu. O middleware já exigiu sessão nesta rota, então o operador
