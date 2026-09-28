@@ -41,7 +41,8 @@ export default defineEventHandler(async (event) => {
   const arquivo = partes?.find((p) => p.name === 'arquivo')
   const campoBruto = partes?.find((p) => p.name === 'campo')?.data.toString('utf8')
 
-  if (!campoBruto || !(campoBruto in CAMPO_PARA_COLUNA)) {
+  // `Object.hasOwn`, não `in` (ADM-53): `'constructor' in {…}` é true e virava 500
+  if (!campoBruto || !Object.hasOwn(CAMPO_PARA_COLUNA, campoBruto)) {
     throw createError({ statusCode: 400, statusMessage: 'Campo inválido: use "banner" ou "thumb".' })
   }
   const campo = campoBruto as Campo
