@@ -217,7 +217,7 @@ useHead({ title: 'Vendas' })
       </div>
     </div>
 
-    <p v-if="falha" class="card border-erro text-erro">
+    <p v-if="falha" class="card text-erro ring-erro/50">
       Não foi possível carregar as vendas.
       <button type="button" class="ml-2 underline" @click="refresh()">Tentar de novo</button>
     </p>

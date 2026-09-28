@@ -363,7 +363,7 @@ function imprimir() {
             <template v-for="l in cat.lotes.filter((x: any) => x.setor === setor)" :key="l.id">
               <!-- lote inteiro, quando não tem tipos -->
               <button v-if="!l.tipos.length" type="button"
-                      class="card text-left transition-colors hover:border-acao hover:bg-acao-fraco"
+                      class="card text-left transition-colors hover:ring-acao hover:bg-acao-fraco"
                       :disabled="l.disponivel <= 0" @click="juntar(l)">
                 <p class="titulo font-semibold text-tinta">{{ l.nome }}</p>
                 <p class="numero-kpi mt-1">{{ reais(l.balcaoCents) }}</p>
@@ -371,7 +371,7 @@ function imprimir() {
               </button>
               <!-- um botão por tipo (inteira, meia…) -->
               <button v-for="t in l.tipos" :key="t.id" type="button"
-                      class="card text-left transition-colors hover:border-acao hover:bg-acao-fraco"
+                      class="card text-left transition-colors hover:ring-acao hover:bg-acao-fraco"
                       :disabled="Math.min(l.disponivel, t.disponivel) <= 0" @click="juntar(l, t)">
                 <p class="titulo font-semibold text-tinta">{{ l.nome }}</p>
                 <p class="text-sm text-tinta-suave">{{ t.nome }}</p>

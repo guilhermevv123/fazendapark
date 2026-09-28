@@ -1164,7 +1164,7 @@ useHead({ title: 'Leitor de entrada' })
          porque o estrago é silencioso: a passagem entra do mesmo jeito (a
          pessoa passou), mas com a hora do servidor — e o operador precisa
          saber qual tablet acertar antes que a noite inteira vá embora assim. -->
-    <div v-if="avisoRelogio" class="card mt-3 border-alerta bg-alerta-claro">
+    <div v-if="avisoRelogio" class="card mt-3 bg-alerta-claro ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         Relógio errado em {{ avisoRelogio.passagens }} passagem(ns)
         <template v-if="avisoRelogio.dispositivo">
@@ -1184,7 +1184,7 @@ useHead({ title: 'Leitor de entrada' })
          porque a saída certa para o ingresso antigo NÃO é inventar um motivo
          — backfill chutado vira rastro falso, que é pior que rastro faltando.
          Então conta-se quantos ficaram sem e mostra-se o número. -->
-    <div v-if="meiasDoEvento.semMotivo" class="card mt-3 border-alerta bg-alerta-claro">
+    <div v-if="meiasDoEvento.semMotivo" class="card mt-3 bg-alerta-claro ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         {{ meiasDoEvento.semMotivo }} de {{ meiasDoEvento.total }}
         meia(s)-entrada(s) deste evento sem motivo registrado
@@ -1458,7 +1458,7 @@ useHead({ title: 'Leitor de entrada' })
       </p>
     </div>
 
-    <div v-if="conflitos.length" class="card mt-4 border-alerta">
+    <div v-if="conflitos.length" class="card mt-4 ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         {{ conflitos.length }} ingresso(s) entraram mais de uma vez
       </p>

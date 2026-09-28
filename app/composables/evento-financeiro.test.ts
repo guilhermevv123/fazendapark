@@ -96,3 +96,54 @@ describe('borderô — exportação pelo baixarCsv (ADM-35)', () => {
     expect(csv).toContain('"Devolvido em pedidos estornados por inteiro (fora da conta)";"";"R$ 220,00"')
   })
 })
+
+// ===========================================================================
+// Financeiro › Transferências — situação com acento (ADM-44), CSV da casa (ADM-35) e filtro na
+// URL (ADM-31)
+// ===========================================================================
+describe('transferências do evento', () => {
+  const transferencias = () => import('../pages/admin/evento/[id]/financeiro/index.vue')
+  const saida = (id: string, status: string, beneficiario = 'Produtora') => ({
+    id, codigo: `TR-${id}`, beneficiario, documento: null, pedidoPor: 'Dono', pedidoPorEmail: null,
+    pedidoEm: '2026-09-20T15:00:00Z', processadoEm: null, valorCents: 1000_00, taxaCents: 0,
+    destino: 'chave@pix', destinoTipo: 'pix', status, erro: null, observacao: null, idNoGateway: null })
+  const FIN = {
+    evento: { id: EV, diasDeRetencao: 2, liberaEm: '2026-10-20T22:00:00Z', liberado: true },
+    resumo: { liquidoCents: 5000_00, retidoCents: 0, disponivelCents: 3000_00, emCursoCents: 0,
+              naPlataformaCents: 5000_00, recebidoDiretoCents: 0, transferidoCents: 1000_00, transferencias: 2 },
+    transferencias: [saida('a', 'concluida', '=HYPERLINK("http://x";"clique")'), saida('b', 'falhou')],
+  }
+  const abrir = async (query: Record<string, string> = {}) => montarTela(await transferencias(), {
+    rota: { params: { id: EV }, query },
+    respostas: { [`/api/admin/evento/${EV}/financeiro`]: FIN },
+    stubs: { AbasSecao: true, CampoMoeda: true, ModalLateral: true },
+  })
+
+  it('a situação sai com acento, nas palavras do filtro', async () => {
+    const w = await abrir()
+    const selos = w.findAll('[data-parte="situacao"]').map((s) => s.text())
+    expect(selos, '"CONCLUIDA" sem acento voltou').toEqual(['CONCLUÍDA', 'FALHOU'])
+  })
+
+  it('o CSV sai pelo baixarCsv: fórmula neutralizada, valor em reais, situação com acento', async () => {
+    const w = await abrir()
+    let blob: Blob | null = null
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((b: any) => { blob = b; return 'blob:x' })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    await w.findAll('button').find((b) => b.text().includes('Exportar'))!.trigger('click')
+    const csv = await blob!.text()
+    expect(csv, 'fórmula crua na planilha').toContain(`"'=HYPERLINK(""http://x"";""clique"")"`)
+    expect(csv).toContain('"R$ 1.000,00"')
+    expect(csv).toContain('"Concluída"')
+  })
+
+  it('o filtro vem da URL (F5 e link mantêm o recorte) e volta pra ela', async () => {
+    const { navegacoes } = await import('./.vitest-setup-dom')
+    const w = await abrir({ status: 'falhou' })
+    expect(w.findAll('[data-parte="situacao"]').map((s) => s.text()), 'o F5 perdeu o filtro').toEqual(['FALHOU'])
+    await w.find('select#st').setValue('concluida')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(navegacoes.at(-1), 'o filtro não foi pra URL').toEqual({ query: { status: 'concluida' } })
+  })
+})

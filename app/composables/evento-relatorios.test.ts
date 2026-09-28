@@ -142,3 +142,40 @@ describe('o CSV da visão geral sai pelo baixarCsv (ADM-35)', () => {
     }
   })
 })
+
+// ===========================================================================
+// Relatórios › Lotes — o campeão de R$ 0 e a cor do giro invertida (ADM-46)
+// ===========================================================================
+describe('vendas por lote (ADM-46)', () => {
+  const lotes = () => import('../pages/admin/evento/[id]/relatorios/lotes.vue')
+  const lote = (loteId: string, vendidos: number, estoque: number, faceUnit: number) => ({
+    loteId, setor: `Setor ${loteId}`, lote: `Lote ${loteId}`, faceUnitCents: faceUnit, estoque, vendidos,
+    cortesias: 0, faceCents: vendidos * faceUnit, taxaCents: 0 })
+  const abrir = async (l: any[]) => montarTela(await lotes(), {
+    rota: { params: { id: EV } },
+    respostas: { [`/api/admin/evento/${EV}/bordero`]: { lotes: l } },
+    stubs: { AbasSecao: true },
+  })
+
+  it('esgotando é verde; parado é neutro — não o contrário', async () => {
+    const { corDoGiro } = await lotes()
+    expect(corDoGiro(95), '90% vendido pintado como problema').toBe('bg-ok')
+    expect(corDoGiro(70)).toBe('bg-acao')
+    expect(corDoGiro(5)).toBe('bg-linha-forte')
+  })
+
+  it('sem venda nenhuma, não há "lote que mais rendeu" e a barra de zero fica vazia', async () => {
+    const w = await abrir([lote('A', 0, 100, 5000), lote('B', 0, 50, 3000)])
+    const card = w.find('[data-parte="campeao"]').text().replace(/\s+/g, ' ')
+    expect(card, 'o campeão de R$ 0,00 voltou').toContain('—')
+    expect(card).toContain('nenhum lote vendeu ainda')
+    for (const b of w.findAll('[data-parte="giro"]')) expect(b.attributes('style')).toContain('width: 0%')
+  })
+
+  it('com venda, o campeão é o de maior receita e o lote esgotando pinta verde', async () => {
+    const w = await abrir([lote('A', 10, 100, 5000), lote('B', 48, 50, 3000)])
+    expect(w.find('[data-parte="campeao"]').text()).toContain('Setor B')
+    const barras = w.findAll('[data-parte="giro"]')
+    expect(barras[1].classes()).toContain('bg-ok')
+  })
+})

@@ -226,7 +226,7 @@ useHead({ title: 'Mapa de assentos' })
           </div>
 
           <div v-if="selecionados.size"
-               class="card mt-3 flex flex-wrap items-end gap-3 border-acao">
+               class="card mt-3 flex flex-wrap items-end gap-3 ring-acao/50">
             <p class="text-sm text-tinta">
               <strong class="tabular-nums">{{ selecionados.size }}</strong> selecionado(s)
               <span v-if="selecaoVendida" class="text-erro">

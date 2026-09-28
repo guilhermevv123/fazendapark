@@ -175,7 +175,7 @@ useHead({ title: 'Histórico de leituras' })
     <!-- Entradas repetidas: o que a portaria offline produz e nenhuma outra
          tela mostra. Fica ANTES do gráfico de propósito — é a coisa que alguém
          precisa agir sobre hoje, não amanhã. -->
-    <div v-if="conflitos.length" class="card mt-4 border-alerta bg-alerta-claro">
+    <div v-if="conflitos.length" class="card mt-4 bg-alerta-claro ring-alerta/50">
       <p class="rotulo-kpi text-alerta">
         {{ conflitos.length }} ingresso(s) entraram mais de uma vez
       </p>

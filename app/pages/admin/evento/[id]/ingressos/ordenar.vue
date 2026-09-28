@@ -153,7 +153,7 @@ useHead({ title: 'Ordenar setores' })
             <span class="font-medium text-tinta">{{ l.nome }}</span>
             <span v-if="!l.visivel" class="selo-neutro">OCULTO</span>
             <span class="text-xs text-tinta-fraca">
-              {{ (l.totalCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }}
+              {{ reais(l.totalCents) }}
             </span>
             <div class="ml-auto flex items-center gap-1">
               <button type="button" class="rounded border border-linha-forte p-1 text-tinta-suave

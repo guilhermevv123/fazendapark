@@ -15,22 +15,37 @@
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id as string
 
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   `/api/admin/evento/${id}/financeiro`)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const dataHora = (d: string) =>
-  new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+// `reais` e `dataHora` são os de app/composables/formato.ts (ADM-48): uma escrita só no projeto
 
 const erro = ref('')
 const salvando = ref(false)
 
 /* --------------------------------------------------------------- filtros */
-const busca = ref('')
-const filtroStatus = ref('')
-const filtroDestino = ref('')
+// Na URL (ADM-31): F5 e link mantêm o recorte. `replace`, não `push` — filtrar não é navegar.
+const naUrl = (chave: string) => {
+  const v = route.query[chave]
+  return String((Array.isArray(v) ? v[0] : v) ?? '')
+}
+const busca = ref(naUrl('busca'))
+const filtroStatus = ref(naUrl('status'))
+const filtroDestino = ref(naUrl('destino'))
+let timerBusca: any
+watch([busca, filtroStatus, filtroDestino], () => {
+  clearTimeout(timerBusca)
+  timerBusca = setTimeout(() => {
+    const query: Record<string, string> = {}
+    if (busca.value.trim()) query.busca = busca.value.trim()
+    if (filtroStatus.value) query.status = filtroStatus.value
+    if (filtroDestino.value) query.destino = filtroDestino.value
+    router.replace({ query })
+  }, 250)
+})
 
 const lista = computed(() => {
   let l = data.value?.transferencias ?? []
@@ -47,6 +62,11 @@ const lista = computed(() => {
 const SELO: Record<string, string> = {
   solicitada: 'selo-alerta', processando: 'selo-alerta',
   concluida: 'selo-ok', falhou: 'selo-erro', cancelada: 'selo-neutro',
+}
+/** a situação com acento, as mesmas palavras do filtro (ADM-44): era `status.toUpperCase()` → "CONCLUIDA" */
+const SITUACAO: Record<string, string> = {
+  solicitada: 'Solicitada', processando: 'Processando', concluida: 'Concluída',
+  falhou: 'Falhou', cancelada: 'Cancelada',
 }
 
 /* ------------------------------------------------------------- nova saída */
@@ -87,27 +107,17 @@ async function pedir() {
 
 /* ------------------------------------------------------------- exportação */
 /**
- * CSV com `;` e BOM: é o que o Excel em português abre sem pedir assistente de
- * importação. Com vírgula e sem BOM, R$ 1.234,56 vira duas colunas e acento
- * vira caractere quebrado — e a pessoa refaz na mão.
+ * O CSV sai pelo `baixarCsv` da casa (ADM-35): `;` e BOM pro Excel em português, e a proteção de
+ * fórmula que a cópia local não tinha — beneficiário e observação são texto livre.
  */
 function exportar() {
-  const cab = ['Código', 'Beneficiário', 'Documento', 'Pedido por', 'Data',
-               'Valor', 'Destino', 'Tipo', 'Status']
-  const linhas = lista.value.map((t: any) => [
-    t.codigo, t.beneficiario, t.documento ?? '', t.pedidoPor ?? '',
-    dataHora(t.pedidoEm), (t.valorCents / 100).toFixed(2).replace('.', ','),
-    t.destino, t.destinoTipo, t.status,
-  ])
-  const csv = [cab, ...linhas]
-    .map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';'))
-    .join('\r\n')
-  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `transferencias-${id.slice(0, 8)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  baixarCsv(`transferencias-${id.slice(0, 8)}`,
+    ['Código', 'Beneficiário', 'Documento', 'Pedido por', 'Data', 'Valor', 'Destino', 'Tipo', 'Situação'],
+    lista.value.map((t: any) => [
+      t.codigo, t.beneficiario, t.documento ?? '', t.pedidoPor ?? '',
+      dataHora(t.pedidoEm), reais(t.valorCents),
+      t.destino, t.destinoTipo === 'pix' ? 'Pix' : 'Conta bancária', SITUACAO[t.status] ?? t.status,
+    ]))
 }
 
 useHead({ title: 'Transferências' })
@@ -166,7 +176,7 @@ useHead({ title: 'Transferências' })
           o que sobra das vendas pagas depois da taxa de serviço e dos estornos
         </p>
       </div>
-      <div class="card" :class="data.resumo.retidoCents && 'border-alerta/50'">
+      <div class="card" :class="data.resumo.retidoCents && 'ring-alerta/50'">
         <p class="rotulo-kpi">Valor retido</p>
         <p class="numero-kpi mt-1" :class="data.resumo.retidoCents && 'text-alerta'">
           {{ reais(data.resumo.retidoCents) }}
@@ -189,7 +199,7 @@ useHead({ title: 'Transferências' })
           </template>
         </p>
       </div>
-      <div class="card" :class="data.resumo.disponivelCents > 0 && 'border-ok/50'">
+      <div class="card" :class="data.resumo.disponivelCents > 0 && 'ring-ok/50'">
         <p class="rotulo-kpi">Disponível para transferir</p>
         <p class="numero-kpi mt-1" :class="data.resumo.disponivelCents > 0 && 'text-ok'">
           {{ reais(data.resumo.disponivelCents) }}
@@ -287,7 +297,9 @@ useHead({ title: 'Transferências' })
               <span class="block font-mono text-xs text-tinta-fraca">{{ t.destino }}</span>
             </td>
             <td class="px-3 py-3">
-              <span :class="SELO[t.status] ?? 'selo-neutro'">{{ t.status.toUpperCase() }}</span>
+              <span :class="SELO[t.status] ?? 'selo-neutro'" data-parte="situacao">
+                {{ (SITUACAO[t.status] ?? t.status).toUpperCase() }}
+              </span>
             </td>
             <td class="px-3 py-3 text-xs text-tinta-suave">
               <p v-if="t.erro" class="text-erro">{{ t.erro }}</p>

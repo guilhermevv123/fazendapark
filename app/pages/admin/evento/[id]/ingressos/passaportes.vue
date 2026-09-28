@@ -21,7 +21,7 @@ const id = route.params.id as string
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   `/api/admin/evento/${id}/ingressos`)
 
-const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+// `reais` é o de app/composables/formato.ts (ADM-48): uma escrita de dinheiro só no projeto
 const erro = ref('')
 const salvando = ref(false)
 
