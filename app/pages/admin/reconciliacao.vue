@@ -208,10 +208,31 @@ const SELO_STATUS: Record<string, string> = {
   chargeback: 'selo-erro', disputa: 'selo-erro', falhou: 'selo-erro',
 }
 
-/** link pro pedido dentro do evento dele — a lista de vendas busca pelo código */
+/**
+ * A situação do pedido com o nome de gente — o mesmo dicionário de Clientes e da Visão geral
+ * (status de pedido é um vocabulário só). A linha imprimia o valor cru do banco em caixa alta
+ * ("ESTORNADO_PARCIAL", "AGUARDANDO_PAGAMENTO"), o mesmo defeito do FIN-07 no Financeiro.
+ */
+const ROTULO_STATUS: Record<string, string> = {
+  pago: 'Pago', aguardando_pagamento: 'Aguardando pagamento', em_analise: 'Em análise',
+  expirado: 'Expirou sem pagar', cancelado: 'Cancelado', falhou: 'Pagamento falhou',
+  estornado: 'Estornado', estornado_parcial: 'Estornado em parte',
+  chargeback: 'Chargeback', disputa: 'Em disputa',
+}
+const rotuloDoStatus = (s: string | null | undefined) =>
+  s ? (ROTULO_STATUS[s] ?? s.replace(/_/g, ' ')) : 'Não existe aqui'
+
+/**
+ * Link pro pedido dentro do evento dele. É o `?pedido=<id>` que a lista de Vendas LÊ (abre a
+ * ficha do pedido direto); o `?busca=<código>` sozinho, que ia antes, a tela de Vendas ignora —
+ * "Abrir o pedido" caía na lista inteira, sem busca nenhuma. O código segue junto, pra quem ler
+ * o endereço saber de que pedido se trata.
+ */
 function linkDoPedido(d: any): string | null {
-  if (!d.eventoId || !d.pedidoCodigo) return null
-  return `/admin/evento/${d.eventoId}/vendas?busca=${encodeURIComponent(d.pedidoCodigo)}`
+  if (!d.eventoId || !d.pedidoId) return null
+  const q = new URLSearchParams({ pedido: d.pedidoId })
+  if (d.pedidoCodigo) q.set('busca', d.pedidoCodigo)
+  return `/admin/evento/${d.eventoId}/vendas?${q}`
 }
 
 /** o que dizer da linha: o aviso do gateway está guardado aqui ou nunca chegou? */
@@ -237,7 +258,7 @@ function exportar() {
     : `reconciliacao-${periodoNoNome}`
   const linhas = (data.value?.divergencias ?? []).map((d: any) => [
     CATALOGO_ROTULO(d.tipo), d.cobrancaId ?? '', d.pedidoCodigo ?? '', d.evento ?? '',
-    d.nossoStatus ?? '', d.statusNoGateway ?? '',
+    rotuloDoStatus(d.nossoStatus), d.statusNoGateway ?? '',
     d.nossoCents == null ? '' : brl(d.nossoCents),
     d.gatewayCents == null ? '' : brl(d.gatewayCents),
     brl(d.diferencaCents), dataHora(d.quando, ''), d.explicacao,
@@ -470,8 +491,8 @@ useHead({ title: 'Reconciliação' })
                   <span class="block text-xs text-tinta-fraca">{{ d.explicacao }}</span>
                 </td>
                 <td class="px-3 py-3">
-                  <span :class="SELO_STATUS[d.nossoStatus] ?? 'selo-neutro'">
-                    {{ (d.nossoStatus ?? 'não existe').toUpperCase() }}
+                  <span :class="SELO_STATUS[d.nossoStatus] ?? 'selo-neutro'" data-parte="situacao-pedido">
+                    {{ rotuloDoStatus(d.nossoStatus) }}
                   </span>
                   <span v-if="d.quando" class="mt-1 block text-xs text-tinta-fraca">
                     {{ dataHora(d.quando) }}

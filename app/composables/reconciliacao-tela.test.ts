@@ -64,6 +64,33 @@ describe('Reconciliação — período e evento na URL', () => {
     expect(navegacoes.at(-1)).toEqual({ path: '/admin/reconciliacao', query: { eventoId: 'e1' } })
   })
 
+  it('"Abrir o pedido" leva à ficha (?pedido=, que a tela de Vendas lê) e a situação tem nome de gente', async () => {
+    const divergencia = {
+      tipo: 'valor_diferente', gravidade: 'atencao', rotulo: 'Valor diferente', cobrancaId: 'pay_1',
+      pedidoId: '11111111-2222-4333-8444-555555555555', pedidoCodigo: 'DT-AB12', eventoId: 'e1',
+      evento: 'Domingo no Parque', nossoStatus: 'estornado_parcial', statusNoGateway: 'RECEIVED',
+      nossoCents: 1000, gatewayCents: 2000, diferencaCents: 1000, quando: null, explicacao: 'x', acao: {},
+    }
+    const tela = await montarTela(await import('../pages/admin/reconciliacao.vue'), {
+      rota: { path: '/admin/reconciliacao', query: {} },
+      respostas: {
+        '/api/admin/reconciliacao': {
+          ...RESPOSTA, divergencias: [divergencia, { ...divergencia, pedidoId: null, pedidoCodigo: null, cobrancaId: 'pay_2', nossoStatus: null }],
+          totais: { ...RESPOSTA.totais, valorDiferente: 2 },
+          catalogo: { valor_diferente: { rotulo: 'Valor diferente', gravidade: 'atencao', oQueE: 'x', acao: { rotulo: 'Conferir', comoFazer: 'x' } } },
+        },
+        '/api/admin/eventos': [{ id: 'e1', nome: 'Domingo no Parque' }],
+      },
+    })
+    const links = tela.findAll('a').filter((a: any) => a.text() === 'Abrir o pedido')
+    expect(links, 'a linha sem pedido não pode oferecer "Abrir o pedido"').toHaveLength(1)
+    const destino = new URL(links[0]!.attributes('href')!, 'http://x')
+    expect(destino.pathname).toBe('/admin/evento/e1/vendas')
+    expect(destino.searchParams.get('pedido')).toBe('11111111-2222-4333-8444-555555555555')
+    const situacoes = tela.findAll('[data-parte="situacao-pedido"]').map((s: any) => s.text())
+    expect(situacoes).toEqual(['Estornado em parte', 'Não existe aqui'])
+  })
+
   it('Registrar conferência leva as datas resolvidas pela rota', async () => {
     const tela = await abrir({ periodo: '7d' })
     const botao = tela.findAll('button').find((b: any) => b.text() === 'Registrar conferência')!
