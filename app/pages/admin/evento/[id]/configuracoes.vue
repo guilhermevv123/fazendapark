@@ -1,3 +1,50 @@
+<script lang="ts">
+/**
+ * Regras puras da tela — exportadas pro teste importar DAQUI
+ * (`app/composables/evento-configuracoes.test.ts`).
+ */
+import { areaDaRota, ehPapel, papelPode } from '~~/server/utils/papeis'
+
+/**
+ * O percentual da taxa digitado → pontos-base, em INTEIRO (ADM-09).
+ *
+ * O campo era `type="number"` com `Math.round(Number(valor) * 100)` no `@input`: apagar dava
+ * `Number('') = 0` e a tela gravava 0% sem aviso (a guarda "preencha o percentual" nunca
+ * disparava); digitando "2," o navegador devolve '' no meio da digitação, a taxa virava 0 e o
+ * campo era reescrito com "0" debaixo do dedo. Agora o campo é texto e a conta é de inteiro:
+ *   "2,5" → 250 · "2.5" → 250 · "10" → 1000 · "" → '' (vazio: a guarda pede o valor)
+ *   "2,555", "abc", "-1" → null (inválido: a tela diz o formato e não salva)
+ */
+export function bpsDoPercentual(texto: unknown): number | '' | null {
+  const t = String(texto ?? '').trim().replace(/%$/, '').trim()
+  if (t === '') return ''
+  const m = /^(\d{1,3})(?:[.,](\d{1,2}))?$/.exec(t)
+  if (!m) return null
+  return Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0'))
+}
+
+/** 250 → "2,5" · 1000 → "10" · 1234 → "12,34" — sem float no caminho */
+export function percentualDosBps(bps: unknown): string {
+  const n = Number(bps)
+  if (bps === '' || bps === null || bps === undefined || !Number.isFinite(n)) return ''
+  const inteiro = Math.floor(n / 100)
+  const resto = n % 100
+  if (!resto) return String(inteiro)
+  return `${inteiro},${String(resto).padStart(2, '0').replace(/0$/, '')}`
+}
+
+/**
+ * "Cancelar o evento e devolver" é da área do DINHEIRO (master e financeiro); a página é da
+ * área do EVENTO (master e operação). Mostrar o bloco pra Operação era oferecer um botão que
+ * responde 403 (ADM-43). A régua é a MESMA da rota (`utils/papeis.ts`), não uma cópia.
+ */
+export function podeCancelarEvento(papel: unknown, eventoId: string): boolean {
+  if (!ehPapel(papel)) return false
+  const area = areaDaRota(`/api/admin/evento/${eventoId}/cancelar`)
+  return area ? papelPode(papel, area) : false
+}
+</script>
+
 <script setup lang="ts">
 /**
  * Configurações do evento — o cadastro que o assistente de criação preencheu,
@@ -22,6 +69,19 @@ const { data, refresh, pending, error: falha } = await useFetch<any>(
 const erro = ref('')
 const aviso = ref('')
 const salvando = ref(false)
+
+/** quem está olhando — pra não oferecer o que a rota recusa (ADM-43) */
+const { data: eu } = await useFetch<any>('/api/auth/eu')
+const podeCancelar = computed(() => podeCancelarEvento(eu.value?.usuario?.papel, id))
+
+/** o percentual da taxa como TEXTO — ver `bpsDoPercentual` (ADM-09) */
+const taxaTexto = ref('')
+const taxaInvalida = ref(false)
+function aplicarTaxa() {
+  const b = bpsDoPercentual(taxaTexto.value)
+  taxaInvalida.value = b === null
+  if (b !== null) f.taxaBps = b
+}
 
 // Os dois conversores nascem ANTES de quem os usa: `carregar()` roda na mesma
 // linha do watch (`immediate: true`), e um `const` declarado depois ainda está
@@ -49,6 +109,8 @@ function carregar() {
   d.tags = (d.tags ?? []).join(', ')
   Object.assign(f, d)
   original.value = { ...d }
+  taxaTexto.value = percentualDosBps(d.taxaBps)
+  taxaInvalida.value = false
 }
 watch(data, carregar, { immediate: true })
 
@@ -81,6 +143,10 @@ const NUMERICOS_OBRIGATORIOS: Record<string, string> = {
 async function salvar() {
   erro.value = ''
   aviso.value = ''
+  if (taxaInvalida.value) {
+    erro.value = 'Confira o percentual da "Taxa de serviço": número com até duas casas (ex.: 2,5).'
+    return
+  }
   const corpo: any = {}
   for (const k of Object.keys(f)) {
     if (SO_LEITURA.includes(k)) continue
@@ -110,6 +176,8 @@ async function salvar() {
 
 function desfazer() {
   Object.assign(f, original.value)
+  taxaTexto.value = percentualDosBps(original.value.taxaBps)
+  taxaInvalida.value = false
   erro.value = ''
 }
 
@@ -525,14 +593,17 @@ async function adiarEvento() {
             <div>
               <label class="rotulo">Percentual</label>
               <div class="flex items-center gap-2">
-                <input :value="(f.taxaBps ?? 0) / 100" type="number" step="0.01" min="0" max="50"
-                       class="campo"
-                       @input="f.taxaBps = Math.round(Number(($event.target as HTMLInputElement).value) * 100)">
+                <input id="taxa" v-model="taxaTexto" type="text" inputmode="decimal" autocomplete="off"
+                       class="campo" :class="taxaInvalida ? 'ring-2 ring-erro/50' : ''" placeholder="ex.: 2,5"
+                       @input="aplicarTaxa">
                 <span class="text-tinta-suave">%</span>
               </div>
-              <p class="mt-1 text-xs text-tinta-fraca">
-                Guardado em pontos-base ({{ f.taxaBps }} bps) — nunca em decimal,
-                pra não perder centavo no arredondamento.
+              <p v-if="taxaInvalida" class="mt-1 text-xs font-semibold text-erro" data-parte="taxa-invalida">
+                Use um número com até duas casas depois da vírgula (ex.: 2,5 ou 10).
+              </p>
+              <p v-else class="mt-1 text-xs text-tinta-suave">
+                Guardado em pontos-base ({{ f.taxaBps === '' ? '—' : f.taxaBps }} bps) — nunca em decimal,
+                pra não perder centavo no arredondamento. 0 = não cobra taxa.
               </p>
             </div>
             <div>
@@ -686,8 +757,17 @@ async function adiarEvento() {
           </div>
         </div>
 
-        <!-- -------------------------------------------------------- cancelar -->
-        <div class="rounded-card border border-erro p-3">
+        <!-- -------------------------------------------------------- cancelar
+             Só pra quem a rota deixa (master e financeiro): a Operação levava 403 (ADM-43) -->
+        <div v-if="!podeCancelar" class="rounded-card border border-linha bg-fundo-cinza p-3"
+             data-parte="cancelar-sem-acesso">
+          <p class="rotulo-kpi">Cancelar o evento</p>
+          <p class="mt-1 text-sm text-tinta-suave">
+            Cancelar e devolver o dinheiro é com o master ou o financeiro da conta. Se o evento
+            precisa ser cancelado, peça a um deles — adiar você pode fazer aqui ao lado.
+          </p>
+        </div>
+        <div v-else class="rounded-card border border-erro p-3">
           <p class="rotulo-kpi text-erro">Cancelar o evento</p>
           <p class="mt-1 text-xs text-tinta-fraca">
             Todo ingresso válido é invalidado na hora e cada pedido pago entra na fila
