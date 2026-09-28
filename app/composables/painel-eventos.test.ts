@@ -104,36 +104,14 @@ describe('Eventos — o cartão (EVT-13, proposta 15)', () => {
   })
 })
 
-describe('Eventos — a faixa do dia', () => {
-  it('pra quem vê o caixa: os números das MESMAS rotas da Visão geral e do Financeiro', async () => {
-    const tela = await abrir({
-      extra: {
-        '/api/admin/relatorios': {
-          filtro: { periodo: '30d', de: '2026-08-29', ate: '2026-09-27', hoje: '2026-09-27' },
-          resumo: { liquidoCents: 208_908 },
-          anterior: { de: '2026-07-30', ate: '2026-08-28', resumo: { liquidoCents: 373_000 } },
-          porDia: [{ dia: '2026-09-26', pedidos: 1, cobradoCents: 9_000 }, { dia: '2026-09-27', pedidos: 2, cobradoCents: 17_500 }],
-        },
-        '/api/admin/financeiro': { totais: { disponivelCents: 10_500, retidoCents: 585_270 } },
-      },
-    })
-    const valor = (k: string) => tela.find(`[data-kpi="${k}"] [data-parte="kpi-valor"]`).text()
-    expect(valor('liquido-30')).toBe('R$ 2.089,08')
-    expect(valor('hoje')).toBe('R$ 175,00')
-    expect(valor('disponivel')).toBe('R$ 105,00')
-    expect(valor('a-venda')).toBe('1')
-    expect(tela.find('[data-kpi="liquido-30"] [data-parte="kpi-variacao"]').text()).toBe('−44%')
-  })
-
-  it('pra operação: sem dinheiro nenhum, com o que ela usa', async () => {
-    const tela = await abrir({ papel: 'operacao' })
-    expect(tela.find('[data-kpi="liquido-30"]').exists()).toBe(false)
-    expect(tela.find('[data-kpi="disponivel"]').exists()).toBe(false)
-    const valor = (k: string) => tela.find(`[data-kpi="${k}"] [data-parte="kpi-valor"]`).text()
-    // só o evento publicado entra: 3 pagos e 2 cortesias
-    expect(valor('pagos')).toBe('3')
-    expect(valor('cortesias')).toBe('2')
-    expect(tela.find('[data-parte="faixa-do-dia"]').text()).not.toMatch(/R\$/)
+describe('Eventos — sem a faixa de números (28/09, pedido do dono)', () => {
+  it('a lista abre sem os cartões de dinheiro: os números moram em Relatórios', async () => {
+    const tela = await abrir({ papel: 'master' })
+    expect(tela.find('[data-parte="faixa-do-dia"]').exists()).toBe(false)
+    expect(tela.find('[data-kpi]').exists()).toBe(false)
+    // e não gasta ida ao servidor com o que ninguém mostra
+    expect(buscas.some((b) => b.url.startsWith('/api/admin/relatorios') || b.url.startsWith('/api/admin/financeiro'))).toBe(false)
+    expect(tela.find('a[href="/admin/relatorios"]').text()).toContain('Relatórios')
   })
 })
 

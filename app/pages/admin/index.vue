@@ -4,9 +4,8 @@
  *
  * ## O redesenho de 27/09 (auditoria EVT-04, EVT-05, EVT-13 e proposta 15)
  *
- *   · no alto, a faixa do dia: pra quem vê o caixa, vendido hoje, líquido de 30 dias (com a variação),
- *     disponível pra saque e eventos à venda — os MESMOS números da Visão geral e do Financeiro
- *     (as mesmas rotas, nenhuma conta nova); pra operação, só o que não é dinheiro;
+ *   · (a faixa de números do alto SAIU em 28/09, pedido do dono: "vai ser tudo em relatórios" —
+ *     os números moram em Relatórios e no Financeiro; aqui é a lista de eventos);
  *   · no cartão, a barra é dos ingressos PAGOS, com a cortesia marcada à parte (EVT-13: somadas, 10
  *     convites pareciam 10 vendas); quem vê o caixa ganha a linha do líquido do evento — a rota
  *     nem manda dinheiro pra operação (EVT-02);
@@ -16,10 +15,7 @@
  */
 import { decidirAcesso, ehPapel, papelPode, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
 import { primeiraTelaDoEvento } from '~/composables/menuDoEvento'
-import { variacao } from '~/composables/painelGrafico'
-import { rotuloDoPeriodo } from '~/composables/painelPeriodo'
 import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
-import PainelKpi from '~/components/painel/Kpi.vue'
 
 definePageMeta({ layout: 'admin' })
 
@@ -81,42 +77,6 @@ if (semAcesso.value) {
   const unico = portoes.value?.eventos.length === 1 ? portoes.value.eventos[0] : null
   if (unico) await navigateTo(`/admin/evento/${unico.id}/validacao`, { replace: true })
 }
-
-/* --------------------------------------------- a faixa do dia (dinheiro) */
-
-/**
- * Uma ida à Visão geral (30 dias, que já traz a curva por dia e o período anterior) e uma ao
- * Financeiro. Só pra quem vê o caixa: pra operação as duas respondem 403, e a faixa dela é feita
- * só com a lista de eventos.
- */
-const { data: trinta, execute: buscarTrinta } = useFetch<any>('/api/admin/relatorios', {
-  key: 'inicio-30d', query: { periodo: '30d' }, immediate: false,
-})
-const { data: caixa, execute: buscarCaixa } = useFetch<any>('/api/admin/financeiro', {
-  key: 'inicio-caixa', immediate: false,
-})
-if (veDinheiro.value && !semAcesso.value) await Promise.all([buscarTrinta(), buscarCaixa()])
-
-const hoje = computed(() => {
-  const d = trinta.value
-  if (!d?.filtro?.hoje) return null
-  const dia = (d.porDia ?? []).find((x: any) => x.dia === d.filtro.hoje)
-  return { cobradoCents: Number(dia?.cobradoCents ?? 0), pedidos: Number(dia?.pedidos ?? 0) }
-})
-const liquido30 = computed(() => trinta.value?.resumo ? Number(trinta.value.resumo.liquidoCents ?? 0) : null)
-const variacao30 = computed(() => (trinta.value?.anterior?.resumo && liquido30.value !== null
-  ? variacao(liquido30.value, Number(trinta.value.anterior.resumo.liquidoCents ?? 0)) : null))
-const contra30 = computed(() => (trinta.value?.anterior ? rotuloDoPeriodo(trinta.value.anterior.de, trinta.value.anterior.ate) : ''))
-
-const aVenda = computed(() => (eventos.value ?? []).filter((e: any) => e.status === 'ativo'))
-const proximo = computed(() => {
-  const agora = Date.now()
-  return [...aVenda.value]
-    .filter((e: any) => e.inicio && Date.parse(e.inicio) >= agora - 86_400_000)
-    .sort((a: any, b: any) => Date.parse(a.inicio) - Date.parse(b.inicio))[0] ?? null
-})
-const pagosAVenda = computed(() => aVenda.value.reduce((s: number, e: any) => s + Number(e.estoque?.pagos ?? e.estoque?.vendidos ?? 0), 0))
-const cortesiasAVenda = computed(() => aVenda.value.reduce((s: number, e: any) => s + Number(e.estoque?.cortesias ?? 0), 0))
 
 /* ------------------------------------------------- busca e situação na URL */
 
@@ -203,12 +163,6 @@ const cortesias = (e: any) => Number(e.estoque?.cortesias ?? 0)
 
 const podeCriar = computed(() => !!papel.value && podeAbrirPagina(papel.value, '/admin/evento/novo'))
 const abreVisaoGeral = computed(() => !!papel.value && podeAbrirPagina(papel.value, '/admin/relatorios'))
-const abreFinanceiro = computed(() => !!papel.value && podeAbrirPagina(papel.value, '/admin/financeiro'))
-/**
- * O cartão da faixa vira link só pra quem abre a tela de destino. `resolveComponent` e não a string
- * 'NuxtLink' no `:is` — a string crua não resolve no Nuxt (ver o comentário em `layouts/admin.vue`).
- */
-const Ligacao = resolveComponent('NuxtLink')
 
 /** iniciais pro quadrado do evento sem `thumb_url` — a mesma conta do avatar da conta, em `layouts/admin.vue`. */
 const iniciais = (nome: string) => {
@@ -279,7 +233,7 @@ useHead({ title: 'Eventos' })
       <div v-if="!semAcesso" class="flex flex-wrap items-center gap-2">
         <!-- financeiro alcança a Visão geral, operação não — a mesma régua do menu -->
         <NuxtLink v-if="abreVisaoGeral" to="/admin/relatorios" class="btn-secundario min-h-[40px]">
-          <IconeMenu nome="relatorio" :tamanho="18" /> Visão geral
+          <IconeMenu nome="relatorio" :tamanho="18" /> Relatórios
         </NuxtLink>
         <!-- e o inverso: operação cria evento, financeiro não. Antes desta
              linha o botão aparecia pros dois — clique de financeiro em
@@ -288,47 +242,6 @@ useHead({ title: 'Eventos' })
           <IconeMenu nome="mais" :tamanho="18" /> Criar evento
         </NuxtLink>
       </div>
-    </div>
-
-    <!-- =================================================== a faixa do dia -->
-    <div v-if="!semAcesso && !falha && eventos" class="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4" data-parte="faixa-do-dia">
-      <template v-if="veDinheiro">
-        <component :is="abreVisaoGeral ? Ligacao : 'div'" :to="abreVisaoGeral ? '/admin/relatorios?periodo=30d' : undefined"
-                   class="col-span-2 block rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-pool-600 sm:col-span-1">
-          <PainelKpi rotulo="Líquido em 30 dias" :valor="liquido30 === null ? '—' : reais(liquido30)" tom="grape" icone="carteira" destaque
-                     :variacao="variacao30" :contra="contra30" class="h-full" data-kpi="liquido-30">
-            o que fica pro parque, depois da taxa e das devoluções
-          </PainelKpi>
-        </component>
-        <component :is="abreVisaoGeral ? Ligacao : 'div'" :to="abreVisaoGeral ? '/admin/relatorios?periodo=hoje' : undefined"
-                   class="block rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-pool-600">
-          <PainelKpi rotulo="Vendido hoje" :valor="hoje ? reais(hoje.cobradoCents) : '—'" tom="pool" icone="vendas" compacto class="h-full" data-kpi="hoje">
-            <template v-if="hoje">{{ milhar(hoje.pedidos) }} {{ hoje.pedidos === 1 ? 'pedido pago' : 'pedidos pagos' }} até agora</template>
-          </PainelKpi>
-        </component>
-        <component :is="abreFinanceiro ? Ligacao : 'div'" :to="abreFinanceiro ? '/admin/financeiro' : undefined"
-                   class="block rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-pool-600">
-          <PainelKpi rotulo="Disponível pra saque" :valor="caixa?.totais ? reais(caixa.totais.disponivelCents) : '—'" tom="ok" icone="check" compacto class="h-full" data-kpi="disponivel">
-            <template v-if="caixa?.totais">+ {{ reais(caixa.totais.retidoCents) }} retido até o fim dos eventos</template>
-          </PainelKpi>
-        </component>
-      </template>
-      <template v-else>
-        <PainelKpi rotulo="Ingressos pagos" :valor="milhar(pagosAVenda)" tom="pool" icone="ingresso" compacto data-kpi="pagos">
-          nos eventos à venda
-        </PainelKpi>
-        <PainelKpi rotulo="Cortesias" :valor="milhar(cortesiasAVenda)" tom="citrus" icone="presente" compacto data-kpi="cortesias">
-          emitidas nos eventos à venda
-        </PainelKpi>
-        <PainelKpi rotulo="Próximo evento" :valor="proximo ? dataCurta(proximo.inicio) : '—'" tom="grape" icone="calendario" compacto data-kpi="proximo">
-          {{ proximo?.nome ?? 'nenhum evento publicado com data à frente' }}
-        </PainelKpi>
-      </template>
-      <PainelKpi rotulo="Eventos à venda" :valor="milhar(aVenda.length)" tom="sun" icone="calendario" compacto
-                 :class="veDinheiro ? 'col-span-2 sm:col-span-1' : ''" data-kpi="a-venda">
-        <template v-if="proximo && veDinheiro">próximo: {{ proximo.nome }} · {{ dataCurta(proximo.inicio) }}</template>
-        <template v-else>publicados no site agora</template>
-      </PainelKpi>
     </div>
 
     <!-- No celular: busca na largura toda e os filtros numa fila que rola de
