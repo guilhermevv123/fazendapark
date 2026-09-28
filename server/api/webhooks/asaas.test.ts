@@ -358,7 +358,7 @@ describe('webhook do Asaas · a mesma entrega duas vezes', () => {
    * Arranque `payment_events_gateway_uk` e este caso fica vermelho na hora.
    */
   it('duas entregas simultâneas: só uma linha entra', async (ctx) => {
-    if (!noAr) return ctx.skip()
+    if (!noAr) ctx.skip()
     const chave = PREFIXO + 'corrida'
     await sql(`DELETE FROM payment_events WHERE gateway_event_id = $1`, [chave])
 
