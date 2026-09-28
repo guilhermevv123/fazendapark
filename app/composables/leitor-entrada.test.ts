@@ -394,3 +394,183 @@ describe('no celular, campo e veredito no topo (ADM-24)', () => {
     expect(linha.text()).toContain('Conectado')
   })
 })
+
+// ===========================================================================
+// 27/09 — a lista do tablet sem código em claro (ADM-25), o QR DT2 lido sem rede e o código
+// digitado à mão, que não tem assinatura
+// ===========================================================================
+import { createHash } from 'node:crypto'
+import { chaveDoCodigo as chaveDoServidor, numeroParaALista } from '../../server/utils/catraca'
+
+describe('a chave da lista offline: a conta do leitor é a do servidor (ADM-25)', () => {
+  it('o SHA-256 escrito à mão bate com o node:crypto — bordas de bloco e UTF-8 inclusive', async () => {
+    const { sha256Hex } = await tela()
+    const textos = ['', 'abc', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(63), 'a'.repeat(64),
+      'a'.repeat(119), 'x'.repeat(1000), 'ação:ÇÃO ✓ 🎟']
+    for (const t of textos) {
+      expect(sha256Hex(t), `${t.length} caracteres`).toBe(createHash('sha256').update(t, 'utf8').digest('hex'))
+    }
+  })
+
+  it('a chave de um código é a mesma nos dois lados, com caixa e espaço de qualquer jeito', async () => {
+    const { chaveDoCodigo } = await tela()
+    const sal = 'a1b2c3d4e5f60718293a4b5c'
+    for (const c of ['CON-AB12-CD34', ' con-ab12-cd34 ', 'ING-ZZZZ-9999']) {
+      expect(chaveDoCodigo(sal, c), c).toBe(chaveDoServidor(sal, c))
+    }
+  })
+})
+
+describe('o QR que a casa emite, lido sem rede', () => {
+  it('DT2 (chave com nome) e DT1 (o já vendido) dão o código; o resto é digitado', async () => {
+    const { codigoDoQr } = await tela()
+    expect(codigoDoQr('DT2:k2:ev-1:CON-AAAA-BBBB:ABCDEFGHJK'))
+      .toEqual({ codigo: 'CON-AAAA-BBBB', eventoDoQr: 'ev-1', digitado: false })
+    expect(codigoDoQr('DT1:ev-1:CON-AAAA-BBBB:ABCDEFGHJK'))
+      .toEqual({ codigo: 'CON-AAAA-BBBB', eventoDoQr: 'ev-1', digitado: false })
+    expect(codigoDoQr(' con-aaaa-bbbb '))
+      .toEqual({ codigo: 'CON-AAAA-BBBB', eventoDoQr: null, digitado: true })
+  })
+})
+
+describe('leitor montado com a lista de chaves (ADM-25)', () => {
+  const SAL = 'f00dfeedbeef000011112222'
+  const COD = 'CON-HASH-AAAA'
+  const item = (sal: string, extra: Record<string, any> = {}) => ({
+    chave: chaveDoServidor(sal, COD), status: 'valido', titular: 'Ana Chave', setor: 'Piscinas',
+    lote: '1º lote', tipo: null, pessoas: 1, sessaoInicio: null, sessaoFim: null, ...extra,
+  })
+  const listaCom = (sal: string, ingressos: any[]) =>
+    ({ geradaEm: new Date().toISOString(), truncada: false, sal, ingressos })
+
+  /** como `abrirLeitor`, devolvendo as respostas pra o teste trocar a do servidor no meio */
+  async function abrirSemRede(sinc: any) {
+    const respostas: Record<string, any> = {
+      '/api/admin/evento/': LOG,
+      '/api/portaria/sincronizar': sinc,
+      '/api/checkin': new TypeError('Failed to fetch'),
+    }
+    const t = await montarTela(await tela(), {
+      rota: { params: { id: EVENTO }, path: `/admin/evento/${EVENTO}/validacao` },
+      respostas, stubs: { AbasSecao: true, LeitorCamera: true },
+    })
+    montadas.push(t)
+    await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+    return { t, respostas }
+  }
+
+  it('sem rede, o QR DT2 e o código digitado entram pela chave; o armazenamento não tem o código', async () => {
+    const meia = { motivo: 'estudante', rotulo: 'Estudante', documento: 'Carteira estudantil',
+                   numero: numeroParaALista('CIE 2026-44120') }
+    const { t } = await abrirSemRede({ ...SINC_OK, lista: listaCom(SAL, [item(SAL, { meia })]) })
+    const guardada = localStorage.getItem(`dt_portaria_lista_${EVENTO}`) ?? ''
+    expect(guardada, 'a lista não foi guardada: nada abaixo prova nada').toContain(SAL)
+    expect(guardada, 'o código do ingresso ficou em claro no aparelho').not.toContain(COD)
+    expect(guardada, 'o número inteiro da meia ficou no aparelho').not.toContain('44120')
+
+    await lerCodigo(t, `DT2:k2:${EVENTO}:${COD}:ABCDEFGHJK`)
+    expect(t.find('[data-parte="veredito"]').text(), 'QR DT2 recusado sem rede').toBe('PODE ENTRAR')
+    expect(t.text()).toContain('•••• 4120')
+    expect(t.find('[data-parte="meia-numero-rotulo"]').text()).toContain('Final do número declarado')
+    expect(t.find('[data-parte="codigo-digitado"]').exists(), 'QR lido marcado como digitado').toBe(false)
+
+    await lerCodigo(t, COD.toLowerCase())
+    expect(t.find('[data-parte="veredito"]').text(), 'o mesmo ingresso passou duas vezes').toBe('BARRADO')
+  })
+
+  it('QR DT2 de outro evento, sem rede: outro evento, não "fora da lista"', async () => {
+    const { t } = await abrirSemRede({ ...SINC_OK, lista: listaCom(SAL, [item(SAL)]) })
+    await lerCodigo(t, `DT2:k2:ev-de-outro:${COD}:ABCDEFGHJK`)
+    expect(t.text()).toContain('Ingresso é de outro evento')
+  })
+
+  it('a lista nova vem com outro sal e herda a marca do que passou aqui e não subiu', async () => {
+    const { t, respostas } = await abrirSemRede({ ...SINC_OK, lista: listaCom(SAL, [item(SAL)]) })
+    await lerCodigo(t, COD)
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+
+    // o servidor volta, NÃO confirma a passagem (ela fica na fila) e manda a lista com sal novo
+    const SAL2 = '0123456789abcdef01234567'
+    respostas['/api/portaria/sincronizar'] = { ...SINC_OK, itens: [], lista: listaCom(SAL2, [item(SAL2)]) }
+    await t.findAll('button').find((b) => b.text() === 'Baixar lista')!.trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+    expect(localStorage.getItem(`dt_portaria_lista_${EVENTO}`), 'a lista nova não foi guardada').toContain(SAL2)
+
+    await lerCodigo(t, COD)
+    expect(t.find('[data-parte="veredito"]').text(),
+      'baixar a lista no apagão devolveu a "válido" quem já passou por este portão').toBe('BARRADO')
+    expect(t.text()).toContain('Este ingresso já entrou')
+  })
+})
+
+describe('código digitado à mão pede o documento (ADM-25)', () => {
+  it('liberado por código digitado: o veredito pede o documento; pelo QR, não', async () => {
+    const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'Liberado', ingresso: { titular: 'Ana' } })
+    await lerCodigo(t, 'CON-AAAA-BBBB')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    expect(t.find('[data-parte="codigo-digitado"]').exists(),
+      'código sem assinatura liberado sem pedir o documento').toBe(true)
+
+    await lerCodigo(t, `DT1:${EVENTO}:CON-AAAA-BBBB:ABCDEFGHJK`)
+    expect(t.find('[data-parte="codigo-digitado"]').exists(), 'QR assinado tratado como digitado').toBe(false)
+  })
+
+  it('recusa e "só conferir" não ganham o aviso — ele é sobre quem ENTRA', async () => {
+    const t = await abrirLeitor({ ok: false, resultado: 'ja_usado', mensagem: 'Este ingresso já entrou' })
+    await lerCodigo(t, 'CON-AAAA-BBBB')
+    expect(t.find('[data-parte="codigo-digitado"]').exists()).toBe(false)
+  })
+})
+
+describe('o log de leituras só é pedido por quem pode lê-lo', () => {
+  it('regra: a portaria não pede; operação e dono pedem; papel desconhecido pede como antes', async () => {
+    const { pedeOLogDeLeituras } = await tela()
+    expect(pedeOLogDeLeituras('portaria', EVENTO), 'a portaria pede o log que o servidor nega').toBe(false)
+    expect(pedeOLogDeLeituras('operacao', EVENTO)).toBe(true)
+    expect(pedeOLogDeLeituras('master', EVENTO)).toBe(true)
+    expect(pedeOLogDeLeituras(undefined, EVENTO), 'aparelho reaberto sem rede ficou sem o log').toBe(true)
+  })
+
+  /** monta o leitor como `papel`, registrando cada `useFetch` e cada recarga que a tela pede */
+  async function abrirComo(papel: string) {
+    const pedidos: { url: string; op: any }[] = []
+    const recargas: string[] = []
+    const original = (globalThis as any).useFetch
+    vi.stubGlobal('useFetch', (url: any, op?: any) => {
+      const u = String(typeof url === 'function' ? url() : url)
+      pedidos.push({ url: u, op })
+      return { ...original(url, op), refresh: async () => { recargas.push(u) } }
+    })
+    const t = await montarTela(await tela(), {
+      rota: { params: { id: EVENTO }, path: `/admin/evento/${EVENTO}/validacao` },
+      respostas: {
+        '/api/auth/eu': { usuario: { papel } },
+        '/api/admin/evento/': LOG,
+        '/api/portaria/sincronizar': SINC_OK,
+        '/api/checkin': { ok: true, resultado: 'ok', mensagem: 'Liberado' },
+      },
+      stubs: { AbasSecao: true, LeitorCamera: true },
+    })
+    montadas.push(t)
+    await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+    await lerCodigo(t, 'CON-AAAA-BBBB')
+    const doLog = (u: string) => u.endsWith('/checkins')
+    return { log: pedidos.find((p) => doLog(p.url)), recargasDoLog: recargas.filter(doLog).length, t }
+  }
+
+  it('montado como portaria: o log não sai ao abrir nem depois da entrada', async () => {
+    const { log, recargasDoLog, t } = await abrirComo('portaria')
+    expect(t.find('[data-parte="veredito"]').text(), 'nada abaixo prova nada').toBe('PODE ENTRAR')
+    expect(log?.op?.immediate, 'a portaria abriu o leitor pedindo o log que o servidor nega (403)').toBe(false)
+    expect(recargasDoLog, 'a cada entrada liberada, um 403 gastando a rede do portão').toBe(0)
+  })
+
+  it('montado como operação: o log sai ao abrir e é repintado depois da entrada', async () => {
+    const { log, recargasDoLog } = await abrirComo('operacao')
+    expect(log?.op?.immediate).toBe(true)
+    expect(recargasDoLog).toBeGreaterThan(0)
+  })
+})

@@ -7,6 +7,19 @@
  */
 
 import { diaLocal } from '~/composables/formato'
+import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
+
+/**
+ * Este papel pode ler o log de leituras (`/checkins`)? A MESMA grade que tranca a rota no servidor
+ * (`decidirAcesso`, do middleware 03). A portaria não tem `portaria_historico`: pedir mesmo assim
+ * dava 403 no console ao abrir o leitor e de novo a cada entrada liberada — uma ida à rede do
+ * portão jogada fora por pessoa que passa. Papel ainda desconhecido (aparelho reaberto sem rede)
+ * pede como antes: quem pode não fica sem o log por falta de uma resposta.
+ */
+export function pedeOLogDeLeituras(papel: unknown, eventoId: string): boolean {
+  if (!ehPapel(papel)) return true
+  return decidirAcesso(papel, `/api/admin/evento/${eventoId}/checkins`).liberado
+}
 
 /** o que a portaria pede quando o ingresso é meia — ver o comentário no setup */
 export type Meia = { motivo: string | null; rotulo: string; documento: string; numero: string | null }
@@ -30,10 +43,96 @@ export type Resposta = {
   }
   /** `nao_lido` por sessão vencida: a tela oferece o link de entrar de novo */
   entrarDeNovo?: boolean
+  /** o código veio DIGITADO, sem a assinatura do QR — a tela pede pra conferir o documento */
+  digitado?: boolean
 }
 
 /** o mesmo mínimo do servidor (`qr: z.string().min(4)` em `/api/checkin`) */
 export const MINIMO_DO_CODIGO = 4
+
+/**
+ * Separa o código do QR assinado; o resto é código digitado à mão.
+ *
+ * Os dois formatos que existem (ver `lerQr` em server/utils/ingresso.ts):
+ *   DT2:<kid>:<evento>:<código>:<assinatura>   ← o que a casa passa a emitir (chave com nome)
+ *   DT1:<evento>:<código>:<assinatura>         ← o que já foi vendido
+ * Sem o DT2 aqui, todo ingresso novo lido SEM REDE caía como "código digitado" com o QR inteiro
+ * no lugar do código — "fora da lista, chame o supervisor" na fila inteira do apagão.
+ */
+export function codigoDoQr(bruto: string): { codigo: string; eventoDoQr: string | null; digitado: boolean } {
+  const partes = bruto.trim().split(':')
+  if (partes.length === 5 && partes[0] === 'DT2') {
+    return { codigo: partes[3], eventoDoQr: partes[2], digitado: false }
+  }
+  if (partes.length === 4 && partes[0] === 'DT1') {
+    return { codigo: partes[2], eventoDoQr: partes[1], digitado: false }
+  }
+  return { codigo: bruto.trim().toUpperCase(), eventoDoQr: null, digitado: true }
+}
+
+/* ---------------------------------------------------------- a chave da lista offline
+ * A lista que desce pro tablet NÃO traz o código do ingresso em claro (ADM-25). Quem pegasse o
+ * aparelho levava do localStorage a lista inteira de códigos válidos, e código digitado entra
+ * sem assinatura. Cada item traz `chave` = SHA-256(sal da lista + ":" + código), cortada em 96
+ * bits; o sal é novo a cada descida e mora junto da lista. O leitor calcula a chave do que leu e
+ * procura — a decisão continua local, sem rede, e custa microssegundos.
+ *
+ * É SHA-256 escrito à mão, síncrono, e não `crypto.subtle`: o tablet do parque roda em http na
+ * LAN, onde o `crypto.subtle` não existe (é o mesmo motivo do `novoId`). O servidor calcula a
+ * mesma chave com `node:crypto` (`chaveDoCodigo` em server/utils/catraca.ts) — o teste confere
+ * que as duas batem.
+ *
+ * Não é cofre: com o sal no aparelho, força bruta nos ~10¹² códigos possíveis é viável pra quem
+ * tem GPU. Tira o código do alcance de quem só abre o armazenamento do navegador.
+ */
+const K_SHA256 = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]
+const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n))
+
+/** SHA-256 de um texto (UTF-8), em hexadecimal */
+export function sha256Hex(texto: string): string {
+  const dados = new TextEncoder().encode(texto)
+  const blocos = Math.ceil((dados.length + 9) / 64)
+  const m = new Uint8Array(blocos * 64)
+  m.set(dados)
+  m[dados.length] = 0x80
+  const dv = new DataView(m.buffer)
+  const bits = dados.length * 8
+  dv.setUint32(m.length - 8, Math.floor(bits / 0x1_0000_0000))
+  dv.setUint32(m.length - 4, bits >>> 0)
+  const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+  const w = new Uint32Array(64)
+  for (let off = 0; off < m.length; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4)
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3)
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10)
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0
+    }
+    let [a, b, c, d, e, f, g, hh] = h
+    for (let i = 0; i < 64; i++) {
+      const t1 = (hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K_SHA256[i] + w[i]) >>> 0
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0
+      hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0
+    }
+    h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0
+    h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0
+  }
+  return h.map((x) => x.toString(16).padStart(8, '0')).join('')
+}
+
+/** a chave de um código na lista offline — a MESMA conta de `chaveDoCodigo` do servidor */
+export function chaveDoCodigo(sal: string, codigo: string): string {
+  return sha256Hex(`${sal}:${codigo.trim().toUpperCase()}`).slice(0, 24)
+}
 
 /**
  * Lista baixada há mais que isto é "antiga": ao voltar a rede, desce de novo.
@@ -288,12 +387,22 @@ const modoCamera = ref(false)
 const ultima = ref<Resposta | null>(null)
 const historico = ref<(Resposta & { codigo: string; quando: Date })[]>([])
 
-const { data, refresh } = await useFetch<any>(`/api/admin/evento/${id}/checkins`)
+// o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
+const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+const veLog = computed(() => pedeOLogDeLeituras(eu.value?.usuario?.papel, id))
+const { data, refresh: recarregarLog } = await useFetch<any>(`/api/admin/evento/${id}/checkins`,
+  { immediate: veLog.value })
+/** repinta o log de leituras — só pra quem pode lê-lo (ver `pedeOLogDeLeituras`) */
+function refresh() {
+  if (veLog.value) void recarregarLog()
+}
 
 /* ----------------------------------------------------------- estado offline */
 
 type IngressoLocal = {
-  codigo: string; status: string; titular: string | null
+  /** a chave do código (ADM-25); lista guardada por versão anterior traz `codigo` em claro */
+  chave?: string; codigo?: string
+  status: string; titular: string | null
   setor: string; lote: string; tipo: string | null; pessoas: number
   /** a meia desce com a lista: é no apagão que o operador mais precisa dela */
   meia?: Meia | null
@@ -309,6 +418,8 @@ const CHAVE_APARELHO = 'dt_portaria_aparelho'
 
 const lista = ref<IngressoLocal[]>([])
 const listaEm = ref<string | null>(null)
+/** o sal da lista baixada — sem ele, a lista é de uma versão antiga, com o código em claro */
+const salDaLista = ref<string | null>(null)
 const fila = ref<Passagem[]>([])
 const aparelho = ref('')
 const online = ref(true)
@@ -359,15 +470,18 @@ const listaTruncada = ref(false)
 /** A lista e a marca de corte viajam juntas pro localStorage — ver acima. */
 function guardarLista() {
   guardar(CHAVE_LISTA, {
-    em: listaEm.value, truncada: listaTruncada.value, ingressos: lista.value,
+    em: listaEm.value, truncada: listaTruncada.value, sal: salDaLista.value, ingressos: lista.value,
   })
 }
 
 const mapa = computed(() => {
   const m = new Map<string, IngressoLocal>()
-  for (const i of lista.value) m.set(i.codigo, i)
+  for (const i of lista.value) m.set(i.chave ?? i.codigo ?? '', i)
   return m
 })
+/** onde procurar um código na lista deste aparelho */
+const chaveLocal = (codigo: string, sal: string | null = salDaLista.value) =>
+  sal ? chaveDoCodigo(sal, codigo) : codigo.trim().toUpperCase()
 
 /**
  * Quantas meias deste evento vão chegar na porta sem dizer por quê.
@@ -447,10 +561,11 @@ onMounted(async () => {
   }
 
   const guardada = recuperar<
-    { em: string; truncada?: boolean; ingressos: IngressoLocal[] } | null>(CHAVE_LISTA, null)
+    { em: string; truncada?: boolean; sal?: string | null; ingressos: IngressoLocal[] } | null>(CHAVE_LISTA, null)
   if (guardada) {
     lista.value = guardada.ingressos
     listaEm.value = guardada.em
+    salDaLista.value = guardada.sal ?? null
     // Lista guardada por uma versão anterior não tem a marca: fica `false`,
     // que é o que a tela já fazia. A próxima descida da lista corrige.
     listaTruncada.value = Boolean(guardada.truncada)
@@ -556,14 +671,6 @@ async function registrarWorker() {
 
 /* ------------------------------------------------------------------ leitura */
 
-/** separa o código do QR assinado; o resto é código digitado à mão */
-function codigoDoQr(bruto: string): { codigo: string; eventoDoQr: string | null } {
-  const partes = bruto.trim().split(':')
-  if (partes.length === 4 && partes[0] === 'DT1') {
-    return { codigo: partes[2], eventoDoQr: partes[1] }
-  }
-  return { codigo: bruto.trim().toUpperCase(), eventoDoQr: null }
-}
 
 /**
  * A decisão sem servidor. Confere contra a lista baixada — que é uma prova
@@ -591,7 +698,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
                + 'Chame o supervisor.' }
   }
 
-  const t = mapa.value.get(cod)
+  const t = mapa.value.get(chaveLocal(cod))
   // Fora da lista baixada não é prova de fraude: pode ser venda de depois da
   // descida, ou código de outro evento digitado à mão. Âmbar e supervisor.
   if (!t) return respostaForaDaLista(listaEm.value)
@@ -740,6 +847,10 @@ async function ler() {
       }
     }
     if (ultima.value) {
+      // Código digitado não tem a assinatura do QR (ADM-25): quem sabe um código de cabeça — ou o
+      // leu de uma lista — entra por ele. A porta não trava (a câmera pode ter quebrado e a fila
+      // anda), mas o veredito pede pra conferir o documento de quem está passando.
+      ultima.value = { ...ultima.value, digitado: codigoDoQr(c).digitado }
       historico.value.unshift({ ...ultima.value, codigo: c, quando: new Date() })
       historico.value = historico.value.slice(0, 12)
     }
@@ -897,11 +1008,21 @@ async function sincronizar({ comLista = false } = {}) {
         // A lista nova não pode apagar o que este aparelho marcou e ainda não
         // sincronizou: sem isto, baixar a lista no meio do apagão devolveria ao
         // estado "válido" um ingresso que já passou por aqui.
-        const pendentes = new Set(fila.value.map((p) => codigoDoQr(p.qr).codigo))
-        lista.value = r.lista.ingressos.map((i: IngressoLocal) =>
-          pendentes.has(i.codigo)
-            ? { ...i, usadoAqui: mapa.value.get(i.codigo)?.usadoAqui }
-            : i)
+        //
+        // A lista nova vem com OUTRO sal: a marca de cada passagem pendente é achada na lista
+        // velha pela chave velha e levada pra chave nova (os dias do passaporte vão junto).
+        const salNovo: string | null = r.lista.sal ?? null
+        const marcas = new Map<string, Pick<IngressoLocal, 'usadoAqui' | 'diasAqui'>>()
+        for (const pend of fila.value) {
+          const cod = codigoDoQr(pend.qr).codigo
+          const velho = mapa.value.get(chaveLocal(cod))
+          if (velho) marcas.set(chaveLocal(cod, salNovo), { usadoAqui: velho.usadoAqui, diasAqui: velho.diasAqui })
+        }
+        lista.value = r.lista.ingressos.map((i: IngressoLocal) => {
+          const marca = marcas.get(i.chave ?? i.codigo ?? '')
+          return marca ? { ...i, ...marca } : i
+        })
+        salDaLista.value = salNovo
         listaEm.value = r.lista.geradaEm
 
         // O servidor corta a lista em 20 mil e MARCA o corte. Sem ler essa
@@ -1236,6 +1357,14 @@ useHead({ title: 'Leitor de entrada' })
         {{ tituloDoVeredito(ultima) }}
       </p>
       <p class="mt-2 text-lg opacity-95">{{ ultima.mensagem }}</p>
+      <!-- Código digitado não tem a assinatura do QR (ADM-25): a porta não trava, mas pede o
+           documento de quem passa. Logo abaixo do título: no celular, o resto do cartão fica
+           abaixo da dobra. -->
+      <p v-if="ultima.digitado && ultima.ok && !ultima.consulta"
+         class="mx-auto mt-3 max-w-md rounded-xl bg-white/20 px-3 py-2 text-lg font-semibold"
+         data-parte="codigo-digitado">
+        Digitado à mão: confira o documento
+      </p>
       <p v-if="ultima.entrarDeNovo" class="mt-3">
         <a :href="`/entrar?de=${encodeURIComponent(`/admin/evento/${id}/validacao`)}`"
            class="inline-block rounded-xl bg-white px-4 py-2 font-semibold text-tinta">
@@ -1278,8 +1407,10 @@ useHead({ title: 'Leitor de entrada' })
           {{ ultima.ingresso.meia.documento }}
         </p>
         <template v-if="ultima.ingresso.meia.numero">
-          <p class="titulo mt-3 text-base font-semibold text-tinta-rotulo">
-            Número declarado na compra — confira se bate
+          <!-- sem rede, a lista do aparelho só tem o final do número (ADM-25) -->
+          <p class="titulo mt-3 text-base font-semibold text-tinta-rotulo" data-parte="meia-numero-rotulo">
+            {{ ultima.ingresso.meia.numero.startsWith('••••') ? 'Final do número declarado na compra'
+              : 'Número declarado na compra' }} — confira se bate
           </p>
           <p class="font-mono text-xl font-semibold tracking-wide text-tinta">
             {{ ultima.ingresso.meia.numero }}

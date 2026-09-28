@@ -24,6 +24,7 @@ import {
   anunciarPulo, BASE_DE_TESTE, MARCA_MAIUSCULA, seForaDoArPula, sondarServidor,
   uuidDaCorrida, type Sonda,
 } from '../../../scripts/test-setup'
+import { chaveDoCodigo } from '../../utils/catraca'
 
 const BASE = BASE_DE_TESTE
 const id = (n: number) => uuidDaCorrida('api/portaria/passaporte', n)
@@ -268,11 +269,13 @@ describe('passaporte de vários dias na porta', () => {
   it('a lista offline desce com os dias do passaporte', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const s = await sincronizar([], true)
-    const item = s.corpo.lista.ingressos.find((i: any) => i.codigo === cod('ULTI'))
+    const naLista = (c: string) => s.corpo.lista.ingressos.find(
+      (i: any) => i.chave === chaveDoCodigo(s.corpo.lista.sal, c))
+    const item = naLista(cod('ULTI'))
     expect(item.diasCobertos).toBe(3)
     expect(item.diasUsados).toHaveLength(3)
     expect(item.sessoes).toHaveLength(4)
-    const comum = s.corpo.lista.ingressos.find((i: any) => i.codigo === cod('COMU'))
+    const comum = naLista(cod('COMU'))
     expect(comum.diasCobertos, 'ingresso de um dia ganhou campo de passaporte').toBeUndefined()
   }, 120_000)
 })

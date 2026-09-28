@@ -54,7 +54,8 @@ import { exigir } from '../../utils/sessao'
 import { ehPapel, papelDoRoleLegado, papelPode, ROTULO } from '../../utils/papeis'
 import { lerQr } from '../../utils/ingresso'
 import {
-  conferirRelogio, ehPassaporte, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA, MENSAGEM_DE_RELOGIO,
+  chaveDoCodigo, conferirRelogio, ehPassaporte, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA,
+  MENSAGEM_DE_RELOGIO, novoSalDaLista, numeroParaALista,
   normalizarFila, retratoDoPublico, SQL_CONFLITOS, SQL_DIAS_DO_PASSAPORTE, SQL_GRAVA_ENTRADA,
   SQL_GRAVA_ENTRADA_NA_SESSAO, SQL_MARCA_ENTRADA_EM, SQL_MARCA_PASSAPORTE, SQL_PUBLICO,
   SQL_SESSAO_DO_LOTE_NO_INSTANTE, SQL_TRAVA_PASSAPORTE, type Relogio, type ResultadoDaFila,
@@ -337,6 +338,11 @@ export default defineEventHandler(async (event) => {
   }
 })
 
+/** a meia do jeito que desce pro tablet: o número do documento só com os 4 últimos (ADM-25) */
+function meiaNaLista(m: ReturnType<typeof meiaDoIngresso>) {
+  return m ? { ...m, numero: numeroParaALista(m.numero) } : null
+}
+
 /**
  * O que o tablet precisa pra decidir sozinho, sem rede.
  *
@@ -379,11 +385,14 @@ async function listaDoEvento(eventId: string, orgId: string) {
       ORDER BY t.code
       LIMIT ${LIMITE_LISTA}`, [eventId, orgId])
 
+  // Sem o código em claro (ADM-25): cada item leva a CHAVE do código, e o sal desce junto.
+  const sal = novoSalDaLista()
   return {
     geradaEm: new Date().toISOString(),
     truncada: linhas.length >= LIMITE_LISTA,
+    sal,
     ingressos: linhas.map((t) => ({
-      codigo: t.code,
+      chave: chaveDoCodigo(sal, t.code),
       status: t.status,
       titular: t.holder_name,
       setor: t.setor,
@@ -394,7 +403,7 @@ async function listaDoEvento(eventId: string, orgId: string) {
       // o que está sem rede: sem estes três campos aqui, o apagão devolve o
       // operador ao problema que a migração 015 resolveu — ele lê
       // "Meia-entrada" e não sabe qual papel pedir.
-      meia: meiaDoIngresso(t),
+      meia: meiaNaLista(meiaDoIngresso(t)),
       sessaoInicio: t.starts_at,
       sessaoFim: t.ends_at,
       // só no passaporte de vários dias (ADM-04): quantos cobre, quais dias já usou, em quais vale

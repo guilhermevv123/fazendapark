@@ -21,6 +21,7 @@
  *     inclusive a que a trava não teve como impedir, porque o tablet estava
  *     sem rede. É dele que sai a contagem de gente e o conflito.
  */
+import { createHash, randomBytes } from 'node:crypto'
 import { MOTIVOS, rotuloDoMotivo } from './meia-entrada'
 
 /**
@@ -489,6 +490,37 @@ export const MEIA_SEM_MOTIVO = 'motivo não declarado na compra'
 /** …e qual papel pedir nesse caso. */
 export const DOCUMENTO_GENERICO =
   'Documento que comprove o direito à meia-entrada — confira com o supervisor.'
+
+/* ------------------------------------------------------------ lista offline */
+
+/**
+ * A chave de um código na LISTA OFFLINE do tablet (ADM-25): SHA-256 de `sal:CÓDIGO`, cortada em
+ * 96 bits. A lista não leva o código em claro — quem pegasse o aparelho levava do localStorage
+ * todos os códigos válidos, e código digitado entra sem assinatura. O leitor calcula a mesma chave
+ * do que leu (`chaveDoCodigo` em validacao/index.vue, SHA-256 escrito à mão porque o tablet roda
+ * em http na LAN, sem `crypto.subtle`) — o teste de tela confere que as duas contas batem.
+ */
+export function chaveDoCodigo(sal: string, codigo: string): string {
+  return createHash('sha256').update(`${sal}:${String(codigo).trim().toUpperCase()}`, 'utf8')
+    .digest('hex').slice(0, 24)
+}
+
+/** sal novo a cada descida da lista: a lista de ontem não serve pra montar a chave de hoje */
+export function novoSalDaLista(): string {
+  return randomBytes(12).toString('hex')
+}
+
+/**
+ * O número do documento da meia NA LISTA OFFLINE: só os 4 últimos (ADM-25). É CPF ou número de
+ * carteira de estudante de cada meia do evento, e ia inteiro pro armazenamento do tablet. Na
+ * porta, os 4 últimos bastam pra bater com o documento na mão; o número inteiro continua vindo
+ * na consulta online, de um ingresso por vez.
+ */
+export function numeroParaALista(numero: string | null): string | null {
+  if (!numero) return null
+  const limpo = String(numero).trim()
+  return limpo.length <= 4 ? '••••' : `•••• ${limpo.slice(-4)}`
+}
 
 export function meiaDoIngresso(t: any): MeiaDoIngresso | null {
   const motivo = t?.half_reason ?? null
