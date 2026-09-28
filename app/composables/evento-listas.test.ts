@@ -161,3 +161,46 @@ describe('vendas — filtro de contestação e "Cancelar pedido" só pra quem po
     expect(dono.find('[data-parte="cancelar-pedido"]').exists()).toBe(true)
   })
 })
+
+describe('transferências — "Link copiado" só quando copiou (ADM-55)', () => {
+  const TRANSF = {
+    evento: { id: EV, permite: true },
+    resumo: { aguardando: 0, concluido: 0, cancelado: 0, expirado: 0 },
+    transferencias: [],
+  }
+  async function criarEPedirCopia() {
+    const w = await montarTela(await import('../pages/admin/evento/[id]/vendas/transferencias.vue'), {
+      rota: { params: { id: EV } },
+      respostas: { [`/api/admin/evento/${EV}/transferencias`]: { ...TRANSF, transferencia: { link: '/transferencia/abc' } } },
+      stubs: { AbasSecao: true, ModalLateral: true },
+    })
+    // cria (a resposta do POST traz o link) e pede a cópia
+    const inputs = w.findAll('input')
+    for (const i of inputs) if ((i.attributes('type') ?? 'text') !== 'checkbox') await i.setValue('CON-AAAA-BBBB')
+    await w.find('form').trigger('submit')
+    await new Promise((r) => setTimeout(r, 0))
+    await w.find('.faixa-aviso button').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    return w
+  }
+
+  it('sem área de transferência (http na LAN), a tela mostra o link pra copiar — não diz "copiado"', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: undefined })
+    try {
+      const w = await criarEPedirCopia()
+      const aviso = w.find('.faixa-aviso').text()
+      expect(aviso, 'disse "copiado" sem ter copiado').not.toContain('Link copiado')
+      expect(aviso).toContain('/transferencia/abc')
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('com área de transferência, copia e diz que copiou', async () => {
+    const escrito: string[] = []
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: async (t: string) => { escrito.push(t) } } })
+    try {
+      const w = await criarEPedirCopia()
+      expect(w.find('.faixa-aviso').text()).toContain('Link copiado')
+      expect(escrito[0]).toMatch(/\/transferencia\/abc$/)
+    } finally { vi.unstubAllGlobals() }
+  })
+})

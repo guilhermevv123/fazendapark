@@ -334,3 +334,58 @@ describe('transferência de ingresso', () => {
     expect(r.status, 'a pendente vencida continuou trancando o ingresso').toBe(200)
   }, 30_000)
 })
+
+// ===========================================================================
+// ADM-55 (27/09) — duplo envio e cancelamento no meio de um aceite
+// ===========================================================================
+describe('transferência: duplo envio e cancelamento sob trava (ADM-55)', () => {
+  it('dois envios no mesmo instante: um passa e o outro leva 409 com o porquê, não 500', async (ctx) => {
+    if (!noAr) ctx.skip()
+    const code = await novoIngresso('DUPLO')
+    const corpo = { codigo: code, paraNome: 'Duplo Clique', paraEmail: 'duplo@teste.invalido' }
+    const rs = await Promise.all([enviar(corpo), enviar(corpo), enviar(corpo)])
+    const status = rs.map((r) => r.status).sort()
+    expect(status, `o índice único subiu cru: ${JSON.stringify(status)}`).toEqual([200, 409, 409])
+    for (const r of rs.filter((x) => x.status === 409)) {
+      expect((r.corpo as any).statusMessage, 'a recusa não diz que já existe uma pendente').toBeTruthy()
+    }
+  }, 30_000)
+
+  it('cancelar enquanto o aceite grava: o titular volta — nunca "cancelada" com o titular trocado', async (ctx) => {
+    if (!noAr) ctx.skip()
+    const code = await novoIngresso('CORRIDA')
+    const env = await enviar({ codigo: code, paraNome: 'Quem Aceita', paraEmail: 'aceita@teste.invalido' })
+    expect(env.status, JSON.stringify(env.corpo)).toBe(200)
+    const trId = (env.corpo as any).transferencia.id
+    const ingressoId = await idDoIngresso(code)
+
+    // O ACEITE, feito à mão numa transação que segura a transferência: o cancelamento chega no
+    // meio dele. Sem a trava, o cancelamento lia 'aguardando' fora da transação, esperava só no
+    // UPDATE e marcava cancelado sem devolver o titular.
+    const { db } = await import('../utils/db')
+    const c = await db().connect()
+    try {
+      await c.query('BEGIN')
+      await c.query(`SELECT 1 FROM ticket_transfers WHERE id = $1 FOR UPDATE`, [trId])
+      const cancelando = comSessao(`/api/admin/evento/${EVENTO}/transferencias`,
+        { method: 'PATCH', body: JSON.stringify({ transferenciaId: trId, acao: 'cancelar' }) })
+      await new Promise((r) => setTimeout(r, 1500))   // o cancelamento chega na trava
+      await c.query(`UPDATE ticket_transfers SET status = 'concluido', accepted_at = now() WHERE id = $1`, [trId])
+      await c.query(`UPDATE tickets SET holder_name = 'Quem Aceita', holder_email = 'aceita@teste.invalido',
+                       holder_document = NULL WHERE id = $1`, [ingressoId])
+      await c.query('COMMIT')
+      const r = await cancelando
+      expect(r.status, await r.text()).toBe(200)
+    } finally {
+      await c.query('ROLLBACK').catch(() => {})
+      c.release()
+    }
+
+    const [tr] = await sql(`SELECT status FROM ticket_transfers WHERE id = $1`, [trId])
+    const t = await titularPorId(ingressoId)
+    expect(tr.status).toBe('cancelado')
+    expect({ nome: t.holder_name, email: t.holder_email },
+      'a transferência ficou "cancelada" com o ingresso no nome de quem aceitou')
+      .toEqual({ nome: DONO.nome, email: DONO.email })
+  }, 60_000)
+})

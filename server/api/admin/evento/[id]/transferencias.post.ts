@@ -66,6 +66,9 @@ export default defineEventHandler(async (event) => {
 
   const autor = autorDaRequisicao(event)
   return await tx(async (c) => {
+    // Duplo envio (ADM-55): os dois pedidos passam pela conferência de "pendentes" acima ao mesmo
+    // tempo, e o segundo INSERT batia no índice `transferencia_pendente_unica` — 500. É a mesma
+    // recusa de quem já tem transferência aguardando, e é ela que volta.
     const { rows } = await c.query(
       `INSERT INTO ticket_transfers
          (org_id, event_id, ticket_id, de_nome, de_email, de_documento,
@@ -77,7 +80,12 @@ export default defineEventHandler(async (event) => {
        ingresso.holder_name, ingresso.holder_email, ingresso.holder_document,
        d.paraNome.trim(), d.paraEmail.trim().toLowerCase(),
        d.paraDocumento ?? null, d.paraTelefone ?? null,
-       gerarToken(), sessao?.usuarioId ?? null, venceEm()])
+       gerarToken(), sessao?.usuarioId ?? null, venceEm()]).catch((e: any) => {
+      if (e?.code === '23505' && String(e?.constraint ?? '').includes('transferencia_pendente_unica')) {
+        throw createError({ statusCode: 409, statusMessage: RECUSA.pendente })
+      }
+      throw e
+    })
 
     await registrarAuditoria({
       autor, entidade: 'ingresso', entidadeId: ingresso.id, acao: 'transferencia_enviada',

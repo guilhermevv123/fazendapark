@@ -54,30 +54,40 @@ export default defineEventHandler(async (event) => {
   }
 
   // ---- cancelar uma transferência --------------------------------------
-  const tr = await q1<any>(
-    `SELECT tr.*, t.status AS ingresso_status, t.code AS ingresso_codigo
-       FROM ticket_transfers tr JOIN tickets t ON t.id = tr.ticket_id
-      WHERE tr.id = $1 AND tr.event_id = $2`, [d.transferenciaId, eventoId])
-  if (!tr) throw createError({ statusCode: 404, statusMessage: 'Transferência não encontrada' })
-
-  if (tr.status === 'cancelado') {
-    throw createError({ statusCode: 409, statusMessage: 'Esta transferência já foi cancelada.' })
-  }
-  if (tr.status === 'expirado') {
-    throw createError({ statusCode: 409, statusMessage: 'Esta transferência venceu sozinha — não há o que cancelar.' })
-  }
-  if (tr.status === 'concluido' && tr.ingresso_status === 'usado') {
-    throw createError({
-      statusCode: 409,
-      statusMessage: `O ingresso ${tr.ingresso_codigo} já entrou no evento no nome de `
-        + `${tr.para_nome}. Desfazer agora deixaria a entrada registrada sem titular.`,
-    })
-  }
-
+  //
+  // A decisão é tomada COM A TRAVA (ADM-55). Lida fora da transação, uma pendente aceita no meio
+  // do caminho era "cancelada" pelo status velho ('aguardando'): o UPDATE marcava cancelado e o
+  // titular, já trocado pelo aceite, não voltava. `FOR UPDATE` na transferência e no ingresso: o
+  // aceite espera o cancelamento terminar (ou este espera o aceite), e cada um vê o estado real.
   return await tx(async (c) => {
-    await c.query(
-      `UPDATE ticket_transfers SET status = 'cancelado', canceled_at = now() WHERE id = $1`,
-      [tr.id])
+    const { rows: [tr] } = await c.query(
+      `SELECT tr.*, t.status AS ingresso_status, t.code AS ingresso_codigo
+         FROM ticket_transfers tr JOIN tickets t ON t.id = tr.ticket_id
+        WHERE tr.id = $1 AND tr.event_id = $2
+        FOR UPDATE OF tr, t`, [d.transferenciaId, eventoId])
+    if (!tr) throw createError({ statusCode: 404, statusMessage: 'Transferência não encontrada' })
+
+    if (tr.status === 'cancelado') {
+      throw createError({ statusCode: 409, statusMessage: 'Esta transferência já foi cancelada.' })
+    }
+    if (tr.status === 'expirado') {
+      throw createError({ statusCode: 409, statusMessage: 'Esta transferência venceu sozinha — não há o que cancelar.' })
+    }
+    if (tr.status === 'concluido' && tr.ingresso_status === 'usado') {
+      throw createError({
+        statusCode: 409,
+        statusMessage: `O ingresso ${tr.ingresso_codigo} já entrou no evento no nome de `
+          + `${tr.para_nome}. Desfazer agora deixaria a entrada registrada sem titular.`,
+      })
+    }
+
+    // o status lido sob a trava vai na condição: se mudou, nada é gravado pela metade
+    const { rowCount } = await c.query(
+      `UPDATE ticket_transfers SET status = 'cancelado', canceled_at = now() WHERE id = $1 AND status = $2`,
+      [tr.id, tr.status])
+    if (!rowCount) {
+      throw createError({ statusCode: 409, statusMessage: 'A transferência mudou agora mesmo. Abra de novo e confira.' })
+    }
 
     // Só mexe no ingresso se a transferência chegou a mudar o titular. Uma
     // pendente cancelada não tem nada pra devolver — o ingresso nunca saiu.

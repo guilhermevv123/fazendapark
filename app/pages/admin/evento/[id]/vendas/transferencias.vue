@@ -104,10 +104,21 @@ const FILTROS = [
   { v: 'expirado', nome: 'Expiradas' },
 ]
 
-function copiar(link: string) {
+/**
+ * "Link copiado" só quando copiou (ADM-55). O painel no tablet da casa roda em http na LAN, onde
+ * `navigator.clipboard` não existe, e o `?.` engolia a falha: a tela dizia "copiado" e a área de
+ * transferência estava vazia. Sem clipboard (ou com a permissão negada), o link aparece pra copiar
+ * à mão.
+ */
+async function copiar(link: string) {
   const url = `${window.location.origin}${link}`
-  navigator.clipboard?.writeText(url)
-  aviso.value = 'Link copiado.'
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('sem área de transferência')
+    await navigator.clipboard.writeText(url)
+    aviso.value = 'Link copiado.'
+  } catch {
+    aviso.value = `Não deu pra copiar sozinho. Copie o link: ${url}`
+  }
 }
 </script>
 
