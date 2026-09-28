@@ -49,23 +49,25 @@ function mover(lista: any[], i: number, passo: number) {
 }
 
 async function salvar() {
+  // dois cliques antes do botão desabilitar mandariam a ordem duas vezes
+  if (salvando.value) return
   erro.value = ''
   salvo.value = ''
   salvando.value = true
   try {
-    // Setores primeiro, depois os lotes de cada um. Em pedidos separados de
-    // propósito: cada lista é validada inteira contra o evento, e um setor com
-    // id estranho não pode gravar a ordem dos lotes dos outros.
+    // A ordem INTEIRA numa chamada só (ADM-41). Eram um PATCH pros setores e mais um por
+    // setor: a rede caindo no meio gravava os setores e não os lotes, e a tela dizia que não
+    // tinha salvo. A rota confere cada lista contra o evento e grava tudo ou nada.
     await $fetch(`/api/admin/evento/${id}/ordenar`, {
-      method: 'PATCH', body: { o: 'setor', ids: setores.value.map((s) => s.id) },
+      method: 'PATCH',
+      body: {
+        o: 'tudo',
+        setores: setores.value.map((s) => s.id),
+        lotes: setores.value
+          .filter((s) => s.lotes.length >= 2)
+          .map((s) => ({ setorId: s.id, ids: s.lotes.map((l: any) => l.id) })),
+      },
     })
-    for (const s of setores.value) {
-      if (s.lotes.length < 2) continue
-      await $fetch(`/api/admin/evento/${id}/ordenar`, {
-        method: 'PATCH',
-        body: { o: 'lote', setorId: s.id, ids: s.lotes.map((l: any) => l.id) },
-      })
-    }
     await refresh()
     salvo.value = 'Ordem salva. É assim que a página de venda vai mostrar.'
   } catch (e: any) {

@@ -182,3 +182,45 @@ describe('apagar dia em dois toques, sem confirm() do navegador (ADM-40)', () =>
     expect(b.classes()).toContain('disabled:opacity-40')
   })
 })
+
+// ===========================================================================
+// Ordenar numa chamada só (ADM-41)
+// ===========================================================================
+describe('salvar a ordem manda UMA chamada com tudo (ADM-41)', () => {
+  const SETORES = [
+    { id: 's1', nome: 'Piscinas', tipo: 'ingresso', lotes: [{ id: 'l1', nome: '1º lote' }, { id: 'l2', nome: '2º lote' }] },
+    { id: 's2', nome: 'Camarote', tipo: 'camarote', lotes: [{ id: 'l3', nome: 'Único' }] },
+  ]
+  async function abrirOrdenar() {
+    return montarTela(await import('../pages/admin/evento/[id]/ingressos/ordenar.vue'), {
+      rota: { params: { id: EV } },
+      respostas: { [`/api/admin/evento/${EV}/ingressos`]: { setores: SETORES } },
+      stubs: { AbasSecao: true, IconeMenu: true },
+    })
+  }
+  const salvarOrdem = (w: any) => w.findAll('button').find((b: any) => b.text().includes('Salvar ordem'))!
+
+  it('setores e lotes vão juntos: a rede caindo no meio não grava metade', async () => {
+    const w = await abrirOrdenar()
+    await w.find('button[aria-label="Descer setor"]').trigger('click')
+    // depois da troca, o Piscinas (s1) é o 2º: o "Descer lote" do 1º lote dele
+    await w.findAll('button[aria-label="Descer lote"]').filter((b: any) => b.attributes('disabled') === undefined)[0]!
+      .trigger('click')
+    await salvarOrdem(w).trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    const patches = envios('PATCH')
+    expect(patches, 'um PATCH por setor: falha no meio deixa a ordem pela metade').toHaveLength(1)
+    expect(patches[0].opcoes.body).toEqual({
+      o: 'tudo', setores: ['s2', 's1'], lotes: [{ setorId: 's1', ids: ['l2', 'l1'] }],
+    })
+  })
+
+  it('dois cliques rápidos no Salvar mandam a ordem uma vez', async () => {
+    const w = await abrirOrdenar()
+    await w.find('button[aria-label="Descer setor"]').trigger('click')
+    const b = salvarOrdem(w)
+    b.trigger('click'); b.trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(envios('PATCH')).toHaveLength(1)
+  })
+})
