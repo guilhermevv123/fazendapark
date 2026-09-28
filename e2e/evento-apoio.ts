@@ -7,8 +7,11 @@
  * `preparo` — e os QR vêm de `GET /api/pedido/:id`, a rota da página do comprador.
  *
  * Efeitos que ficam no banco de E2E (nunca no real — `travaDeBase`): eventos "ZZE2E F3 …" da
- * organização do seed, com as vendas de balcão, cortesias, cupons e leituras de cada caso. Nenhum
- * e-mail sai (sem SMTP_URL o transporte é o simulado, que grava .eml na pasta temporária) e nenhum
+ * organização do seed, com as vendas de balcão, cortesias, cupons e leituras de cada caso. No fim
+ * de cada arquivo os eventos da rodada ficam OCULTOS (`esconderEventosDaRodada`): uma rodada cria
+ * uns vinte, e ativos eles enchiam a lista de 20 da portaria (`/api/portaria/destino`) e a vitrine
+ * — a suíte de papéis, rodando no mesmo banco, deixava de achar o evento do seed. Nenhum e-mail
+ * sai (sem SMTP_URL o transporte é o simulado, que grava .eml na pasta temporária) e nenhum
  * pagamento passa pelo Asaas (balcão não usa gateway).
  */
 import { expect, request as novoRequest, type APIRequestContext, type Page } from '@playwright/test'
@@ -46,6 +49,20 @@ export async function abrir(page: Page, caminho: string) {
 
 /** o texto de uma página sem os espaços duplos (e sem o espaço fino do toLocaleString) */
 export const limpo = (t: string | null | undefined) => String(t ?? '').replace(/[\s ]+/g, ' ').trim()
+
+/** os eventos que este processo criou — escondidos no fim do arquivo */
+const criadosNestaRodada: string[] = []
+
+/**
+ * Esconde (status `oculto`) os eventos que a rodada criou: saem da vitrine e da lista da portaria,
+ * e continuam no banco pra quem quiser olhar o que o caso deixou (pelo endereço direto). O evento
+ * cancelado recusa troca de status — e já não aparece em lista nenhuma.
+ */
+export async function esconderEventosDaRodada(api: APIRequestContext) {
+  for (const id of criadosNestaRodada.splice(0)) {
+    await api.patch(`/api/admin/evento/${id}/configuracoes`, { data: { status: 'oculto' } }).catch(() => {})
+  }
+}
 
 export interface Lote { id: string; nome: string; faceCents: number; tipos: { id: string; nome: string; exigeDocumento: boolean }[] }
 export interface EventoDeTeste {
@@ -92,6 +109,7 @@ export async function criarEvento(api: APIRequestContext, opcoes: {
       publicar: opcoes.publicar ?? !opcoes.semLote, setores,
     },
   }))
+  criadosNestaRodada.push(criado.id)
   const ing = await corpo(await api.get(`/api/admin/evento/${criado.id}/ingressos`))
   const setor = ing.setores[0]
   const achaLote = (n: string) => setor?.lotes.find((l: any) => l.nome === n)

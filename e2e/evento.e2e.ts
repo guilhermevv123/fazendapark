@@ -12,7 +12,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { BASE, centavos, sessao, travaDeBase, unico, vigiar } from './apoio'
 import {
-  abrir, abrirBalcao, apiComo, codigoDeCupom, corpo, cpfDeTeste, criarEvento, diaNaBahia, limpo,
+  abrir, abrirBalcao, apiComo, esconderEventosDaRodada, codigoDeCupom, corpo, cpfDeTeste, criarEvento, diaNaBahia, limpo,
   textoDoDownload, venderNoBalcao, type EventoDeTeste,
 } from './evento-apoio'
 
@@ -38,7 +38,10 @@ test.beforeAll(async () => {
     { recebidoCents: 5000, comprador: { nome: '=1+1' } })
   vazio = await criarEvento(master, { nome: unico('ZZE2E F3 VAZIO') })
 })
-test.afterAll(async () => { await master?.dispose() })
+test.afterAll(async () => {
+  if (master) await esconderEventosDaRodada(master)
+  await master?.dispose()
+})
 
 const painel = (id: string, resto = '') => `/admin/evento/${id}/dashboard${resto}`
 
@@ -637,6 +640,45 @@ test.describe('configurações', () => {
       await expect(page.locator('[data-parte="cancelar-sem-acesso"]')).toContainText('master ou o financeiro')
       await expect(page.locator('#cancelamento')).toContainText(/Adiar/i)
     })
+  })
+})
+
+/* ================================================== filtros na URL (restantes) */
+
+test.describe('filtros na URL nas outras listas (ADM-31)', () => {
+  test.use({ storageState: sessao('master') })
+
+  test('#135 financeiro › transferências: busca, status e destino — F5 mantém', async ({ page }) => {
+    await abrir(page, `/admin/evento/${ev.id}/financeiro`)
+    await page.locator('#q').fill('Fazenda')
+    await page.locator('#st').selectOption('concluida')
+    await page.locator('#dt').selectOption({ index: 1 })
+    const destino = await page.locator('#dt').inputValue()
+    await expect(page).toHaveURL(/busca=Fazenda/)
+    await expect(page).toHaveURL(/status=concluida/)
+    await expect(page).toHaveURL(new RegExp(`destino=${destino}`))
+    await page.reload()
+    await expect(page.locator('#q')).toHaveValue('Fazenda')
+    await expect(page.locator('#st')).toHaveValue('concluida')
+    await expect(page.locator('#dt')).toHaveValue(destino)
+  })
+
+  test('#85 cortesias: a busca ?q= volta do F5', async ({ page }) => {
+    await abrir(page, `/admin/evento/${ev.id}/ingressos/cortesias`)
+    await page.getByPlaceholder('Buscar por nome, motivo, quem pediu…').fill('Convidado')
+    await expect(page).toHaveURL(/q=Convidado/)
+    await page.reload()
+    await expect(page.getByPlaceholder('Buscar por nome, motivo, quem pediu…')).toHaveValue('Convidado')
+  })
+
+  test('#113 sessões: "Mostrar dias passados" é ?passadas=1 e volta do F5', async ({ page }) => {
+    await abrir(page, `/admin/evento/${vazio.id}/ingressos/sessoes`)
+    await page.getByRole('button', { name: /Mostrar dias passados/ }).click()
+    await expect(page).toHaveURL(/passadas=1/)
+    await page.reload()
+    await expect(page.getByRole('button', { name: 'Esconder dias passados' })).toBeVisible()
+    await page.getByRole('button', { name: 'Esconder dias passados' }).click()
+    await expect(page).not.toHaveURL(/passadas=/)
   })
 })
 

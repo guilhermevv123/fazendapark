@@ -12,7 +12,7 @@
 import { chromium, expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { BASE, sessao, travaDeBase, unico, vigiar } from './apoio'
 import {
-  abrir, abrirBalcao, apiComo, corpo, cpfDeTeste, criarEvento, ingressosDoPedido, limpo, rolaNaHorizontal,
+  abrir, abrirBalcao, apiComo, esconderEventosDaRodada, corpo, cpfDeTeste, criarEvento, ingressosDoPedido, limpo, rolaNaHorizontal,
   venderNoBalcao, type EventoDeTeste,
 } from './evento-apoio'
 
@@ -28,7 +28,10 @@ test.beforeAll(async () => {
   ev = await criarEvento(master)
   balcao = await abrirBalcao(master, ev.id)
 })
-test.afterAll(async () => { await master?.dispose() })
+test.afterAll(async () => {
+  if (master) await esconderEventosDaRodada(master)
+  await master?.dispose()
+})
 
 /** ingressos novos, vendidos no balcão pela rota do guichê */
 async function ingressos(n: number, extra: { ticketTypeId?: string; meia?: any; comprador?: any } = {}) {
