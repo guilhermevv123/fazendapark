@@ -53,9 +53,12 @@ async function entrarCom(email: string): Promise<string> {
     .map((c) => c.split(';')[0]).find((c) => c.startsWith('dt_sessao=')) ?? ''
 }
 
-const abrir = (rota: string, papel: Papel | null = 'master') =>
+// o cabeçalho que só o botão Exportar da tela manda (CLI-04) — as outras rotas ignoram
+const abrir = (rota: string, papel: Papel | null = 'master', comCabecalho = true) =>
   fetch(`${BASE}${rota}`, {
-    headers: papel ? { cookie: cookies[papel] ?? '', origin: BASE } : {},
+    headers: papel
+      ? { cookie: cookies[papel] ?? '', origin: BASE, ...(comCabecalho ? { 'x-diamond-exportacao': '1' } : {}) }
+      : {},
   })
 
 async function json(rota: string, papel: Papel = 'master') {
@@ -354,6 +357,47 @@ describe('a exportação', () => {
     seForaDoArPula(ctx, sonda)
     await expurgar(`org_id = $1`, [ORG])
     expect((await abrir('/api/admin/clientes/exportar?uf=B')).status).toBe(400)
+    expect((await q1<any>(`SELECT count(*)::int AS n FROM audit_log WHERE org_id = $1`, [ORG]))!.n).toBe(0)
+  })
+})
+
+describe('rodada de 27/09 (CLI-01, CLI-02, CLI-03, CLI-04, proposta 16)', () => {
+  it('CLI-01: e-mail com números não casa CPF nem celular de estranho', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    // "998" está no celular da Ana (73 99826-0963): antes, esta busca a trazia
+    expect(await nomes(`q=${encodeURIComponent('maria998@teste.invalido')}`)).toEqual([])
+    // número de verdade continua achando pelo dígito
+    expect(await nomes(`q=${encodeURIComponent('(73) 99826')}`)).toEqual(['Ana Silva'])
+    expect(await nomes(`q=${encodeURIComponent('111.444')}`)).toEqual(['Bruno Costa'])
+  })
+
+  it('proposta 16: o topo conta o RECORTE, com a base ao lado', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const d = await json('/api/admin/clientes?novidades=1')
+    expect(d.recorte).toEqual({ total: 1, compraram: 1, comCadastro: 1, aceitamNovidades: 1, comInstagram: 1 })
+    expect(d.resumo.total).toBe(6)
+    const sem = await json('/api/admin/clientes')
+    expect(sem.recorte).toEqual(sem.resumo)
+  })
+
+  it('CLI-02: as faixas de idade vêm da regra, pela rota', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const d = await json('/api/admin/clientes')
+    expect(d.faixas.map((f: any) => f.rotulo)).toEqual(['Até 17', '18 a 24', '25 a 34', '35 a 44', '45 a 59', '60 ou mais'])
+  })
+
+  it('CLI-03: a cidade que a URL pede entra na lista do select, mesmo fora das mais frequentes', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const d = await json(`/api/admin/clientes?uf=BA&cidade=${encodeURIComponent('Ubaitaba')}`)
+    expect(d.cidades).toContainEqual({ cidade: 'Ubaitaba', estado: 'BA', clientes: 0 })
+  })
+
+  it('CLI-04: sem o cabeçalho da tela, a exportação é recusada e não deixa linha de auditoria', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    await expurgar(`org_id = $1`, [ORG])
+    const r = await abrir('/api/admin/clientes/exportar?novidades=1', 'master', false)
+    expect(r.status).toBe(400)
+    expect((await r.json()).statusMessage).toContain('botão Exportar')
     expect((await q1<any>(`SELECT count(*)::int AS n FROM audit_log WHERE org_id = $1`, [ORG]))!.n).toBe(0)
   })
 })

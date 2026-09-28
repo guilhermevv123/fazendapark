@@ -35,9 +35,13 @@ export function filtroDeClientes(
   if (busca) {
     const nome = p(`%${semCuringa(busca)}%`)
     const partes = [`cu.name ILIKE ${nome}`, `cu.email ILIKE ${nome}`, `cu.instagram ILIKE ${nome}`]
-    // CPF e telefone se procuram por dígito: "(73) 99826" e "73998260963" são o mesmo
+    // CPF e telefone se procuram por dígito: "(73) 99826" e "73998260963" são o mesmo.
+    // CLI-01: só quando a busca TEM CARA de número (dígitos e pontuação de CPF/telefone). Antes
+    // os dígitos de QUALQUER busca entravam: "maria1985@gmail.com" trazia a Maria e todo estranho
+    // com "1985" no CPF ou no celular.
     const digitos = busca.replace(/\D/g, '')
-    if (digitos.length >= 3) {
+    const pareceNumero = /^[\d\s().+\-/]+$/.test(busca)
+    if (pareceNumero && digitos.length >= 3) {
       const d = p(`%${digitos}%`)
       partes.push(`cu.document LIKE ${d}`, `cu.phone LIKE ${d}`)
     }

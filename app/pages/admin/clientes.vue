@@ -17,54 +17,82 @@
  *   divulgação filtra por ele — a planilha exportada respeita o mesmo filtro.
  */
 import { baixarCsv } from '~/composables/baixarCsv'
+import PainelFalha from '~/components/painel/Falha.vue'
+import PainelVazio from '~/components/painel/Vazio.vue'
 
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
 
-const busca = ref(String(route.query.q ?? ''))
+/**
+ * O recorte é o que a URL diz — a cada troca, não só na montagem (REL-07). Antes cada filtro virava
+ * um `ref` lido uma vez: clicar em "Clientes" no menu com uma busca ativa limpava a URL e a lista
+ * continuava filtrada até o F5 (que mostrava outra coisa). Agora a tela lê `route.query`; mexer num
+ * filtro ESCREVE na URL (`irPara`, com `replace`). Trocar filtro ou ordem volta pra página 1.
+ */
+const texto = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+const url = computed(() => {
+  const q = route.query
+  return {
+    q: texto(q.q), uf: texto(q.uf), cidade: texto(q.cidade), faixa: texto(q.faixa),
+    situacao: texto(q.situacao), novidades: q.novidades === '1', cadastro: q.cadastro === '1',
+    ordem: texto(q.ordem) || 'recentes', pagina: Math.max(1, Math.trunc(Number(q.pagina)) || 1),
+  }
+})
 /** "UF|Cidade" num campo só: é o valor do `<select>`; a URL guarda os dois separados */
-const local = ref(route.query.uf && route.query.cidade ? `${route.query.uf}|${route.query.cidade}` : '')
-const faixa = ref(String(route.query.faixa ?? ''))
-const situacao = ref(String(route.query.situacao ?? ''))
-const novidades = ref(route.query.novidades === '1')
-const completo = ref(route.query.cadastro === '1')
-const ordem = ref(String(route.query.ordem ?? 'recentes'))
-const pagina = ref(Number(route.query.pagina) || 1)
+const local = computed(() => (url.value.uf && url.value.cidade ? `${url.value.uf}|${url.value.cidade}` : ''))
+const pagina = computed(() => url.value.pagina)
 
 /** O recorte que a lista e a planilha compartilham — sem página nem ordem. */
 const recorte = computed(() => {
-  const [uf, cidade] = local.value ? local.value.split('|') : ['', '']
+  const u = url.value
   return {
-    q: busca.value.trim() || undefined,
-    uf: uf || undefined, cidade: cidade || undefined,
-    faixa: faixa.value || undefined,
-    situacao: situacao.value || undefined,
-    novidades: novidades.value ? '1' : undefined,
-    cadastro: completo.value ? '1' : undefined,
+    q: u.q || undefined,
+    uf: u.uf || undefined, cidade: u.cidade || undefined,
+    faixa: u.faixa || undefined,
+    situacao: u.situacao || undefined,
+    novidades: u.novidades ? '1' : undefined,
+    cadastro: u.cadastro ? '1' : undefined,
   }
 })
 
 const params = computed(() => ({
   ...recorte.value,
-  ordem: ordem.value !== 'recentes' ? ordem.value : undefined,
+  ordem: url.value.ordem !== 'recentes' ? url.value.ordem : undefined,
   pagina: pagina.value > 1 ? String(pagina.value) : undefined,
 }))
 
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   '/api/admin/clientes', { query: params })
 
-watch(params, (p) => {
-  navigateTo({ query: Object.fromEntries(Object.entries(p).filter(([, v]) => v)) },
-    { replace: true })
-})
-// mudou o recorte ou a ordem: a página 3 do recorte antigo não existe mais
-watch([busca, local, faixa, situacao, novidades, completo, ordem], () => { pagina.value = 1 })
+type Mudanca = Partial<{ q: string; local: string; faixa: string; situacao: string
+  novidades: boolean; cadastro: boolean; ordem: string; pagina: number }>
+function irPara(m: Mudanca) {
+  const u = url.value
+  const [uf, cidade] = (m.local ?? local.value) ? (m.local ?? local.value).split('|') : ['', '']
+  const f = {
+    q: m.q ?? u.q, uf, cidade, faixa: m.faixa ?? u.faixa, situacao: m.situacao ?? u.situacao,
+    novidades: m.novidades ?? u.novidades, cadastro: m.cadastro ?? u.cadastro, ordem: m.ordem ?? u.ordem,
+    // mudou o recorte ou a ordem: a página 3 do recorte antigo não existe mais
+    pagina: m.pagina ?? 1,
+  }
+  const query: Record<string, string> = {}
+  if (f.q) query.q = f.q
+  if (f.uf && f.cidade) { query.uf = f.uf; query.cidade = f.cidade }
+  if (f.faixa) query.faixa = f.faixa
+  if (f.situacao) query.situacao = f.situacao
+  if (f.novidades) query.novidades = '1'
+  if (f.cadastro) query.cadastro = '1'
+  if (f.ordem && f.ordem !== 'recentes') query.ordem = f.ordem
+  if (f.pagina > 1) query.pagina = String(f.pagina)
+  return navigateTo({ path: '/admin/clientes', query }, { replace: true })
+}
 
 const temFiltro = computed(() => Object.values(recorte.value).some(Boolean))
+/** zera o recorte; a ordem fica (é jeito de olhar, não filtro) */
 function limpar() {
-  busca.value = ''; local.value = ''; faixa.value = ''; situacao.value = ''
-  novidades.value = false; completo.value = false
+  const query: Record<string, string> = url.value.ordem !== 'recentes' ? { ordem: url.value.ordem } : {}
+  return navigateTo({ path: '/admin/clientes', query }, { replace: true })
 }
 
 const total = computed(() => data.value?.paginacao?.total ?? 0)
@@ -77,14 +105,20 @@ const temProxima = computed(() => ultimo.value < total.value)
 watch(data, (d) => {
   const t = d?.paginacao?.total ?? 0
   if (d && !d.itens.length && t > 0 && pagina.value > 1) {
-    pagina.value = Math.ceil(t / porPagina.value)
+    irPara({ pagina: Math.ceil(t / porPagina.value) })
   }
 })
 
-const FAIXAS = [
-  ['ate17', 'Até 17'], ['18a24', '18 a 24'], ['25a34', '25 a 34'],
-  ['35a44', '35 a 44'], ['45a59', '45 a 59'], ['60mais', '60 ou mais'],
-] as const
+/** CLI-02: as faixas vêm da rota (a regra é uma lista só, `FAIXAS_ETARIAS`), não de uma cópia aqui */
+const faixas = computed<{ chave: string; rotulo: string }[]>(() => data.value?.faixas ?? [])
+
+/**
+ * Proposta 16: o topo conta o RECORTE (os mesmos números, só de quem o filtro pega) e diz a base
+ * embaixo — antes os quatro números eram sempre da base inteira, enquanto o botão de exportar ao
+ * lado já reagia ao filtro. Sem filtro, recorte = base.
+ */
+const numeros = computed(() => data.value?.recorte ?? data.value?.resumo)
+const base = computed(() => data.value?.resumo)
 
 /** (73) 99826-0963 — só formata o que tem cara de telefone; o resto passa como veio */
 function telefoneBonito(t: string | null | undefined): string {
@@ -141,7 +175,10 @@ async function exportar() {
   avisoExport.value = ''
   erroExport.value = ''
   try {
-    const r = await $fetch<any>('/api/admin/clientes/exportar', { query: recorte.value })
+    // CLI-04: o cabeçalho da tela — a rota grava auditoria e recusa quem não é o botão
+    const r = await $fetch<any>('/api/admin/clientes/exportar', {
+      query: recorte.value, headers: { 'x-diamond-exportacao': '1' },
+    })
     baixarCsv(`clientes-${diaLocal()}`,
       ['Nome', 'E-mail', 'Celular', 'Instagram', 'Cidade', 'UF', 'Idade', 'Aceita novidades',
        'Cliente desde', 'Pedidos', 'Total pago', 'Última compra'],
@@ -179,30 +216,35 @@ useHead({ title: 'Clientes' })
     <p v-if="erroExport" class="faixa-erro mb-3">{{ erroExport }}</p>
 
     <template v-if="data">
-      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="card">
-          <p class="rotulo-kpi">Clientes</p>
-          <p class="numero-kpi mt-1">{{ data.resumo.total.toLocaleString('pt-BR') }}</p>
-          <p class="mt-1 text-xs text-tinta-fraca">todos que passaram por aqui</p>
+      <!-- proposta 16: o número grande é o do RECORTE; "de N na base" embaixo quando há filtro -->
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" :class="pending && 'opacity-60'" :aria-busy="pending">
+        <div class="card" data-kpi="clientes">
+          <p class="rotulo-kpi">{{ temFiltro ? 'Clientes no recorte' : 'Clientes' }}</p>
+          <p class="numero-kpi mt-1" data-parte="kpi-valor">{{ numeros.total.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-xs text-tinta-fraca" data-parte="kpi-base">
+            {{ temFiltro ? `de ${base.total.toLocaleString('pt-BR')} na base` : 'todos que passaram por aqui' }}
+          </p>
         </div>
-        <div class="card">
+        <div class="card" data-kpi="compraram">
           <p class="rotulo-kpi">Já compraram</p>
-          <p class="numero-kpi mt-1">{{ data.resumo.compraram.toLocaleString('pt-BR') }}</p>
-          <p class="mt-1 text-xs text-tinta-fraca">
-            {{ data.resumo.total - data.resumo.compraram }} só tentaram
+          <p class="numero-kpi mt-1" data-parte="kpi-valor">{{ numeros.compraram.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-xs text-tinta-fraca" data-parte="kpi-base">
+            {{ (numeros.total - numeros.compraram).toLocaleString('pt-BR') }} só tentaram<template v-if="temFiltro"> · de {{ base.compraram.toLocaleString('pt-BR') }} na base</template>
           </p>
         </div>
-        <div class="card">
+        <div class="card" data-kpi="cadastro">
           <p class="rotulo-kpi">Cadastro completo</p>
-          <p class="numero-kpi mt-1">{{ data.resumo.comCadastro.toLocaleString('pt-BR') }}</p>
-          <p class="mt-1 text-xs text-tinta-fraca">
-            preencheram o formulário do site · {{ data.resumo.comInstagram }} com Instagram
+          <p class="numero-kpi mt-1" data-parte="kpi-valor">{{ numeros.comCadastro.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-xs text-tinta-fraca" data-parte="kpi-base">
+            <template v-if="temFiltro">de {{ base.comCadastro.toLocaleString('pt-BR') }} na base · </template>{{ numeros.comInstagram.toLocaleString('pt-BR') }} com Instagram
           </p>
         </div>
-        <div class="card">
+        <div class="card" data-kpi="novidades">
           <p class="rotulo-kpi">Aceitam novidades</p>
-          <p class="numero-kpi mt-1">{{ data.resumo.aceitamNovidades.toLocaleString('pt-BR') }}</p>
-          <p class="mt-1 text-xs text-tinta-fraca">podem receber divulgação</p>
+          <p class="numero-kpi mt-1" data-parte="kpi-valor">{{ numeros.aceitamNovidades.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-xs text-tinta-fraca" data-parte="kpi-base">
+            {{ temFiltro ? `de ${base.aceitamNovidades.toLocaleString('pt-BR')} na base` : 'podem receber divulgação' }}
+          </p>
         </div>
       </div>
 
@@ -211,12 +253,15 @@ useHead({ title: 'Clientes' })
         <div class="flex flex-wrap items-end gap-3">
           <label class="block min-w-[14rem] flex-1">
             <span class="rotulo">Buscar</span>
-            <input v-model.lazy="busca" type="search" class="campo"
-                   placeholder="nome, e-mail, CPF, celular ou @instagram">
+            <!-- vai pra URL no Enter (ou ao sair do campo), não a cada letra -->
+            <input :value="url.q" type="search" class="campo" data-parte="busca"
+                   placeholder="nome, e-mail, CPF, celular ou @instagram"
+                   @change="irPara({ q: ($event.target as HTMLInputElement).value.trim() })">
           </label>
           <label class="block">
             <span class="rotulo">Cidade</span>
-            <select v-model="local" class="campo w-52">
+            <select :value="local" class="campo w-52" data-parte="filtro-cidade"
+                    @change="irPara({ local: ($event.target as HTMLSelectElement).value })">
               <option value="">Todas</option>
               <option v-for="c in data.cidades" :key="`${c.estado}|${c.cidade}`" :value="`${c.estado}|${c.cidade}`">
                 {{ c.cidade }} — {{ c.estado }} ({{ c.clientes }})
@@ -225,14 +270,16 @@ useHead({ title: 'Clientes' })
           </label>
           <label class="block">
             <span class="rotulo">Idade</span>
-            <select v-model="faixa" class="campo w-40">
+            <select :value="url.faixa" class="campo w-40" data-parte="filtro-faixa"
+                    @change="irPara({ faixa: ($event.target as HTMLSelectElement).value })">
               <option value="">Todas</option>
-              <option v-for="f in FAIXAS" :key="f[0]" :value="f[0]">{{ f[1] }}</option>
+              <option v-for="f in faixas" :key="f.chave" :value="f.chave">{{ f.rotulo }}</option>
             </select>
           </label>
           <label class="block">
             <span class="rotulo">Situação</span>
-            <select v-model="situacao" class="campo w-44">
+            <select :value="url.situacao" class="campo w-44" data-parte="filtro-situacao"
+                    @change="irPara({ situacao: ($event.target as HTMLSelectElement).value })">
               <option value="">Todos</option>
               <option value="compraram">Já compraram</option>
               <option value="so_tentaram">Só tentaram</option>
@@ -240,7 +287,8 @@ useHead({ title: 'Clientes' })
           </label>
           <label class="block">
             <span class="rotulo">Ordenar por</span>
-            <select v-model="ordem" class="campo w-44">
+            <select :value="url.ordem" class="campo w-44" data-parte="ordem"
+                    @change="irPara({ ordem: ($event.target as HTMLSelectElement).value })">
               <option value="recentes">Mais recentes</option>
               <option value="nome">Nome</option>
               <option value="gasto">Quem mais gastou</option>
@@ -250,28 +298,38 @@ useHead({ title: 'Clientes' })
         </div>
 
         <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-linha pt-3">
-          <button type="button" :class="novidades ? 'chip-ativo' : 'chip'" @click="novidades = !novidades">
+          <button type="button" class="min-h-[40px] sm:min-h-0" :class="url.novidades ? 'chip-ativo' : 'chip'"
+                  :aria-pressed="url.novidades" data-parte="chip-novidades" @click="irPara({ novidades: !url.novidades })">
             Aceitam novidades
           </button>
-          <button type="button" :class="completo ? 'chip-ativo' : 'chip'" @click="completo = !completo">
+          <button type="button" class="min-h-[40px] sm:min-h-0" :class="url.cadastro ? 'chip-ativo' : 'chip'"
+                  :aria-pressed="url.cadastro" data-parte="chip-cadastro" @click="irPara({ cadastro: !url.cadastro })">
             Cadastro completo
           </button>
-          <button v-if="temFiltro" type="button" class="btn-secundario py-1.5" @click="limpar">
+          <button v-if="temFiltro" type="button" class="btn-secundario min-h-[40px] py-1.5" data-acao="limpar" @click="limpar">
             Limpar filtros
           </button>
+          <!-- REL-09: trocar filtro diz que está atualizando, em vez de deixar os números velhos calados -->
+          <span v-if="pending" class="inline-flex items-center gap-1.5 text-xs font-medium text-pool-700" data-parte="atualizando">
+            <span class="size-2 animate-pulse rounded-full bg-pool-600" /> atualizando…
+          </span>
           <span class="text-xs text-tinta-fraca">
             Pra mandar divulgação, use só quem aceita novidades.
           </span>
         </div>
       </div>
 
-      <p v-if="!data.itens.length" class="card mt-4 py-12 text-center text-tinta-suave">
-        <template v-if="temFiltro">Nenhum cliente com esses filtros.</template>
-        <template v-else>Ainda não há clientes. Eles aparecem aqui a partir da primeira compra.</template>
-      </p>
+      <!-- vazio que orienta (REGRAS §4): ícone, a frase e a saída -->
+      <PainelVazio v-if="!data.itens.length" class="mt-4" icone="pessoas"
+                   :titulo="temFiltro ? 'Nenhum cliente com esses filtros' : 'Ainda não há clientes'"
+                   :texto="temFiltro ? `A base tem ${base.total.toLocaleString('pt-BR')} clientes — o recorte é que não pega ninguém.`
+                     : 'Eles aparecem aqui a partir da primeira compra no site ou na bilheteria.'">
+        <button v-if="temFiltro" type="button" class="btn-primario min-h-[40px]" @click="limpar">Limpar filtros</button>
+        <NuxtLink v-else to="/admin" class="btn-secundario min-h-[40px]">Ver os eventos</NuxtLink>
+      </PainelVazio>
 
-      <div v-else class="card mt-4 p-0">
-        <div class="overflow-x-auto">
+      <div v-else class="card mt-4 p-0" :class="pending && 'opacity-60'" :aria-busy="pending">
+        <div class="relative overflow-x-auto">
           <table class="w-full min-w-[56rem] text-sm">
             <thead>
               <tr class="border-b border-linha text-left text-xs text-tinta-fraca">
@@ -328,10 +386,10 @@ useHead({ title: 'Clientes' })
             de {{ total.toLocaleString('pt-BR') }}
           </p>
           <div class="flex gap-2">
-            <button type="button" class="btn-secundario py-1.5" :disabled="pagina <= 1 || pending"
-                    @click="pagina -= 1">Anterior</button>
-            <button type="button" class="btn-secundario py-1.5" :disabled="!temProxima || pending"
-                    @click="pagina += 1">Próxima</button>
+            <button type="button" class="btn-secundario min-h-[40px] py-1.5" data-acao="anterior" :disabled="pagina <= 1 || pending"
+                    @click="irPara({ pagina: pagina - 1 })">Anterior</button>
+            <button type="button" class="btn-secundario min-h-[40px] py-1.5" data-acao="proxima" :disabled="!temProxima || pending"
+                    @click="irPara({ pagina: pagina + 1 })">Próxima</button>
           </div>
         </div>
       </div>
@@ -339,13 +397,8 @@ useHead({ title: 'Clientes' })
 
     <p v-else-if="pending" class="card mt-6 text-tinta-suave">Carregando…</p>
 
-    <div v-else class="card mt-6">
-      <p class="rotulo-kpi text-erro">Não foi possível carregar os clientes</p>
-      <p class="mt-1 text-sm text-tinta-suave">
-        {{ (falha as any)?.data?.statusMessage || (falha as any)?.message || 'Erro desconhecido.' }}
-      </p>
-      <button type="button" class="btn-secundario mt-3" @click="refresh()">Tentar de novo</button>
-    </div>
+    <!-- GER-01: 403 diz o motivo sem "Tentar de novo"; 400 de filtro torto oferece limpar -->
+    <PainelFalha v-else :falha="falha" o-que="os clientes" :tentar="refresh" :limpar="limpar" />
 
     <!-- ficha -->
     <ModalLateral v-if="fichaId" :titulo="ficha?.nome ?? 'Cliente'" largura="max-w-xl" @fechar="fecharFicha">

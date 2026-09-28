@@ -24,7 +24,7 @@
  */
 import { q, q1 } from '../../../utils/db'
 import { PEDIDO_VIVO } from '../../../utils/liquido'
-import { cpfMascarado, SQL_FAIXA, SQL_IDADE } from '../../../utils/cadastro'
+import { cpfMascarado, FAIXAS_ETARIAS, SQL_FAIXA, SQL_IDADE } from '../../../utils/cadastro'
 import { filtroDeClientes, FiltroInvalido } from '../../../utils/clientes-filtro'
 
 /** ordem por NOME de opção — o que vai pro `ORDER BY` nunca vem da URL */
@@ -52,7 +52,16 @@ export default defineEventHandler(async (event) => {
   const ordem = ORDEM[query.ordem ?? ''] ?? ORDEM.recentes
 
   const params = [...filtro.params, porPagina, (pagina - 1) * porPagina]
-  const [itens, resumo, cidades] = await Promise.all([
+  // Os MESMOS quatro números da base, contados só no recorte (proposta 16): o topo da tela
+  // reage ao filtro como a exportação reage, e diz "de N na base" embaixo.
+  const CONTAGENS = `count(*)::int AS total,
+              count(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM orders o
+                 WHERE o.customer_id = cu.id AND ${PEDIDO_VIVO('o.')}))::int AS compraram,
+              count(*) FILTER (WHERE cu.registered_at IS NOT NULL)::int AS com_cadastro,
+              count(*) FILTER (WHERE cu.marketing_opt_in)::int AS aceitam_novidades,
+              count(*) FILTER (WHERE cu.instagram IS NOT NULL)::int AS com_instagram`
+  const [itens, resumo, cidades, doRecorte] = await Promise.all([
     q<any>(
       `SELECT cu.id, cu.name, cu.email, cu.document, cu.phone, cu.instagram,
               cu.city, cu.state,
@@ -74,22 +83,27 @@ export default defineEventHandler(async (event) => {
         ORDER BY ${ordem}
         LIMIT $${filtro.params.length + 1} OFFSET $${filtro.params.length + 2}`, params),
 
-    // a base inteira, sem filtro: são os números do topo da tela
-    q1<any>(
-      `SELECT count(*)::int AS total,
-              count(*) FILTER (WHERE EXISTS (
-                SELECT 1 FROM orders o
-                 WHERE o.customer_id = cu.id AND ${PEDIDO_VIVO('o.')}))::int AS compraram,
-              count(*) FILTER (WHERE cu.registered_at IS NOT NULL)::int AS com_cadastro,
-              count(*) FILTER (WHERE cu.marketing_opt_in)::int AS aceitam_novidades,
-              count(*) FILTER (WHERE cu.instagram IS NOT NULL)::int AS com_instagram
-         FROM customers cu WHERE cu.org_id = $1`, [orgId]),
+    // a base inteira, sem filtro: o "de N na base" do topo da tela
+    q1<any>(`SELECT ${CONTAGENS} FROM customers cu WHERE cu.org_id = $1`, [orgId]),
 
     q<any>(
       `SELECT city, state, count(*)::int AS clientes
          FROM customers WHERE org_id = $1 AND city IS NOT NULL
         GROUP BY 1, 2 ORDER BY 3 DESC, 1 LIMIT 40`, [orgId]),
+
+    q1<any>(`SELECT ${CONTAGENS} FROM customers cu WHERE ${filtro.onde}`, filtro.params),
   ])
+
+  // CLI-03: a cidade que a URL pede entra na lista mesmo fora das 40 mais frequentes — senão o
+  // `<select>` ficava em branco com o filtro aplicado, e a tela não dizia o que estava filtrando.
+  const ufPedida = String(query.uf ?? '').trim().toUpperCase()
+  const cidadePedida = String(query.cidade ?? '').trim()
+  if (ufPedida && cidadePedida && !cidades.some((c) => c.state === ufPedida && c.city === cidadePedida)) {
+    const n = await q1<any>(
+      `SELECT count(*)::int AS clientes FROM customers WHERE org_id = $1 AND state = $2 AND city = $3`,
+      [orgId, ufPedida, cidadePedida])
+    cidades.push({ city: cidadePedida, state: ufPedida, clientes: Number(n?.clientes ?? 0) })
+  }
 
   // O total vem colado na PRIMEIRA linha da janela. Página além do fim volta
   // vazia e sem ele: sem esta pergunta, um `?pagina=99` velho na URL dizia "0 de
@@ -100,14 +114,20 @@ export default defineEventHandler(async (event) => {
       `SELECT count(*)::int AS n FROM customers cu WHERE ${filtro.onde}`, filtro.params))!.n)
   }
 
+  const contagens = (r: any) => ({
+    total: Number(r?.total ?? 0),
+    compraram: Number(r?.compraram ?? 0),
+    comCadastro: Number(r?.com_cadastro ?? 0),
+    aceitamNovidades: Number(r?.aceitam_novidades ?? 0),
+    comInstagram: Number(r?.com_instagram ?? 0),
+  })
+
   return {
-    resumo: {
-      total: Number(resumo.total),
-      compraram: Number(resumo.compraram),
-      comCadastro: Number(resumo.com_cadastro),
-      aceitamNovidades: Number(resumo.aceitam_novidades),
-      comInstagram: Number(resumo.com_instagram),
-    },
+    resumo: contagens(resumo),
+    /** os mesmos números, só do recorte (igual à base quando não há filtro) */
+    recorte: contagens(doRecorte),
+    /** CLI-02: as faixas vêm da regra (`FAIXAS_ETARIAS`), não de uma cópia na tela */
+    faixas: FAIXAS_ETARIAS.map(({ chave, rotulo }) => ({ chave, rotulo })),
     paginacao: { pagina, porPagina, total: totalFiltrado },
     cidades: cidades.map((c) => ({ cidade: c.city, estado: c.state, clientes: c.clientes })),
     itens: itens.map((c) => ({

@@ -26,9 +26,24 @@ import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 
 const TETO = 20_000
 
+/**
+ * CLI-04: o cabeçalho que só o botão da tela manda — o mesmo cinto da Reconciliação
+ * (`x-diamond-conferencia`). Esta rota é GET e GRAVA auditoria ("lista exportada"): o cookie é
+ * `SameSite=Lax`, que viaja numa navegação de topo vinda de outro site, então um link "clique
+ * aqui" carimbava uma exportação no nome de quem clicou. Navegação não manda cabeçalho; o `$fetch`
+ * da tela manda.
+ */
+export const CABECALHO_DA_EXPORTACAO = 'x-diamond-exportacao'
+
 export default defineEventHandler(async (event) => {
   const orgId = (event.context as any).sessao?.orgId
   if (!orgId) throw createError({ statusCode: 401, statusMessage: 'Sessão sem organização' })
+  if (getRequestHeader(event, CABECALHO_DA_EXPORTACAO) !== '1') {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'A planilha de clientes sai pelo botão Exportar da tela de Clientes.',
+    })
+  }
 
   const query = getQuery(event) as Record<string, string | undefined>
   let filtro
