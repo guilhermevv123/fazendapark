@@ -115,6 +115,13 @@ describe('ORG-01 — trocar só o select não muda para onde a cobrança vai, en
     const org = await get('/api/admin/organizacao')
     expect(JSON.stringify(org)).not.toContain(PROD)
     expect(org).toMatchObject({ ambienteEfetivo: 'production', ambienteDivergente: false })
+    // e a Auditoria diz que a chave foi TROCADA — sem o valor (matriz: "Auditoria — sem vazar chave")
+    const linha = await q1<any>(
+      `SELECT before, after FROM audit_log WHERE org_id = $1 AND entity = 'organizacao' AND action = 'editada'
+        ORDER BY created_at DESC, id DESC LIMIT 1`, [ORG])
+    expect(linha?.after?.chaveAsaas).toBe('trocada')
+    expect(JSON.stringify(linha)).not.toContain(PROD)
+    expect(JSON.stringify(linha)).not.toContain(HMLG)
   })
 
   it('salvar só o nome de uma organização já divergente não é bloqueado (a tela grita, não trava)', async (ctx) => {
