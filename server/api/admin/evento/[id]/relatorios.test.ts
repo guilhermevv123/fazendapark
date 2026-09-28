@@ -820,6 +820,27 @@ describe('as telas do dinheiro contam igual', () => {
     })
   }, 30_000)
 
+  // O BORDERÔ FECHA A PRÓPRIA CONTA (ADM-13). A tela escreve, linha a linha,
+  //   face + taxa do comprador − descontos − plataforma − estornos parciais = líquido
+  // com os campos que a rota devolve. Se um desses campos mudar de régua (voltar
+  // a `status = 'pago'`, ou o parcial virar a devolução total), a tela mostra a
+  // faixa "a conta não fecha" — e este caso fica vermelho antes, na fixture que
+  // tem cupom, taxa absorvida, estorno parcial E estorno total ao mesmo tempo.
+  it('o borderô fecha a própria conta: face + taxa − desconto − plataforma − parcial = líquido', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    const b = await json(`/api/admin/evento/${EVENTO}/bordero`)
+    const t = b.totais
+    expect(t.faceCents + t.taxaCents - t.descontoCents - t.plataformaCents - t.estornadoNoLiquidoCents,
+      'a conta que o borderô escreve na tela não fecha com o líquido da mesma rota')
+      .toBe(t.liquidoCents)
+    expect(t.liquidoCents).toBe(LIQUIDO)
+    // e o que fica À PARTE da conta é exatamente o estorno do pedido devolvido por inteiro
+    expect(t.estornadoCents - t.estornadoNoLiquidoCents, 'o estorno total não é o que sobra da devolução')
+      .toBe(DEVOLVIDO - DEVOLVIDO_NO_LIQUIDO)
+    expect(DEVOLVIDO_NO_LIQUIDO, 'a fixture perdeu o estorno parcial e a linha "parcial" não prova nada')
+      .toBeGreaterThan(0)
+  }, 30_000)
+
   it('o estorno parcial não apaga o pedido inteiro de nenhuma das cinco', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
