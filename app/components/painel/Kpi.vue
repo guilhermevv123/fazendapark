@@ -10,6 +10,10 @@
  * A variação contra o período anterior é um selo (`selo-ok` sobe, `selo-erro` desce,
  * `selo-neutro` igual); `inverter` troca o sentido pra quem é melhor quando cai (devolução).
  * Sem base de comparação (`null`), o selo não aparece — nunca uma porcentagem inventada.
+ *
+ * `compacto`: no celular o número cai pra 22 px e o cartão encolhe (duas colunas cabem em 390 px);
+ * do `sm` pra cima é o cartão normal. Serve pra faixa da tela de Eventos, que não pode empurrar a
+ * lista pra terceira tela do telefone.
  */
 type Tom = 'pool' | 'grape' | 'sun' | 'citrus' | 'ok' | 'erro' | 'neutro'
 
@@ -22,7 +26,8 @@ const props = withDefaults(defineProps<{
   variacao?: number | null
   inverter?: boolean
   contra?: string
-}>(), { tom: 'pool', icone: undefined, destaque: false, variacao: null, inverter: false, contra: 'o período anterior' })
+  compacto?: boolean
+}>(), { tom: 'pool', icone: undefined, destaque: false, variacao: null, inverter: false, contra: 'o período anterior', compacto: false })
 
 // Literais inteiros, nunca montados por concatenação: o Tailwind só gera a classe que aparece
 // escrita no fonte. Os tons são das escalas da marca (tailwind.config.js).
@@ -62,18 +67,18 @@ const selo = computed(() => {
 </script>
 
 <template>
-  <div class="relative flex min-w-0 flex-col overflow-hidden rounded-2xl p-5 shadow-card"
-       :class="destaque ? [HERO[tom], 'text-white'] : 'bg-white ring-1 ring-ink-200/70'">
+  <div class="relative flex min-w-0 flex-col overflow-hidden rounded-2xl shadow-card"
+       :class="[destaque ? [HERO[tom], 'text-white'] : 'bg-white ring-1 ring-ink-200/70', compacto ? 'p-4 sm:p-5' : 'p-5']">
     <div class="flex items-start justify-between gap-3">
       <p class="titulo text-[13.5px] font-semibold leading-snug"
          :class="destaque ? 'text-white/85' : 'text-ink-700'">{{ rotulo }}</p>
-      <span v-if="icone" class="grid size-10 shrink-0 place-items-center rounded-xl"
-            :class="destaque ? 'bg-white/15 text-white' : ICONE[tom]">
+      <span v-if="icone" class="grid shrink-0 place-items-center rounded-xl"
+            :class="[destaque ? 'bg-white/15 text-white' : ICONE[tom], compacto ? 'size-8 sm:size-10' : 'size-10']">
         <IconeMenu :nome="icone" :tamanho="20" />
       </span>
     </div>
-    <p class="titulo mt-2 break-words text-[30px] font-semibold leading-none tabular-nums sm:text-[32px]"
-       :class="destaque ? 'text-white' : NUMERO[tom]" data-parte="kpi-valor">
+    <p class="titulo mt-2 break-words font-semibold leading-none tabular-nums"
+       :class="[destaque ? 'text-white' : NUMERO[tom], compacto ? 'text-[22px] sm:text-[30px]' : 'text-[30px] sm:text-[32px]']" data-parte="kpi-valor">
       {{ valor }}
     </p>
     <div v-if="selo" class="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs"
