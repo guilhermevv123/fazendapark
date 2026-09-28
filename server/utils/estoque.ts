@@ -343,6 +343,36 @@ async function matarPedidoVencido(c: PoolClient, orderId: string): Promise<boole
 }
 
 /**
+ * Solta um pedido que estava em ANÁLISE DE RISCO (B09) e devolve o que ele
+ * segurava. Quem decide que pode soltar é `varrerEmAnalise` (asaas.ts), depois
+ * de perguntar ao gateway — aqui é só a virada, com a mesma trava de
+ * `matarPedidoVencido`: `WHERE status = 'em_analise'` acerta uma vez só, e o
+ * pagamento que chegar na mesma hora ganha a corrida.
+ *
+ * `para`: 'expirado' quando a cobrança voltou a esperar pagamento (reprovada
+ * na análise) — a varredura de cobranças cancela ela depois, como em todo
+ * pedido expirado; 'cancelado' quando o gateway já apagou ou devolveu.
+ */
+export async function soltarPedidoEmAnalise(
+  c: PoolClient, orderId: string, para: 'expirado' | 'cancelado',
+): Promise<boolean> {
+  const virou = await c.query(
+    `UPDATE orders SET status = $2, canceled_at = now()
+      WHERE id = $1 AND status = 'em_analise'
+      RETURNING id`,
+    [orderId, para],
+  )
+  if (virou.rowCount !== 1) return false
+  const { rows: itens } = await c.query(
+    `SELECT lot_id AS "lotId", ticket_type_id AS "ticketTypeId", quantity AS quantidade
+       FROM order_items WHERE order_id = $1`,
+    [orderId],
+  )
+  await liberar(c, itens)
+  return true
+}
+
+/**
  * O pedido expirado ainda tem cobrança viva no gateway?
  *
  * Matar a reserva sem cancelar a cobrança era o P0 de 22/09: o PIX nasce com

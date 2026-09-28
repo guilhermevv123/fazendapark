@@ -169,8 +169,17 @@ describe('e-mail de outro CPF', () => {
     seForaDoArPula(ctx, sonda)
     const email = `zzqa.dono.${Date.now()}@teste.invalido`
     const doDono = cpf()
-    await sql(`INSERT INTO customers (org_id, name, email, document) VALUES ($1,'ZZQA Dono',$2,$3)`,
-      [ORG, email, doDono])
+    const dono = (await sql(`INSERT INTO customers (org_id, name, email, document)
+      VALUES ($1,'ZZQA Dono',$2,$3) RETURNING id`, [ORG, email, doDono]))[0]
+    // O dono já PAGOU com este e-mail (e foi estornado — o pagamento provou
+    // quem é). Sem nenhum pagamento, o e-mail volta pra quem chega com outro
+    // CPF (B14, checkout-cadastro.test.ts) e não haveria recusa pra conferir.
+    await sql(`INSERT INTO orders (org_id, event_id, customer_id, code, status, channel,
+                 face_cents, fee_cents, platform_cents, discount_cents, total_cents,
+                 payment_method, paid_at, refunded_cents)
+               VALUES ($1,$2,$3,'PED-ZZQA-' || upper(substr(md5(random()::text),1,4)),
+                       'estornado','online',100,0,0,0,100,'pix', now() - interval '1 day', 100)`,
+      [ORG, EVENTO, dono.id])
 
     let outro = cpf()
     while (outro === doDono) outro = cpf()

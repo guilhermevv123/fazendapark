@@ -10,6 +10,7 @@
  * texto, e "ba", "Ba" e "BA" viram três linhas.
  *
  * Puro de propósito — sem banco e sem Nitro. Dá pra testar sem servidor no ar.
+ * (O único SQL daqui, `esquecerCadastrosPendentes`, recebe a conexão de quem chama.)
  */
 
 export class CadastroInvalido extends Error {
@@ -250,4 +251,29 @@ export function SQL_FAIXA(coluna: string): string {
       ? `WHEN ${idade} >= ${f.de} THEN '${f.chave}'`
       : `WHEN ${idade} BETWEEN ${f.de} AND ${f.ate} THEN '${f.chave}'`)
   return `CASE WHEN ${coluna} IS NULL THEN NULL ${ramos.join(' ')} END`
+}
+
+/**
+ * O formulário que ficou no pedido que MORREU sem pagar (`orders.cadastro_pendente`,
+ * db/028) é apagado depois de alguns dias (LGPD: guardar dado pessoal sem
+ * finalidade). Pedido pago já teve o cadastro aplicado e zerado pelo gatilho.
+ *
+ * Por que não na hora em que o pedido morre: o PIX pago depois do prazo ainda
+ * pode chegar (a emissão refaz a reserva, `emissao.ts`), e aí o cadastro dele
+ * precisa estar lá. A cobrança nasce com vencimento de um dia e a varredura de
+ * expirados a cancela; três dias é folga de sobra.
+ */
+export const DIAS_DO_CADASTRO_PENDENTE = 3
+
+export async function esquecerCadastrosPendentes(
+  c: { query: (texto: string, par?: any[]) => Promise<{ rowCount: number | null }> },
+  dias = DIAS_DO_CADASTRO_PENDENTE,
+): Promise<number> {
+  const r = await c.query(
+    `UPDATE orders SET cadastro_pendente = NULL
+      WHERE cadastro_pendente IS NOT NULL
+        AND status IN ('expirado', 'falhou', 'cancelado')
+        AND COALESCE(canceled_at, expires_at, created_at) < now() - make_interval(days => $1)`,
+    [dias])
+  return r.rowCount ?? 0
 }

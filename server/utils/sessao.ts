@@ -634,14 +634,23 @@ export function marcarNoFreio(event: H3Event, nome: NomeDoFreio, peso = 1) {
 }
 
 /** Como o freio está ligado — pra `/api/saude`, sem IP nenhum. */
-export function estadoDoFreio(): { proxy: 'traefik' | 'cloudflare' | 'nenhum'; baldes: Record<string, string> } {
+export function estadoDoFreio(): {
+  proxy: 'traefik' | 'cloudflare' | 'nenhum'
+  /** já chegou requisição por proxy interno SEM `CONFIAR_PROXY` (o freio por IP está desligado) */
+  proxySemConfiancaVisto: boolean
+  baldes: Record<string, string>
+} {
   const modo = String(process.env.CONFIAR_PROXY ?? '').trim().toLowerCase()
   const baldes: Record<string, string> = {}
   for (const nome of Object.keys(FREIO_PUBLICO_PADRAO) as NomeDoFreio[]) {
     const r = regraDoFreio(nome)
     baldes[nome] = r ? `${r.limite}/${r.janelaSeg}s` : 'desligado'
   }
-  return { proxy: modo === '1' ? 'traefik' : modo === 'cloudflare' ? 'cloudflare' : 'nenhum', baldes }
+  return {
+    proxy: modo === '1' ? 'traefik' : modo === 'cloudflare' ? 'cloudflare' : 'nenhum',
+    proxySemConfiancaVisto: avisouProxy,
+    baldes,
+  }
 }
 
 /* ------------------------------------------------------------------ papéis */

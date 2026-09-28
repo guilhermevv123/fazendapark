@@ -17,7 +17,12 @@ import type { PoolClient } from 'pg'
 import { cpfValido } from './documento'
 import { db, q, q1, tx } from './db'
 import { emitirNaTransacao } from './emissao'
-import { liberar, SQL_COBRANCAS_A_CANCELAR } from './estoque'
+import { liberar, soltarPedidoEmAnalise, SQL_COBRANCAS_A_CANCELAR } from './estoque'
+import * as simulado from './gateway-simulado'
+import { pendenciaDoEmail, transporteEscolhido } from './email'
+import { baseDoSite } from './envio'
+import { estadoDasChavesDeIngresso } from './ingresso'
+import { estadoDoFreio } from './sessao'
 
 const PROD_URL = 'https://api.asaas.com/v3'
 const SANDBOX_URL = 'https://api-sandbox.asaas.com/v3'
@@ -85,7 +90,28 @@ export interface DadosCliente {
   name: string
   email: string
   cpfCnpj: string
+  /** "Fone celular" na doc do Asaas */
   mobilePhone?: string
+  /** "Fone fixo" na doc do Asaas */
+  phone?: string
+}
+
+/**
+ * O telefone do formulário no campo que o Asaas documenta pra ele: celular
+ * (11 dígitos, 9 depois do DDD) em `mobilePhone`, fixo (10 dígitos) em `phone`.
+ *
+ * B12: todo telefone ia em `mobilePhone`. Fixo como celular é dado que o
+ * gateway pode recusar — e a recusa derrubava a compra inteira com "Não foi
+ * possível gerar a cobrança", repetindo igual a cada tentativa. Número torto
+ * (nem 10 nem 11 dígitos) não vai: o telefone é opcional pro Asaas, e mandar
+ * lixo só troca uma venda por uma recusa.
+ */
+export function telefoneParaAsaas(telefone?: string | null): { mobilePhone?: string; phone?: string } {
+  let d = String(telefone ?? '').replace(/\D/g, '')
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2)
+  if (d.length === 11 && d[2] === '9') return { mobilePhone: d }
+  if (d.length === 10) return { phone: d }
+  return {}
 }
 
 /** Acha pelo CPF/CNPJ ou cria. O Asaas não faz upsert, então é find-then-create. */
@@ -94,10 +120,79 @@ export async function acharOuCriarCliente(cfg: ConfigAsaas, d: DadosCliente): Pr
   const achados = await chamar<any>(cfg, 'GET', `/customers?cpfCnpj=${doc}&limit=1`)
   if (achados?.data?.[0]?.id) return achados.data[0].id
   const criado = await chamar<any>(cfg, 'POST', '/customers', {
-    name: d.name, email: d.email, cpfCnpj: doc, mobilePhone: d.mobilePhone,
+    name: d.name, email: d.email, cpfCnpj: doc, mobilePhone: d.mobilePhone, phone: d.phone,
     notificationDisabled: true, // quem avisa o comprador somos nós
   })
   return criado.id
+}
+
+/**
+ * A recusa do Asaas que é do DADO do comprador — e o campo dela.
+ *
+ * B12: qualquer erro do gateway virava "Não foi possível gerar a cobrança.
+ * Tente de novo." — e tentar de novo dava o mesmo, porque o que o Asaas
+ * recusou foi o celular, o e-mail ou o nome. O motivo ficava só no
+ * `audit_log`. O Asaas responde 400 com `errors[{ code, description }]`, a
+ * descrição já em português; aqui ela vira frase pro comprador, com o campo
+ * pra tela marcar. Recusa que não é de campo do comprador (valor, vencimento,
+ * conta) devolve `null` e segue como indisponibilidade.
+ */
+export function recusaDeDadoDoComprador(e: unknown): { campo: string; recado: string } | null {
+  // 400 é a recusa de validação; 2xx com `errors[]` também existe (ver `chamar`)
+  if (!(e instanceof ErroAsaas) || !(e.status === 400 || (e.status >= 200 && e.status < 300))) return null
+  const erros = (e.detalhes as any)?.errors
+  if (!Array.isArray(erros) || !erros.length) return null
+  for (const erro of erros) {
+    const codigo = String(erro?.code ?? '')
+    const campo = /mobilePhone|phone/i.test(codigo) ? 'telefone'
+      : /email/i.test(codigo) ? 'email'
+      : /cpfCnpj|document/i.test(codigo) ? 'documento'
+      : /(^|_)name$/i.test(codigo) ? 'nome'
+      : null
+    if (!campo) continue
+    const rotulo: Record<string, string> = {
+      telefone: 'o celular', email: 'o e-mail', documento: 'o CPF', nome: 'o nome',
+    }
+    const descricao = String(erro?.description ?? '').trim().replace(/\.$/, '')
+    return {
+      campo,
+      recado: `O sistema de pagamento recusou ${rotulo[campo]}`
+        + (descricao ? ` (${descricao})` : '') + '. Corrija e tente de novo.',
+    }
+  }
+  return null
+}
+
+/**
+ * Dá pra cobrar online AGORA? Decidido antes do formulário, não no último clique.
+ *
+ * PROD-06: organização sem chave do Asaas fazia o comprador preencher tudo e
+ * só no fim receber 503 — com o cadastro gravado e o estoque reservado e
+ * devolvido. E chave de TESTE (`_hmlg_`) em produção gerava PIX de mentira que
+ * nenhum banco paga: todo pedido expirava. A vitrine usa esta mesma resposta
+ * pra não oferecer pagamento que vai falhar, e o checkout pra recusar antes
+ * de tocar em estoque. Nunca devolve a chave: só SIM/NÃO e o motivo.
+ *
+ * PROD-01: em produção, sem `ASAAS_WEBHOOK_TOKEN` o webhook recusa todo aviso
+ * de pagamento (503, de propósito — aceitar anônimo seria ingresso de graça
+ * pra quem achar a URL). Vender assim é cobrar e não entregar: o PIX cai no
+ * Asaas e o ingresso não sai. Então também não vende (`sem_webhook`).
+ */
+export type MotivoSemPagamento = 'sem_chave' | 'chave_de_teste' | 'sem_webhook'
+
+export const RECADO_SEM_PAGAMENTO =
+  'As vendas online estão indisponíveis no momento. Tente mais tarde ou compre na bilheteria.'
+
+export function pagamentoOnline(org: { asaas_api_key?: string | null; asaas_env?: string | null }):
+  { ok: true } | { ok: false; motivo: MotivoSemPagamento; recado: string } {
+  if (simulado.ligado()) return { ok: true }
+  const fechado = (motivo: MotivoSemPagamento) => ({ ok: false as const, motivo, recado: RECADO_SEM_PAGAMENTO })
+  if (!org.asaas_api_key) return fechado('sem_chave')
+  const producao = process.env.NODE_ENV === 'production'
+  const ambiente = ambienteDaChave(org.asaas_api_key) || org.asaas_env || 'sandbox'
+  if (producao && ambiente !== 'production') return fechado('chave_de_teste')
+  if (producao && !String(process.env.ASAAS_WEBHOOK_TOKEN ?? '').trim()) return fechado('sem_webhook')
+  return { ok: true }
 }
 
 // ----------------------------------------------------------------- cobrança
@@ -295,6 +390,121 @@ export async function cancelarCobrancasDeExpirados(limite = 50): Promise<Resulta
     if (travou) {
       await conexao.query(`SELECT pg_advisory_unlock(hashtext('dt:cancelar-cobrancas-expiradas'))`)
         .catch(() => {})
+    }
+    conexao.release()
+  }
+}
+
+/* ------------------------------------------ análise de risco sem saída (B09) */
+
+/**
+ * Depois de quanto tempo em análise o pedido passa a ser perguntado ao gateway,
+ * e de quanto em quanto tempo a pergunta se repete.
+ *
+ * Perguntar cedo não custa nada — o gateway é quem decide, e "ainda em
+ * análise" mantém o pedido. O que custa é NÃO perguntar: o pedido em
+ * 'em_analise' não tem prazo (o gatilho da 011 só carimba prazo em
+ * 'aguardando_pagamento'), `liberarExpirados` não o enxerga, e a reprovação
+ * cujo webhook se perdeu segurava o lugar pra sempre.
+ */
+export const EM_ANALISE_PERGUNTAR_APOS_MIN = Number(process.env.EM_ANALISE_PERGUNTAR_APOS_MIN || 120)
+export const EM_ANALISE_REPERGUNTAR_MIN = 60
+
+const STATUS_PAGO = new Set(['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'])
+const STATUS_SEM_ANALISE = new Set(['PENDING', 'OVERDUE'])
+const STATUS_ACABOU = new Set(['REFUNDED', 'REFUND_REQUESTED', 'REFUND_IN_PROGRESS'])
+
+export interface DesfechoDaAnalise {
+  pedidoId: string
+  /** 'solto' devolveu o lugar; 'mantido' continua esperando */
+  desfecho: 'solto' | 'mantido'
+  statusNoGateway: string | null
+  motivo: string
+}
+
+/**
+ * O que fazer com um pedido em análise, dado o que o GATEWAY diz dele.
+ *
+ * PURO, e a regra que manda é: **nunca soltar o que o gateway diz que foi
+ * pago ou aprovado.** Soltar é só quando ele diz, com todas as letras, que a
+ * cobrança voltou a esperar pagamento (reprovada), foi apagada ou devolvida.
+ * Consulta que falhou, cobrança não encontrada ou status que não conhecemos
+ * mantêm o pedido — o custo de errar pra esse lado é um lugar preso por mais
+ * uma hora; pro outro, é um comprador pago sem ingresso.
+ */
+export function decidirEmAnalise(cobranca: any | null):
+  { soltar: false; motivo: string } | { soltar: true; para: 'expirado' | 'cancelado'; motivo: string } {
+  if (!cobranca) return { soltar: false, motivo: 'o gateway não respondeu sobre a cobrança' }
+  const status = String(cobranca.status ?? '').toUpperCase()
+  if (STATUS_PAGO.has(status)) {
+    return { soltar: false,
+      motivo: `o gateway diz ${status}: o pagamento entrou e o webhook não baixou — reprocessar a entrega` }
+  }
+  if (cobranca.deleted === true) return { soltar: true, para: 'cancelado', motivo: 'cobrança apagada no gateway' }
+  if (status === 'AWAITING_RISK_ANALYSIS') return { soltar: false, motivo: 'ainda em análise de risco' }
+  if (STATUS_SEM_ANALISE.has(status)) {
+    return { soltar: true, para: 'expirado', motivo: `análise encerrada sem pagamento (${status})` }
+  }
+  if (STATUS_ACABOU.has(status)) return { soltar: true, para: 'cancelado', motivo: `cobrança ${status}` }
+  return { soltar: false, motivo: `status ${status || 'vazio'} não é decisão pra soltar lugar` }
+}
+
+/**
+ * A varredura: pedidos em análise há mais de `EM_ANALISE_PERGUNTAR_APOS_MIN`,
+ * não perguntados na última hora, até `limite` por rodada. Cada pergunta vira
+ * linha no `audit_log` (`em_analise_consulta`), que é a marca de "já perguntei"
+ * e a trilha que o painel mostra. Uma instância por vez (trava de sessão), como
+ * `cancelarCobrancasDeExpirados`.
+ */
+export async function varrerEmAnalise(limite = 20): Promise<DesfechoDaAnalise[]> {
+  const conexao = await db().connect()
+  const feitos: DesfechoDaAnalise[] = []
+  let travou = false
+  try {
+    const { rows: trava } = await conexao.query(
+      `SELECT pg_try_advisory_lock(hashtext('dt:varrer-em-analise')) AS ok`)
+    travou = !!trava[0]?.ok
+    if (!travou) return feitos
+
+    const candidatos = await q<any>(
+      `SELECT o.id, o.org_id, o.code, o.asaas_payment_id
+         FROM orders o
+        WHERE o.status = 'em_analise'
+          AND o.created_at < now() - make_interval(mins => $1)
+          AND NOT EXISTS (SELECT 1 FROM audit_log a
+                           WHERE a.entity = 'order' AND a.entity_id = o.id::text
+                             AND a.action = 'em_analise_consulta'
+                             AND a.created_at > now() - make_interval(mins => $2))
+        ORDER BY o.created_at
+        LIMIT $3`,
+      [EM_ANALISE_PERGUNTAR_APOS_MIN, EM_ANALISE_REPERGUNTAR_MIN, limite])
+
+    for (const p of candidatos) {
+      let cobranca: any = null
+      let erro: string | null = null
+      try {
+        cobranca = await consultarCobranca({ orgId: p.org_id, paymentId: String(p.asaas_payment_id ?? '') })
+      } catch (e: any) {
+        erro = e?.message ?? String(e)
+      }
+      const d = decidirEmAnalise(cobranca)
+      let solto = false
+      if (d.soltar) solto = await tx((c) => soltarPedidoEmAnalise(c, p.id, d.para))
+      const statusNoGateway = cobranca?.status ?? null
+      const motivo = erro ? `consulta falhou: ${erro}` : d.motivo
+      await q(
+        `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+         VALUES ($1, 'order', $2, 'em_analise_consulta', $3::jsonb)`,
+        [p.org_id, p.id, JSON.stringify({ pedido: p.code, statusNoGateway, solto, motivo })])
+      if (!solto && cobranca && STATUS_PAGO.has(String(cobranca.status).toUpperCase())) {
+        console.warn(`[asaas] pedido ${p.code} em análise e PAGO no gateway: ${d.motivo}`)
+      }
+      feitos.push({ pedidoId: p.id, desfecho: solto ? 'solto' : 'mantido', statusNoGateway, motivo })
+    }
+    return feitos
+  } finally {
+    if (travou) {
+      await conexao.query(`SELECT pg_advisory_unlock(hashtext('dt:varrer-em-analise'))`).catch(() => {})
     }
     conexao.release()
   }
@@ -1049,6 +1259,12 @@ export const EVENTOS_QUE_IMPORTAM = new Set([
  */
 export function statusDoEvento(nomeEvento: string, pagamento: any) {
   switch (nomeEvento) {
+    // Reprovado na análise de risco: a cobrança volta a esperar pagamento. Pelo
+    // status só, um payload que ainda diga AWAITING_RISK_ANALYSIS deixava o
+    // pedido em 'em_analise' — sem prazo, segurando lugar (B09). Como
+    // 'aguardando_pagamento', o prazo da reserva volta a valer e a varredura
+    // de expirados devolve o lugar e cancela a cobrança.
+    case 'PAYMENT_REPROVED_BY_RISK_ANALYSIS': return 'aguardando_pagamento' as const
     case 'PAYMENT_DELETED': return 'cancelado' as const
     case 'PAYMENT_REFUNDED': return 'estornado' as const
     case 'PAYMENT_PARTIALLY_REFUNDED': return 'estornado_parcial' as const
@@ -1245,19 +1461,27 @@ export function conferirSegredoWebhook(args: {
  * (o `GREATEST(...,0)` só segura quando a reserva é do pedido sozinho), e o
  * lote passa a vender lugar que não existe.
  *
- * `disputa` está aqui e isso NÃO é enfeite. O caminho do chargeback no Asaas é
- * uma sequência de três eventos, não um:
+ * `disputa` está aqui e isso NÃO é enfeite. O chargeback no Asaas é uma
+ * sequência, não um evento. A ordem OFICIAL (docs.asaas.com, "Eventos para
+ * cobranças" e "Chargeback", conferida em 27/09):
  *
  *   PAYMENT_CHARGEBACK_REQUESTED → desfaz (o pedido sai de 'pago')
- *   PAYMENT_AWAITING_CHARGEBACK_REVERSAL → só anota: 'chargeback' vira 'disputa'
- *   PAYMENT_CHARGEBACK_DISPUTE → desfaz DE NOVO
+ *   PAYMENT_CHARGEBACK_DISPUTE → "em disputa após apresentação de documentos":
+ *                                 o pedido já está desfeito, nada muda
+ *   e aí um de dois fins:
+ *     GANHOU: PAYMENT_AWAITING_CHARGEBACK_REVERSAL ("disputa vencida, aguardando
+ *             repasse da adquirente") → 'disputa'; e depois PAYMENT_CONFIRMED ou
+ *             PAYMENT_RECEIVED — o dinheiro volta, e o pedido volta a contar
+ *             (ver "chargeback revertido" em `aplicarEventoDoAsaas`)
+ *     PERDEU: PAYMENT_REFUNDED → segue 'chargeback'
  *
- * No terceiro o pedido está em 'disputa'. Sem 'disputa' nesta lista ele não
- * conta como desfeito, e como também não está em 'pago' o `desfazer` cai no
- * `liberar()` — que subtrai `reserved` de um pedido que não reserva mais nada.
- * Medido: lote com um vizinho segurando 5 lugares ficou com 3 depois da
- * sequência. Os 2 lugares não voltaram pro vizinho; o lote passou a achar que
- * tem 2 a mais pra vender.
+ * Fora de ordem (o Asaas reentrega), um DISPUTE pode chegar DEPOIS do
+ * AWAITING_REVERSAL, com o pedido em 'disputa'. Sem 'disputa' nesta lista ele
+ * não conta como desfeito, e como também não está em 'pago' o `desfazer` cai
+ * no `liberar()` — que subtrai `reserved` de um pedido que não reserva mais
+ * nada. Medido: lote com um vizinho segurando 5 lugares ficou com 3. Os 2
+ * lugares não voltaram pro vizinho; o lote passou a achar que tem 2 a mais pra
+ * vender.
  *
  * Só se chega em 'disputa' vindo de 'chargeback' (ver `permiteAnotarStatus`),
  * e 'chargeback' já desfez — então 'disputa' SEMPRE quer dizer "já desfeito".
@@ -1598,6 +1822,49 @@ export async function aplicarEventoDoAsaas(
     return { ok: true, aviso: 'status desconhecido' }
   }
 
+  // ------------------------------------------ chargeback revertido (ganho)
+  //
+  // Na disputa GANHA o Asaas manda PAYMENT_AWAITING_CHARGEBACK_REVERSAL e, com
+  // o repasse da adquirente, PAYMENT_CONFIRMED ou PAYMENT_RECEIVED (docs,
+  // "Chargeback": "o evento posterior a PAYMENT_AWAITING_CHARGEBACK_REVERSAL
+  // será PAYMENT_CONFIRMED ou PAYMENT_RECEIVED"). O pagamento caía na emissão,
+  // que recusa pedido em 'disputa' ("pedido em disputa") — a entrega era dada
+  // por concluída e o pedido ficava fora do líquido PRA SEMPRE, com o dinheiro
+  // de volta na conta do produtor.
+  //
+  // O pedido volta a CONTAR ('pago', ou 'estornado_parcial' se parte já tinha
+  // sido devolvida). Os ingressos NÃO voltam: foram cancelados no chargeback,
+  // o lugar pode ter sido vendido de novo e, a esta altura, o evento em geral
+  // já passou — reemitir é decisão do produtor, pelo painel.
+  if (novo === 'pago' && pedido.status === 'chargeback') {
+    // O dinheiro só volta DEPOIS do AWAITING_CHARGEBACK_REVERSAL. Pagamento
+    // antes dele é entrega fora de ordem: fica pendurada (sem baixa) e o
+    // reprocessador tenta de novo — quando o REVERSAL chegar, ela vale.
+    throw new Error('pagamento confirmado com o pedido ainda em chargeback: '
+      + 'aguardando PAYMENT_AWAITING_CHARGEBACK_REVERSAL')
+  }
+  if (novo === 'pago' && pedido.status === 'disputa') {
+    const total = Number(pedido.total_cents)
+    const devolvido = limitar(valorEstornadoCents(e.pagamento) ?? 0, total)
+    if (devolvido >= total) {
+      await concluir('pagamento em disputa com o valor inteiro devolvido: nada a reverter')
+      return { ok: true, pedido: pedido.id, status: pedido.status }
+    }
+    const status = devolvido > 0 ? 'estornado_parcial' : 'pago'
+    await c.query(
+      `UPDATE orders SET status = $2, refunded_cents = $3,
+              refunded_at = CASE WHEN $3::bigint > 0 THEN refunded_at END,
+              canceled_at = NULL
+        WHERE id = $1`, [pedido.id, status, devolvido])
+    await c.query(
+      `INSERT INTO audit_log (entity, entity_id, action, after)
+       VALUES ('order', $1, 'chargeback_revertido', $2::jsonb)`,
+      [pedido.id, JSON.stringify({ evento: e.nomeEvento, status, estornadoCents: devolvido,
+        ingressos: 'continuam cancelados (reemitir é decisão do produtor)' })])
+    await concluir('chargeback revertido: o dinheiro voltou; os ingressos continuam cancelados')
+    return { ok: true, pedido: pedido.id, status, chargebackRevertido: true }
+  }
+
   // ---------------------------------------------------------- pagamento
   if (novo === 'pago') {
     const v = conferirValorRecebido({
@@ -1706,6 +1973,21 @@ export async function aplicarEventoDoAsaas(
         WHERE id = $1`, [pedido.id, devolvido])
     await concluir()
     return { ok: true, pedido: pedido.id, status: novo, estornadoCents: devolvido }
+  }
+
+  // Disputa que parecia ganha e terminou em estorno: o dinheiro não volta
+  // mais. 'disputa' diz "o dinheiro está voltando"; deixar o pedido nela seria
+  // prometer um repasse que não vem. O estoque e os ingressos já foram
+  // desfeitos no chargeback — só o nome do fim muda.
+  if (novo === 'estornado' && pedido.status === 'disputa') {
+    await c.query(
+      `UPDATE orders SET status = 'chargeback', refunded_at = COALESCE(refunded_at, now()),
+              refunded_cents = GREATEST(refunded_cents, $2)
+        WHERE id = $1`,
+      [pedido.id, limitar(valorEstornadoCents(e.pagamento) ?? Number(pedido.total_cents),
+                          Number(pedido.total_cents))])
+    await concluir('estorno depois da disputa: o chargeback ficou perdido')
+    return { ok: true, pedido: pedido.id, status: 'chargeback' }
   }
 
   // -------------------------------------- estorno / cancelamento / chargeback
@@ -2056,3 +2338,182 @@ export function pararWorkerDoWebhook() {
  * que ele existe é ruído caro de achar.
  */
 if (!process.env.VITEST) garantirWorkerDoWebhook()
+
+/* ===================================================================== */
+/*  A CONFIGURAÇÃO DE PRODUÇÃO — que grita no boot e em /api/saude       */
+/* ===================================================================== */
+/**
+ * O que falta no ambiente pra vender e entregar, em SIM/NÃO e em frases —
+ * NUNCA o valor de variável nenhuma.
+ *
+ * Por que existe (PROD-01, 03, 04, 05, 06 e B05): cada peça que faltava no
+ * deploy falhava em SILÊNCIO e longe da causa — o webhook recusando todo
+ * pagamento, o e-mail simulado num disco que ninguém lê, o link do e-mail pra
+ * localhost, o QR que morre quando alguém troca o segredo da sessão, o freio
+ * por IP travando todo mundo atrás do proxy. O dono descobria pelo telefone
+ * do cliente. Agora a mesma lista sai em três lugares: no log do boot (uma
+ * vez, com `console.error` no que impede venda ou entrega), em `/api/saude`
+ * (que um monitor externo lê) e — o que impede cobrar — na vitrine, que não
+ * oferece pagamento que vai falhar (`pagamentoOnline`).
+ *
+ * `critico` = alguém paga e não recebe, ou não consegue pagar.
+ */
+export interface ProblemaDeConfiguracao {
+  /** o nome da peça — da variável, nunca o valor */
+  item: string
+  critico: boolean
+  frase: string
+}
+
+export interface EstadoDaConfiguracao {
+  producao: boolean
+  itens: Record<string, 'SIM' | 'NÃO'>
+  assinaQrCom: 'DT2' | 'DT1' | null
+  proxy: 'traefik' | 'cloudflare' | 'nenhum'
+  problemas: ProblemaDeConfiguracao[]
+}
+
+export function conferirConfiguracao(): EstadoDaConfiguracao {
+  const env = process.env
+  const producao = env.NODE_ENV === 'production'
+  const problemas: ProblemaDeConfiguracao[] = []
+  const sim = (b: boolean): 'SIM' | 'NÃO' => (b ? 'SIM' : 'NÃO')
+  const url = (v?: string) => {
+    try { return !!v && /^[a-z]+:$/.test(new URL(v).protocol) } catch { return false }
+  }
+
+  // PROD-01 — o webhook é a única porta por onde o pagamento vira ingresso
+  const token = !!String(env.ASAAS_WEBHOOK_TOKEN ?? '').trim()
+  if (producao && !token) {
+    problemas.push({ item: 'ASAAS_WEBHOOK_TOKEN', critico: true,
+      frase: 'ASAAS_WEBHOOK_TOKEN não configurado: o webhook recusa todo aviso de pagamento '
+        + 'e nenhum PIX vira ingresso. A vitrine não vende enquanto faltar (configure o mesmo '
+        + 'token no painel de webhooks do Asaas e no ambiente do deploy).' })
+  }
+
+  // PROD-05 — a mesma régua de `entregar()`
+  const email = pendenciaDoEmail(env)
+  if (email) problemas.push({ item: 'SMTP_URL/EMAIL_REMETENTE', critico: true, frase: email })
+  const remetenteOk = !!env.EMAIL_REMETENTE && pendenciaDoEmail({
+    NODE_ENV: 'production', SMTP_URL: 'smtp://conferencia.invalid', EMAIL_REMETENTE: env.EMAIL_REMETENTE,
+  }) === null
+
+  // PROD-04
+  const base = baseDoSite()
+  const baseOk = producao ? !!base : url(String(env.PUBLIC_BASE_URL ?? '').trim())
+  if (producao && !base) {
+    problemas.push({ item: 'PUBLIC_BASE_URL', critico: false,
+      frase: 'PUBLIC_BASE_URL ausente, inválido ou apontando pra esta máquina: o e-mail do '
+        + 'ingresso sai sem o link do pedido (o QR vai anexado).' })
+  }
+
+  // PROD-03 — sem chave nenhuma, nenhum QR é gerado
+  const chaves = estadoDasChavesDeIngresso()
+  if (chaves.assinaCom === 'DT1') {
+    // A frase do chaveiro ("TICKET_KEYS não configurada…") convida a configurar
+    // já — e configurar antes da validação OFFLINE da portaria ler DT2 faz o
+    // celular do portão recusar ingresso bom sem rede. Aqui vai o aviso certo.
+    problemas.push({ item: 'TICKET_KEYS', critico: false,
+      frase: 'Os ingressos saem no formato DT1, assinados com NUXT_SESSION_SECRET: NÃO troque essa '
+        + 'variável (invalida todo QR vendido). A troca pra TICKET_KEYS (DT2, chave própria) espera a '
+        + 'validação offline da portaria ler o formato novo.' })
+    for (const frase of chaves.problemas.filter((f) => !/^TICKET_KEYS não configurada/.test(f))) {
+      problemas.push({ item: 'TICKET_KEYS', critico: false, frase })
+    }
+  } else {
+    for (const frase of chaves.problemas) problemas.push({ item: 'TICKET_KEYS', critico: false, frase })
+  }
+  if (!chaves.assinaCom) {
+    problemas.push({ item: 'TICKET_KEYS', critico: true,
+      frase: 'Nenhuma chave pra assinar ingresso: NUXT_SESSION_SECRET ausente (ou curto) e '
+        + 'TICKET_KEYS vazio. Nenhum QR é gerado.' })
+  }
+
+  // B05 — atrás do Traefik sem CONFIAR_PROXY todo mundo tem o IP do proxy
+  const freio = estadoDoFreio()
+  if (freio.proxySemConfiancaVisto) {
+    problemas.push({ item: 'CONFIAR_PROXY', critico: false,
+      frase: 'Chegou requisição por proxy (x-forwarded-for) e CONFIAR_PROXY não está ligado: '
+        + 'o freio por IP do login e da loja fica DESLIGADO. Configure CONFIAR_PROXY=1 (Traefik '
+        + 'do EasyPanel) ou CONFIAR_PROXY=cloudflare.' })
+  }
+
+  return {
+    producao,
+    itens: {
+      webhookToken: sim(token),
+      smtp: sim(url(env.SMTP_URL)),
+      remetente: sim(remetenteOk),
+      emailDeVerdade: sim(transporteEscolhido() === 'smtp'),
+      publicBaseUrl: sim(baseOk),
+      chaveDoIngresso: sim(chaves.assinaCom === 'DT2'),
+      confereQrAntigo: sim(chaves.confereDT1),
+      confiarProxy: sim(freio.proxy !== 'nenhum'),
+      monitorToken: sim(String(env.MONITOR_TOKEN ?? '').length >= 32),
+    },
+    assinaQrCom: chaves.assinaCom,
+    proxy: freio.proxy,
+    problemas,
+  }
+}
+
+/**
+ * Os eventos À VENDA que não têm como cobrar online (PROD-06): sem chave, com
+ * chave de teste em produção, ou sem o webhook que confirma o pagamento. Só o
+ * slug (público) e o motivo — a chave nunca sai daqui.
+ */
+export async function eventosSemPagamentoOnline(): Promise<Array<{ slug: string; motivo: MotivoSemPagamento }>> {
+  const eventos = await q<any>(
+    `SELECT e.slug, o.asaas_api_key, o.asaas_env
+       FROM events e JOIN organizations o ON o.id = e.org_id
+      WHERE e.status = 'ativo'
+        AND (e.ends_at IS NULL OR e.ends_at > now())
+        AND (e.sales_end_at IS NULL OR e.sales_end_at > now())
+      ORDER BY e.starts_at`)
+  const fora: Array<{ slug: string; motivo: MotivoSemPagamento }> = []
+  for (const e of eventos) {
+    const p = pagamentoOnline(e)
+    if (!p.ok) fora.push({ slug: e.slug, motivo: p.motivo })
+  }
+  return fora
+}
+
+/**
+ * O aviso do boot: uma vez por processo, alto no que impede venda ou entrega.
+ * Fora de produção também avisa (em `warn`), pra ninguém descobrir a falta
+ * no dia do deploy.
+ */
+export async function avisarConfiguracaoNoBoot(
+  saida: Pick<Console, 'error' | 'warn' | 'log'> = console,
+): Promise<void> {
+  const c = conferirConfiguracao()
+  for (const p of c.problemas) {
+    const linha = `[config] ${p.item}: ${p.frase}`
+    if (p.critico && c.producao) saida.error(linha)
+    else saida.warn(linha)
+  }
+  try {
+    const fora = await eventosSemPagamentoOnline()
+    for (const e of fora) {
+      const linha = `[config] evento à venda SEM pagamento online (${e.motivo}): ${e.slug} — `
+        + 'a vitrine mostra "vendas online indisponíveis" e o checkout recusa antes do estoque.'
+      if (c.producao) saida.error(linha)
+      else saida.warn(linha)
+    }
+  } catch (e: any) {
+    saida.warn(`[config] não deu pra conferir as chaves do Asaas no banco: ${e?.message ?? e}`)
+  }
+  if (c.producao && !c.problemas.some((p) => p.critico)) {
+    saida.log(`[config] produção: webhook=${c.itens.webhookToken} email=${c.itens.emailDeVerdade} `
+      + `site=${c.itens.publicBaseUrl} qr=${c.assinaQrCom} proxy=${c.proxy}`)
+  }
+}
+
+// Mesmo motivo do `garantirWorkerDoWebhook()` acima: este módulo cai no pedaço
+// avaliado no boot, então o aviso sai quando o processo sobe — e uma vez só
+// (o `globalThis` sobrevive ao recarregamento do `nuxt dev`). Fora da suíte:
+// teste que importa este arquivo não quer o aviso no meio das afirmações.
+if (!process.env.VITEST && !(globalThis as any).__dtConfigAvisada) {
+  ;(globalThis as any).__dtConfigAvisada = true
+  setTimeout(() => { avisarConfiguracaoNoBoot().catch(() => {}) }, 0).unref?.()
+}
