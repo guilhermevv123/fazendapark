@@ -55,6 +55,7 @@ import type { Pool, PoolClient } from 'pg'
 import { db, q, q1 } from './db'
 import { PEDIDO_VIVO } from './liquido'
 import { buscarCobranca, estornar, valorEstornadoCents, type ConfigAsaas } from './asaas'
+import { conferirNoMp, estornarNoMp, PREFIXO_MP } from './mercadopago'
 
 /** Conexão OU pool: a reserva é um comando só e roda bem nos dois. */
 type Executor = Pool | PoolClient
@@ -284,7 +285,10 @@ export const SQL_ENFILEIRA_ESTORNO_DO_EVENTO = `
   INSERT INTO refund_jobs (org_id, event_id, order_id, cancellation_id, reason,
                            amount_cents, asaas_payment_id, requested_by)
   SELECT o.org_id, o.event_id, o.id, $2, $3,
-         o.total_cents - o.refunded_cents, o.asaas_payment_id, $4
+         o.total_cents - o.refunded_cents,
+         -- o id no gateway: Asaas como sempre; Pix do Mercado Pago com o prefixo 'mp:'
+         -- (utils/mercadopago.ts, PREFIXO_MP); nenhum dos dois = dinheiro fora da plataforma
+         COALESCE(o.asaas_payment_id, 'mp:' || o.mp_payment_id), $4
     FROM orders o
    WHERE o.event_id = $1
      AND ${PEDIDO_VIVO('o.')}
@@ -297,7 +301,8 @@ export const SQL_ENFILEIRA_ESTORNO_DE_UM_PEDIDO = `
   INSERT INTO refund_jobs (org_id, event_id, order_id, cancellation_id, reason,
                            amount_cents, asaas_payment_id, requested_by)
   SELECT o.org_id, o.event_id, o.id, $3, $2,
-         o.total_cents - o.refunded_cents, o.asaas_payment_id, $4
+         o.total_cents - o.refunded_cents,
+         COALESCE(o.asaas_payment_id, 'mp:' || o.mp_payment_id), $4
     FROM orders o
    WHERE o.id = $1
      AND ${PEDIDO_VIVO('o.')}
@@ -561,8 +566,20 @@ const conferirNoAsaas: Conferidor = async (p) => {
   }
 }
 
-const estornarAgora = (p: PedidoDeEstorno) => (estornadorInjetado ?? estornarNoAsaas)(p)
-const conferirAgora = (p: PedidoDeEstorno) => (conferidorInjetado ?? conferirNoAsaas)(p)
+/**
+ * O gateway sai do próprio id (o segundo provedor que o `usarEstornador` já previa): o Pix do
+ * Mercado Pago chega na fila como `mp:<id>` e devolve pelo MP; o resto é do Asaas.
+ */
+const estornarNoGateway: Estornador = (p) => (p.paymentId.startsWith(PREFIXO_MP)
+  ? estornarNoMp({ orgId: p.orgId, paymentId: p.paymentId, valorCents: p.valorCents,
+                   jobId: p.jobId, tentativa: p.tentativa, orderId: p.orderId })
+  : estornarNoAsaas(p))
+const conferirNoGateway: Conferidor = (p) => (p.paymentId.startsWith(PREFIXO_MP)
+  ? conferirNoMp({ orgId: p.orgId, paymentId: p.paymentId })
+  : conferirNoAsaas(p))
+
+const estornarAgora = (p: PedidoDeEstorno) => (estornadorInjetado ?? estornarNoGateway)(p)
+const conferirAgora = (p: PedidoDeEstorno) => (conferidorInjetado ?? conferirNoGateway)(p)
 
 /* ------------------------------------------------------------- processar */
 

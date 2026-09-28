@@ -10,7 +10,9 @@
  *    não há venda online — e a resposta nunca carrega a chave.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { ErroAsaas, pagamentoOnline, recusaDeDadoDoComprador, telefoneParaAsaas } from './asaas'
+import {
+  ErroAsaas, pagamentoOnline, RECADO_CARTAO_FORA, RECADO_SEM_PAGAMENTO, recusaDeDadoDoComprador, telefoneParaAsaas,
+} from './asaas'
 
 describe('B12 · telefoneParaAsaas', () => {
   it('celular (11 dígitos, 9 depois do DDD) vai em mobilePhone, com ou sem máscara', () => {
@@ -101,6 +103,25 @@ describe('PROD-06 · pagamentoOnline', () => {
     expect(pagamentoOnline({ asaas_api_key: 'chave-sem-marca', asaas_env: null }))
       .toMatchObject({ ok: false, motivo: 'chave_de_teste' })
     expect(pagamentoOnline({ asaas_api_key: 'chave-sem-marca', asaas_env: 'production' })).toEqual({ ok: true })
+  })
+  it('Pix pelo Mercado Pago (28/09): vende Pix sem o Asaas, e o cartão continua dependendo dele', () => {
+    ambiente('production', '0', null)
+    const soMp = { asaas_api_key: null, mp_access_token: 'APP_USR-123-producao' }
+    expect(pagamentoOnline(soMp, 'pix')).toEqual({ ok: true })
+    // a vitrine pergunta sem forma: dá pra vender por ALGUMA
+    expect(pagamentoOnline(soMp)).toEqual({ ok: true })
+    // cartão só pelo Asaas: sem chave, sem cartão — e a frase manda pro Pix, que está de pé
+    // ("vendas indisponíveis" mandaria embora quem pode pagar agora)
+    expect(pagamentoOnline(soMp, 'credito')).toMatchObject({ ok: false, motivo: 'sem_chave', recado: RECADO_CARTAO_FORA })
+    // sem o MP também, a frase de sempre
+    expect(pagamentoOnline({ asaas_api_key: null }, 'credito')).toMatchObject({ ok: false, recado: RECADO_SEM_PAGAMENTO })
+    // token de teste em produção não liga o MP: volta a régua do Asaas
+    expect(pagamentoOnline({ asaas_api_key: null, mp_access_token: 'TEST-123' }, 'pix'))
+      .toMatchObject({ ok: false, motivo: 'sem_chave' })
+    // e o Asaas sem o token do webhook não derruba o Pix do MP (a varredura pergunta sozinha)
+    expect(pagamentoOnline({ ...soMp, asaas_api_key: CHAVE_PROD }, 'pix')).toEqual({ ok: true })
+    expect(pagamentoOnline({ ...soMp, asaas_api_key: CHAVE_PROD }, 'credito'))
+      .toMatchObject({ ok: false, motivo: 'sem_webhook', recado: RECADO_CARTAO_FORA })
   })
   it('em produção, chave de produção vende', () => {
     ambiente('production', '0')

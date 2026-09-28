@@ -202,7 +202,7 @@ describe('Financeiro — avisos do gateway pendurados (FIN-10)', () => {
       },
     })
     const bloco = tela.find('[data-parte="entregas"]')
-    expect(bloco.text()).toContain('2 avisos do Asaas chegaram e não foram aplicados')
+    expect(bloco.text()).toContain('2 avisos de pagamento chegaram e não foram aplicados')
     const botoes = bloco.findAll('tbody button')
     expect(botoes[1]!.text()).toBe('Precisa de gente')
     expect((botoes[1]!.element as HTMLButtonElement).disabled).toBe(true)

@@ -20,6 +20,19 @@ import { z } from 'zod'
 import { reprocessarEntregasPendentes } from '../../../utils/asaas'
 import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 import { q1 } from '../../../utils/db'
+import { reprocessarFatosMp } from '../../../utils/mercadopago'
+
+/** O "tentar agora" de um fato do MP, na forma da resposta do reprocessador do Asaas. */
+async function reprocessarUmFatoMp(id: string, linha: any) {
+  const [d] = await reprocessarFatosMp({ id, limite: 1 })
+  if (!d) return []
+  const baixa = await q1<any>(`SELECT processed_at, order_id FROM payment_events WHERE id = $1`, [id])
+  return [{
+    id, evento: String(linha.event_name || ''), ok: d.ok, resolvido: !!baixa?.processed_at,
+    pedidoId: baixa?.order_id ?? d.pedidoId ?? null,
+    erro: d.ok ? (d.pendurado || d.devolucaoAConfirmar ? d.aviso ?? null : null) : d.erro ?? null,
+  }]
+}
 
 const Entrada = z.object({
   /** uma entrega específica — o botão "tentar agora" da linha */
@@ -41,11 +54,11 @@ export default defineEventHandler(async (event) => {
   // ------------------------------------------------------- uma entrega só
   if (p.data.id) {
     const linha = await q1<any>(
-      `SELECT pe.id, pe.event_name, pe.attempts, pe.error, pe.processed_at,
+      `SELECT pe.id, pe.event_name, pe.attempts, pe.error, pe.processed_at, pe.provider,
               pe.order_id, o.org_id, o.code AS pedido
          FROM payment_events pe
          LEFT JOIN orders o ON o.id = pe.order_id
-        WHERE pe.id = $1 AND pe.provider = 'asaas'`, [p.data.id])
+        WHERE pe.id = $1 AND pe.provider IN ('asaas', 'mercadopago')`, [p.data.id])
 
     // "Não existe" e "não é sua" respondem igual: separar conta pro vizinho
     // que a linha existe.
@@ -58,8 +71,11 @@ export default defineEventHandler(async (event) => {
       }
     }
 
-    // `carenciaMin: 0` + `id` = sem espera e sem teto. É o ponto da rota.
-    const [r] = await reprocessarEntregasPendentes({ id: p.data.id, carenciaMin: 0, limite: 1 })
+    // `carenciaMin: 0` + `id` = sem espera e sem teto. É o ponto da rota. O fato do Mercado Pago
+    // não reaplica o payload guardado: pergunta de novo ao MP (`reprocessarFatosMp`).
+    const [r] = linha.provider === 'mercadopago'
+      ? await reprocessarUmFatoMp(p.data.id, linha)
+      : await reprocessarEntregasPendentes({ id: p.data.id, carenciaMin: 0, limite: 1 })
     if (!r) {
       throw createError({
         statusCode: 409,
@@ -93,9 +109,20 @@ export default defineEventHandler(async (event) => {
   // rota com corpo vazio devolveu a entrega pendurada da produtora VIZINHA —
   // id do pedido dela, erro dela — e teria aplicado o efeito no dinheiro
   // dela. Reprocessar EMITE ingresso e mexe em `refunded_cents`.
-  const feitos = await reprocessarEntregasPendentes({
+  const doAsaas = await reprocessarEntregasPendentes({
     limite: p.data.limite ?? 50, orgId, ehMaster,
   })
+  // O Pix do Mercado Pago pendura na mesma tela, e o "tentar todos" é um só: sem isto o botão
+  // respondia "nenhuma entrega esperando" com a linha do MP ali embaixo. Cada volta do MP é por
+  // PAGAMENTO (ele pergunta de novo e aplica o que faltar), não por linha.
+  const doMp = (await reprocessarFatosMp({ limite: p.data.limite ?? 50, orgId })).map((d) => {
+    const resolvido = d.ok && !d.pendurado && !d.devolucaoAConfirmar
+    return {
+      id: d.pedidoId ?? '', evento: 'Mercado Pago', ok: d.ok, resolvido, pedidoId: d.pedidoId ?? null,
+      erro: d.ok ? (resolvido ? null : d.aviso ?? null) : d.erro ?? null,
+    }
+  })
+  const feitos = [...doAsaas, ...doMp]
   const presas = feitos.filter((r) => !r.resolvido)
   return {
     ok: true,

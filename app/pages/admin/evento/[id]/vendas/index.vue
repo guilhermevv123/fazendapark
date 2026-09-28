@@ -477,6 +477,18 @@ useHead({ title: 'Vendas' })
                     {{ reais(ficha.pedido.totalCents) }}
                   </td>
                 </tr>
+                <!-- o que caiu na conta, na palavra do gateway (Pix do Mercado Pago informa a tarifa) -->
+                <tr v-if="ficha.pedido.liquidoGatewayCents != null" data-parte="liquido-gateway">
+                  <td colspan="2" class="py-1 text-right text-tinta-suave">
+                    Caiu na conta {{ ficha.pedido.gateway === 'mercadopago' ? 'do Mercado Pago' : 'do Asaas' }}
+                    <template v-if="ficha.pedido.taxaGatewayCents != null">
+                      (tarifa {{ reais(ficha.pedido.taxaGatewayCents) }})
+                    </template>
+                  </td>
+                  <td class="py-1 text-right tabular-nums text-tinta">
+                    {{ reais(ficha.pedido.liquidoGatewayCents) }}
+                  </td>
+                </tr>
               </tfoot>
             </table>
           </section>

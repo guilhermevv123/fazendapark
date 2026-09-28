@@ -24,6 +24,7 @@ import { baseDoSite } from './envio'
 import { estadoDasChavesDeIngresso } from './ingresso'
 import { estadoDoFreio } from './sessao'
 import { abrirSegredo, CofreFechado } from './cofre'
+import { pixPeloMercadoPago, type OrgMercadoPago } from './mercadopago-conta'
 
 const PROD_URL = 'https://api.asaas.com/v3'
 const SANDBOX_URL = 'https://api-sandbox.asaas.com/v3'
@@ -190,9 +191,33 @@ export type MotivoSemPagamento = 'sem_chave' | 'chave_de_teste' | 'sem_webhook' 
 export const RECADO_SEM_PAGAMENTO =
   'As vendas online estão indisponíveis no momento. Tente mais tarde ou compre na bilheteria.'
 
-export function pagamentoOnline(org: { asaas_api_key?: string | null; asaas_env?: string | null }):
-  { ok: true } | { ok: false; motivo: MotivoSemPagamento; recado: string } {
+export function pagamentoOnline(
+  org: { asaas_api_key?: string | null; asaas_env?: string | null } & OrgMercadoPago,
+  /**
+   * A forma que vai ser cobrada. Pix pode sair pelo Mercado Pago (28/09); cartão, só pelo Asaas.
+   * Sem forma a pergunta é "dá pra vender online por ALGUMA forma?" — a da vitrine e a da saúde.
+   */
+  forma?: 'pix' | 'credito',
+): { ok: true } | { ok: false; motivo: MotivoSemPagamento; recado: string } {
   if (simulado.ligado()) return { ok: true }
+  const asaas = pagamentoPeloAsaas(org)
+  if (asaas.ok) return asaas
+  // O Pix do MP não depende do ASAAS_WEBHOOK_TOKEN: a varredura de minuto em minuto pergunta ao MP
+  // por todo Pix esperando, com ou sem aviso chegando.
+  const mp = pixPeloMercadoPago(org).ok
+  if (forma !== 'credito') return mp ? { ok: true } : asaas
+  // Cartão sem Asaas, com o Pix de pé: "vendas indisponíveis" mandaria embora quem pode pagar agora.
+  return mp ? { ...asaas, recado: RECADO_CARTAO_FORA } : asaas
+}
+
+export const RECADO_CARTAO_FORA = 'O cartão está indisponível no momento. Pague com PIX — é na hora.'
+
+/**
+ * A régua do Asaas sozinha — o que era `pagamentoOnline` até o Pix do MP existir. É também a
+ * pergunta do checkout quando o MP falha ao gerar o Pix: com o Asaas de pé, o Pix sai por ele.
+ */
+export function pagamentoPeloAsaas(org: { asaas_api_key?: string | null; asaas_env?: string | null }):
+  { ok: true } | { ok: false; motivo: MotivoSemPagamento; recado: string } {
   const fechado = (motivo: MotivoSemPagamento) => ({ ok: false as const, motivo, recado: RECADO_SEM_PAGAMENTO })
   if (!org.asaas_api_key) return fechado('sem_chave')
   // chave no cofre sem a chave do cofre no servidor: não dá pra cobrar — diz isso (a saúde e o
@@ -2134,10 +2159,12 @@ export const SQL_ENTREGAS_PENDENTES_TODAS = `
          -- "100 penduradas" com 400 na fila é a mesma classe de número que
          -- mente dos outros painéis desta casa.
          count(*) OVER ()::int AS total_geral,
-         o.code AS pedido_code, o.status AS pedido_status, o.event_id
+         o.code AS pedido_code, o.status AS pedido_status, o.event_id, pe.provider
     FROM payment_events pe
     LEFT JOIN orders o ON o.id = pe.order_id
-   WHERE pe.provider = 'asaas'
+   -- o Pix do Mercado Pago (28/09) pendura no MESMO lugar: um pago sem lugar é dinheiro parado
+   -- venha de qual gateway vier, e a tela é uma só
+   WHERE pe.provider IN ('asaas', 'mercadopago')
      AND pe.processed_at IS NULL
      AND ( o.org_id = $1::uuid OR (pe.order_id IS NULL AND $2::boolean) )
    ORDER BY pe.created_at DESC
@@ -2478,7 +2505,7 @@ export function conferirConfiguracao(): EstadoDaConfiguracao {
  */
 export async function eventosSemPagamentoOnline(): Promise<Array<{ slug: string; motivo: MotivoSemPagamento }>> {
   const eventos = await q<any>(
-    `SELECT e.slug, o.asaas_api_key, o.asaas_env
+    `SELECT e.slug, o.asaas_api_key, o.asaas_env, o.mp_access_token, o.mp_test
        FROM events e JOIN organizations o ON o.id = e.org_id
       WHERE e.status = 'ativo'
         AND (e.ends_at IS NULL OR e.ends_at > now())

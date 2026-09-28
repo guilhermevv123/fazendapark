@@ -79,6 +79,7 @@ import {
   avaliarArrependimento, devolverEstoqueDoPedido, devolverPeloGateway, resumoDaFila,
 } from '../../../../utils/cancelamento'
 import { SQL_TRAVA_INGRESSOS_DA_VENDA } from '../../../../utils/caixa'
+import { idNoGateway } from '../../../../utils/mercadopago'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 
 const Entrada = z.discriminatedUnion('escopo', [
@@ -232,7 +233,7 @@ async function desistirDaCompra(
   // login qualquer cancelaria a compra de outra produtora sabendo o uuid dela.
   const pedido = await q1<any>(
     `SELECT o.id, o.code, o.org_id, o.channel, o.status, o.total_cents, o.refunded_cents,
-            o.paid_at, o.created_at, o.asaas_payment_id,
+            o.paid_at, o.created_at, o.asaas_payment_id, o.mp_payment_id,
             e.name AS evento, e.starts_at, e.status AS evento_status
        FROM orders o
        JOIN events e ON e.id = o.event_id
@@ -337,7 +338,7 @@ async function desistirDaCompra(
     valorCents: feito.valorCents,
     ingressosCancelados: feito.ingressos,
     prazoAte: veredicto.prazoAte,
-    aviso: pedido.asaas_payment_id
+    aviso: idNoGateway(pedido)
       ? `Devolução de ${brl(feito.valorCents)} pedida ao banco. O dinheiro volta para o comprador em alguns dias.`
       : `Esta compra não passou pela plataforma: devolva ${brl(feito.valorCents)} ao comprador. `
         + 'Os ingressos já foram invalidados.',
@@ -405,7 +406,7 @@ async function cancelarPedidoAdministrativo(
     try {
       await c.query('BEGIN')
       const { rows } = await c.query(
-        `SELECT status, total_cents, refunded_cents, asaas_payment_id, payment_method
+        `SELECT status, total_cents, refunded_cents, asaas_payment_id, mp_payment_id, payment_method
            FROM orders WHERE id = $1 FOR UPDATE`, [pedidoId])
       const o = rows[0]
       if (o.status !== 'pago' && o.status !== 'estornado_parcial') {
@@ -452,7 +453,7 @@ async function cancelarPedidoAdministrativo(
         await c.query(
           `UPDATE orders SET status = 'cancelado', canceled_at = now() WHERE id = $1`, [pedidoId])
         devolucao = 'nao_aplica'
-      } else if (!o.asaas_payment_id) {
+      } else if (!idNoGateway(o)) {
         // O dinheiro nunca passou pela plataforma: quem devolve é a produtora,
         // na mão. O pedido já nasce estornado aqui, com o valor — o que a
         // gente registra é que ele foi devolvido, e por quem.
@@ -479,7 +480,8 @@ async function cancelarPedidoAdministrativo(
       feito = {
         aDevolver: Math.max(aDevolver, 0), devolucao, retentativa,
         ingressos: mortos.rowCount ?? 0, forma: o.payment_method as string | null,
-        paymentId: o.asaas_payment_id as string | null, jaNoPedido: Number(o.refunded_cents),
+        // o Pix do Mercado Pago vai como `mp:<id>` e o estornador devolve por lá (utils/mercadopago.ts)
+        paymentId: idNoGateway(o), jaNoPedido: Number(o.refunded_cents),
       }
     } catch (e) {
       await c.query('ROLLBACK').catch(() => {})

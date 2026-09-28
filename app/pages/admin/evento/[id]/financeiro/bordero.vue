@@ -227,7 +227,7 @@ useHead({ title: 'Borderô' })
       <p v-if="data.totais.recebidoDiretoCents" class="mt-3 text-sm text-tinta-suave"
          data-parte="recebido-direto">
         <strong class="text-tinta">{{ reais(data.totais.recebidoDiretoCents) }}</strong>
-        recebidos direto (dinheiro no balcão ou pix na sua chave) já estão com você e não
+        recebidos direto (dinheiro no balcão, pix na sua chave ou Pix no Mercado Pago) já estão com você e não
         entram no saldo a receber da plataforma.
       </p>
     </section>

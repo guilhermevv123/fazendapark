@@ -573,8 +573,8 @@ export default defineEventHandler(async (event) => {
             e.max_per_order, e.max_per_customer,
             o.name AS organizacao,
             -- só pra decidir se há como cobrar online (PROD-06): a chave nunca
-            -- sai desta rota
-            o.asaas_api_key, o.asaas_env
+            -- sai desta rota. O Mercado Pago entra na conta do Pix (28/09).
+            o.asaas_api_key, o.asaas_env, o.mp_access_token, o.mp_test
        FROM events e JOIN organizations o ON o.id = e.org_id
       WHERE e.slug = $1`, [slug])
 

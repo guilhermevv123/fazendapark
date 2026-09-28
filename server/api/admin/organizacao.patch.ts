@@ -1,5 +1,5 @@
 /**
- * PATCH /api/admin/organizacao — cadastro e credenciais do Asaas.
+ * PATCH /api/admin/organizacao — cadastro e credenciais do Asaas e do Mercado Pago (Pix, 28/09).
  *
  * Duas regras que vieram de como o dinheiro entra:
  *
@@ -26,6 +26,8 @@ import { q1, tx } from '../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../utils/auditoria'
 import { recusaDeAmbiente, type AmbienteAsaas } from '../../utils/asaas-ambiente'
 import { guardarSegredo } from '../../utils/cofre'
+import { ErroMercadoPago, quemEhAConta } from '../../utils/mercadopago-conta'
+import { fecharPixAbertos } from '../../utils/mercadopago'
 import { documentoDaEmpresaValido, somenteDigitos } from '../../../app/composables/dadosDaEmpresa'
 import { explicarErro } from './evento/index.post'
 
@@ -41,6 +43,10 @@ const Entrada = z.object({
   // a chave colada com menos de 20 caracteres não é chave do Asaas (a tela avisa antes — CFG-01)
   chaveAsaas: z.string().trim().min(20).max(400).nullish(),
   carteiraAsaas: opcional(80),
+  // Pix pelo Mercado Pago (28/09): o Access Token de produção e, opcional, a assinatura secreta do
+  // webhook. Mesma regra da chave do Asaas: entram, não saem; `null` apaga.
+  tokenMercadoPago: z.string().trim().min(20).max(400).nullish(),
+  segredoMercadoPago: z.string().trim().min(16).max(200).nullish(),
 
   // Os dados que o site de vendas mostra (Decreto 7.962/2013 — auditoria PROD-08). Nada é
   // inventado: o que ficar vazio o site omite.
@@ -60,6 +66,7 @@ const Entrada = z.object({
 const ROTULOS: Record<string, string> = {
   nome: 'Nome', documento: 'CNPJ ou CPF', chaveAsaas: 'Chave de API do Asaas',
   carteiraAsaas: 'Carteira (walletId)', ambienteAsaas: 'Ambiente',
+  tokenMercadoPago: 'Access Token do Mercado Pago', segredoMercadoPago: 'Assinatura secreta do webhook do Mercado Pago',
   razaoSocial: 'Razão social', enderecoLinha: 'Endereço', enderecoBairro: 'Bairro',
   enderecoCidade: 'Cidade', enderecoUf: 'UF', enderecoCep: 'CEP',
   emailAtendimento: 'E-mail de atendimento', telefoneAtendimento: 'Telefone de atendimento',
@@ -111,6 +118,8 @@ export default defineEventHandler(async (event) => {
   const atual = await q1<any>(
     `SELECT name, document, asaas_env, asaas_wallet, asaas_api_key,
             asaas_api_key IS NOT NULL AS tem_chave,
+            mp_access_token IS NOT NULL AS tem_token_mp, mp_webhook_secret IS NOT NULL AS tem_segredo_mp,
+            mp_user_id,
             legal_name, address_line, address_district, address_city, address_state, address_zip,
             support_email, support_phone, privacy_contact
        FROM organizations WHERE id = $1`, [orgId])
@@ -126,6 +135,44 @@ export default defineEventHandler(async (event) => {
       chaveNova: typeof d.chaveAsaas === 'string',
     })
     if (recusa) throw createError({ statusCode: 422, statusMessage: recusa })
+  }
+
+  // O token do MP é conferido NA FONTE antes de gravar: `GET /users/me` com ele. Token torto
+  // gravado era Pix que não nasce no primeiro comprador — e de quebra a conta diz se é de TESTE
+  // (em produção, conta de teste não liga o Pix do MP: ver `pixPeloMercadoPago`).
+  let contaMp: { id: string; teste: boolean } | null = null
+  if (typeof d.tokenMercadoPago === 'string') {
+    try {
+      contaMp = await quemEhAConta(d.tokenMercadoPago)
+    } catch (e: any) {
+      if (e instanceof ErroMercadoPago && [400, 401, 403].includes(e.status)) {
+        recusar('Access Token do Mercado Pago: o Mercado Pago não aceitou este token. Copie o "Access Token" '
+          + 'em Suas integrações → sua aplicação → Credenciais de produção, do começo ao fim.')
+      }
+      recusar('Não consegui falar com o Mercado Pago para conferir o token. Nada foi salvo — tente de novo em instantes.')
+    }
+  }
+
+  // Token saindo, ou trocando de CONTA: o Pix que ainda pode receber ficaria órfão — o QR segue
+  // pagável na conta velha e ninguém mais pergunta por ele (o dinheiro entraria sem ingresso e sem
+  // linha em lugar nenhum). Fecha tudo com o token que AINDA está gravado; o que não fechar, ou
+  // devolução do MP ainda na fila (que só sai com o token daquela conta), segura a troca, nomeado.
+  // Token novo da MESMA conta não passa por aqui: ele enxerga os mesmos pagamentos.
+  const mesmaConta = !!contaMp?.id && !!atual.mp_user_id && String(contaMp.id) === String(atual.mp_user_id)
+  if (d.tokenMercadoPago !== undefined && atual.tem_token_mp && !mesmaConta) {
+    const f = await fecharPixAbertos(orgId)
+    if (f.abertos.length || f.devolucoesNaFila) {
+      const partes: string[] = []
+      if (f.abertos.length) {
+        partes.push(`${f.abertos.length} Pix que não consegui fechar no Mercado Pago `
+          + `(pedido ${f.abertos.slice(0, 3).map((a) => a.pedido).join(', ')}${f.abertos.length > 3 ? '…' : ''})`)
+      }
+      if (f.devolucoesNaFila) partes.push(`${f.devolucoesNaFila} devolução(ões) pelo Mercado Pago ainda na fila`)
+      throw createError({ statusCode: 409,
+        statusMessage: `O token do Mercado Pago não foi ${d.tokenMercadoPago === null ? 'removido' : 'trocado'}: `
+          + `ainda há ${partes.join(' e ')}. Sem o token desta conta eles ficariam sem dono. `
+          + 'Nada foi salvo — tente de novo em alguns minutos.' })
+    }
   }
 
   const set: string[] = []
@@ -163,6 +210,20 @@ export default defineEventHandler(async (event) => {
     por('asaas_api_key', guardarSegredo(d.chaveAsaas))
     antes.chaveAsaas = atual.tem_chave ? 'configurada' : 'ausente'
     log.chaveAsaas = d.chaveAsaas === null ? 'removida' : 'trocada'
+  }
+
+  if (d.tokenMercadoPago !== undefined) {
+    por('mp_access_token', guardarSegredo(d.tokenMercadoPago))
+    por('mp_user_id', contaMp?.id || null)
+    por('mp_test', contaMp?.teste ?? false)
+    antes.tokenMercadoPago = atual.tem_token_mp ? 'configurado' : 'ausente'
+    log.tokenMercadoPago = d.tokenMercadoPago === null ? 'removido'
+      : contaMp?.teste ? 'trocado (conta de TESTE)' : 'trocado'
+  }
+  if (d.segredoMercadoPago !== undefined) {
+    por('mp_webhook_secret', guardarSegredo(d.segredoMercadoPago))
+    antes.segredoMercadoPago = atual.tem_segredo_mp ? 'configurado' : 'ausente'
+    log.segredoMercadoPago = d.segredoMercadoPago === null ? 'removido' : 'trocado'
   }
 
   if (!set.length) return { ok: true, semMudanca: true }

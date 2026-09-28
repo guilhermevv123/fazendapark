@@ -34,8 +34,8 @@ import {
   aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
 import {
-  acharOuCriarCliente, centavosParaReais, criarCobranca, pagamentoOnline, qrCodePix,
-  recusaDeDadoDoComprador, telefoneParaAsaas, valorDaCobranca, vencimentoEmDias,
+  acharOuCriarCliente, centavosParaReais, criarCobranca, pagamentoOnline, pagamentoPeloAsaas,
+  qrCodePix, recusaDeDadoDoComprador, telefoneParaAsaas, valorDaCobranca, vencimentoEmDias,
   type ConfigAsaas,
 } from '../utils/asaas'
 import { conferirFreio, frearPortaPublica, marcarNoFreio } from '../utils/sessao'
@@ -51,6 +51,8 @@ import {
 import { gerarCodigo } from '../utils/ingresso'
 import { cpfValido } from '../utils/documento'
 import * as simulado from '../utils/gateway-simulado'
+import { pixPeloMercadoPago } from '../utils/mercadopago-conta'
+import { gerarPixDoPedido, type PixDoPedido } from '../utils/mercadopago'
 
 /**
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa.
@@ -194,7 +196,7 @@ export default defineEventHandler(async (event) => {
 
   // ------------------------------------------------------------- 1. evento
   const ev = await q1<any>(
-    `SELECT e.*, o.asaas_api_key, o.asaas_env, o.asaas_wallet
+    `SELECT e.*, o.asaas_api_key, o.asaas_env, o.asaas_wallet, o.mp_access_token, o.mp_test
        FROM events e JOIN organizations o ON o.id = e.org_id
       WHERE e.slug = $1`, [dados.eventSlug])
   // Rascunho e oculto: o MESMO 404 do slug que não existe, igual à vitrine.
@@ -289,7 +291,8 @@ export default defineEventHandler(async (event) => {
   // fechar em zero (cupom, lote gratuito) não precisa de gateway: só recusa
   // quando há face a cobrar e nenhum cupom que possa zerá-la — o cupom é
   // conferido lá dentro, e o que sobrar é recusado depois dele.
-  const online = pagamentoOnline(ev)
+  // Pela FORMA escolhida: o Pix pode sair pelo Mercado Pago (28/09); o cartão, só pelo Asaas.
+  const online = pagamentoOnline(ev, dados.forma)
   if (!online.ok) {
     const face = linhas.reduce((soma, l) => soma + l.faceUnitCents * l.quantidade, 0)
     if (face > 0 && !dados.cupom) {
@@ -495,6 +498,13 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 503, statusMessage: online.recado,
       data: { tipo: 'pagamento_indisponivel', motivo: online.motivo } })
   }
+  // Pix com o Mercado Pago ligado na organização: sai de lá (0,99%). Antes do simulado de
+  // propósito — o MP de mentira do teste (`MERCADOPAGO_API_URL`) roda sem chave do Asaas.
+  if (dados.forma === 'pix' && pixPeloMercadoPago(ev).ok) {
+    const peloMp = await cobrarPixNoMercadoPago(pedido, ev, total, dados, expiraEm, documento)
+    if (peloMp) return peloMp
+    // o MP falhou e o Asaas está de pé: o Pix deste pedido sai por ele (segue abaixo)
+  }
   if (!cfg.apiKey) return await cobrarSimulado(pedido, ev, total, dados, expiraEm)
 
   let cobranca: any
@@ -569,6 +579,71 @@ export default defineEventHandler(async (event) => {
     },
   }
 })
+
+/**
+ * O Pix pelo Mercado Pago — mesmo retorno do caminho do Asaas, pra tela não saber de onde veio.
+ *
+ * Nada do Asaas é tocado: nem cliente, nem cobrança. O id do MP vai pra `mp_payment_id` (e NUNCA
+ * pra `asaas_payment_id`, que é a régua de "o dinheiro está no Asaas" — ver db/033).
+ *
+ * MP caiu: com o Asaas de pé (ou o simulado, na máquina), devolve `null` e o Pix sai pelo caminho
+ * de sempre — o comprador não perde a compra porque um dos dois gateways piscou. Sem plano B,
+ * devolve o estoque na hora, como o caminho do Asaas. Nos dois casos a falha fica na trilha do
+ * pedido (`pix_mp_falhou`), que a saúde conta: MP falhando em silêncio seria tarifa de Asaas
+ * paga sem ninguém saber por quê.
+ */
+async function cobrarPixNoMercadoPago(
+  pedido: any, ev: any, total: any, dados: any, expiraEm: Date, documento: string,
+) {
+  let pix: PixDoPedido
+  try {
+    pix = await gerarPixDoPedido({
+      org: { id: ev.org_id, mp_access_token: ev.mp_access_token, mp_test: ev.mp_test },
+      pedido: { id: pedido.id, code: pedido.code },
+      valorCents: total.totalCents,
+      descricao: `${ev.name} — pedido ${pedido.code}`,
+      expiraEm,
+      comprador: { email: dados.comprador.email, nome: dados.comprador.nome, cpf: documento },
+    })
+  } catch (e: any) {
+    const motivo = e?.message ?? String(e)
+    const planoB = simulado.ligado() || pagamentoPeloAsaas(ev).ok
+    await q(
+      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+       VALUES ($1, 'order', $2, 'pix_mp_falhou', $3::jsonb)`,
+      [ev.org_id, pedido.id, JSON.stringify({ pedido: pedido.code, erro: motivo, saiuPor: planoB ? 'asaas' : null })],
+    ).catch(() => {})
+    console.warn(`[checkout] Pix do pedido ${pedido.code} no Mercado Pago falhou`
+      + `${planoB ? ' — saindo pelo Asaas' : ''}: ${motivo}`)
+    if (planoB) return null
+    await desfazer(pedido.id, `Mercado Pago: ${motivo}`)
+    throw createError({ statusCode: 502, statusMessage: 'Não foi possível gerar o PIX. Tente de novo.' })
+  }
+
+  await q(
+    `UPDATE orders SET mp_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4, invoice_url = NULL
+      WHERE id = $1`,
+    [pedido.id, pix.paymentId, pix.copiaECola, pix.qrBase64])
+
+  return {
+    ok: true,
+    pedido: pedido.code,
+    pedidoId: pedido.id,
+    status: 'aguardando_pagamento',
+    expiraEm: expiraEm.toISOString(),
+    totalCents: total.totalCents,
+    parcelas: pedido.parcelas,
+    faceCents: total.faceCents,
+    feeCents: total.feeCents,
+    descontoCents: total.discountCents,
+    pagamento: {
+      forma: 'pix',
+      pixPayload: pix.copiaECola,
+      pixQrBase64: pix.qrBase64,
+      linkFatura: null,
+    },
+  }
+}
 
 /**
  * Mesmo retorno do caminho real, com cobrança de mentira. Fica numa função

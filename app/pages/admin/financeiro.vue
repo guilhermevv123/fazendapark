@@ -141,7 +141,7 @@ const partes = computed(() => [
   { rotulo: 'Em curso', valor: Number(t.value.emCursoCents ?? 0), cor: '#f29b0c', texto: brl(t.value.emCursoCents ?? 0), dica: 'saque pedido, ainda não concluído' },
   { rotulo: 'Disponível', valor: Number(t.value.disponivelCents ?? 0), cor: '#1789a1', texto: brl(t.value.disponivelCents ?? 0), dica: 'pode ser transferido agora' },
   { rotulo: 'Retido', valor: Number(t.value.retidoCents ?? 0), cor: '#9877c5', texto: brl(t.value.retidoCents ?? 0), dica: `libera ${data.value?.diasDeRetencao ?? 2} dias depois do fim do evento` },
-  { rotulo: 'Recebido direto', valor: Number(t.value.recebidoDiretoCents ?? 0), cor: '#7b921b', texto: brl(t.value.recebidoDiretoCents ?? 0), dica: 'dinheiro no balcão ou pix na sua chave' },
+  { rotulo: 'Recebido direto', valor: Number(t.value.recebidoDiretoCents ?? 0), cor: '#7b921b', texto: brl(t.value.recebidoDiretoCents ?? 0), dica: 'dinheiro no balcão, pix na sua chave ou Pix no Mercado Pago' },
 ])
 const devedor = computed(() => Number(t.value.saldoDevedorCents ?? 0))
 
@@ -401,7 +401,7 @@ useHead({ title: 'Financeiro' })
              líquido e achar que a plataforma deve a diferença. -->
         <p v-if="t.recebidoDiretoCents" class="mt-4 text-sm text-ink-700" data-parte="recebido-direto">
           <strong class="text-ink-900">{{ brl(t.recebidoDiretoCents) }}</strong>
-          recebidos direto (dinheiro no balcão ou pix na sua chave) já estão com você e não
+          recebidos direto (dinheiro no balcão, pix na sua chave ou Pix no Mercado Pago) já estão com você e não
           entram no saldo a transferir.
         </p>
       </section>
@@ -510,7 +510,7 @@ useHead({ title: 'Financeiro' })
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 id="titulo-entregas" class="titulo text-lg font-semibold text-ink-900">
-              {{ n(entregas.total) }} {{ entregas.total === 1 ? 'aviso do Asaas chegou e não foi aplicado' : 'avisos do Asaas chegaram e não foram aplicados' }}
+              {{ n(entregas.total) }} {{ entregas.total === 1 ? 'aviso de pagamento chegou e não foi aplicado' : 'avisos de pagamento chegaram e não foram aplicados' }}
             </h2>
             <p class="text-sm text-ink-700">O gateway já mexeu nesse dinheiro e o sistema ainda não registrou. A varredura tenta de novo sozinha; aqui dá pra forçar.</p>
           </div>

@@ -90,6 +90,6 @@ export function recusaDeSaque(disponivelCents: number, diretoCents = 0): string 
     ? 'Não há saldo disponível para transferir neste evento.'
     : `Disponível para transferência: ${brl(disponivelCents)}.`
   return diretoCents > 0
-    ? `${base} Os ${brl(diretoCents)} recebidos direto (dinheiro no balcão ou pix na sua chave) já estão com você e não passam pela plataforma.`
+    ? `${base} Os ${brl(diretoCents)} recebidos direto (dinheiro no balcão, pix na sua chave ou Pix no Mercado Pago) já estão com você e não passam pela plataforma.`
     : base
 }

@@ -138,7 +138,8 @@ export default defineEventHandler(async (event) => {
       /** houve cancelamento cuja devolução pelo banco não saiu */
       devolucaoPendente: !!tentativa,
       aDevolverCents: Math.max(aDevolverCents, 0),
-      passouPelaPlataforma: !!pedido.asaas_payment_id,
+      // Asaas ou Pix do Mercado Pago (28/09): nos dois a devolução sai pelo gateway
+      passouPelaPlataforma: !!(pedido.asaas_payment_id || pedido.mp_payment_id),
       /** fichas do balcão e reenvio por e-mail só fazem sentido com ingresso valendo */
       reimprimir: vivo && validos > 0,
       reenviar: vivo && validos > 0,
@@ -152,7 +153,11 @@ export default defineEventHandler(async (event) => {
       criadoEm: pedido.created_at, pagoEm: pedido.paid_at,
       canceladoEm: pedido.canceled_at, estornadoEm: pedido.refunded_at,
       expiraEm: pedido.expires_at,
-      idNoGateway: pedido.asaas_payment_id,
+      idNoGateway: pedido.asaas_payment_id ?? pedido.mp_payment_id ?? null,
+      gateway: pedido.asaas_payment_id ? 'asaas' : pedido.mp_payment_id ? 'mercadopago' : null,
+      /** o que o gateway disse que cobrou e o que sobrou (hoje só o Pix do MP informa) */
+      taxaGatewayCents: pedido.gateway_fee_cents == null ? null : Number(pedido.gateway_fee_cents),
+      liquidoGatewayCents: pedido.gateway_net_cents == null ? null : Number(pedido.gateway_net_cents),
       eventoId: pedido.evento_id, eventoNome: pedido.evento_nome,
       ponto: pedido.ponto ?? null,
       caixaAberto,

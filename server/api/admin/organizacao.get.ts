@@ -18,6 +18,8 @@
 import { q1 } from '../../utils/db'
 import { ambienteDivergente, ambienteEfetivo } from '../../utils/asaas-ambiente'
 import { CofreFechado, finalDoSegredo } from '../../utils/cofre'
+import { pixPeloMercadoPago, urlDoAviso } from '../../utils/mercadopago-conta'
+import { baseDoSite } from '../../utils/envio'
 
 function finalSemCofreFechado(guardado: string | null) {
   try { return finalDoSegredo(guardado) } catch (e) { if (e instanceof CofreFechado) return null; throw e }
@@ -30,6 +32,8 @@ export default defineEventHandler(async (event) => {
   const o = await q1<any>(
     `SELECT o.id, o.name, o.slug, o.document, o.asaas_env, o.asaas_wallet, o.created_at,
             o.asaas_api_key, o.asaas_api_key IS NOT NULL AS tem_chave,
+            o.mp_access_token, o.mp_access_token IS NOT NULL AS tem_token_mp,
+            o.mp_webhook_secret IS NOT NULL AS tem_segredo_mp, o.mp_user_id, o.mp_test,
             o.legal_name, o.address_line, o.address_district, o.address_city, o.address_state,
             o.address_zip, o.support_email, o.support_phone, o.privacy_contact,
             (SELECT count(*)::int FROM events WHERE org_id = o.id) AS eventos,
@@ -47,6 +51,22 @@ export default defineEventHandler(async (event) => {
     // os 6 últimos da chave ABERTA (no banco ela pode estar no cofre, e o fim do cifrado não diz
     // qual chave é); cofre que não abre neste servidor: sem final, e a saúde acusa
     temChave: o.tem_chave, chaveFinal: o.tem_chave ? finalSemCofreFechado(o.asaas_api_key) : null,
+    // Pix pelo Mercado Pago (28/09). Do token, só o fim — a mesma regra da chave do Asaas.
+    mercadoPago: (() => {
+      const p = pixPeloMercadoPago(o)
+      return {
+        temToken: o.tem_token_mp,
+        tokenFinal: o.tem_token_mp ? finalSemCofreFechado(o.mp_access_token) : null,
+        contaDeTeste: !!o.mp_test,
+        contaId: o.mp_user_id ?? null,
+        temSegredo: o.tem_segredo_mp,
+        // é isto que decide: com o token certo, TODO Pix do site sai pelo MP
+        pixPeloMercadoPago: p.ok,
+        motivo: p.ok ? null : p.motivo,
+        // o endereço pra colar no painel do MP (opcional: é de lá que sai a assinatura secreta)
+        urlDoAviso: urlDoAviso(baseDoSite(), o.id),
+      }
+    })(),
     eventos: o.eventos, pessoas: o.pessoas, clientes: o.clientes,
     criadoEm: o.created_at,
     // o que o site público mostra (rodapé, termos, privacidade, cancelamento) — PROD-08.

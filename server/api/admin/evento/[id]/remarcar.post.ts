@@ -34,6 +34,7 @@
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
 import { PEDIDO_VIVO } from '../../../../utils/liquido'
+import { idNoGateway } from '../../../../utils/mercadopago'
 import {
   SQL_ADIA_EVENTO, SQL_DESLOCA_SESSOES, SQL_ENFILEIRA_ESTORNO_DE_UM_PEDIDO,
   SQL_MATA_INGRESSOS_DO_PEDIDO, SQL_TRAVA_EVENTO, devolverEstoqueDoPedido,
@@ -245,7 +246,7 @@ async function registrarEscolha(
   // Cerca própria: o id do pedido vem no corpo, e o middleware só cerca a URL.
   const pedido = await q1<any>(
     `SELECT o.id, o.code, o.org_id, o.status, o.total_cents, o.refunded_cents,
-            o.asaas_payment_id
+            o.asaas_payment_id, o.mp_payment_id
        FROM orders o WHERE o.id = $1 AND o.event_id = $2`, [pedidoId, eventId])
   if (!pedido) throw createError({ statusCode: 404, statusMessage: 'Compra não encontrada' })
 
@@ -352,7 +353,7 @@ async function registrarEscolha(
     ...feito,
     aviso: feito.escolha === 'remarcar'
       ? `Ingressos mantidos: valem em ${dataHora(ato.new_starts_at)}. Nada foi cobrado nem devolvido.`
-      : pedido.asaas_payment_id
+      : idNoGateway(pedido)
         ? `Devolução de ${brl(feito.valorCents)} pedida ao banco. Os ingressos foram invalidados.`
         : `Esta compra não passou pela plataforma: devolva ${brl(feito.valorCents)} ao comprador. `
           + 'Os ingressos já foram invalidados.',

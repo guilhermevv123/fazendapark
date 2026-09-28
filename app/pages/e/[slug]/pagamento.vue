@@ -901,7 +901,7 @@ useHead({ title: 'Pagamento' })
               <button type="button" :class="forma === 'pix' ? 'chip-ativo' : 'chip'"
                       :aria-pressed="forma === 'pix'" @click="forma = 'pix'">PIX — na hora</button>
               <button type="button" :class="forma === 'credito' ? 'chip-ativo' : 'chip'"
-                      :aria-pressed="forma === 'credito'" @click="forma = 'credito'">Cartão de crédito</button>
+                      :aria-pressed="forma === 'credito'" @click="forma = 'credito'">Cartão de crédito ou débito</button>
             </div>
             <div v-if="forma === 'credito'" class="mt-3">
               <label for="parcelas" class="rotulo">Parcelas</label>
@@ -910,6 +910,7 @@ useHead({ title: 'Pagamento' })
               </select>
               <p class="mt-1 text-xs text-tinta-fraca">
                 Parcelas sem juros, sobre o total{{ cupom.estado === 'vale' ? ' já com o cupom' : '' }}.
+                No débito é sempre à vista.
                 Os dados do cartão são digitados no ambiente do Asaas — eles não passam por aqui.
               </p>
             </div>

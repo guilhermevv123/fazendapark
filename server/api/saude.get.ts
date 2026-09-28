@@ -97,7 +97,10 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
   const wh = await q1<any>(
     `SELECT EXTRACT(epoch FROM now() - max(created_at))::int AS ultimo_ha,
             count(*) FILTER (WHERE processed_at IS NULL
-                               AND created_at < now() - interval '5 minutes')::int AS sem_baixa
+                               AND created_at < now() - interval '5 minutes'
+                               -- a devolução do MP em processamento não é aviso sem baixa: tem
+                               -- régua própria logo abaixo
+                               AND event_name <> 'MP_DEVOLUCAO_A_CONFIRMAR')::int AS sem_baixa
        FROM payment_events`)
   const webhook = {
     ultimoRecebidoHaSegundos: wh?.ultimo_ha ?? null,
@@ -106,8 +109,33 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
   }
   if (webhook.semBaixaHaMaisDe5min > 0) {
     problemas.push({ item: 'webhook', critico: false,
-      frase: `${webhook.semBaixaHaMaisDe5min} aviso(s) do Asaas sem baixa há mais de 5 min `
+      // conta os dois gateways: o Pix do Mercado Pago (28/09) pendura na mesma tabela
+      frase: `${webhook.semBaixaHaMaisDe5min} aviso(s) de pagamento (Asaas ou Mercado Pago) sem baixa há mais de 5 min `
         + '(o reprocessador tenta de novo; olhe a reconciliação se não baixar).' })
+  }
+
+  // ------------------------------------------------ o Pix do Mercado Pago
+  // O checkout cai pro Asaas quando o MP não gera o Pix: o comprador não sente, e é por isso que
+  // precisa aparecer aqui — sem esta linha, MP falhando é tarifa do Asaas paga em silêncio.
+  const mp = await q1<any>(
+    `SELECT (SELECT count(*) FROM audit_log
+              WHERE action = 'pix_mp_falhou' AND created_at > now() - interval '1 hour')::int AS falhou_1h,
+            (SELECT count(*) FROM payment_events
+              WHERE provider = 'mercadopago' AND event_name = 'MP_DEVOLUCAO_A_CONFIRMAR'
+                AND processed_at IS NULL AND created_at < now() - interval '1 hour')::int AS devolucao_presa`)
+  const mercadoPago = {
+    pixQueFalharamNaUltimaHora: Number(mp?.falhou_1h ?? 0),
+    devolucoesSemConfirmacaoHaMaisDe1h: Number(mp?.devolucao_presa ?? 0),
+  }
+  if (mercadoPago.pixQueFalharamNaUltimaHora > 0) {
+    problemas.push({ item: 'mercado_pago', critico: false,
+      frase: `${mercadoPago.pixQueFalharamNaUltimaHora} Pix não saíram pelo Mercado Pago na última hora — `
+        + 'o checkout usou o Asaas (ou recusou a venda, sem Asaas). Confira o token em Configurações → Dados e cobrança.' })
+  }
+  if (mercadoPago.devolucoesSemConfirmacaoHaMaisDe1h > 0) {
+    problemas.push({ item: 'mercado_pago', critico: false,
+      frase: `${mercadoPago.devolucoesSemConfirmacaoHaMaisDe1h} devolução(ões) pelo Mercado Pago sem confirmação há mais `
+        + 'de 1 h — o motivo está em Financeiro → entregas.' })
   }
 
   // ------------------------------------------------------- fila de e-mail
@@ -228,6 +256,7 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
       producao: config.producao,
       banco,
       webhook,
+      mercadoPago,
       filaDeEnvio,
       pedidos,
       cofre,

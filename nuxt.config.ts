@@ -96,6 +96,9 @@ export default defineNuxtConfig({
     // De minuto em minuto: é o intervalo que faz a prateleira voltar antes de
     // a próxima pessoa desistir. Mais espaçado que isso e o lugar fica preso
     // tempo suficiente pra virar venda perdida numa noite de pico.
-    scheduledTasks: { '* * * * *': ['liberar-expirados'] },
+    //
+    // O Pix do Mercado Pago é tarefa PRÓPRIA no mesmo minuto (server/tasks/mercadopago-pix.ts): o
+    // cron dispara as duas juntas, e MP lento não segura a devolução do estoque atrás dele.
+    scheduledTasks: { '* * * * *': ['liberar-expirados', 'mercadopago-pix'] },
   },
 })

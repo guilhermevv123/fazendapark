@@ -59,6 +59,41 @@ const chaveCurta = computed(() => {
   return t.length > 0 && t.length < 20
 })
 
+/**
+ * Pix pelo Mercado Pago (28/09). Token e assinatura seguem a regra da chave do Asaas: entram, não
+ * saem, e a tela mostra só o fim. Com o token salvo, todo Pix do site passa a sair pelo MP; o
+ * cartão continua no Asaas.
+ */
+const mp = computed(() => data.value?.mercadoPago ?? null)
+const tokenMpNovo = ref('')
+const trocandoTokenMp = ref(false)
+const segredoMpNovo = ref('')
+const trocandoSegredoMp = ref(false)
+const confirmandoRemocaoMp = ref(false)
+const urlCopiada = ref(false)
+const tokenMpParaEnviar = computed(() =>
+  (trocandoTokenMp.value || !mp.value?.temToken) && tokenMpNovo.value.trim().length >= 20
+    ? tokenMpNovo.value.trim()
+    : null)
+const tokenMpCurto = computed(() => {
+  const t = tokenMpNovo.value.trim()
+  return t.length > 0 && t.length < 20
+})
+const segredoMpParaEnviar = computed(() =>
+  (trocandoSegredoMp.value || !mp.value?.temSegredo) && segredoMpNovo.value.trim().length >= 16
+    ? segredoMpNovo.value.trim()
+    : null)
+const segredoMpCurto = computed(() => {
+  const t = segredoMpNovo.value.trim()
+  return t.length > 0 && t.length < 16
+})
+/** o que o selo diz: ligado, token de teste (não liga), ou desligado */
+const seloMp = computed(() => {
+  if (mp.value?.pixPeloMercadoPago) return { texto: 'PIX PELO MERCADO PAGO', classe: 'selo-ok' }
+  if (mp.value?.temToken) return { texto: mp.value?.motivo === 'token_de_teste' ? 'CONTA DE TESTE' : 'NÃO LIGOU', classe: 'selo-alerta' }
+  return { texto: 'DESLIGADO', classe: 'selo-neutro' }
+})
+
 /** o que veio do servidor, na forma do formulário (a comparação de "mudou" é com isto) */
 function doServidor(d: any) {
   return {
@@ -95,6 +130,8 @@ const mudancas = computed(() => {
   }
   if (f.ambienteAsaas !== o.ambienteAsaas) corpo.ambienteAsaas = f.ambienteAsaas
   if (chaveParaEnviar.value) corpo.chaveAsaas = chaveParaEnviar.value
+  if (tokenMpParaEnviar.value) corpo.tokenMercadoPago = tokenMpParaEnviar.value
+  if (segredoMpParaEnviar.value) corpo.segredoMercadoPago = segredoMpParaEnviar.value
   return corpo
 })
 const mudou = computed(() => Object.keys(mudancas.value).length > 0)
@@ -104,7 +141,8 @@ const mudou = computed(() => Object.keys(mudancas.value).length > 0)
  * Conta também a chave colada pela metade — ela não vira mudança (`chaveParaEnviar` é nula), mas
  * sumir com o F5 é perder o que a pessoa colou.
  */
-const naoSalvo = computed(() => !salvando.value && (mudou.value || chaveNova.value.trim().length > 0))
+const naoSalvo = computed(() => !salvando.value && (mudou.value || chaveNova.value.trim().length > 0
+  || tokenMpNovo.value.trim().length > 0 || segredoMpNovo.value.trim().length > 0))
 const PERGUNTA_AO_SAIR = 'Tem alteração não salva em Dados e cobrança. Sair mesmo assim?'
 /** F5, fechar a aba, digitar outro endereço: o navegador pergunta (a frase é a dele) */
 function avisarAntesDeDescarregar(e: BeforeUnloadEvent) {
@@ -168,6 +206,10 @@ async function salvar() {
     await $fetch('/api/admin/organizacao', { method: 'PATCH', body: mudancas.value })
     chaveNova.value = ''
     trocandoChave.value = false
+    tokenMpNovo.value = ''
+    trocandoTokenMp.value = false
+    segredoMpNovo.value = ''
+    trocandoSegredoMp.value = false
     await refresh()
     aviso.value = 'Salvo.'
     setTimeout(() => { aviso.value = '' }, 2500)
@@ -194,6 +236,37 @@ async function removerChave() {
     erro.value = e?.data?.statusMessage || 'Não foi possível remover.'
   } finally {
     salvando.value = false
+  }
+}
+
+/** Desligar o MP em dois passos, como a chave do Asaas: o Pix volta pro Asaas no mesmo segundo. */
+async function removerMercadoPago() {
+  if (!confirmandoRemocaoMp.value) { confirmandoRemocaoMp.value = true; return }
+  confirmandoRemocaoMp.value = false
+  erro.value = ''
+  salvando.value = true
+  try {
+    await $fetch('/api/admin/organizacao', {
+      method: 'PATCH', body: { tokenMercadoPago: null, segredoMercadoPago: null },
+    })
+    await refresh()
+    aviso.value = 'Mercado Pago desligado. O Pix do site voltou a sair pelo Asaas.'
+  } catch (e: any) {
+    erro.value = e?.data?.statusMessage || 'Não foi possível desligar.'
+  } finally {
+    salvando.value = false
+  }
+}
+
+async function copiarUrlDoAviso() {
+  const url = mp.value?.urlDoAviso
+  if (!url) return
+  try {
+    await navigator.clipboard.writeText(url)
+    urlCopiada.value = true
+    setTimeout(() => { urlCopiada.value = false }, 2500)
+  } catch {
+    erro.value = `O navegador bloqueou a cópia. Selecione o endereço à mão: ${url}`
   }
 }
 
@@ -334,8 +407,14 @@ useHead({ title: 'Dados e cobrança' })
             </span>
           </div>
           <p class="mt-1 text-sm text-ink-700">
-            É por aqui que o PIX e o cartão do comprador entram. Em testes, nada é cobrado
-            de verdade.
+            <template v-if="mp?.pixPeloMercadoPago">
+              É por aqui que o cartão do comprador (crédito e débito) entra — o Pix sai pelo Mercado Pago,
+              logo abaixo. Em testes, nada é cobrado de verdade.
+            </template>
+            <template v-else>
+              É por aqui que o PIX e o cartão do comprador entram. Em testes, nada é cobrado
+              de verdade.
+            </template>
           </p>
           <p v-if="data.ambienteDivergente" class="faixa-erro mt-3" role="alert" data-parte="ambiente-divergente">
             A chave gravada é de <strong>{{ ambienteMostrado === 'production' ? 'PRODUÇÃO' : 'TESTES' }}</strong>,
@@ -400,6 +479,96 @@ useHead({ title: 'Dados e cobrança' })
             Produção sem chave gera cobrança de verdade que nunca confirma —
             o comprador paga e não recebe o ingresso. Informe a chave junto com a troca.
           </p>
+        </section>
+
+        <!-- ============================================ Pix pelo Mercado Pago (28/09) -->
+        <section v-if="mp" class="card" data-parte="mercado-pago">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <h2 class="titulo text-lg font-semibold text-ink-900">Pix pelo Mercado Pago</h2>
+            <span data-parte="selo-mp" :class="seloMp.classe">{{ seloMp.texto }}</span>
+          </div>
+          <p class="mt-1 text-sm text-ink-700">
+            Com o token salvo, todo Pix do site passa a ser gerado no Mercado Pago e o dinheiro cai na
+            conta de vocês lá. O cartão continua no Asaas. Sem token, o Pix segue pelo Asaas, como hoje.
+          </p>
+          <p v-if="mp.temToken && mp.motivo === 'token_de_teste'" class="faixa-aviso mt-3" data-parte="mp-teste">
+            O token salvo é de uma conta de <strong>teste</strong> do Mercado Pago: ninguém consegue pagar esse Pix.
+            O Pix do site continua pelo Asaas até você salvar o Access Token de <strong>produção</strong>.
+          </p>
+          <p v-else-if="mp.temToken && mp.motivo === 'cofre_fechado'" class="faixa-erro mt-3" role="alert" data-parte="mp-cofre">
+            O token está guardado com uma chave de cofre que este servidor não tem (COFRE_CHAVE).
+            O Pix continua pelo Asaas. Cole o token de novo e salve.
+          </p>
+
+          <div class="mt-3 grid gap-3">
+            <div>
+              <label class="rotulo" for="cfg-token-mp">Access Token (credencial de produção)</label>
+              <div v-if="mp.temToken && !trocandoTokenMp"
+                   class="flex flex-wrap items-center gap-3 rounded-xl border border-ink-200 bg-ink-50 px-3 py-2">
+                <span class="font-mono text-sm text-ink-900">
+                  configurado · termina em <strong>{{ mp.tokenFinal }}</strong>
+                </span>
+                <button type="button" class="btn-secundario min-h-[40px] py-1 text-sm"
+                        @click="trocandoTokenMp = true; confirmandoRemocaoMp = false">Trocar</button>
+                <button type="button" class="min-h-[40px] px-2 text-sm text-danger-700 hover:underline"
+                        :class="confirmandoRemocaoMp && 'font-semibold'" data-acao="desligar-mp"
+                        :disabled="salvando" @click="removerMercadoPago">
+                  {{ confirmandoRemocaoMp ? 'Confirmar: desligar o Mercado Pago' : 'Desligar' }}
+                </button>
+                <button v-if="confirmandoRemocaoMp" type="button" class="min-h-[40px] px-2 text-sm text-ink-600 hover:underline"
+                        @click="confirmandoRemocaoMp = false">Cancelar</button>
+              </div>
+              <div v-else>
+                <input id="cfg-token-mp" v-model="tokenMpNovo" type="password" autocomplete="off" class="campo font-mono"
+                       placeholder="APP_USR-…" :aria-invalid="tokenMpCurto" data-parte="campo-token-mp">
+                <p v-if="tokenMpCurto" class="mt-1 text-xs font-medium text-danger-700" data-parte="token-mp-curto">
+                  Isso não parece o token inteiro: o Access Token do Mercado Pago é bem mais longo. Copie de novo, do começo ao fim.
+                </p>
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                  <button v-if="mp.temToken" type="button" class="btn-secundario min-h-[40px] py-1 text-sm"
+                          @click="trocandoTokenMp = false; tokenMpNovo = ''">Cancelar troca</button>
+                  <p class="text-xs text-ink-600">
+                    Em Suas integrações → sua aplicação → Credenciais de produção. Ao salvar, o sistema confere o
+                    token no Mercado Pago antes de gravar.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label class="rotulo" for="cfg-segredo-mp">Assinatura secreta do webhook — opcional</label>
+              <div v-if="mp.temSegredo && !trocandoSegredoMp"
+                   class="flex flex-wrap items-center gap-3 rounded-xl border border-ink-200 bg-ink-50 px-3 py-2">
+                <span class="text-sm text-ink-900">configurada</span>
+                <button type="button" class="btn-secundario min-h-[40px] py-1 text-sm"
+                        @click="trocandoSegredoMp = true">Trocar</button>
+              </div>
+              <div v-else>
+                <input id="cfg-segredo-mp" v-model="segredoMpNovo" type="password" autocomplete="off" class="campo font-mono"
+                       :aria-invalid="segredoMpCurto" data-parte="campo-segredo-mp">
+                <p v-if="segredoMpCurto" class="mt-1 text-xs font-medium text-danger-700">
+                  A assinatura secreta do Mercado Pago é mais longa. Copie de novo.
+                </p>
+                <button v-if="mp.temSegredo" type="button" class="btn-secundario mt-2 min-h-[40px] py-1 text-sm"
+                        @click="trocandoSegredoMp = false; segredoMpNovo = ''">Cancelar troca</button>
+              </div>
+              <p class="mt-1 text-xs text-ink-600">
+                O aviso de pagamento já funciona sem nada no painel do Mercado Pago: cada Pix leva o endereço dele.
+                Para o aviso chegar também assinado, cole este endereço em Suas integrações → Webhooks, marque
+                "Pagamentos", salve e traga a assinatura secreta para cá.
+              </p>
+              <div v-if="mp.urlDoAviso" class="mt-2 flex flex-wrap items-center gap-2">
+                <code class="min-w-0 rounded-lg bg-ink-50 px-2 py-1 text-xs text-ink-900 [overflow-wrap:anywhere]" data-parte="url-aviso-mp">{{ mp.urlDoAviso }}</code>
+                <button type="button" class="btn-secundario min-h-[40px] py-1 text-sm" @click="copiarUrlDoAviso">
+                  {{ urlCopiada ? 'Copiado' : 'Copiar endereço' }}
+                </button>
+              </div>
+              <p v-else class="mt-2 text-xs font-medium text-sun-800">
+                O endereço público do site (PUBLIC_BASE_URL) não é https: o Mercado Pago não manda aviso pra ele.
+                O Pix funciona do mesmo jeito — o sistema pergunta ao Mercado Pago a cada minuto.
+              </p>
+            </div>
+          </div>
         </section>
       </div>
 
