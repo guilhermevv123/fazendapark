@@ -20,6 +20,7 @@ import {
   linhasDoEndereco, mascaraDocumento, somenteDigitos,
 } from '~/composables/dadosDaEmpresa'
 import PainelFalha from '~/components/painel/Falha.vue'
+import { onBeforeRouteLeave } from 'vue-router'
 
 definePageMeta({ layout: 'admin' })
 
@@ -97,6 +98,24 @@ const mudancas = computed(() => {
   return corpo
 })
 const mudou = computed(() => Object.keys(mudancas.value).length > 0)
+
+/**
+ * Edição que ainda não foi salva (matriz da auditoria, "F5 — edição não salva": perdia calada).
+ * Conta também a chave colada pela metade — ela não vira mudança (`chaveParaEnviar` é nula), mas
+ * sumir com o F5 é perder o que a pessoa colou.
+ */
+const naoSalvo = computed(() => !salvando.value && (mudou.value || chaveNova.value.trim().length > 0))
+const PERGUNTA_AO_SAIR = 'Tem alteração não salva em Dados e cobrança. Sair mesmo assim?'
+/** F5, fechar a aba, digitar outro endereço: o navegador pergunta (a frase é a dele) */
+function avisarAntesDeDescarregar(e: BeforeUnloadEvent) {
+  if (!naoSalvo.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+onMounted(() => window.addEventListener('beforeunload', avisarAntesDeDescarregar))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', avisarAntesDeDescarregar))
+/** clique no menu do painel com edição pendente: a mesma pergunta, dentro do painel */
+onBeforeRouteLeave(() => (naoSalvo.value && !window.confirm(PERGUNTA_AO_SAIR) ? false : undefined))
 
 /**
  * CFG-02 e o resto do formato, conferidos ANTES de mandar (a rota confere de novo e é quem decide —
@@ -418,6 +437,23 @@ useHead({ title: 'Dados e cobrança' })
           </ul>
         </section>
       </div>
+    </div>
+
+    <!-- Com alteração pendente, o Salvar desce junto: no celular o formulário é uma coluna só, bem
+         comprida, e o botão do topo ficava fora da tela — era preciso rolar tudo de volta pra salvar
+         (matriz da auditoria, "Celular 375px — Salvar alcançável"). Grudado no pé da tela enquanto
+         houver o que salvar. -->
+    <div v-if="naoSalvo || salvando" data-parte="barra-salvar"
+         class="sticky bottom-0 z-10 mt-6 flex items-center justify-between gap-3 rounded-t-xl border border-b-0 border-linha bg-white/95 px-4 py-3 shadow-[0_-8px_24px_-12px_rgb(18_15_29/0.25)] backdrop-blur">
+      <p class="min-w-0 text-sm text-ink-700">
+        <template v-if="temProblema">Corrija o que está marcado para salvar.</template>
+        <template v-else-if="mudou">Alteração não salva.</template>
+        <template v-else>A chave colada ainda não está inteira.</template>
+      </p>
+      <button type="button" class="btn-primario min-h-[40px] shrink-0" :disabled="salvando || !mudou || temProblema"
+              data-acao="salvar-rodape" @click="salvar">
+        {{ salvando ? 'Salvando…' : 'Salvar' }}
+      </button>
     </div>
   </div>
 

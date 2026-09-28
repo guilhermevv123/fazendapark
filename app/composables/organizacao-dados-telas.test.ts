@@ -74,6 +74,65 @@ describe('Dados e cobrança — os dados da empresa (PROD-08)', () => {
   })
 })
 
+describe('Dados e cobrança — edição pendente (matriz: "F5 perde calado" e "Salvar só no topo")', () => {
+  /**
+   * O harness não desmonta a tela entre um caso e outro, então o `beforeunload` do window acumula
+   * a escuta de cada tela montada no arquivo. O caso pega a escuta QUE ESTA TELA registrou e
+   * pergunta só a ela.
+   */
+  async function montarComEscuta(org: any = ORG_VAZIA) {
+    const pos = vi.spyOn(window, 'addEventListener')
+    const tira = vi.spyOn(window, 'removeEventListener')
+    const tela = await configuracoes(org)
+    const escuta = pos.mock.calls.filter((c) => c[0] === 'beforeunload').at(-1)?.[1] as ((e: Event) => void) | undefined
+    pos.mockRestore()
+    const descarregar = () => {
+      const ev = new Event('beforeunload', { cancelable: true })
+      escuta?.(ev)
+      return ev.defaultPrevented
+    }
+    return { tela, escuta, descarregar, tira }
+  }
+
+  it('sem mexer: o F5 não pergunta nada e não há barra de salvar no pé', async () => {
+    const { tela, escuta, descarregar, tira } = await montarComEscuta()
+    tira.mockRestore()
+    expect(escuta, 'a tela não escuta o F5').toBeTypeOf('function')
+    expect(descarregar()).toBe(false)
+    expect(tela.find('[data-parte="barra-salvar"]').exists()).toBe(false)
+  })
+
+  it('com edição pendente: o F5 pergunta, e o Salvar do pé grava o mesmo que o do topo', async () => {
+    const { tela, descarregar, tira } = await montarComEscuta()
+    tira.mockRestore()
+    await tela.find('#cfg-razao').setValue('ZZ Parque Aquático LTDA')
+    expect(descarregar(), 'o F5 jogou fora a edição sem perguntar').toBe(true)
+    const barra = tela.find('[data-parte="barra-salvar"]')
+    expect(barra.exists(), 'no celular o único Salvar ficava lá no topo').toBe(true)
+    expect(barra.text()).toContain('Alteração não salva')
+    await barra.find('[data-acao="salvar-rodape"]').trigger('click')
+    const patch = chamadas.find((c) => c.url === '/api/admin/organizacao' && c.opcoes?.method === 'PATCH')
+    expect(patch?.opcoes.body).toEqual({ razaoSocial: 'ZZ Parque Aquático LTDA' })
+  })
+
+  it('a chave colada pela metade também conta como o que se perde no F5', async () => {
+    const { tela, descarregar, tira } = await montarComEscuta()
+    tira.mockRestore()
+    await tela.find('[data-parte="campo-chave"]').setValue('$aact_hmlg_123')
+    expect(descarregar()).toBe(true)
+    expect(tela.find('[data-parte="barra-salvar"]').text()).toContain('A chave colada ainda não está inteira')
+    expect((tela.find('[data-acao="salvar-rodape"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('fechar a tela solta a escuta (o F5 de outra tela não pergunta desta)', async () => {
+    const { tela, escuta, tira } = await montarComEscuta()
+    await tela.find('#cfg-razao').setValue('ZZ Parque Aquático LTDA')
+    tela.unmount()
+    expect(tira.mock.calls.some((c) => c[0] === 'beforeunload' && c[1] === escuta)).toBe(true)
+    tira.mockRestore()
+  })
+})
+
 const EMPRESA_COMPLETA = {
   nome: 'ZZ Parque', razaoSocial: 'ZZ Parque Aquático LTDA', documento: '12ABC34501DE35',
   endereco: { linha: 'Rodovia BA-120, km 5', bairro: 'Zona Rural', cidade: 'Ubatã', uf: 'BA', cep: '45550000' },
