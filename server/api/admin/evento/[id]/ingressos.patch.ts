@@ -35,18 +35,34 @@ const Entrada = z.object({
     canais: z.array(z.enum(['online', 'bilheteria', 'cortesia'])).min(1).optional(),
     abreEm: z.string().datetime({ offset: true }).nullish(),
     expiraEm: z.string().datetime({ offset: true }).nullish(),
-    descontoBps: z.number().int().min(0).max(10_000).optional(),
+    descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').optional(),
     exigeDocumento: z.boolean().optional(),
     maxPorCliente: z.number().int().min(1).max(200).nullish(),
     capacidade: z.number().int().min(1).max(1_000_000).nullish(),
     admite: z.number().int().min(1).max(100).optional(),
     sessoesCobertas: z.number().int().min(1).max(365).nullish(),
     giroAutomatico: z.boolean().optional(),
-    taxaBps: z.number().int().min(0).max(5000).optional(),
+    taxaBps: z.number().int().min(0).max(5000, 'não pode passar de 50%').optional(),
     modoTaxaOnline: z.enum(['repassar', 'absorver']).optional(),
     modoTaxaPdv: z.enum(['repassar', 'absorver']).optional(),
   }),
 })
+
+/**
+ * Os campos com o nome da tela (#97, 28/09): a recusa do 0 em "Pessoas por unidade" saía
+ * "campos › admite: o mínimo é 1" — o nome interno da API. `campos` é o envelope do PATCH: some.
+ */
+export const ROTULOS_INGRESSOS: Record<string, string> = {
+  o: 'Item', id: 'Item', campos: '', setorId: 'Setor', loteId: 'Lote', sessaoId: 'Sessão',
+  tipo: 'Tipo do setor',
+  nome: 'Nome', descricao: 'Descrição', faceCents: 'Valor de face', gratuito: 'Ingresso gratuito',
+  quantidade: 'Quantidade', minPorCompra: 'Mínimo por compra', maxPorCompra: 'Máximo por compra',
+  visivel: 'Visível no site', canais: 'Onde vende', abreEm: 'Abre em', expiraEm: 'Expira em',
+  descontoBps: 'Desconto', exigeDocumento: 'Exige documento', maxPorCliente: 'Máximo por cliente',
+  capacidade: 'Capacidade', admite: 'Pessoas por unidade', sessoesCobertas: 'Sessões cobertas',
+  giroAutomatico: 'Giro automático de lote', taxaBps: 'Taxa de serviço',
+  modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão',
+}
 
 /** campo da API → coluna do banco, por entidade */
 const COLUNAS: Record<string, Record<string, string>> = {
@@ -79,7 +95,7 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error), data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS_INGRESSOS), data: p.error.flatten() })
   }
   const { o, id, campos } = p.data
 

@@ -30,9 +30,14 @@ export default defineEventHandler(async (event) => {
   const sessao = (event.context as any).sessao
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
+    // a frase é do campo que falhou (#8, 28/09): a observação de 600 letras voltava "Digite quanto
+    // contou na gaveta" com o contado preenchido — o operador procurava o erro no campo errado
+    const campo = p.error.issues[0]?.path?.[0]
     throw createError({
       statusCode: 400,
-      statusMessage: 'Digite quanto contou na gaveta antes de fechar o caixa.',
+      statusMessage: campo === 'observacao'
+        ? 'A observação aceita no máximo 400 caracteres — encurte e feche o caixa de novo.'
+        : 'Digite quanto contou na gaveta antes de fechar o caixa.',
       data: p.error.flatten(),
     })
   }

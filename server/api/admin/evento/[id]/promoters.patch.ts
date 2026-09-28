@@ -19,7 +19,7 @@ const Entrada = z.object({
     nome: z.string().min(2).max(120).optional(),
     email: z.string().email().max(160).nullish(),
     telefone: z.string().max(30).nullish(),
-    comissaoBps: z.number().int().min(0).max(10_000).optional(),
+    comissaoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').optional(),
     ativo: z.boolean().optional(),
   }),
 })

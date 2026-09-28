@@ -84,7 +84,7 @@ const Entrada = z.object({
 
   // sem taxa de serviço por padrão (dono, 23/09); o banco ainda tem DEFAULT 1000,
   // mas todo evento novo passa por aqui
-  taxaBps: z.number().int().min(0).max(5000).default(0),
+  taxaBps: z.number().int().min(0).max(5000, 'não pode passar de 50%').default(0),
   modoTaxaOnline: z.enum(['repassar', 'absorver']).default('repassar'),
   modoTaxaPdv: z.enum(['repassar', 'absorver']).default('absorver'),
   maxPorCliente: z.number().int().min(1).max(200).nullish(),
@@ -139,7 +139,7 @@ const Entrada = z.object({
       tipos: z.array(z.object({
         nome: z.string().min(1).max(80),
         quantidade: z.number().int().min(1).max(1_000_000),
-        descontoBps: z.number().int().min(0).max(10_000).default(0),
+        descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').default(0),
         exigeDocumento: z.boolean().default(false),
       })).max(20).default([]),
     })).max(40).default([]),
@@ -165,22 +165,62 @@ const ROTULOS: Record<string, string> = {
   faceCents: 'Valor de face', quantidade: 'Quantidade', minPorCompra: 'Mínimo por compra',
   maxPorCompra: 'Máximo por compra', canais: 'Onde vende', capacidade: 'Capacidade',
   estado: 'Estado (UF)', chaveDeCriacao: 'Chave de criação', fuso: 'Fuso horário',
+  // os que faltavam (#63, 28/09): a descrição de 20.001 letras voltava "descricao: …", com o
+  // nome do código, e o mesmo com categoria, subcategorias, lotes e tipos
+  descricao: 'Descrição do evento', faixaEtaria: 'Faixa etária', categoria: 'Categoria',
+  subcategorias: 'Subcategorias', tags: 'Tags', substantivo: 'Nomenclatura do bilhete',
+  encerraVendasEm: 'Data de encerramento das vendas', encerraVendasMinutosApos: 'Minutos após o início',
+  modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão', orgId: 'Organização',
+  lotes: 'Lotes', tipos: 'Tipos de ingresso', descontoBps: 'Desconto', expiraEm: 'Fim das vendas do lote',
+  exigeDocumento: 'Exige documento', indiceSessao: 'Sessão', gratuito: 'Ingresso gratuito',
+  cep: 'CEP', endereco: 'Rua / avenida / logradouro', numero: 'Número', bairro: 'Bairro',
+  cidade: 'Cidade', complemento: 'Complemento',
+  // o mesmo nome de campo muda de sentido conforme o pai: "nome" de um lote não é o do evento
+  'setores.nome': 'Nome do setor', 'setores.tipo': 'Tipo do setor', 'setores.descricao': 'Descrição do setor',
+  'lotes.nome': 'Nome do lote', 'tipos.nome': 'Nome do tipo', 'tipos.quantidade': 'Quantidade do tipo',
+  'sessoes.titulo': 'Título da sessão', 'sessoes.inicio': 'Início da sessão', 'sessoes.fim': 'Fim da sessão',
+  'local.nome': 'Nome Fantasia', 'suporte.tipo': 'Tipo de contato', 'suporte.valor': 'Contato',
 }
 
 /** "Setores › 1 › Lotes › 2 › Quantidade: …" em vez de "Dados inválidos". */
 export function explicarErro(erro: z.ZodError, rotulos: Record<string, string> = ROTULOS): string {
   const i = erro.issues[0]
   if (!i) return 'Confira os campos do formulário.'
-  const caminho = i.path.map((p) => typeof p === 'number' ? `nº ${p + 1}` : (rotulos[p] ?? p))
+  // `pai.campo` antes de `campo` ("Setores › nº 1 › Nome do setor", não "… › Nome do evento");
+  // rótulo vazio some do caminho — o envelope `campos` do PATCH não é nada que a pessoa veja
+  const caminho: string[] = []
+  let pai = ''
+  for (const p of i.path) {
+    if (typeof p === 'number') { caminho.push(`nº ${p + 1}`); continue }
+    const rotulo = rotulos[`${pai}.${p}`] ?? rotulos[p] ?? p
+    pai = String(p)
+    if (rotulo) caminho.push(rotulo)
+  }
   return `${caminho.join(' › ') || 'Formulário'}: ${traduzir(i)}`
 }
 
+/** 20000 → "20.000": o limite na frase é pra quem lê, não pro programador */
+const numero = (n: number | bigint) => Number(n).toLocaleString('pt-BR')
+
+/**
+ * Frase escrita no próprio schema (`.max(10_000, 'não pode passar de 100%')`) vale mais que a
+ * genérica: é como um limite em pontos-base fala em % ("Comissão: o máximo é 10000" era a
+ * comissão de 100% escrita em bps). A do zod é em inglês e começa sempre por estas palavras.
+ */
+const fraseDoSchema = (i: z.ZodIssue) =>
+  !/^(Number|String|Array|Set|Date|BigInt|Value|Too|Expected|Invalid|Required)\b/.test(i.message)
+
 function traduzir(i: z.ZodIssue): string {
   if (i.code === 'too_small') {
-    return i.type === 'string' ? `precisa de pelo menos ${i.minimum} caractere(s)` : `o mínimo é ${i.minimum}`
+    if (fraseDoSchema(i)) return i.message
+    if (i.type === 'string') return `precisa de pelo menos ${numero(i.minimum)} caractere(s)`
+    // `positive()`: o 0 não passa, e "o mínimo é 0" dizia o contrário
+    return i.inclusive === false ? `precisa ser maior que ${numero(i.minimum)}` : `o mínimo é ${numero(i.minimum)}`
   }
   if (i.code === 'too_big') {
-    return i.type === 'string' ? `aceita no máximo ${i.maximum} caractere(s)` : `o máximo é ${i.maximum}`
+    if (fraseDoSchema(i)) return i.message
+    if (i.type === 'string') return `aceita no máximo ${numero(i.maximum)} caractere(s)`
+    return i.inclusive === false ? `precisa ser menor que ${numero(i.maximum)}` : `o máximo é ${numero(i.maximum)}`
   }
   if (i.code === 'invalid_type') {
     return i.received === 'undefined' || i.received === 'null' ? 'não pode ficar vazio' : 'valor em formato errado'

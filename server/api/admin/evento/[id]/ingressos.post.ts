@@ -10,6 +10,7 @@
 import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
 import { CANAIS_PADRAO, explicarErro } from '../index.post'
+import { ROTULOS_INGRESSOS } from './ingressos.patch'
 
 const Setor = z.object({
   o: z.literal('setor'),
@@ -46,7 +47,7 @@ const Tipo = z.object({
   loteId: z.string().uuid(),
   nome: z.string().min(1).max(80),
   quantidade: z.number().int().min(1).max(1_000_000),
-  descontoBps: z.number().int().min(0).max(10_000).default(0),
+  descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').default(0),
   exigeDocumento: z.boolean().default(false),
   maxPorCliente: z.number().int().min(1).max(200).nullish(),
 })
@@ -57,7 +58,9 @@ export default defineEventHandler(async (event) => {
   const eventoId = getRouterParam(event, 'id')
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error), data: p.error.flatten() })
+    // os rótulos da tela de ingressos: com os do assistente, o nome vazio de um lote saía
+    // "Nome do evento: …"
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS_INGRESSOS), data: p.error.flatten() })
   }
   const d = p.data
 

@@ -7,6 +7,7 @@
  * vendas de meia-entrada e duas de camarote não têm o mesmo peso, e ordenar
  * por quantidade coloca o promoter errado no topo da lista de comissão.
  */
+import { percentualDosBps } from '~/composables/formato'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
@@ -88,7 +89,8 @@ async function copiarLink(p: any) {
     await navigator.clipboard.writeText(url)
     copiado.value = p.id
     setTimeout(() => { if (copiado.value === p.id) copiado.value = '' }, 2000)
-  } catch { erro.value = 'O navegador bloqueou a cópia. Selecione o link à mão.' }
+  // "selecione à mão" sem o link na tela não tinha o que selecionar (#104, 28/09): vai junto
+  } catch { erro.value = `O navegador bloqueou a cópia. Selecione o link à mão: ${url}` }
 }
 
 const totais = computed(() => {
@@ -119,7 +121,8 @@ useHead({ title: 'Promoters' })
 
     <AbasSecao :evento-id="id" />
 
-    <p v-if="erro" class="mt-4 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
+    <!-- o link de divulgação vem inteiro na recusa da cópia: quebra onde precisar no celular -->
+    <p v-if="erro" class="mt-4 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro [overflow-wrap:anywhere]">
       {{ erro }}
     </p>
 
@@ -167,7 +170,7 @@ useHead({ title: 'Promoters' })
               <span class="tabular-nums" :class="p.comissaoCents ? 'text-alerta' : 'text-tinta-fraca'">
                 {{ reais(p.comissaoCents) }}
               </span>
-              <span class="block text-xs text-tinta-fraca">{{ (p.comissaoBps / 100).toFixed(1) }}%</span>
+              <span class="block text-xs text-tinta-fraca">{{ percentualDosBps(p.comissaoBps) }}%</span>
             </td>
             <td class="px-3 py-3">
               <span :class="p.ativo ? 'selo-ok' : 'selo-neutro'">{{ p.ativo ? 'ATIVO' : 'INATIVO' }}</span>

@@ -82,7 +82,7 @@ const Entrada = z.object({
   privado: z.boolean().optional(),
   minutosDeReserva: z.number().int().min(5).max(120).optional(),
   agruparPorSetor: z.boolean().optional(),
-  taxaBps: z.number().int().min(0).max(5000).optional(),
+  taxaBps: z.number().int().min(0).max(5000, 'não pode passar de 50%').optional(),
   modoTaxaOnline: z.enum(['repassar', 'absorver']).optional(),
   modoTaxaPdv: z.enum(['repassar', 'absorver']).optional(),
   maxPorCliente: z.number().int().min(1).max(200).nullish(),

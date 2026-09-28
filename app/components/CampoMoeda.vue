@@ -26,7 +26,7 @@
  * caixa, que não têm o teto do preço de ingresso. Quem é PREÇO passa `:maximo="TETO_DO_INGRESSO"`
  * (R$ 100.000,00, o mesmo `faceCents` ≤ 100_000_00 do servidor).
  */
-import { centavosDigitados, centavosParaTexto, paraCentavos } from '~/composables/formato'
+import { centavosDaTecla, centavosDigitados, centavosParaTexto, paraCentavos } from '~/composables/formato'
 
 const props = defineProps<{
   modelValue: number; id?: string; disabled?: boolean; conferirAbaixo?: number
@@ -65,9 +65,24 @@ function aplicar(el: HTMLInputElement, centavos: number) {
   emit('update:modelValue', centavos)
 }
 
+/**
+ * A tecla nova entra na ponta dos centavos, com o cursor em qualquer lugar (#65): o clique no
+ * campo põe o cursor no começo do "0,00", e ler os dígitos da caixa inteira fazia o "1" digitado
+ * valer R$ 10,00. O `beforeinput` guarda a caixa e a seleção de ANTES da tecla; o `input` faz a
+ * conta com elas (`centavosDaTecla`). Sem `beforeinput` (valor posto por programa), vale o que
+ * está escrito.
+ */
+let antesDaTecla: { texto: string; ini: number; fim: number } | null = null
+function aoIrDigitar(e: Event) {
+  const el = e.target as HTMLInputElement
+  const fim = el.value.length
+  antesDaTecla = { texto: el.value, ini: el.selectionStart ?? fim, fim: el.selectionEnd ?? fim }
+}
 function aoDigitar(e: Event) {
   const el = e.target as HTMLInputElement
-  aplicar(el, centavosDigitados(el.value))
+  const antes = antesDaTecla
+  antesDaTecla = null
+  aplicar(el, antes ? centavosDaTecla(antes.texto, el.value, antes) : centavosDigitados(el.value))
 }
 
 /** colar é VALOR, não tecla: "1234.5" é R$ 1.234,50 (e substitui o que estava no campo) */
@@ -86,7 +101,8 @@ function aoColar(e: ClipboardEvent) {
         R$
       </span>
       <input :id="id" :value="texto" :disabled="disabled" inputmode="numeric"
-             class="campo pl-9 text-right tabular-nums" @input="aoDigitar" @paste="aoColar">
+             class="campo pl-9 text-right tabular-nums" @beforeinput="aoIrDigitar" @input="aoDigitar"
+             @paste="aoColar">
     </div>
     <p v-if="conferir" role="status"
        class="mt-1 rounded-card border border-alerta bg-alerta-claro px-2 py-1 text-xs font-medium text-alerta">

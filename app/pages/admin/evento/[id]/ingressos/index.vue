@@ -38,6 +38,7 @@ import { COTA_LEGAL_BPS, cotaDeMeias, MOTIVOS } from '~~/server/utils/meia-entra
 // já o importa do mesmo jeito).
 import { faceParaTotal, precificar, type ModoTaxa } from '~~/server/utils/dinheiro'
 import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
+import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
 
 const route = useRoute()
 const id = route.params.id as string
@@ -46,8 +47,11 @@ const id = route.params.id as string
 // `pending` falso ao mesmo tempo — a tela renderia o esqueleto do admin com o
 // miolo em branco e nenhuma pista do motivo. Foi exatamente assim que uma
 // coluna faltando no banco virou "página vazia" em vez de "deu erro".
+// E o recarregar que falha DEPOIS de gravar não apaga a tela — ver `ultimoDadoBom` (#77).
+const bom = ultimoDadoBom<any>()
 const { data, refresh, pending, error: falha } = await useFetch<any>(
-  `/api/admin/evento/${id}/ingressos`)
+  `/api/admin/evento/${id}/ingressos`, { default: bom.default })
+bom.guardar(data)
 
 /*
  * Data e dinheiro saem de `app/composables/formato.ts`. As duas cópias que
@@ -69,14 +73,17 @@ async function chamar(metodo: 'POST' | 'PATCH' | 'DELETE', body: any) {
   salvando.value = true
   try {
     await $fetch(`/api/admin/evento/${id}/ingressos`, { method: metodo, body })
-    await refresh()
-    return true
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível salvar.'
     return false
   } finally {
     salvando.value = false
   }
+  // já gravou: o recarregar é o passo seguinte, e a falha dele (que o `refresh()` do Nuxt 4 não
+  // lança) não pode virar "não foi possível salvar"
+  await refresh()
+  if (falha.value) erro.value = 'Salvo, mas a lista não recarregou. Atualize a página para ver como ficou.'
+  return true
 }
 
 /* --------------------------------------------------------------- totais --- */
@@ -212,20 +219,14 @@ function abrirLote(setorId: string, l?: any) {
     gratuito: l ? Number(l.faceCents) === 0 : false,
     canais: l?.canais?.length ? [...l.canais] : ['online', 'bilheteria'],
   })
+  loteAoAbrir = l ? retrato(camposDoLote()) : {}
   erroLote.value = ''
   erro.value = ''
 }
-async function salvarLote() {
-  erroLote.value = ''
-  if (loteForm.faceCents === 0 && !loteForm.gratuito) {
-    erroLote.value = 'O valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito".'
-    return
-  }
-  if (!loteForm.canais.length) {
-    erroLote.value = 'Marque onde este lote vende: Site, Bilheteria ou os dois.'
-    return
-  }
-  const campos = {
+
+/** os campos do lote como vão pro servidor — a mesma conta ao abrir a janela e ao salvar */
+function camposDoLote() {
+  return {
     nome: loteForm.nome || 'Lote único',
     faceCents: loteForm.faceCents,
     gratuito: loteForm.faceCents === 0 && loteForm.gratuito,
@@ -238,9 +239,41 @@ async function salvarLote() {
     // 'cortesia' (se o lote tiver) é preservado: a tela só liga e desliga os dois de venda
     canais: loteForm.canais,
   }
-  const ok = loteForm.id
-    ? await chamar('PATCH', { o: 'lote', id: loteForm.id, campos })
-    : await chamar('POST', { o: 'lote', setorId: loteForm.setorId, ...campos })
+}
+/**
+ * O lote como a janela o mostrou ao abrir. Editar manda SÓ o que mudou desde então (#3, 28/09):
+ * com o formulário inteiro, dois operadores com a mesma janela aberta se desfaziam — quem salvasse
+ * por último devolvia ao valor antigo, em silêncio, o que o outro tinha acabado de gravar.
+ * (Configurações do evento já salvava assim.) Guardado como texto: `canais` é o mesmo array que
+ * os botões de Site/Bilheteria editam, e uma referência mudaria junto com a tela.
+ */
+let loteAoAbrir: Record<string, string> = {}
+const retrato = (campos: Record<string, unknown>) => Object.fromEntries(
+  Object.entries(campos).map(([k, v]) => [k, JSON.stringify(Array.isArray(v) ? [...v].sort() : v)]))
+
+async function salvarLote() {
+  erroLote.value = ''
+  if (loteForm.faceCents === 0 && !loteForm.gratuito) {
+    erroLote.value = 'O valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito".'
+    return
+  }
+  if (!loteForm.canais.length) {
+    erroLote.value = 'Marque onde este lote vende: Site, Bilheteria ou os dois.'
+    return
+  }
+  const campos = camposDoLote()
+  let ok: boolean
+  if (loteForm.id) {
+    const agora = retrato(campos)
+    const mudou: Record<string, unknown> = Object.fromEntries(Object.entries(campos)
+      .filter(([k]) => k !== 'gratuito' && agora[k] !== loteAoAbrir[k]))
+    // a marca de gratuito anda com o preço: é ela que deixa o R$ 0,00 passar no servidor
+    if ('faceCents' in mudou) mudou.gratuito = campos.gratuito
+    if (!Object.keys(mudou).length) { loteForm.aberto = false; return }
+    ok = await chamar('PATCH', { o: 'lote', id: loteForm.id, campos: mudou })
+  } else {
+    ok = await chamar('POST', { o: 'lote', setorId: loteForm.setorId, ...campos })
+  }
   if (ok) loteForm.aberto = false
   // o erro do servidor aparece DENTRO da janela: o aviso do topo da página
   // fica atrás dela, e o botão parecia não fazer nada

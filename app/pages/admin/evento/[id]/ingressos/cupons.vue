@@ -7,13 +7,18 @@
  * de R$ 50 aparecem iguais, e é sempre o segundo que estoura o orçamento de
  * desconto do evento.
  */
+import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
+import { percentualDosBps } from '~/composables/formato'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
 const id = route.params.id as string
 
+// o recarregar que falha depois de gravar não apaga a tela (#77) — ver `ultimoDadoBom`
+const bom = ultimoDadoBom<any>()
 const { data, refresh, pending, error: falha } = await useFetch<any>(
-  `/api/admin/evento/${id}/cupons`)
+  `/api/admin/evento/${id}/cupons`, { default: bom.default })
+bom.guardar(data)
 
 /*
  * Data e dinheiro saem de `app/composables/formato.ts`. Esta tela tinha as
@@ -36,14 +41,16 @@ async function chamar(metodo: 'POST' | 'PATCH' | 'DELETE', body: any) {
   salvando.value = true
   try {
     await $fetch(`/api/admin/evento/${id}/cupons`, { method: metodo, body })
-    await refresh()
-    return true
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível salvar.'
     return false
   } finally {
     salvando.value = false
   }
+  // já gravou: a falha do recarregar (que o `refresh()` do Nuxt 4 não lança) não é "não salvou"
+  await refresh()
+  if (falha.value) erro.value = 'Salvo, mas a lista não recarregou. Atualize a página para ver como ficou.'
+  return true
 }
 
 const form = reactive({
@@ -81,16 +88,18 @@ function abrir(c?: any) {
     ativo: c?.ativo ?? true,
     semLimiteConfirmado: false,
   })
+  cupomAoAbrir = c ? retrato(camposDoCupom()) : {}
   erro.value = ''
 }
 
 const deCampo = (v: string) => deCampoDataHora(v)
 
-async function salvar() {
+/** os campos do cupom como vão pro servidor — a mesma conta ao abrir a janela e ao salvar */
+function camposDoCupom() {
   // percentual → bps (o % vezes 100); fixo → os centavos que o CampoMoeda já dá. Deixar isso
   // implícito é como 10% vira R$ 0,10.
   const valor = form.tipo === 'fixo' ? form.valorCents : Math.round(form.valor * 100)
-  const campos = {
+  return {
     valor,
     maxUsos: form.maxUsos || null,
     maxPorCliente: form.maxPorCliente,
@@ -99,10 +108,35 @@ async function salvar() {
     loteIds: form.loteIds,
     ativo: form.ativo,
   }
+}
+/**
+ * O cupom como a janela o mostrou ao abrir: editar manda SÓ o que mudou (#3, 28/09). Com o
+ * formulário inteiro, o operador que salvasse por último devolvia ao valor antigo o "máx. por
+ * pessoa" que o outro tinha acabado de gravar. Guardado como texto (`loteIds` é o array que os
+ * chips editam).
+ */
+let cupomAoAbrir: Record<string, string> = {}
+const retrato = (campos: Record<string, unknown>) => Object.fromEntries(
+  Object.entries(campos).map(([k, v]) => [k, JSON.stringify(Array.isArray(v) ? [...v].sort() : v)]))
+
+async function salvar() {
+  // 0 no limite de usos virava "sem limite" (o `|| null` abaixo) — o contrário do que o 0 diz, e
+  // num cupom de 100% é ingresso grátis pra todo mundo (#88, 28/09)
+  if (form.maxUsos === 0) {
+    erro.value = 'Limite de usos 0 não existe: deixe em branco para sem limite, ou desligue o cupom para ninguém mais usar.'
+    return
+  }
+  const campos = camposDoCupom()
   const confirmacao = gratisSemLimite.value && form.semLimiteConfirmado ? { semLimiteConfirmado: true } : {}
-  const ok = form.id
-    ? await chamar('PATCH', { id: form.id, campos, ...confirmacao })
-    : await chamar('POST', { codigo: form.codigo, tipo: form.tipo, ...campos, ...confirmacao })
+  let ok: boolean
+  if (form.id) {
+    const agora = retrato(campos)
+    const mudou = Object.fromEntries(Object.entries(campos).filter(([k]) => agora[k] !== cupomAoAbrir[k]))
+    if (!Object.keys(mudou).length) { form.aberto = false; return }
+    ok = await chamar('PATCH', { id: form.id, campos: mudou, ...confirmacao })
+  } else {
+    ok = await chamar('POST', { codigo: form.codigo, tipo: form.tipo, ...campos, ...confirmacao })
+  }
   if (ok) form.aberto = false
 }
 
@@ -131,8 +165,9 @@ async function copiar(codigo: string) {
   } catch { erro.value = 'O navegador bloqueou a cópia. Selecione o código à mão.' }
 }
 
+// 50 bps é "0,5%", com vírgula — o `toFixed` escrevia "0.50%" (achado da rodada de variações, 28/09)
 const descricao = (c: any) =>
-  c.tipo === 'percentual' ? `${(c.valor / 100).toFixed(c.valor % 100 ? 2 : 0)}%` : reais(c.valor)
+  c.tipo === 'percentual' ? `${percentualDosBps(c.valor)}%` : reais(c.valor)
 
 function situacao(c: any) {
   if (!c.ativo) return { texto: 'DESATIVADO', classe: 'selo-neutro' }

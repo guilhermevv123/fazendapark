@@ -4,6 +4,8 @@
  * (`app/composables/evento-configuracoes.test.ts`).
  */
 import { areaDaRota, ehPapel, papelPode } from '~~/server/utils/papeis'
+import { percentualDosBps } from '~/composables/formato'
+import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
 
 /**
  * O percentual da taxa digitado → pontos-base, em INTEIRO (ADM-09).
@@ -23,15 +25,9 @@ export function bpsDoPercentual(texto: unknown): number | '' | null {
   return Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0'))
 }
 
-/** 250 → "2,5" · 1000 → "10" · 1234 → "12,34" — sem float no caminho */
-export function percentualDosBps(bps: unknown): string {
-  const n = Number(bps)
-  if (bps === '' || bps === null || bps === undefined || !Number.isFinite(n)) return ''
-  const inteiro = Math.floor(n / 100)
-  const resto = n % 100
-  if (!resto) return String(inteiro)
-  return `${inteiro},${String(resto).padStart(2, '0').replace(/0$/, '')}`
-}
+// `percentualDosBps` mora em `app/composables/formato.ts` (cupons e divulgadores escrevem o % com
+// ele); fica exportado daqui porque o teste da tela o importa desta página
+export { percentualDosBps }
 
 /**
  * "Cancelar o evento e devolver" é da área do DINHEIRO (master e financeiro); a página é da
@@ -63,8 +59,11 @@ definePageMeta({ layout: 'admin' })
 const route = useRoute()
 const id = route.params.id as string
 
+// o recarregar que falha depois de gravar não apaga a tela (#77) — ver `ultimoDadoBom`
+const bom = ultimoDadoBom<any>()
 const { data, refresh, pending, error: falha } = await useFetch<any>(
-  `/api/admin/evento/${id}/configuracoes`)
+  `/api/admin/evento/${id}/configuracoes`, { default: bom.default })
+bom.guardar(data)
 
 const erro = ref('')
 const aviso = ref('')
@@ -165,13 +164,30 @@ async function salvar() {
   try {
     await $fetch(`/api/admin/evento/${id}/configuracoes`, { method: 'PATCH', body: corpo })
     await refresh()
-    aviso.value = 'Salvo.'
-    setTimeout(() => { aviso.value = '' }, 2500)
+    // o `refresh()` do Nuxt 4 não lança: gravou, e só a releitura falhou
+    if (falha.value) erro.value = 'Salvo, mas a tela não recarregou. Atualize a página para ver como ficou.'
+    else {
+      aviso.value = 'Salvo.'
+      setTimeout(() => { aviso.value = '' }, 2500)
+    }
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível salvar.'
   } finally {
     salvando.value = false
   }
+}
+
+/**
+ * "Preencher um zera o outro" (#122, 28/09): a tela prometia e não fazia — com a data e os
+ * minutos preenchidos na mesma edição, o servidor ficava com a data (ela ganha sempre) e os
+ * minutos, o último preenchido, sumiam em silêncio. Agora o campo que a pessoa escolhe apaga o
+ * outro na hora, e o que vai pro servidor é o que está na tela.
+ */
+function escolheuData(e: Event) {
+  if ((e.target as HTMLInputElement).value) f.vendaAteMinutos = null
+}
+function escolheuMinutos(e: Event) {
+  if ((e.target as HTMLInputElement).value !== '') f.vendaAte = ''
 }
 
 function desfazer() {
@@ -368,7 +384,20 @@ async function cancelarEvento() {
   }
 }
 
+/**
+ * O botão "Adiar evento" travava sem dizer por quê (#128, 28/09) — com o motivo de 2 letras a
+ * pessoa via o botão apagado e mais nada. O que falta aparece ao lado, como nas cortesias.
+ */
+const faltaParaAdiar = computed(() => {
+  if (!novaComecaEm.value) return 'Falta o novo início.'
+  if (motivoAdiar.value.trim().length < 3) return 'Falta o motivo, com pelo menos 3 letras (o comprador lê).'
+  return ''
+})
+
 async function adiarEvento() {
+  // dois cliques no mesmo tique: o segundo chegava depois do primeiro remarcar e voltava com
+  // "Esta já é a data do evento", embaixo do "Feito" (#128)
+  if (adiando.value) return
   acaoErro.value = ''
   resultado.value = null
   adiando.value = true
@@ -401,7 +430,7 @@ async function adiarEvento() {
           O mesmo cadastro da criação. Só o que você mudar é enviado.
         </p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
         <a :href="`/e/${data.slug}`" target="_blank" rel="noopener" class="btn-secundario">
           Ver página pública
         </a>
@@ -487,12 +516,12 @@ async function adiarEvento() {
             </div>
             <div>
               <label class="rotulo">Venda encerra em (data fixa)</label>
-              <input v-model="f.vendaAte" type="datetime-local" class="campo">
+              <input v-model="f.vendaAte" type="datetime-local" class="campo" @input="escolheuData">
             </div>
             <div>
               <label class="rotulo">…ou minutos após o início</label>
               <input v-model.number="f.vendaAteMinutos" type="number" min="0" class="campo"
-                     placeholder="ex.: 120">
+                     placeholder="ex.: 120" @input="escolheuMinutos">
               <p class="mt-1 text-xs text-tinta-fraca">
                 Preencher um zera o outro — as duas formas não convivem.
               </p>
@@ -750,10 +779,13 @@ async function adiarEvento() {
               <input v-model="motivoAdiar" class="campo" placeholder="Chuva forte: passou para o dia 25">
             </div>
             <button type="button" class="btn-secundario"
-                    :disabled="adiando || motivoAdiar.trim().length < 3 || !novaComecaEm"
+                    :disabled="adiando || !!faltaParaAdiar"
                     @click="adiarEvento">
               {{ adiando ? 'Remarcando…' : 'Adiar evento' }}
             </button>
+            <p v-if="faltaParaAdiar && !adiando" class="text-xs text-tinta-suave" data-parte="falta-adiar">
+              {{ faltaParaAdiar }}
+            </p>
           </div>
         </div>
 

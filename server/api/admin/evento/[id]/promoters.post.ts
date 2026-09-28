@@ -18,7 +18,8 @@ const Entrada = z.object({
   email: z.string().email().max(160).nullish(),
   telefone: z.string().max(30).nullish(),
   codigo: z.string().max(32).nullish(),
-  comissaoBps: z.number().int().min(0).max(10_000).default(0),
+  // pontos-base: a frase fala em % ("o máximo é 10000" era a comissão de 100% em bps)
+  comissaoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').default(0),
   ativo: z.boolean().default(true),
 })
 

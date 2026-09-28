@@ -177,11 +177,25 @@ const EXPLICACAO: Record<string, string> = {
   pessoas: 'Preencha o nome de quem recebe. Cortesia sem nome não serve na portaria.',
 }
 
+/**
+ * Texto COMPRIDO demais tem frase própria (#8, 28/09): o motivo de 600 letras voltava "Diga o
+ * motivo da cortesia…" — mandava escrever um motivo que já estava escrito, sem dizer o limite.
+ */
+const LIMITE: Record<string, string> = {
+  motivo: 'O motivo', responsavel: 'O nome de quem pediu', pessoas: 'O nome de quem recebe',
+}
+
 function recusaDeFormulario(erro: z.ZodError): never {
-  const campo = erro.issues[0]?.path?.[0]
+  const i = erro.issues[0]
+  const campo = String(i?.path?.[0])
+  const teto = i?.code === 'too_big' ? { tipo: i.type, maximo: Number(i.maximum) } : null
   throw createError({
     statusCode: 400,
-    statusMessage: EXPLICACAO[String(campo)] ?? 'Confira os dados da cortesia.',
+    statusMessage: teto?.tipo === 'string' && LIMITE[campo]
+      ? `${LIMITE[campo]} aceita no máximo ${teto.maximo} caracteres — este tem mais. Encurte e emita de novo.`
+      : teto?.tipo === 'array' && campo === 'pessoas'
+        ? `Uma emissão leva no máximo ${teto.maximo} pessoas. Divida a lista em mais de uma emissão.`
+        : EXPLICACAO[campo] ?? 'Confira os dados da cortesia.',
     data: erro.flatten(),
   })
 }

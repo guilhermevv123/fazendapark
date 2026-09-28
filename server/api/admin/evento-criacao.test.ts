@@ -169,3 +169,53 @@ describe('EVT-06 e EVT-14 — o que o evento grava', () => {
     expect((await q1<any>(`SELECT timezone FROM events WHERE id = $1`, [padrao.corpo.id]))!.timezone).toBe('America/Bahia')
   })
 })
+
+/*
+ * A frase da recusa diz o campo como a TELA o chama, e o limite como a gente lê (rodada de
+ * variações, 28/09): "descricao: aceita no máximo 20000 caractere(s)" (#63), "campos › admite: o
+ * mínimo é 1" (#97), "Comissão: o máximo é 10000" (bps numa tela em %), "o mínimo é 0" num campo
+ * que recusa o 0, e o motivo de 600 letras da cortesia respondido com "Diga o motivo" (#8).
+ */
+describe('Frases de recusa — o campo da tela e o limite legível', () => {
+  const lote = (extra: Record<string, unknown>) =>
+    evento({ setores: [{ nome: 'Pista', lotes: [{ nome: '1º lote', faceCents: 5000, quantidade: 60, ...extra }] }] })
+
+  it('no assistente: descrição longa, lote sem nome, quantidade, taxa e desconto', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const casos: [Record<string, unknown>, string][] = [
+      [evento({ descricao: 'a'.repeat(20_001) }), 'Descrição do evento: aceita no máximo 20.000 caractere(s)'],
+      [lote({ nome: '' }), 'Setores › nº 1 › Lotes › nº 1 › Nome do lote: precisa de pelo menos 1 caractere(s)'],
+      [lote({ quantidade: 1_000_001 }), 'Setores › nº 1 › Lotes › nº 1 › Quantidade: o máximo é 1.000.000'],
+      [evento({ taxaBps: 6000 }), 'Taxa de serviço: não pode passar de 50%'],
+      [lote({ tipos: [{ nome: 'Meia', quantidade: 10, descontoBps: 10_001 }] }),
+        'Setores › nº 1 › Lotes › nº 1 › Tipos de ingresso › nº 1 › Desconto: não pode passar de 100%'],
+    ]
+    for (const [corpo, frase] of casos) {
+      const r = await chamar(corpo)
+      expect(r.status, frase).toBe(400)
+      expect(r.corpo.statusMessage).toBe(frase)
+      expect(await quantosComNome(String(corpo.nome)), 'a recusa criou evento').toBe(0)
+    }
+  })
+
+  it('nas rotas do evento: pessoas por unidade, cupom de 0, motivo da cortesia e observação do caixa', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const criado = await chamar(evento())
+    expect(criado.status, JSON.stringify(criado.corpo)).toBe(200)
+    const id = criado.corpo.id
+    const setorId = (await q1<any>(`SELECT id FROM sectors WHERE event_id = $1 LIMIT 1`, [id]))!.id
+    const enviar = async (rota: string, method: string, body: unknown) => {
+      const r = await http(`/api/admin/evento/${id}/${rota}`, { method, body: JSON.stringify(body) })
+      return { status: r.status, frase: ((await r.json().catch(() => ({}))) as any).statusMessage }
+    }
+    expect(await enviar('ingressos', 'PATCH', { o: 'setor', id: setorId, campos: { admite: 0 } }))
+      .toEqual({ status: 400, frase: 'Pessoas por unidade: o mínimo é 1' })
+    expect(await enviar('cupons', 'POST', { codigo: `ZZ${MARCA.slice(-6).toUpperCase()}`, tipo: 'percentual', valor: 0 }))
+      .toEqual({ status: 400, frase: 'Valor do desconto: precisa ser maior que 0' })
+    expect(await enviar('cortesias', 'POST', {
+      loteId: randomUUID(), motivo: 'a'.repeat(201), responsavel: 'Diretoria', pessoas: [{ nome: 'Fulano de Tal' }],
+    })).toEqual({ status: 400, frase: 'O motivo aceita no máximo 200 caracteres — este tem mais. Encurte e emita de novo.' })
+    expect(await enviar('pdv/turno', 'PATCH', { turnoId: randomUUID(), contadoCents: 0, observacao: 'x'.repeat(401) }))
+      .toEqual({ status: 400, frase: 'A observação aceita no máximo 400 caracteres — encurte e feche o caixa de novo.' })
+  })
+})

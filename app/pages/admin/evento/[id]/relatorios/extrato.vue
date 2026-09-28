@@ -81,6 +81,18 @@ const STATUS_LEGIVEL: Record<string, string> = {
 const temFiltro = computed(() =>
   !!(de.value || ate.value || canal.value || ponto.value || forma.value))
 
+/**
+ * "Até" antes do "De" (#31, 28/09): tudo R$ 0,00 e "Nenhum pedido neste recorte." — quem trocou as
+ * pontas lia que não houve venda. As datas vêm como AAAA-MM-DD, e texto nesse formato compara
+ * como data.
+ */
+const periodoInvertido = computed(() => !!de.value && !!ate.value && de.value > ate.value)
+function trocarAsDatas() {
+  const d = de.value
+  de.value = ate.value
+  ate.value = d
+}
+
 function limpar() {
   de.value = ''; ate.value = ''; canal.value = ''; ponto.value = ''; forma.value = ''
 }
@@ -232,6 +244,12 @@ useHead({ title: 'Extrato' })
         </button>
       </div>
     </div>
+
+    <p v-if="periodoInvertido" class="faixa-aviso mt-4" role="status" data-parte="periodo-invertido">
+      Período invertido: o "Até" ({{ dia(ate) }}) está antes do "De" ({{ dia(de) }}), e
+      nenhum dia cabe entre os dois.
+      <button type="button" class="font-semibold underline" @click="trocarAsDatas">Trocar as datas</button>
+    </p>
 
     <!-- com o motivo do servidor: o 403 da Operação diz que o extrato é do dinheiro do evento -->
     <p v-if="falha" class="faixa-erro mt-4" data-parte="falha-extrato">Não consegui carregar o extrato.
@@ -402,7 +420,8 @@ useHead({ title: 'Extrato' })
 
       <!-- as linhas -->
       <p v-if="!data.linhas.length" class="card mt-4 py-12 text-center text-tinta-suave">
-        {{ temFiltro ? 'Nenhum pedido neste recorte.' : 'Nenhum pedido pago ainda.' }}
+        {{ periodoInvertido ? 'Nenhum pedido: o "Até" está antes do "De".'
+           : temFiltro ? 'Nenhum pedido neste recorte.' : 'Nenhum pedido pago ainda.' }}
       </p>
 
       <div v-else class="card mt-4 overflow-x-auto p-0">

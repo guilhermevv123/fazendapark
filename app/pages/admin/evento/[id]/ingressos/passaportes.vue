@@ -13,13 +13,17 @@
  * metade. A conta de "lugares de verdade" no rodapé é exatamente unidades ×
  * admite — é ela que responde quantas pessoas cabem, não o estoque.
  */
+import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
 const id = route.params.id as string
 
+// o recarregar que falha depois de gravar não apaga a tela (#77) — ver `ultimoDadoBom`
+const bom = ultimoDadoBom<any>()
 const { data, refresh, pending, error: falha } = await useFetch<any>(
-  `/api/admin/evento/${id}/ingressos`)
+  `/api/admin/evento/${id}/ingressos`, { default: bom.default })
+bom.guardar(data)
 
 // `reais` é o de app/composables/formato.ts (ADM-48): uma escrita de dinheiro só no projeto
 const erro = ref('')
@@ -50,12 +54,15 @@ async function salvarCampo(setorId: string, campos: any) {
     await $fetch(`/api/admin/evento/${id}/ingressos`, {
       method: 'PATCH', body: { o: 'setor', id: setorId, campos },
     })
-    await refresh()
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível salvar.'
+    return false
   } finally {
     salvando.value = false
   }
+  // já gravou: a falha do recarregar (que o `refresh()` do Nuxt 4 não lança) não é "não salvou"
+  await refresh()
+  return true
 }
 
 const form = reactive({ aberto: false, id: '', admite: 1, sessoesCobertas: null as number | null, descricao: '' })
@@ -65,13 +72,36 @@ function abrir(s: any) {
     descricao: s.descricao ?? '',
   })
 }
+/**
+ * Mudar "Pessoas por unidade" com unidade já vendida muda a conta da PORTARIA (#99, 28/09): ela lê
+ * o número do setor na hora da entrada (`sectors.admits`, em `catraca.ts`), então a mesa de 4 já
+ * vendida passa a entrar com 2. A janela gravava em silêncio; agora diz antes do Salvar.
+ */
+const avisoDoAdmite = computed(() => {
+  const s = grupos.value.find((g: any) => g.id === form.id)
+  const novo = Number(form.admite)
+  if (!form.aberto || !s || !Number.isInteger(novo) || novo < 1 || novo === s.admite) return ''
+  const { vendidas } = lugares(s)
+  if (!vendidas) return ''
+  return `Já saíram ${vendidas} unidade(s) deste setor. Com ${novo} pessoa(s) por unidade, a portaria `
+    + `passa a contar ${vendidas * novo} pessoa(s) nelas (hoje conta ${vendidas * s.admite}) — `
+    + 'inclusive nas que já foram vendidas.'
+})
+
 async function salvar() {
-  await salvarCampo(form.id, {
+  // campo apagado: o `v-model.number` dá "" e o servidor respondia "formato errado"
+  if (form.admite === ('' as any) || form.admite == null) {
+    erro.value = 'Preencha "Pessoas por unidade": de 1 a 100 (mesa de 4 → 4).'
+    return
+  }
+  const ok = await salvarCampo(form.id, {
     admite: form.admite,
     sessoesCobertas: form.sessoesCobertas || null,
     descricao: form.descricao || null,
   })
-  if (!erro.value) form.aberto = false
+  if (!ok) return
+  form.aberto = false
+  if (falha.value) erro.value = 'Salvo, mas a tela não recarregou. Atualize a página para ver como ficou.'
 }
 
 useHead({ title: 'Passaportes e grupos' })
@@ -192,6 +222,9 @@ useHead({ title: 'Passaportes e grupos' })
           <input v-model.number="form.admite" type="number" min="1" max="100" class="campo tabular-nums">
           <p class="mt-1 text-xs text-tinta-fraca">
             Mesa de 4 → 4. Passaporte individual → 1. É o número que a portaria usa pra contar entrada.
+          </p>
+          <p v-if="avisoDoAdmite" class="faixa-aviso mt-2 text-sm" role="status" data-parte="aviso-admite">
+            {{ avisoDoAdmite }}
           </p>
         </div>
         <div>

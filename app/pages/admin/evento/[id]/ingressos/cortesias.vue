@@ -46,13 +46,17 @@ export const ROTULO_DO_STATUS: Record<string, string> = {
  * está vendo — "as cortesias que o João pediu" tem que ser um endereço.
  */
 import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
+import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
 const id = route.params.id as string
 
+// o recarregar que falha depois de emitir não apaga a tela (#77) — ver `ultimoDadoBom`
+const bom = ultimoDadoBom<any>()
 const { data, refresh, pending, error: falha } = await useFetch<any>(
-  `/api/admin/evento/${id}/cortesias`)
+  `/api/admin/evento/${id}/cortesias`, { default: bom.default })
+bom.guardar(data)
 
 /**
  * Emitir é trabalho de quem atende; mexer no TETO, não.
@@ -143,6 +147,9 @@ const faltaPreencher = computed(() => {
 const emitido = ref<{ pedido: string; quantidade: number } | null>(null)
 
 async function emitir() {
+  // Dois cliques no mesmo tique: o `:disabled` só vale no próximo desenho da tela, e o segundo
+  // clique emitia a mesma lista de novo — a mesma pessoa com duas cortesias (#77, 28/09).
+  if (salvando.value) return
   if (faltaPreencher.value) { erro.value = faltaPreencher.value; return }
   const pessoas = form.pessoas
     .filter((p) => p.nome.trim())
@@ -172,13 +179,13 @@ async function emitir() {
   // seguinte, não parte do ato: enquanto o `refresh()` ficou dentro do mesmo
   // `try`, uma falha dele (sessão vencida, rede caindo) virava "Não foi
   // possível emitir" com os ingressos emitidos — e o operador emitia tudo de
-  // novo. Silêncio nenhum: se a lista não recarregar, a tela diz isso.
+  // novo. Silêncio nenhum: se a lista não recarregar, a tela diz isso. O `refresh()` do Nuxt 4
+  // não rejeita (a falha fica em `falha`): o `try/catch` que morava aqui nunca pegava nada.
   form.aberto = false
   emitido.value = { pedido: r.pedido, quantidade: r.quantidade }
-  try {
-    await refresh()
-  } catch (e: any) {
-    erro.value = `As cortesias foram emitidas (pedido ${r.pedido}), mas a lista não recarregou: ${recado(e, 'tente atualizar a página')}.`
+  await refresh()
+  if (falha.value) {
+    erro.value = `As cortesias foram emitidas (pedido ${r.pedido}), mas a lista não recarregou: ${recado(falha.value, 'tente atualizar a página')}.`
   }
 }
 
@@ -202,6 +209,7 @@ function abrirCota() {
 // `numeroOuNulo` mora no <script> de cima: campo em branco = sem teto, zero = teto de verdade
 
 async function salvarCota() {
+  if (salvando.value) return
   erro.value = ''
   salvando.value = true
   try {
@@ -222,10 +230,9 @@ async function salvarCota() {
 
   // mesma separação da emissão: a cota já está gravada
   cota.aberto = false
-  try {
-    await refresh()
-  } catch (e: any) {
-    erro.value = `A cota foi salva, mas a tela não recarregou: ${recado(e, 'tente atualizar a página')}.`
+  await refresh()
+  if (falha.value) {
+    erro.value = `A cota foi salva, mas a tela não recarregou: ${recado(falha.value, 'tente atualizar a página')}.`
   }
 }
 
@@ -242,10 +249,9 @@ async function cancelar(ticketId: string) {
     erro.value = recado(e, 'Não foi possível cancelar.')
     return
   }
-  try {
-    await refresh()
-  } catch (e: any) {
-    erro.value = `A cortesia foi cancelada, mas a lista não recarregou: ${recado(e, 'tente atualizar a página')}.`
+  await refresh()
+  if (falha.value) {
+    erro.value = `A cortesia foi cancelada, mas a lista não recarregou: ${recado(falha.value, 'tente atualizar a página')}.`
   }
 }
 
@@ -281,7 +287,7 @@ useHead({ title: 'Cortesias' })
           Ingresso de graça, com nome e código. Baixa estoque igual a uma venda — o lugar é o mesmo.
         </p>
       </div>
-      <div class="flex gap-2">
+      <div class="flex flex-wrap gap-2">
         <button type="button" class="btn-secundario disabled:opacity-50"
                 :disabled="!souMaster"
                 :title="souMaster ? 'Quantas cortesias este evento pode dar'

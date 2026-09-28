@@ -315,3 +315,46 @@ export function centavosDigitados(texto: string, maxDigitos = 11): number {
   const digitos = String(texto ?? '').replace(/\D/g, '').slice(0, maxDigitos)
   return Number(digitos || '0')
 }
+
+/**
+ * Pontos-base → o percentual escrito como a gente lê: 250 → "2,5" · 1000 → "10" · 1234 → "12,34".
+ * Sem float no caminho. Cupons e divulgadores escreviam com `toFixed` — "0.50%", "12.5%", com
+ * ponto (achado da rodada de variações, 28/09).
+ */
+export function percentualDosBps(bps: unknown): string {
+  const n = Number(bps)
+  if (bps === '' || bps === null || bps === undefined || !Number.isFinite(n)) return ''
+  const inteiro = Math.floor(n / 100)
+  const resto = n % 100
+  if (!resto) return String(inteiro)
+  return `${inteiro},${String(resto).padStart(2, '0').replace(/0$/, '')}`
+}
+
+/**
+ * Os centavos depois de uma tecla, esteja o cursor onde estiver (#65, 28/09).
+ *
+ * O campo é alinhado à direita e o clique cai à esquerda do "0,00": o cursor ia pro COMEÇO, e
+ * refazer os centavos com todos os dígitos da caixa punha o dígito novo como o mais
+ * significativo — digitar "1" dava R$ 10,00, e "123456" dava R$ 12.300,04. Com `sel` (a seleção
+ * de ANTES da tecla, que o `beforeinput` dá), a conta é a da maquininha:
+ *
+ *   · cursor sem seleção: o que se digita entra na ponta direita dos centavos, e apagar
+ *     (Backspace ou Delete, mesmo em cima da vírgula) tira um número da ponta;
+ *   · tudo selecionado: o que se digita troca o valor inteiro;
+ *   · um PEDAÇO selecionado, ou sem `sel` (valor posto por programa, preenchimento automático):
+ *     vale o que ficou escrito na caixa.
+ */
+export function centavosDaTecla(antes: string, depois: string, sel?: { ini: number; fim: number } | null): number {
+  const a = String(antes ?? ''), d = String(depois ?? '')
+  if (!sel) return centavosDigitados(d)
+  const digitos = (t: string) => t.replace(/\D/g, '')
+  if (sel.ini !== sel.fim) {
+    if (digitos(a.slice(sel.ini, sel.fim)).length < digitos(a).length) return centavosDigitados(d)
+    const entrou = d.slice(sel.ini, Math.max(sel.ini, d.length - (a.length - sel.fim)))
+    return Number(digitos(entrou) || '0')
+  }
+  const valor = String(centavosDigitados(a, 20))
+  if (d.length > a.length) return Number(valor + digitos(d.slice(sel.ini, sel.ini + d.length - a.length)))
+  if (d.length < a.length) return Number(valor.slice(0, -1) || '0')
+  return centavosDigitados(d)
+}

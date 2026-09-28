@@ -58,4 +58,47 @@ describe('CampoMoeda (GER-02)', () => {
     await colar('R$ 1.234,50')
     expect(emitidos.at(-1)).toBe(123_450)
   })
+
+  /*
+   * #65 (28/09): o clique no campo alinhado à direita põe o cursor no COMEÇO do "0,00". O dígito
+   * entrava na frente e virava o mais significativo — "1" dava R$ 10,00; "123456", R$ 12.300,04.
+   */
+  it('com o cursor no começo, a tecla entra na ponta dos centavos: 1 → 0,01 e 123456 → 1.234,56', async () => {
+    const { input, emitidos } = await campo({ maximo: 100_000_00 })
+    const el = input.element as HTMLInputElement
+    // o que o navegador faz com uma tecla: `beforeinput` com a seleção de antes, a caixa muda, `input`
+    const teclar = async (digito: string, onde: 'começo' | 'meio' | 'fim') => {
+      const v = el.value
+      const pos = onde === 'começo' ? 0 : onde === 'meio' ? 1 : v.length
+      el.setSelectionRange(pos, pos)
+      el.dispatchEvent(new Event('beforeinput', { bubbles: true, cancelable: true }))
+      el.value = v.slice(0, pos) + digito + v.slice(pos)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    }
+    await teclar('1', 'começo')
+    expect(el.value).toBe('0,01')
+    expect(emitidos.at(-1)).toBe(1)
+    for (const d of '23456') await teclar(d, 'começo')
+    expect(el.value).toBe('1.234,56')
+    expect(emitidos.at(-1)).toBe(123_456)
+    await teclar('7', 'meio')
+    expect(el.value).toBe('12.345,67')
+  })
+
+  it('apagar tira da ponta; tudo selecionado troca o valor; um pedaço selecionado vale o que ficou escrito', async () => {
+    const { centavosDaTecla } = await import('./formato')
+    const cursor = (i: number) => ({ ini: i, fim: i })
+    expect(centavosDaTecla('1.234,56', '1.234,5', cursor(8))).toBe(12_345) // Backspace no fim
+    expect(centavosDaTecla('1.234,56', '.234,56', cursor(1))).toBe(12_345) // Backspace depois do 1: tira da PONTA
+    expect(centavosDaTecla('1.234,56', '1.23456', cursor(6))).toBe(12_345) // apagou só a vírgula
+    expect(centavosDaTecla('1.234,56', '', { ini: 0, fim: 8 })).toBe(0) // tudo selecionado e apagado
+    expect(centavosDaTecla('1.234,56', '5', { ini: 0, fim: 8 })).toBe(5) // tudo selecionado e digitado 5
+    expect(centavosDaTecla('1.234,56', '1.294,56', { ini: 3, fim: 4 })).toBe(129_456) // um pedaço: vale o escrito
+    expect(centavosDaTecla('0,00', '0,000', cursor(4))).toBe(0) // zero depois de zero continua zero
+    expect(centavosDaTecla('0,01', '0,010', cursor(4))).toBe(10)
+    expect(centavosDaTecla('0,00', '00,00', cursor(0))).toBe(0)
+    // sem a seleção (valor posto por programa, preenchimento automático): vale o que está escrito
+    expect(centavosDaTecla('0,00', '10000000')).toBe(10_000_000)
+  })
 })

@@ -190,6 +190,24 @@ function fecharRecibo() {
 }
 
 // `reais` e `dataHora` vêm de `app/composables/formato.ts`.
+/**
+ * O balcão abria normal com o evento encerrado, cancelado ou em rascunho (#150, 28/09): catálogo
+ * com "300 disponíveis", e a recusa só vinha no clique de Vender, sem dizer por quê. O catálogo já
+ * traz a situação; a venda continua decidida pela rota (só 'ativo' vende), a tela só avisa antes.
+ */
+const SITUACAO_FECHADA: Record<string, string> = {
+  rascunho: 'Este evento está em rascunho: as vendas deste evento não estão abertas. Quem cuida do evento publica em Configurações › Situação.',
+  encerrado: 'Este evento está encerrado: as vendas deste evento não estão abertas.',
+  cancelado: 'Este evento foi cancelado: as vendas deste evento não estão abertas.',
+  adiado: 'Este evento está marcado como adiado: as vendas deste evento não estão abertas até ele voltar a ficar ativo.',
+}
+const eventoFechado = computed(() => {
+  const s = cat.value?.evento?.status
+  return s && s !== 'ativo'
+    ? SITUACAO_FECHADA[s] ?? `Este evento está "${s}": as vendas deste evento não estão abertas.`
+    : ''
+})
+
 const totalCents = computed(() =>
   carrinho.value.reduce((s, i) => s + i.precoCents * i.quantidade, 0))
 
@@ -347,6 +365,9 @@ function imprimir() {
     <div v-else-if="turno" class="mt-4 grid gap-4 lg:grid-cols-[1fr_380px]">
       <!-- catálogo -->
       <section>
+        <p v-if="eventoFechado" class="faixa-erro mb-4" role="alert" data-parte="evento-fechado">
+          {{ eventoFechado }}
+        </p>
         <div v-if="falhaCatalogo && !cat" class="card mb-4">
           <p class="faixa-erro">
             Não foi possível carregar os ingressos à venda.
