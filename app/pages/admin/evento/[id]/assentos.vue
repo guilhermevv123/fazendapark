@@ -154,10 +154,22 @@ useHead({ title: 'Mapa de assentos' })
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Mapa de assentos</h1>
         <p class="mt-1 text-tinta-suave">
-          Setor numerado vende lugar, não quantidade. Clique pra selecionar;
+          O desenho dos lugares de cada setor. Clique pra selecionar;
           Shift pega a faixa inteira.
         </p>
       </div>
+    </div>
+
+    <!-- ADM-42: a tela saiu do menu (22/09) porque a venda não usa `seats`, mas abre pelo
+         endereço — e prometia "setor numerado vende lugar". Quem chega aqui fica sabendo o
+         que o mapa faz e o que não faz. Sai quando o checkout passar a escolher lugar. -->
+    <div data-parte="em-preparacao"
+         class="mb-4 rounded-card border border-alerta bg-alerta-claro px-4 py-3 text-sm text-alerta">
+      <p class="font-semibold">Em preparação: a venda ainda não usa este mapa.</p>
+      <p class="mt-1">
+        O comprador não escolhe lugar no site nem no balcão, bloquear um lugar aqui não tira nada
+        do estoque e o mapa não mostra o que foi vendido. O que vende é o estoque de cada lote.
+      </p>
     </div>
 
     <p v-if="erro" class="rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro">
@@ -192,9 +204,9 @@ useHead({ title: 'Mapa de assentos' })
         <div v-else-if="!setor.total" class="card py-12 text-center">
           <p class="titulo text-lg font-semibold text-tinta">{{ setor.nome }} não tem mapa</p>
           <p class="mx-auto mt-2 max-w-md text-sm text-tinta-suave">
-            Hoje este setor vende por quantidade: {{ setor.estoque }} no estoque,
-            {{ setor.vendidos }} vendidos. Gerar um mapa transforma cada vaga num lugar
-            com nome — e é o que permite dizer a alguém onde sentar.
+            Este setor vende por quantidade: {{ setor.estoque }} no estoque,
+            {{ setor.vendidos }} vendidos. Gerar um mapa desenha cada vaga como um lugar
+            com nome; a venda continua por quantidade até o checkout escolher lugar.
           </p>
           <button type="button" class="btn-primario mt-4" @click="abrirGerador(setor)">
             Gerar mapa deste setor
