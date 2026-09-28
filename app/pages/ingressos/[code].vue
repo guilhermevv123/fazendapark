@@ -11,19 +11,42 @@
  * 'currency' })`, que separa o símbolo com espaço FINO (U+00A0): duas strings
  * idênticas na tela que não são iguais na comparação.
  */
+import { dataNoFuso, falhaDaConsulta, situacaoDoPedido } from '~/composables/carrinhoDaVitrine'
+
 const route = useRoute()
-const code = route.params.code as string
+const code = String(route.params.code ?? '')
 
-const { data, error, refresh } = await useFetch<any>(`/api/pedido/${code}`)
+// B22: o código vai CODIFICADO. Cru, `/ingressos/..%2Fadmin%2Fclientes` virava
+// `/api/pedido/../admin/clientes` no SSR — `/api/admin/clientes` com o cookie
+// de quem abriu o link.
+const { data, error, refresh } = await useFetch<any>(`/api/pedido/${encodeURIComponent(code)}`)
 
-const quando = (v: any) => {
-  const d = paraData(v)
-  return d
-    ? d.toLocaleString('pt-BR', {
-        day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
-      })
-    : '—'
+/**
+ * B10: "Pedido não encontrado" só pro 404 — e aí a resposta é 404 de verdade
+ * (`app/error.vue`). Com o banco fora do ar a página dizia que o pedido que a
+ * pessoa PAGOU não existe.
+ */
+const falha = computed(() => falhaDaConsulta(error.value))
+if (falha.value === 'nao_encontrado') {
+  throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado', fatal: true })
 }
+const tentando = ref(false)
+async function tentarDeNovo() {
+  tentando.value = true
+  try { await refresh() } finally { tentando.value = false }
+}
+
+/** B24: a data no fuso do EVENTO, não no do navegador de quem abriu. */
+const quando = (v: any) => dataNoFuso(v, data.value?.fuso)
+
+/**
+ * B01/B10: o selo, se os ingressos aparecem e o que dizer no lugar deles. Todo
+ * status que não fosse 'pago' lia "ainda não foi pago" — inclusive o estorno
+ * PARCIAL, cujos ingressos continuam valendo.
+ */
+const situacao = computed(() => situacaoDoPedido(data.value?.status, {
+  estornadoCents: data.value?.estornadoCents, pagoSemIngresso: data.value?.pagoSemIngresso,
+}))
 
 const estado: Record<string, { t: string; c: string }> = {
   valido: { t: 'VÁLIDO', c: 'selo-ok' },
@@ -77,7 +100,17 @@ const pessoa = computed<{ rotulo: string; nome: string } | null>(() => {
  */
 const copiado = ref(false)
 const restante = ref(0)
+/** o relógio já contou uma vez (no navegador): antes disso "0" não quer dizer vencido */
+const relogioLigado = ref(false)
 let timerContagem: any, timerVigia: any
+
+/**
+ * B20: o prazo venceu — a varredura cancela a cobrança no gateway, então o QR
+ * e o copia-e-cola SOMEM (pagar um PIX cancelado é dinheiro que não chega).
+ */
+const prazoVencido = computed(() => relogioLigado.value && restante.value <= 0)
+/** ainda pode mudar sozinho: a página segue consultando */
+const emAberto = (status: any) => status === 'aguardando_pagamento' || status === 'em_analise'
 
 const relogio = computed(() => {
   const m = Math.floor(restante.value / 60), s = restante.value % 60
@@ -93,12 +126,15 @@ async function copiarPix() {
 }
 
 onMounted(() => {
-  if (data.value?.status !== 'aguardando_pagamento') return
+  if (!emAberto(data.value?.status)) return
 
-  if (data.value.expiraEm) {
+  // em análise o relógio da reserva não se aplica (o pedido não vence enquanto
+  // a operadora analisa) — só a consulta segue
+  if (data.value.status === 'aguardando_pagamento' && data.value.expiraEm) {
     const fim = new Date(data.value.expiraEm).getTime()
     const tick = () => { restante.value = Math.max(0, Math.floor((fim - Date.now()) / 1000)) }
     tick()
+    relogioLigado.value = true
     timerContagem = setInterval(tick, 1000)
   }
   // O `catch` não é mudo: uma consulta que falha em silêncio aqui é a tela que
@@ -106,7 +142,7 @@ onMounted(() => {
   timerVigia = setInterval(async () => {
     try {
       await refresh()
-      if (data.value?.status !== 'aguardando_pagamento') {
+      if (!emAberto(data.value?.status)) {
         clearInterval(timerVigia); clearInterval(timerContagem)
       }
     } catch (e: any) {
@@ -130,9 +166,27 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
     </CabecalhoPublico>
 
     <div class="mx-auto max-w-3xl px-4 py-6">
-      <p v-if="error" class="card py-12 text-center text-tinta-suave">
-        Pedido não encontrado. Confira o código.
-      </p>
+      <!-- B10: o 404 da primeira carga já saiu como página de erro (HTTP 404);
+           aqui fica o que NÃO é "não existe" — e o "Atualizar" que voltou 404 -->
+      <div v-if="falha" class="card py-10 text-center" role="alert">
+        <template v-if="falha === 'nao_encontrado'">
+          <p class="titulo text-xl font-semibold text-tinta">Pedido não encontrado</p>
+          <p class="mt-2 text-tinta-suave">
+            Confira o código do pedido: ele está no e-mail da compra e começa com PED-.
+          </p>
+        </template>
+        <template v-else>
+          <p class="titulo text-xl font-semibold text-tinta">A bilheteria não respondeu agora</p>
+          <p class="mt-2 text-tinta-suave">
+            {{ falha === 'freio'
+                 ? 'Muitas consultas seguidas deste aparelho. Espere alguns minutos e tente de novo.'
+                 : 'O seu pedido continua guardado — quem não respondeu foi o nosso sistema. Tente de novo em alguns instantes.' }}
+          </p>
+          <button type="button" class="btn-primario mt-6 px-5" :disabled="tentando" @click="tentarDeNovo">
+            {{ tentando ? 'Tentando…' : 'Tentar de novo' }}
+          </button>
+        </template>
+      </div>
 
       <template v-else-if="data">
         <h1 class="titulo text-2xl font-semibold text-tinta">{{ data.evento.nome }}</h1>
@@ -153,18 +207,19 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
             <p class="font-medium text-tinta">{{ pessoa.nome }}</p>
           </div>
           <div>
-            <p class="text-xs text-tinta-fraca">{{ data.cortesia ? 'Entrada' : 'Total pago' }}</p>
+            <!-- "Total pago" só no que foi pago: no pendente, no expirado e no
+                 recusado a palavra "pago" é mentira -->
+            <p class="text-xs text-tinta-fraca">{{ data.cortesia ? 'Entrada' : situacao.rotuloDoTotal }}</p>
             <p class="font-medium tabular-nums text-tinta">
               {{ data.cortesia ? 'Cortesia' : reais(data.totalCents) }}
             </p>
           </div>
-          <span class="ml-auto" :class="data.status === 'pago' ? 'selo-ok' : 'selo-alerta'">
-            {{ data.status === 'pago' ? 'PAGO' : data.status.replace(/_/g, ' ').toUpperCase() }}
-          </span>
+          <span class="ml-auto" :class="situacao.selo.classe">{{ situacao.selo.texto }}</span>
         </div>
 
-        <!-- pedido ainda não pago -->
-        <div v-if="data.status !== 'pago'" class="card mt-4">
+        <!-- pedido sem a venda de pé: pendente, em análise, expirado, cancelado,
+             recusado, devolvido, contestado — cada um dizendo o que houve (B10) -->
+        <div v-if="!situacao.vivo" class="card mt-4">
           <!-- PIX pago depois do prazo e sem lugar: "ainda não foi pago" seria
                mentira pra quem pagou (ver `pagoSemIngresso` na API). -->
           <div v-if="data.pagoSemIngresso">
@@ -176,11 +231,37 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               <strong class="text-tinta">{{ data.pedido }}</strong>.
             </p>
           </div>
-          <p v-else class="text-tinta-corpo">
-            Este pedido ainda não foi pago, então os ingressos não foram emitidos.
-          </p>
+          <p v-else class="text-tinta-corpo">{{ situacao.frase }}</p>
 
-          <div v-if="data.pagamento?.pixQrBase64 || data.pagamento?.pixPayload" class="mt-4">
+          <!-- B20: o prazo venceu — o QR e o copia-e-cola somem -->
+          <div v-if="data.status === 'aguardando_pagamento' && prazoVencido"
+               class="mt-4 rounded-xl bg-fundo-cinza px-4 py-4 text-center">
+            <p class="font-semibold text-tinta">O prazo deste pagamento venceu</p>
+            <p class="mt-1 text-sm text-tinta-suave">
+              A cobrança foi cancelada e não pode mais ser paga. Se você pagou nos últimos minutos,
+              espere nesta página: a confirmação ainda pode chegar.
+            </p>
+          </div>
+
+          <!-- B08: cartão pendente — a fatura do Asaas abre de qualquer aparelho -->
+          <div v-else-if="data.status === 'aguardando_pagamento' && data.pagamento?.forma === 'credito'" class="mt-4">
+            <a v-if="data.pagamento.linkFatura" :href="data.pagamento.linkFatura"
+               target="_blank" rel="noopener" class="btn-cta w-full py-3">
+              Pagar com cartão
+            </a>
+            <p v-else class="faixa-aviso">
+              O link do cartão não está disponível. Guarde o pedido
+              <strong class="text-tinta">{{ data.pedido }}</strong> e fale com a bilheteria — a reserva
+              continua de pé até o prazo abaixo.
+            </p>
+            <p class="mt-3 text-center text-sm text-tinta-suave">
+              O cartão é digitado no ambiente seguro do Asaas. Depois de pagar, volte para esta página:
+              ela se atualiza sozinha.
+            </p>
+          </div>
+
+          <div v-else-if="data.status === 'aguardando_pagamento'
+                          && (data.pagamento?.pixQrBase64 || data.pagamento?.pixPayload)" class="mt-4">
             <img v-if="data.pagamento.pixQrBase64"
                  :src="`data:image/png;base64,${data.pagamento.pixQrBase64}`"
                  alt="QR Code do PIX" class="mx-auto h-52 w-52 max-w-full">
@@ -205,6 +286,8 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
 
         <!-- ingressos -->
         <section v-else class="mt-4 space-y-4">
+          <!-- B01: estorno PARCIAL — quanto voltou, e os ingressos seguem valendo -->
+          <p v-if="situacao.frase" class="faixa-aviso" role="status">{{ situacao.frase }}</p>
           <!--
             Onde mais o ingresso está. Quem paga online espera o e-mail em
             segundos; quando ele não aparece, a pessoa não sabe se o problema
@@ -248,7 +331,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                  10 PNGs, e os de baixo esperam a rolagem sem prejudicar
                  ninguém. `lazy` no primeiro já rendeu `complete: false` com a
                  rota devolvendo 200 na medição do navegador. -->
-            <img v-if="t.qr" :src="`/api/ingresso/${t.id}/qr.png?pedido=${data.pedido}`"
+            <img v-if="t.qr" :src="`/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.pedido)}`"
                  :alt="`QR do ingresso ${t.codigo}`"
                  class="mx-auto h-40 w-40 shrink-0 rounded-card border border-linha bg-white p-1 sm:mx-0"
                  :loading="i === 0 ? 'eager' : 'lazy'" decoding="async">

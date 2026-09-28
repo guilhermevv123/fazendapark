@@ -369,10 +369,9 @@ useSeoMeta({
             <h2 id="precos" class="titulo text-3xl font-semibold tracking-[-0.02em] text-ink-950 sm:text-4xl">
               Ingressos e preços
             </h2>
-            <p class="mt-3 max-w-2xl text-base leading-7 text-ink-600">
-              {{ detalhe?.evento?.descricao
-                || 'Escolha seus ingressos e pague em poucos minutos.' }}
-            </p>
+            <!-- B31: a descrição que o produtor escreveu em parágrafos sai em parágrafos -->
+            <p class="mt-3 max-w-2xl whitespace-pre-line text-base leading-7 text-ink-600">{{ detalhe?.evento?.descricao
+                || 'Escolha seus ingressos e pague em poucos minutos.' }}</p>
           </div>
           <!-- sem "Escolher ingressos" aqui (dono, 23/09): a compra sai do
                "Comprar" de cada cartão logo abaixo -->
@@ -411,7 +410,8 @@ useSeoMeta({
                 <p v-if="ing.sessao" class="text-xs font-semibold uppercase tracking-wide text-pool-700">
                   {{ ing.sessao.titulo }} · {{ diaMes(ing.sessao.inicio) }}
                 </p>
-                <h4 class="titulo mt-1 text-lg font-semibold leading-snug text-ink-900">{{ ing.nome }}</h4>
+                <!-- B23: h3 logo abaixo do h2 "Ingressos e preços" — pular pra h4 quebrava o índice do leitor de tela -->
+                <h3 class="titulo mt-1 text-lg font-semibold leading-snug text-ink-900">{{ ing.nome }}</h3>
                 <p v-if="ing.lote" class="mt-1 text-sm text-ink-600">{{ ing.lote }}</p>
                 <ul class="mt-4 grid gap-1.5">
                   <li v-for="v in ing.variacoes" :key="v.tipoId" class="flex items-baseline justify-between gap-3 text-[15px]">

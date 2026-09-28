@@ -11,35 +11,56 @@
  * ou cancelado precisa dizer o que aconteceu e o que fazer, senão a pessoa
  * fica clicando achando que é a internet dela.
  */
-const route = useRoute()
-const code = route.params.code as string
+import { dataNoFuso, falhaDaConsulta } from '~/composables/carrinhoDaVitrine'
 
-const { data, refresh, error: falha } = await useFetch<any>(`/api/transferencia/${code}`)
+const route = useRoute()
+const code = String(route.params.code ?? '')
+// B22: o token vai CODIFICADO (cru, `..%2F` subia de pasta no SSR)
+const rota = `/api/transferencia/${encodeURIComponent(code)}`
+
+const { data, refresh, error } = await useFetch<any>(rota)
+
+/**
+ * B10: "Link não encontrado" só pro 404 — e aí a resposta é 404 de verdade
+ * (`app/error.vue`). Com o banco fora do ar a pessoa lia que o link que o
+ * amigo mandou não existe.
+ */
+const falha = computed(() => falhaDaConsulta(error.value))
+if (falha.value === 'nao_encontrado') {
+  throw createError({ statusCode: 404, statusMessage: 'Transferência não encontrada', fatal: true })
+}
+const tentando = ref(false)
+async function tentarDeNovo() {
+  tentando.value = true
+  try { await refresh() } finally { tentando.value = false }
+}
 
 const nome = ref('')
 const documento = ref('')
 const erro = ref('')
+/** o servidor recusou o CPF (B33) — o campo fica marcado */
+const erroNoCpf = ref(false)
 const aceitando = ref(false)
 const pronto = ref<any>(null)
 
 watch(data, (d) => { if (d?.para?.nome && !nome.value) nome.value = d.para.nome }, { immediate: true })
 
 async function aceitar() {
-  aceitando.value = true; erro.value = ''
+  aceitando.value = true; erro.value = ''; erroNoCpf.value = false
   try {
-    pronto.value = await $fetch(`/api/transferencia/${code}`, {
+    pronto.value = await $fetch(rota, {
       method: 'POST',
       body: { nome: nome.value.trim(), documento: documento.value.trim() || null },
     })
     await refresh()
   } catch (e: any) {
     erro.value = e?.data?.message ?? e?.statusMessage ?? 'Não deu pra aceitar agora.'
+    erroNoCpf.value = e?.data?.data?.campo === 'documento'
   } finally { aceitando.value = false }
 }
 
-const quando = (v: string | null) => v
-  ? new Date(v).toLocaleString('pt-BR', { dateStyle: 'long', timeStyle: 'short' })
-  : ''
+/** B24: no fuso do EVENTO — o SSR e o celular de outro fuso escreviam horas diferentes. */
+const quando = (v: string | null) => (v ? dataNoFuso(v, data.value?.evento?.fuso) : '')
 
 /**
  * O QR de quem recebeu. Aparece AQUI, na página da transferência, e não no
@@ -71,12 +92,24 @@ const RECADO: Record<string, string> = {
         <LogoMarca class="h-12" />
       </div>
 
-      <div v-if="falha" class="card mt-6 text-center">
-        <h1 class="titulo text-xl font-semibold text-tinta">Link não encontrado</h1>
-        <p class="mt-2 text-tinta-suave">
-          Confira se o endereço veio completo. Se veio por mensagem, às vezes a última parte
-          do link fica de fora.
-        </p>
+      <div v-if="falha" class="card mt-6 text-center" role="alert">
+        <template v-if="falha === 'nao_encontrado'">
+          <h1 class="titulo text-xl font-semibold text-tinta">Link não encontrado</h1>
+          <p class="mt-2 text-tinta-suave">
+            Confira se o endereço veio completo. Se veio por mensagem, às vezes a última parte
+            do link fica de fora.
+          </p>
+        </template>
+        <template v-else>
+          <h1 class="titulo text-xl font-semibold text-tinta">A bilheteria não respondeu agora</h1>
+          <p class="mt-2 text-tinta-suave">
+            O ingresso continua reservado pra você — quem não respondeu foi o nosso sistema. Tente
+            de novo em alguns instantes.
+          </p>
+          <button type="button" class="btn-primario mt-6 px-5" :disabled="tentando" @click="tentarDeNovo">
+            {{ tentando ? 'Tentando…' : 'Tentar de novo' }}
+          </button>
+        </template>
       </div>
 
       <template v-else-if="data">
@@ -103,12 +136,16 @@ const RECADO: Record<string, string> = {
         <!-- nada a fazer -->
         <div v-else-if="!data.podeAceitar" class="card mt-6 text-center">
           <h1 class="titulo text-xl font-semibold text-tinta">{{ data.statusTexto }}</h1>
+          <!-- B33: o ingresso morreu antes do aceite (usado, cancelado) — o
+               servidor diz por quê em `motivo`; sem ele a frase saía vazia -->
           <p class="mt-2 text-tinta-suave">
-            {{ data.ingresso.situacao && SITUACAO[data.ingresso.situacao]
-                 ? SITUACAO[data.ingresso.situacao]
-                 : data.status === 'concluido' && !data.ingresso.codigo
-                   ? 'Esta transferência foi aceita, mas o ingresso já passou para outra pessoa.'
-                   : RECADO[data.status] }}
+            {{ data.motivo
+                 ? data.motivo
+                 : data.ingresso.situacao && SITUACAO[data.ingresso.situacao]
+                   ? SITUACAO[data.ingresso.situacao]
+                   : data.status === 'concluido' && !data.ingresso.codigo
+                     ? 'Esta transferência foi aceita, mas o ingresso já passou para outra pessoa.'
+                     : RECADO[data.status] }}
           </p>
           <img v-if="qrSrc" :src="qrSrc" :alt="`QR do ingresso ${data.ingresso.codigo}`"
                class="mx-auto mt-4 h-52 w-52 rounded-card border border-linha bg-white p-1"
@@ -168,13 +205,17 @@ const RECADO: Record<string, string> = {
               <input v-model="nome" class="campo mt-1 w-full" required maxlength="120">
             </label>
 
+            <!-- B33: só números (a máscara com ponto e traço também passa); o
+                 servidor confere os dígitos e recusa letra ou símbolo -->
             <label class="mt-3 block text-sm">
               <span class="text-tinta-suave">CPF <span class="text-tinta-fraca">(opcional)</span></span>
-              <input v-model="documento" class="campo mt-1 w-full" maxlength="20"
-                     placeholder="só se o evento pedir">
+              <input v-model="documento" class="campo mt-1 w-full" maxlength="14"
+                     inputmode="numeric" autocomplete="off" placeholder="000.000.000-00"
+                     :aria-invalid="erroNoCpf ? 'true' : undefined">
+              <span class="mt-1 block text-xs text-tinta-fraca">Só os 11 números. Deixe em branco se o evento não pedir.</span>
             </label>
 
-            <p v-if="erro" class="faixa-erro mt-4">
+            <p v-if="erro" class="faixa-erro mt-4" role="alert">
               {{ erro }}
             </p>
 

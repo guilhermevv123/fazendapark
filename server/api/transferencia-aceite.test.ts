@@ -116,3 +116,17 @@ describe('B33 · pela HTTP', () => {
     expect(v.motivo).toMatch(/cancelado/)
   })
 })
+
+describe('B24 · a página da transferência escreve a data no fuso do EVENTO', () => {
+  it('a rota devolve o fuso do evento (não o do servidor, não o do navegador)', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    await q(`UPDATE events SET timezone = 'America/Manaus' WHERE id = $1`, [eventId])
+    try {
+      const { token } = await transferencia('valido')
+      const v = await fetch(`${BASE}/api/transferencia/${token}`).then((x) => x.json())
+      expect(v.evento.fuso).toBe('America/Manaus')
+    } finally {
+      await q(`UPDATE events SET timezone = 'America/Bahia' WHERE id = $1`, [eventId])
+    }
+  })
+})

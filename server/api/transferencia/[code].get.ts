@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
                          WHERE depois.ticket_id = tr.ticket_id
                            AND depois.status = 'concluido'
                            AND depois.accepted_at > tr.accepted_at) AS em_vigor,
-            e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.slug,
+            e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.slug, e.timezone,
             s.name AS setor, l.name AS lote, tt.name AS tipo,
             se.label AS assento,
             es.title AS sessao, es.starts_at AS sessao_inicio
@@ -91,6 +91,8 @@ export default defineEventHandler(async (event) => {
     evento: {
       nome: tr.evento, comecaEm: tr.starts_at, slug: tr.slug,
       local: tr.venue_name, cidade: tr.city, estado: tr.state,
+      /** B24: a tela escreve a data no fuso do EVENTO, não no do navegador */
+      fuso: tr.timezone || 'America/Bahia',
     },
     ingresso: {
       setor: tr.setor, lote: tr.lote, tipo: tr.tipo,
