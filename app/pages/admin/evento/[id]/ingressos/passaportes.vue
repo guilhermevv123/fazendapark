@@ -208,6 +208,12 @@ useHead({ title: 'Passaportes e grupos' })
                     placeholder="O que está incluso: mesa, cadeiras, entrada preferencial…" />
         </div>
       </div>
+      <!-- a recusa do servidor aparece DENTRO da janela: a faixa do alto da página fica atrás do
+           painel, e a janela aberta parecia não ter feito nada -->
+      <p v-if="erro" class="mt-3 rounded-card border border-erro bg-erro-claro px-3 py-2 text-sm text-erro"
+         role="alert" data-parte="erro-na-janela">
+        {{ erro }}
+      </p>
       <template #acoes>
         <button type="button" class="btn-secundario" @click="form.aberto = false">Cancelar</button>
         <button type="button" class="btn-primario" :disabled="salvando" @click="salvar">Salvar</button>
