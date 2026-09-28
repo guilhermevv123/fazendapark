@@ -21,7 +21,9 @@
  * lote inteiro sem perceber.
  */
 import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
+import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
+import PainelFalha from '~/components/painel/Falha.vue'
 definePageMeta({ layout: false })
 
 /**
@@ -492,6 +494,20 @@ async function publicar() {
  */
 const CHAVE_ANTIGA = 'dt:criar-evento:v1'
 const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+
+/**
+ * Quem não cria evento (financeiro, portaria) só descobria no FIM: preenchia os cinco passos e o
+ * "Publicar evento" voltava 403 (matriz da auditoria, "Financeiro pela URL"). A recusa aparece na
+ * ENTRADA, com a mesma frase que a rota de criação mandaria — `decidirAcesso` sobre
+ * `POST /api/admin/evento`, a régua de papeis.ts, não uma lista escrita aqui. Sem saber o papel, não
+ * trava: quem decide continua sendo a rota.
+ */
+const recusa = computed(() => {
+  const p = eu.value?.usuario?.papel
+  if (!ehPapel(p)) return null
+  const d = decidirAcesso(p, '/api/admin/evento')
+  return d.liberado ? null : { statusCode: 403, data: { statusMessage: d.motivo } }
+})
 function marcaDaPessoa(texto: string): string {
   let h = 0x811c9dc5
   for (let i = 0; i < texto.length; i++) { h ^= texto.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0 }
@@ -564,7 +580,13 @@ useHead({ title: 'Criar evento' })
 </script>
 
 <template>
-  <NuxtLayout name="criacao" :passos="PASSOS" :passo="passo"
+  <NuxtLayout v-if="recusa" name="admin">
+    <div class="py-5" data-parte="sem-acesso-criar">
+      <h1 class="titulo text-2xl font-semibold text-tinta">Criar evento</h1>
+      <PainelFalha :falha="recusa" o-que="criar evento" />
+    </div>
+  </NuxtLayout>
+  <NuxtLayout v-else name="criacao" :passos="PASSOS" :passo="passo"
               :pode-voltar="passo > 1" :salvando="salvando"
               :rotulo-avancar="passo === PASSOS.length ? 'Publicar evento' : 'Prosseguir'"
               @voltar="voltar" @avancar="avancar" @sair="sair">

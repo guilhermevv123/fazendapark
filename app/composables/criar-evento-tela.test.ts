@@ -180,3 +180,23 @@ describe('EVT-12 — a ajuda da criação diz o que existe', () => {
     expect(ajuda.find('a').text()).toBe('Suporte: o que fazer quando algo dá errado')
   })
 })
+
+describe('quem não cria evento ouve isso NA ENTRADA (matriz: "Financeiro pela URL")', () => {
+  it('financeiro abre o endereço: a recusa da rota, sem passo nenhum pra preencher à toa', async () => {
+    const tela = await abrir({ usuario: { email: 'financeiro@fazendapark.com.br', orgId: 'org-1', papel: 'financeiro' } })
+    const aviso = tela.find('[data-parte="sem-acesso-criar"]')
+    expect(aviso.exists(), 'o financeiro preencheu cinco passos pra ouvir o 403 no fim').toBe(true)
+    expect(aviso.text()).toContain('Criar evento não é do seu acesso')
+    expect(aviso.text()).toContain('Seu acesso é de Financeiro')
+    expect(tela.find('#nome').exists()).toBe(false)
+  })
+
+  it('master e operação seguem direto pro passo 1', async () => {
+    for (const eu of [PESSOA_A, PESSOA_B]) {
+      const tela = await abrir(eu)
+      expect(tela.find('[data-parte="sem-acesso-criar"]').exists()).toBe(false)
+      expect(tela.find('#nome').exists()).toBe(true)
+      limparTela()
+    }
+  })
+})
