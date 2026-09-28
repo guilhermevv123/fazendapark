@@ -93,7 +93,7 @@ const conta = () => import('../pages/admin/evento/[id]/dashboard.vue')
 const NOVO = {
   ...PAINEL,
   evento: { id: EV, nome: 'Evento', status: 'ativo' },
-  periodo: { ...PAINEL.periodo, nome: 'tudo', diaDe: null, diaAte: null, atualizadoEm: '2026-09-20T17:32:00.000Z', horaAgora: 14 },
+  periodo: { ...PAINEL.periodo, nome: 'tudo', diaDe: null, diaAte: null, atualizadoEm: '2026-09-20T17:32:00.000Z', atualizadoAs: '14:32', horaAgora: 14 },
   totais: { ...PAINEL.totais, cobradoCents: 1200_00, liquidoCents: 1080_00, liquidoNaPlataformaCents: 900_00, liquidoDiretoCents: 180_00 },
   // online R$ 1.000 (PIX 600 + crédito 400) e balcão R$ 200: a régua do ADM-18
   porForma: [

@@ -256,6 +256,16 @@ describe('o painel redesenhado conta pelas réguas das outras telas', () => {
     expect(d.porHoraHoje.reduce((s: number, h: any) => s + h.hojeCents, 0)).toBe(d.totais.hojeCents)
   }, 120_000)
 
+  it('"Atualizado às" vem pronto no relógio do evento (a tela não formata data na mão)', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const antes = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Bahia', hour: '2-digit', minute: '2-digit' }).format(new Date())
+    const d = await painel()
+    const depois = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Bahia', hour: '2-digit', minute: '2-digit' }).format(new Date())
+    expect(d.periodo.atualizadoAs).toMatch(/^\d{2}:\d{2}$/)
+    // a leitura cai entre o antes e o depois (a virada de minuto no meio vale os dois)
+    expect([antes, depois], 'a hora não é a da Bahia (UTC−3)').toContain(d.periodo.atualizadoAs)
+  }, 120_000)
+
   it('as duas metades do líquido fecham com ele e batem com Financeiro e Borderô', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const [d, fin, bor] = await Promise.all([

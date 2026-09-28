@@ -238,15 +238,11 @@ onMounted(ligarRelogio)
 watch(periodo, ligarRelogio)
 onBeforeUnmount(() => clearInterval(relogio))
 
-/** "14:32" da última leitura, no relógio do evento */
-const atualizadoAs = computed(() => {
-  const p = data.value?.periodo
-  if (!p?.atualizadoEm) return ''
-  try {
-    return new Intl.DateTimeFormat('pt-BR', { timeZone: p.fuso, hour: '2-digit', minute: '2-digit' })
-      .format(new Date(p.atualizadoEm))
-  } catch { return '' }
-})
+/**
+ * "14:32" da última leitura, no relógio do evento — pronto da rota (`periodo.atualizadoAs`, feito
+ * no banco com o fuso do evento). Formatar data na tela é o que a trava de formato.test.ts proíbe.
+ */
+const atualizadoAs = computed(() => String(data.value?.periodo?.atualizadoAs ?? ''))
 
 const num = (n: number) => Number(n ?? 0).toLocaleString('pt-BR')
 const t = computed(() => data.value?.totais ?? {})

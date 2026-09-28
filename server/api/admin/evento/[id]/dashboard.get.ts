@@ -267,6 +267,7 @@ export default defineEventHandler(async (event) => {
             CASE WHEN $6::date IS NULL THEN NULL
                  ELSE (($6::date + 1)::timestamp AT TIME ZONE $1) - interval '1 millisecond' END AS ant_fim,
             extract(hour FROM now() AT TIME ZONE $1)::int                              AS hora_agora,
+            to_char(now() AT TIME ZONE $1, 'HH24:MI')                                 AS hora_minuto_agora,
             now()                                                                      AS agora`,
     [fuso, diaDe, diaAte, hoje, antDe, antAte])
   const inicio: Date = janela.inicio
@@ -645,6 +646,8 @@ export default defineEventHandler(async (event) => {
       // o que a tela acende e escreve: o nome do período e os dias de calendário dele
       nome: nomeDoPeriodo, diaDe, diaAte: diaDe || diaAte ? (diaAte ?? hoje) : null,
       atualizadoEm: agora.toISOString(),
+      /** "14:32" da leitura NO RELÓGIO DO EVENTO — a tela escreve pronto, sem formatar data na mão */
+      atualizadoAs: String(janela.hora_minuto_agora),
       horaAgora: Number(janela.hora_agora),
     },
     regua: 'pedido que virou dinheiro, pela data do pagamento',

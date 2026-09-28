@@ -90,6 +90,11 @@ describe('série por dia sem buraco, 24 horas e 7 dias (ADM-30)', () => {
     expect(serieDiaria([{ dia: '2026-12-31', n: 1 }, { dia: '2027-01-02', n: 1 }], vazio).map((d) => d.dia))
       .toEqual(['2026-12-31', '2027-01-01', '2027-01-02'])
     expect(serieDiaria([], vazio)).toEqual([])
+    // fim de mês e ano bissexto: o dia seguinte é de calendário
+    expect(serieDiaria([{ dia: '2028-02-27', n: 1 }, { dia: '2028-03-01', n: 1 }], vazio).map((d) => d.dia))
+      .toEqual(['2028-02-27', '2028-02-28', '2028-02-29', '2028-03-01'])
+    expect(serieDiaria([{ dia: '2026-04-30', n: 1 }, { dia: '2026-05-01', n: 1 }], vazio).map((d) => d.dia))
+      .toEqual(['2026-04-30', '2026-05-01'])
   })
 
   it('vinteQuatroHoras e seteDias têm todas as posições', async () => {

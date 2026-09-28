@@ -3,12 +3,17 @@
  * As contas desta tela que não dependem de estado — exportadas pra teste
  * (`app/composables/evento-relatorios.test.ts`): o teste roda estas linhas, não uma cópia.
  */
+import { diaLocal, paraData } from '~/composables/formato'
 
-/** o dia seguinte de um `AAAA-MM-DD` — ao meio-dia UTC, pra horário de verão nenhum pular dia */
+/**
+ * O dia seguinte de um `AAAA-MM-DD` — pelos conversores da casa (`paraData` nasce à meia-noite
+ * LOCAL do dia de calendário; `setDate` anda um dia de calendário, não 24 h, e horário de verão
+ * nenhum pula dia). O `toISOString` que morava aqui é o que a trava de formato.test.ts proíbe.
+ */
 function diaSeguinte(dia: string): string {
-  const d = new Date(`${dia}T12:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + 1)
-  return d.toISOString().slice(0, 10)
+  const d = paraData(dia) as Date
+  d.setDate(d.getDate() + 1)
+  return diaLocal(d)
 }
 
 /** teto da série: 10 anos de dias. Data torta não vira laço sem fim na tela. */
