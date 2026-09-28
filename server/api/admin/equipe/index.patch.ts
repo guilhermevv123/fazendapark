@@ -48,6 +48,8 @@ import { randomInt } from 'node:crypto'
 import { q1, tx } from '../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 import { PAPEIS, ehPapel, papelDoRoleLegado, roleLegado } from '../../../utils/papeis'
+import { explicarErro } from '../evento/index.post'
+import { ROTULOS_DA_EQUIPE } from './index.post'
 
 const Entrada = z.object({
   id: z.string().uuid(),
@@ -72,7 +74,7 @@ export default defineEventHandler(async (event) => {
 
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) {
-    throw createError({ statusCode: 400, statusMessage: 'Dados inválidos', data: p.error.flatten() })
+    throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS_DA_EQUIPE), data: p.error.flatten() })
   }
   const d = p.data
   const papelNovo = d.papel as (typeof PAPEIS)[number] | undefined

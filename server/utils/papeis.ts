@@ -436,7 +436,11 @@ export const ROTULO: Record<Papel, string> = {
 export const RESUMO: Record<Papel, string> = {
   master: 'Tudo, inclusive equipe, base de clientes e credenciais de cobrança.',
   financeiro: 'Dinheiro: saldo, transferência, borderô, extrato e relatórios.',
-  operacao: 'Evento, ingressos, bilheteria e portaria. Não vê o caixa nem pede transferência.',
+  // ADM-65: "Não vê o caixa" era falso — a Operação abre Pontos de venda e a conferência do caixa
+  // do turno, com os totais. O que ela não vê é o dinheiro da PRODUTORA (financeiro, relatórios,
+  // saldo) nem pede transferência. A descrição é o que o dono lê ao dar o papel: tem que bater.
+  operacao: 'Evento, ingressos, bilheteria (com o caixa do turno e a conferência) e portaria. '
+    + 'Não vê o financeiro nem os relatórios da produtora, e não pede transferência.',
   portaria: 'Só o leitor de entrada.',
 }
 
