@@ -1464,6 +1464,20 @@ test.describe('home', () => {
     expect(await preco(/Inteira/), 'a inteira (que vende) saiu riscada').not.toContain('line-through')
   })
 
+  test('matriz 12 · rodapé: "Ingressos e datas" rola até #ingressos e "Área da equipe" abre /entrar', async ({ page }) => {
+    await page.goto('/')
+    await pronta(page)
+    const rodape = page.locator('footer')
+    await rodape.scrollIntoViewIfNeeded()
+    await rodape.getByRole('link', { name: 'Ingressos e datas' }).click()
+    await expect(page).toHaveURL(/\/#ingressos$/)
+    await expect(page.locator('#ingressos')).toBeInViewport()
+    await rodape.scrollIntoViewIfNeeded()
+    await rodape.getByRole('link', { name: 'Área da equipe' }).click()
+    await expect(page).toHaveURL(/\/entrar$/)
+    await expect(page.getByLabel(/senha/i)).toBeVisible()
+  })
+
   test('matriz 7 · os três "Comprar ingressos" (cabeçalho, capa e fim) levam à vitrine do evento à venda', async ({ page }) => {
     await page.goto('/')
     await pronta(page)
