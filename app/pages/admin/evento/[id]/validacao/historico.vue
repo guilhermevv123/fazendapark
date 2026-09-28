@@ -87,22 +87,19 @@ const pico = computed(() => {
   return h.reduce((m: number, x: any) => Math.max(m, x.n), 0)
 })
 
+/**
+ * CSV pelo `baixarCsv` da casa (ADM-14). O "código lido" é o texto que o leitor recebeu — do QR
+ * ou digitado —, e a leitura inválida é gravada como veio: `=HYPERLINK("http://…";"clique")`
+ * saía cru no arquivo e virava fórmula ativa no computador de quem confere. `celulaCsv` põe o
+ * apóstrofo na frente de `= + - @`.
+ */
 function exportar() {
-  const cab = ['Quando', 'Código lido', 'Resultado', 'Motivo', 'Portão', 'Operador',
-               'Titular', 'Setor', 'Lote']
-  const linhas = (data.value?.leituras ?? []).map((l: any) => [
-    new Date(l.quando).toLocaleString('pt-BR'), l.codigo, l.resultado, l.motivo,
-    l.gate ?? '', l.operador ?? '', l.titular ?? '', l.setor ?? '', l.lote ?? '',
-  ])
-  const csv = [cab, ...linhas]
-    .map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';'))
-    .join('\r\n')
-  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `leituras-${id.slice(0, 8)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  baixarCsv(`leituras-${id.slice(0, 8)}`,
+    ['Quando', 'Código lido', 'Resultado', 'Motivo', 'Portão', 'Operador', 'Titular', 'Setor', 'Lote'],
+    (data.value?.leituras ?? []).map((l: any) => [
+      dataHoraSegundo(l.quando, ''), l.codigo, l.resultado, l.motivo,
+      l.gate ?? '', l.operador ?? '', l.titular ?? '', l.setor ?? '', l.lote ?? '',
+    ]))
 }
 
 useHead({ title: 'Histórico de leituras' })
