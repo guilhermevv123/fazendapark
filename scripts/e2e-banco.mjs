@@ -10,7 +10,8 @@
  *
  * O que sobra no fim: o esquema inteiro (db/*.sql em ordem), o seed de TESTE (organização, evento
  * de exemplo, dono e portaria) e mais dois logins que o seed não cria — financeiro e operação —
- * pra bateria exercitar os quatro papéis. Senha de todos: E2E_SENHA (padrão a do seed).
+ * pra bateria exercitar os quatro papéis. Senha de todos: E2E_SENHA (padrão a do seed). Por fim,
+ * os dados de e2e/dados/*.sql (eventos encerrados com venda, saque e estorno).
  *
  *   npm run e2e:banco
  */
@@ -84,5 +85,19 @@ if (process.env.E2E_SENHA) {
   // o seed grava a senha dele; a bateria precisa que os quatro entrem com a MESMA
   await d.query(`UPDATE users SET password_hash = $1 WHERE org_id = $2`, [hash, org.id])
 }
-await d.end()
 console.log('e2e-banco: logins master, financeiro, operacao e portaria prontos')
+
+// 5. os dados de que os casos dependem e o seed não tem (e2e/dados/*.sql, em ordem): eventos
+// encerrados com venda, saque e estorno. Sem eles, o caso passava só no banco de quem os criou à mão.
+const pastaDados = new URL('../e2e/dados/', import.meta.url)
+const fixtures = readdirSync(pastaDados).filter((f) => f.endsWith('.sql')).sort()
+for (const f of fixtures) {
+  try {
+    await d.query(readFileSync(new URL(f, pastaDados), 'utf8'))
+  } catch (e) {
+    console.error(`e2e-banco: e2e/dados/${f} falhou: ${e.message}`)
+    process.exit(1)
+  }
+}
+await d.end()
+console.log(`e2e-banco: ${fixtures.length} arquivo(s) de dados da bateria aplicados`)

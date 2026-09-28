@@ -77,13 +77,19 @@ test.describe('vitrine: escolher os ingressos', () => {
     await expect(page.getByText('Meia-entrada: quem tem direito?')).toHaveCount(0)
   })
 
-  test('F5 na vitrine não quebra nada: a página volta limpa e deixa escolher de novo', async ({ page }) => {
+  // B19 (frota F1, 28/09): o F5 GUARDA a escolha (antes voltava limpa e a pessoa perdia o carrinho).
+  // Aqui o que se confere é mexer DEPOIS do F5: tirar até zerar trava o pagamento, pôr de novo solta.
+  test('F5 na vitrine mantém a escolha e deixa mexer de novo: tirar zera e trava, pôr solta', async ({ page }) => {
     const problemas = vigiar(page)
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
     await page.reload()
     await hidratada(page)
+    await expect(menos(page, 'Inteira')).toBeEnabled()
+    await expect(botaoIrPagar(page)).toBeEnabled()
+    await menos(page, 'Inteira').click()
     await expect(menos(page, 'Inteira')).toBeDisabled()
+    await expect(botaoIrPagar(page)).toBeDisabled()
     await mais(page, 'Inteira').click()
     await expect(botaoIrPagar(page)).toBeEnabled()
     expect(problemas).toEqual([])

@@ -256,15 +256,22 @@ test.describe('menu por papel (layout)', () => {
     test.use({ storageState: sessao('portaria') })
     test('portaria: no painel o menu diz o porquê; no leitor, sem "Voltar aos eventos" e sem EVENTOS como link (ADM-56)', async ({ page }) => {
       await abrir(page, '/admin')
-      await expect(menu(page)).toContainText('Seu acesso é só o leitor de entrada')
-      // o que a tela oferece segue a rota do leitor: vários → um botão por evento; nenhum → a frase
+      // o que a tela oferece segue a rota do leitor: um → vai direto pra ele; vários → um botão por
+      // evento; nenhum → a frase. Com UM (a base da bateria: só o evento de exemplo está à venda) a
+      // portaria nem fica no /admin, e a frase do menu é de quem fica — ela mora no teste de tela
+      // (telas.test.ts). Este caso passava só no banco da frota F2, que tinha sobra de outras rodadas.
       const destino = await api(page, '/api/portaria/destino')
-      if (destino.eventos.length > 1) {
-        for (const e of destino.eventos) await expect(page.locator(`a[href="/admin/evento/${e.id}/validacao"]`).first()).toBeVisible()
-      } else if (!destino.eventos.length) {
-        await expect(page.getByText('Nenhum evento com leitor aberto agora')).toBeVisible()
+      if (destino.eventos.length === 1) {
+        await expect(page).toHaveURL(new RegExp(`/admin/evento/${destino.eventos[0].id}/validacao`))
+      } else {
+        await expect(menu(page)).toContainText('Seu acesso é só o leitor de entrada')
+        if (destino.eventos.length > 1) {
+          for (const e of destino.eventos) await expect(page.locator(`a[href="/admin/evento/${e.id}/validacao"]`).first()).toBeVisible()
+        } else {
+          await expect(page.getByText('Nenhum evento com leitor aberto agora')).toBeVisible()
+        }
+        await expect(page.getByText('Nenhum evento aqui ainda')).toHaveCount(0)
       }
-      await expect(page.getByText('Nenhum evento aqui ainda')).toHaveCount(0)
       await abrir(page, `/admin/evento/${EVENTO_SEED.id}/validacao`)
       expect(await nomesDoMenu(page)).toEqual(['Validação e acessos', 'Leitor de entrada'])
       await expect(page.getByText('Voltar aos eventos')).toHaveCount(0)
@@ -343,10 +350,10 @@ test.describe('Eventos (/admin)', () => {
     await expect(page).toHaveURL(/situacao=encerrado/)
     await page.locator('[data-parte="busca"]').fill('Sábado')
     await expect(page).toHaveURL(/busca=S%C3%A1bado|busca=Sábado/)
-    await expect(page.locator('li[data-evento] h2')).toHaveText(['DEMO F2 · Sábado 29/08'])
+    await expect(page.locator('li[data-evento] h2')).toHaveText(['DEMO E2E · Sábado'])
     await page.reload()
     await hidratada(page)
-    await expect(page.locator('li[data-evento] h2')).toHaveText(['DEMO F2 · Sábado 29/08'])
+    await expect(page.locator('li[data-evento] h2')).toHaveText(['DEMO E2E · Sábado'])
     await expect(page.locator('[data-situacao="encerrado"]')).toHaveAttribute('aria-pressed', 'true')
     await menu(page).getByRole('link', { name: 'Eventos', exact: true }).click()
     await expect(page).toHaveURL(/\/admin$/)
@@ -505,7 +512,7 @@ test.describe('Visão geral (/admin/relatorios)', () => {
   test('REL-07: filtrado por evento, o clique em "Visão geral" no menu desfiltra tela e URL (e o F5 concorda)', async ({ page }) => {
     await abrir(page, '/admin/relatorios?periodo=tudo')
     const eventos = await api(page, '/api/admin/eventos')
-    const demo = eventos.find((e: any) => e.nome.startsWith('DEMO F2 · Domingo'))
+    const demo = eventos.find((e: any) => e.nome.startsWith('DEMO E2E · Domingo'))
     await page.locator('[data-parte="filtro-evento"]').selectOption(demo.id)
     await expect(page).toHaveURL(new RegExp(`evento=${demo.id}`))
     const soDele = await api(page, `/api/admin/relatorios?periodo=tudo&evento=${demo.id}`)
