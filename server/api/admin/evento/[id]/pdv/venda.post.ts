@@ -20,7 +20,8 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { q, q1, tx } from '../../../../../utils/db'
 import { EstoqueInsuficiente, LoteIndisponivel, reservar } from '../../../../../utils/estoque'
-import { faceDoTipo, somarPedido, type ModoTaxa } from '../../../../../utils/dinheiro'
+import { faceDoTipo, type ModoTaxa } from '../../../../../utils/dinheiro'
+import { aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom } from '../../../../../utils/cupom'
 import { gerarCodigo } from '../../../../../utils/ingresso'
 import { emitirNaTransacao } from '../../../../../utils/emissao'
 import { SQL_FIM_DO_DIA_DO_LOTE, SQL_TRAVA_TURNO_ABERTO } from '../../../../../utils/caixa'
@@ -272,39 +273,23 @@ export default defineEventHandler(async (event) => {
   })
 
   // --------------------------------------------------------------- cupom
-  let cupom: any = null
-  if (d.cupom) {
-    cupom = await q1<any>(
-      `SELECT * FROM promo_codes
-        WHERE event_id = $1 AND upper(code) = upper($2) AND active = true
-          AND (starts_at IS NULL OR starts_at <= now())
-          AND (ends_at   IS NULL OR ends_at   >= now())
-          AND (max_uses  IS NULL OR uses < max_uses)`, [ev.id, d.cupom])
-    if (!cupom) throw createError({ statusCode: 422, statusMessage: 'Cupom inválido ou expirado' })
-    if (cupom.lot_ids?.length) {
-      const vale = d.itens.every((i) => cupom.lot_ids.includes(i.lotId))
-      if (!vale) throw createError({ statusCode: 422, statusMessage: 'Cupom não vale para estes ingressos' })
-    }
+  // A MESMA régua do site (ADM-15): `resgatarCupom` trava a linha do cupom e conta os usos em
+  // `orders` (não no placar `uses`, que o carrinho expirado também gasta), com limite total,
+  // limite por CPF e teto de desconto (`aplicarCupom`). Era um SELECT solto `uses < max_uses`
+  // fora da transação e um `uses + 1` depois: dois caixas passavam juntos num cupom de 1 uso,
+  // o "1 por pessoa" e o teto eram ignorados, e o balcão recusava cupom que o site aceitava.
+  //
+  // O "um por pessoa" responde pelo CPF — então, no balcão, cupom pede o CPF do cliente.
+  if (d.cupom && !documento) {
+    throw createError({
+      statusCode: 422,
+      statusMessage: 'Cupom no balcão pede o CPF do cliente: é ele que responde pelo limite de uso por pessoa.',
+      data: { tipo: 'cupom', motivo: 'sem_cpf' },
+    })
   }
 
   // O modo do BALCÃO, não o do site.
   const modo: ModoTaxa = ev.fee_mode_pos
-  const total = somarPedido(linhas, Number(ev.fee_bps), modo,
-    cupom ? { kind: cupom.kind, value: Number(cupom.value) } : undefined)
-
-  // ------------------------------------------------------------- o troco
-  let trocoCents: number | null = null
-  let recebidoCents: number | null = null
-  if (d.forma === 'dinheiro') {
-    recebidoCents = d.recebidoCents ?? total.totalCents
-    if (recebidoCents < total.totalCents) {
-      throw createError({
-        statusCode: 422,
-        statusMessage: 'O valor recebido é menor que o total da venda.',
-      })
-    }
-    trocoCents = recebidoCents - total.totalCents
-  }
 
   // ------------------------ tudo num commit só: venda + estoque + ingresso
   const resultado = await tx(async (c) => {
@@ -323,6 +308,57 @@ export default defineEventHandler(async (event) => {
     await reservar(c, d.itens.map((i) => ({
       lotId: i.lotId, ticketTypeId: i.ticketTypeId ?? null, quantidade: i.quantidade,
     })), { canal: 'bilheteria' })
+
+    // O cupom DEPOIS de `reservar()` — a ordem do checkout (lote antes do cupom), senão duas
+    // vendas que pegam os mesmos dois recursos em ordens opostas se prendem uma na outra.
+    const cupom = d.cupom
+      ? await resgatarCupom(c, {
+          eventId: ev.id, codigo: d.cupom, documento: documento!,
+          lotIdsDoPedido: d.itens.map((i) => i.lotId), fuso: ev.timezone,
+        })
+      : null
+    // "Um por pessoa" também vê a venda de BALCÃO. `resgatarCupom` conta o CPF pelo cadastro do
+    // cliente (`customers.document`), e o balcão sem e-mail não cria cadastro — o CPF vai no
+    // ingresso (`holder_document`). Sem esta conta, o mesmo CPF usava o cupom "1 por pessoa"
+    // no guichê quantas vezes quisesse. A linha do cupom já está travada pelo resgate.
+    if (cupom) {
+      const { rows: [uso] } = await c.query(
+        `SELECT pc.max_per_customer,
+                count(o.id) FILTER (WHERE cu.document = $2
+                                       OR (o.customer_id IS NULL AND EXISTS (
+                                             SELECT 1 FROM tickets t
+                                              WHERE t.order_id = o.id AND t.holder_document = $2)))::int
+                  AS da_pessoa
+           FROM promo_codes pc
+           LEFT JOIN orders o ON o.promo_code_id = pc.id AND o.status = ANY($3::text[])
+           LEFT JOIN customers cu ON cu.id = o.customer_id
+          WHERE pc.id = $1
+          GROUP BY pc.max_per_customer`, [cupom.id, documento, PEDIDO_EM_PE as unknown as string[]])
+      const porPessoa = Number(uso?.max_per_customer ?? 1)
+      if (Number(uso?.da_pessoa ?? 0) >= porPessoa) {
+        throw new CupomRecusado(
+          porPessoa === 1
+            ? `Este CPF já usou o cupom ${cupom.codigo}. Ele vale uma vez por pessoa.`
+            : `Este CPF já usou o cupom ${cupom.codigo} ${uso.da_pessoa} vezes — o limite é ${porPessoa} por pessoa.`,
+          'uma_vez_por_pessoa')
+      }
+    }
+    const total = aplicarCupom(linhas, Number(ev.fee_bps), modo, cupom)
+
+    // ------------------------------------------------------------- o troco
+    // Aqui dentro porque o total só existe com o cupom resgatado; recusar aqui desfaz tudo.
+    let trocoCents: number | null = null
+    let recebidoCents: number | null = null
+    if (d.forma === 'dinheiro') {
+      recebidoCents = d.recebidoCents ?? total.totalCents
+      if (recebidoCents < total.totalCents) {
+        throw createError({
+          statusCode: 422,
+          statusMessage: 'O valor recebido é menor que o total da venda.',
+        })
+      }
+      trocoCents = recebidoCents - total.totalCents
+    }
 
     // A cota de meia, com a trava do lote na mão e ESTA venda já somada em `sold` — a mesma
     // conferência do checkout, na mesma ordem (lotes ordenados: duas vendas que levam os
@@ -427,6 +463,10 @@ export default defineEventHandler(async (event) => {
 
     return { orderId: ord.rows[0].id as string }
   }).catch(async (e) => {
+    if (e instanceof CupomRecusado) {
+      throw createError({ statusCode: e.status, statusMessage: e.recado,
+        data: { tipo: 'cupom', motivo: e.motivo } })
+    }
     if (e instanceof EstoqueInsuficiente) {
       throw createError({ statusCode: 409, statusMessage: recadoDeEsgotado(e),
         data: { tipo: 'estoque', disponivel: e.disponivel } })
