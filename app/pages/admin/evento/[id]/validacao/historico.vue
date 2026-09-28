@@ -16,20 +16,35 @@
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id as string
 
-const resultado = ref('')
-const gate = ref('')
-const busca = ref('')
-const pagina = ref(1)
+// Filtros e página na URL (ADM-31): o link "as recusas do portão 2" mandado pro supervisor abre
+// no mesmo recorte, e o F5 não volta pra primeira página de tudo. `replace`, não `push`.
+const naUrl = (chave: string) => {
+  const v = route.query[chave]
+  return String((Array.isArray(v) ? v[0] : v) ?? '')
+}
+const resultado = ref(naUrl('resultado'))
+const gate = ref(naUrl('portao'))
+const busca = ref(naUrl('busca'))
+const pagina = ref(Math.max(1, Number.parseInt(naUrl('pagina'), 10) || 1))
 
-const buscaDebounce = ref('')
+const buscaDebounce = ref(busca.value)
 let timer: any
 watch(busca, (v) => {
   clearTimeout(timer)
   timer = setTimeout(() => { buscaDebounce.value = v; pagina.value = 1 }, 300)
 })
 watch([resultado, gate], () => { pagina.value = 1 })
+watch([resultado, gate, buscaDebounce, pagina], () => {
+  const query: Record<string, string> = {}
+  if (resultado.value) query.resultado = resultado.value
+  if (gate.value) query.portao = gate.value
+  if (buscaDebounce.value.trim()) query.busca = buscaDebounce.value.trim()
+  if (pagina.value > 1) query.pagina = String(pagina.value)
+  router.replace({ query })
+})
 
 const { data, pending, error: falha, refresh } = await useFetch<any>(
   () => `/api/admin/evento/${id}/checkins`,

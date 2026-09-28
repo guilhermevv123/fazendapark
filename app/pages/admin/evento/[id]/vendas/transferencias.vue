@@ -9,13 +9,32 @@
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id as string
 
-const busca = ref('')
-const filtro = ref('')
+// Busca e situação na URL (ADM-31): F5 e o link mantêm o recorte. `replace`, não `push`. A busca
+// espera a pessoa parar de digitar (cada tecla era uma consulta) e vai junto pra URL.
+const naUrl = (chave: string) => {
+  const v = route.query[chave]
+  return String((Array.isArray(v) ? v[0] : v) ?? '')
+}
+const busca = ref(naUrl('busca'))
+const filtro = ref(naUrl('status'))
+const buscaDebounced = ref(busca.value)
+let timerBusca: any
+watch(busca, (v) => {
+  clearTimeout(timerBusca)
+  timerBusca = setTimeout(() => { buscaDebounced.value = v }, 300)
+})
+watch([buscaDebounced, filtro], () => {
+  const query: Record<string, string> = {}
+  if (buscaDebounced.value.trim()) query.busca = buscaDebounced.value.trim()
+  if (filtro.value) query.status = filtro.value
+  router.replace({ query })
+})
 const { data, refresh, pending, error: falha } = await useFetch<any>(
   () => `/api/admin/evento/${id}/transferencias`,
-  { query: { busca, status: filtro } })
+  { query: { busca: buscaDebounced, status: filtro } })
 
 const erro = ref('')
 const aviso = ref('')

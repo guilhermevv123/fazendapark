@@ -204,3 +204,103 @@ describe('transferências — "Link copiado" só quando copiou (ADM-55)', () => 
     } finally { vi.unstubAllGlobals() }
   })
 })
+
+// ===========================================================================
+// Filtros na URL (ADM-31): vendas, histórico de leituras e transferências
+// ===========================================================================
+import { unref } from 'vue'
+
+describe('filtros na URL — F5 e link mantêm o recorte (ADM-31)', () => {
+  /** monta registrando o `query` que cada useFetch recebeu */
+  async function montarRegistrando(tela: any, query: Record<string, string>, respostas: Record<string, any>) {
+    const pedidos: { url: string; op: any }[] = []
+    const original = (globalThis as any).useFetch
+    vi.stubGlobal('useFetch', (url: any, op?: any) => {
+      pedidos.push({ url: String(typeof url === 'function' ? url() : url), op })
+      return original(url, op)
+    })
+    try {
+      const w = await montarTela(tela, {
+        rota: { params: { id: EV }, query }, respostas,
+        stubs: { AbasSecao: true, ModalLateral: true },
+      })
+      const consulta = (fim: string) => {
+        const q = pedidos.find((p) => p.url.endsWith(fim))?.op?.query ?? {}
+        return Object.fromEntries(Object.entries(q).map(([k, v]) => [k, unref(v as any)]))
+      }
+      return { w, consulta }
+    } finally { vi.unstubAllGlobals() }
+  }
+  const espera = (ms = 350) => new Promise((r) => setTimeout(r, ms))
+
+  it('vendas: busca, situação, canal e página vêm da URL e voltam pra ela', async () => {
+    const { navegacoes } = await import('./.vitest-setup-dom')
+    const VENDAS = {
+      evento: { id: EV, nome: 'Evento' }, pagina: 3, porPagina: 50, total: 200,
+      totais: { pedidos: 200, cobradoCents: 0, liquidoCents: 0, pendenteCents: 0, estornadoCents: 0,
+                ingressosVendidos: 0, cortesias: 0 },
+      pedidos: [],
+    }
+    const { w, consulta } = await montarRegistrando(
+      await import('../pages/admin/evento/[id]/vendas/index.vue'),
+      { busca: 'ana', situacao: 'pago', canal: 'online', pagina: '3' },
+      { [`/api/admin/evento/${EV}/vendas`]: VENDAS })
+    expect(consulta('/vendas'), 'o F5 voltou pra primeira página de tudo')
+      .toEqual({ busca: 'ana', situacao: 'pago', canal: 'online', pagina: 3 })
+    expect((w.find('input.campo').element as HTMLInputElement).value).toBe('ana')
+    expect(w.text()).toContain('página 3 de 4')
+
+    await w.findAll('select')[0].setValue('estornado')
+    await espera()
+    // (o temporizador de busca de uma tela de outro caso pode cair aqui: olha só as desta tela)
+    expect(navegacoes.filter((n) => 'situacao' in (n.query ?? {})).at(-1), 'o filtro não foi pra URL (a página volta pra 1)')
+      .toEqual({ query: { busca: 'ana', situacao: 'estornado', canal: 'online' } })
+  })
+
+  it('histórico: resultado, portão e página vêm da URL e voltam pra ela', async () => {
+    const { navegacoes } = await import('./.vitest-setup-dom')
+    const CHECKINS = {
+      evento: { id: EV, nome: 'Evento' },
+      resumo: { leituras: 0, aceitas: 0, recusadas: 0, entraram: 0, pessoas: 0, aptos: 0, faltam: 0, comparecimentoPct: 0 },
+      porHora: [], pagina: 2, paginas: 5, leituras: [],
+      portoes: [{ gate: 'Portão A', filtro: 'Portão A', leituras: 10 }, { gate: 'Portão B', filtro: 'Portão B', leituras: 4 }],
+    }
+    const { w, consulta } = await montarRegistrando(
+      await import('../pages/admin/evento/[id]/validacao/historico.vue'),
+      { resultado: 'ja_usado', portao: 'Portão B', pagina: '2' },
+      {
+        [`/api/admin/evento/${EV}/checkins`]: CHECKINS,
+        '/api/portaria/sincronizar': { publico: { pessoas: 0, entradas: 0, offline: 0, ingressos: 0, aptos: 0, comparecimentoPct: 0 }, conflitos: [] },
+      })
+    expect(consulta('/checkins')).toEqual({ resultado: 'ja_usado', gate: 'Portão B', busca: '', pagina: 2 })
+    expect((w.find('select#r').element as HTMLSelectElement).value).toBe('ja_usado')
+    expect((w.find('select#g').element as HTMLSelectElement).value).toBe('Portão B')
+
+    await w.find('select#r').setValue('invalido')
+    await espera()
+    expect(navegacoes.filter((n) => 'resultado' in (n.query ?? {})).at(-1))
+      .toEqual({ query: { resultado: 'invalido', portao: 'Portão B' } })
+  })
+
+  it('transferências: busca e situação vêm da URL; a busca espera parar de digitar e vai pra URL', async () => {
+    const { navegacoes } = await import('./.vitest-setup-dom')
+    const TRANSF = { evento: { id: EV, permite: true },
+                     resumo: { aguardando: 0, concluido: 0, cancelado: 0, expirado: 0 }, transferencias: [] }
+    const { w, consulta } = await montarRegistrando(
+      await import('../pages/admin/evento/[id]/vendas/transferencias.vue'),
+      { busca: 'ana@', status: 'aguardando' },
+      { [`/api/admin/evento/${EV}/transferencias`]: TRANSF })
+    expect(consulta('/transferencias')).toEqual({ busca: 'ana@', status: 'aguardando' })
+    const chip = w.findAll('button').find((b) => b.text() === 'Aguardando')!
+    expect(chip.classes()).toContain('chip-ativo')
+
+    const campo = w.find('input[placeholder^="Busque por e-mail"]')
+    const antes = navegacoes.length
+    await campo.setValue('bia')
+    expect(consulta('/transferencias').busca, 'cada tecla virou consulta').toBe('ana@')
+    await espera()
+    expect(consulta('/transferencias').busca).toBe('bia')
+    expect(navegacoes.slice(antes).filter((n) => n.query?.status === 'aguardando').at(-1))
+      .toEqual({ query: { busca: 'bia', status: 'aguardando' } })
+  })
+})

@@ -28,20 +28,36 @@ const route = useRoute()
 const router = useRouter()
 const id = route.params.id as string
 
-const busca = ref('')
-const situacao = ref('')
-const canal = ref('')
-const pagina = ref(1)
+// Busca, filtros e página na URL (ADM-31): F5 e o link mandado pra equipe mantêm o recorte, em
+// vez de voltar pra primeira página de tudo. `replace`, não `push` — filtrar não é navegar.
+const naUrl = (chave: string) => {
+  const v = route.query[chave]
+  return String((Array.isArray(v) ? v[0] : v) ?? '')
+}
+const busca = ref(naUrl('busca'))
+const situacao = ref(naUrl('situacao'))
+const canal = ref(naUrl('canal'))
+const pagina = ref(Math.max(1, Number.parseInt(naUrl('pagina'), 10) || 1))
 
 // debounce na busca: cada tecla disparando consulta é o jeito mais fácil de
 // transformar uma lista de 10 mil pedidos em travamento.
-const buscaDebounced = ref('')
+const buscaDebounced = ref(busca.value)
 let timer: any
 watch(busca, (v) => {
   clearTimeout(timer)
   timer = setTimeout(() => { buscaDebounced.value = v; pagina.value = 1 }, 300)
 })
 watch([situacao, canal], () => { pagina.value = 1 })
+watch([buscaDebounced, situacao, canal, pagina], () => {
+  const query: Record<string, string> = {}
+  if (buscaDebounced.value.trim()) query.busca = buscaDebounced.value.trim()
+  if (situacao.value) query.situacao = situacao.value
+  if (canal.value) query.canal = canal.value
+  if (pagina.value > 1) query.pagina = String(pagina.value)
+  // o link da ficha (`?pedido=`) continua valendo enquanto ela estiver aberta
+  if (route.query.pedido) query.pedido = String(route.query.pedido)
+  router.replace({ query })
+})
 
 // o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
 const { data: eu } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
