@@ -538,6 +538,17 @@ describe('código digitado à mão pede o documento (ADM-25)', () => {
     expect(t.find('[data-parte="codigo-digitado"]').exists(), 'QR assinado tratado como digitado').toBe(false)
   })
 
+  it('QR de antes da troca de chave: o servidor libera pelo código e a tela pede o documento', async () => {
+    // o servidor manda `qrAntigo` quando a chave que assinou saiu do TICKET_KEYS (checkin.post.ts);
+    // o leitor não tem as chaves pra saber sozinho
+    const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'Liberado', qrAntigo: true,
+      aviso: 'QR de antes da troca de chave: confira o documento', ingresso: { titular: 'Ana' } })
+    await lerCodigo(t, `DT2:zzvelha:${EVENTO}:CON-AAAA-BBBB:ABCDEFGHJK`)
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    expect(t.find('[data-parte="codigo-digitado"]').text(), 'QR antigo liberado sem pedir o documento')
+      .toBe('QR de antes da troca de chave: confira o documento')
+  })
+
   it('recusa e "só conferir" não ganham o aviso — ele é sobre quem ENTRA', async () => {
     const t = await abrirLeitor({ ok: false, resultado: 'ja_usado', mensagem: 'Este ingresso já entrou' })
     await lerCodigo(t, 'CON-AAAA-BBBB')

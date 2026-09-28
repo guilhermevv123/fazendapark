@@ -19,6 +19,7 @@
  */
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
+import type { H3Event } from 'h3'
 import { q, q1, tx } from '../utils/db'
 import {
   ehPassaporte, meiaDoIngresso, mensagemDoPassaporte, passarPassaporte, retratoDoPublico,
@@ -47,7 +48,23 @@ const Entrada = z.object({
   deviceId: z.string().max(60).optional(),
 })
 
+/**
+ * QR assinado com uma chave que SAIU da lista (troca de `TICKET_KEYS`, ou DT1 sem a chave antiga —
+ * ver `utils/ingresso.ts`) não é QR fabricado: é o ingresso de quem pagou, vendido antes da troca.
+ * Até 28/09 a porta dizia "Ingresso inválido" pra ele — trocar a chave barrava o público inteiro
+ * na entrada. O código de dentro dele vale como o DIGITADO à mão (quem decide é o banco), e a
+ * resposta pede pra conferir o documento, igual ao código digitado.
+ */
+export const AVISO_QR_ANTIGO = 'QR de antes da troca de chave: confira o documento'
+
 export default defineEventHandler(async (event) => {
+  const resposta: any = await decidir(event)
+  return (event.context as any).qrAntigo && resposta && typeof resposta === 'object'
+    ? { ...resposta, qrAntigo: true, aviso: AVISO_QR_ANTIGO }
+    : resposta
+})
+
+async function decidir(event: H3Event) {
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS) })
   const { qr, eventId, gate, apenasConsultar, entradaId, deviceId } = p.data
@@ -128,14 +145,17 @@ export default defineEventHandler(async (event) => {
 
   // O QR pode vir assinado (DT1:...) ou o operador digitou o código legível.
   const lido = lerQr(qr)
-  const codigo = lido.ok ? lido.code! : qr.trim().toUpperCase()
+  // chave aposentada: o código lido vale como o digitado (ver AVISO_QR_ANTIGO, acima)
+  const qrAntigo = !lido.ok && lido.chaveAposentada === true && !!lido.code
+  if (qrAntigo) (event.context as any).qrAntigo = true
+  const codigo = lido.ok || qrAntigo ? lido.code! : qr.trim().toUpperCase()
 
-  if (!lido.ok && lido.motivo === 'assinatura') {
+  if (!lido.ok && lido.motivo === 'assinatura' && !qrAntigo) {
     // Formato certo, assinatura errada = alguém fabricou. Isso é o achado mais
     // importante que esta rota produz; fica marcado como inválido e auditável.
     return registrar('invalido', null, qr)
   }
-  if (lido.ok && lido.eventId !== eventId) {
+  if ((lido.ok || qrAntigo) && lido.eventId !== eventId) {
     return registrar('evento_errado', null, qr)
   }
 
@@ -270,7 +290,7 @@ export default defineEventHandler(async (event) => {
 
   const r = await registrar('ok', ingresso.id, codigo)
   return { ...r, ingresso: dadosDoIngresso(ingresso), pessoas: passagem.pessoas }
-})
+}
 
 function dadosDoIngresso(i: any) {
   return {

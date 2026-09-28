@@ -50,6 +50,7 @@ const P_AMANHA = id(24)
 const COMUM = id(25)
 const P_QUEIMADO = id(26)      // queimado pela porta velha no 1º dia
 const COMUM_USADO = id(27)
+const COMUM_QR_ANTIGO = id(28)  // ingresso comum lido offline com QR de chave aposentada
 const MARCA = MARCA_MAIUSCULA.toLowerCase()
 const EMAIL = `dono.passaporte.${MARCA}@teste.invalido`
 const cod = (s: string) => `ZZPP-${MARCA_MAIUSCULA}-${s}`
@@ -150,6 +151,7 @@ beforeAll(async () => {
   await ingresso(P_QUEIMADO, SETOR_DIAS, LOTE_DIAS, cod('QUEI'))
   await passagemAntiga(P_QUEIMADO, S_ONTEM, 24)
   await ingresso(COMUM_USADO, SETOR_UM_DIA, LOTE_UM_DIA, cod('CUSA'))
+  await ingresso(COMUM_QR_ANTIGO, SETOR_UM_DIA, LOTE_UM_DIA, cod('QRAN'))
   await passagemAntiga(COMUM_USADO, null, 24)
   await sql(`UPDATE tickets SET status = 'usado' WHERE id = ANY($1::uuid[])`, [[P_QUEIMADO, COMUM_USADO]])
 
@@ -250,6 +252,20 @@ describe('passaporte de vários dias na porta', () => {
     expect(s.status).toBe(200)
     expect(s.corpo.itens[0].resultado, JSON.stringify(s.corpo.itens)).toBe('conflito')
     expect(s.corpo.conflitos.some(conflitou), 'duas passagens no mesmo dia sumiram dos conflitos').toBe(true)
+  }, 120_000)
+
+  it('sincronização: QR de chave aposentada é a entrada de quem pagou, não "código não encontrado"', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    // o tablet deixou entrar sem rede (a lista dele confere o código); na volta, o servidor não
+    // pode chamar de inválido o QR assinado com uma chave que saiu do TICKET_KEYS (a troca de
+    // chave) — o livro perderia a entrada de quem pagou. Mutação conferida: sem o `qrAntigo` em
+    // sincronizar.post.ts, o resultado vira 'invalido' e a passagem não entra no livro.
+    const { randomUUID } = await import('node:crypto')
+    const s = await sincronizar([{ id: randomUUID(), qr: `DT2:zzvelha:${EVENTO}:${cod('QRAN')}:QUALQUER`, gate: 'SUL', offline: true }])
+    expect(s.status).toBe(200)
+    expect(s.corpo.itens[0].resultado, JSON.stringify(s.corpo.itens)).toBe('aplicada')
+    expect(await status(COMUM_QR_ANTIGO)).toBe('usado')
+    expect((await sql(`SELECT count(*)::int AS n FROM entries WHERE ticket_id = $1`, [COMUM_QR_ANTIGO]))[0].n).toBe(1)
   }, 120_000)
 
   it('migração 032: reabre o passaporte que a porta velha queimou, e só ele', async (ctx) => {

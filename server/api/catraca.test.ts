@@ -90,6 +90,7 @@ const cod = (sufixo: string) => `ZZT-${MARCA_MAIUSCULA}-${sufixo}`
 const COD_OK = cod('AAAA')
 const COD_CANCELADO = cod('BBBB')
 const COD_PASSADO = cod('CCCC')
+const COD_ANTIGO = cod('EEEE')
 const COD_VIZINHO = cod('DDDD')
 
 let sonda: Sonda = { noAr: false, porque: 'o beforeAll não chegou a rodar' }
@@ -174,6 +175,7 @@ beforeAll(async () => {
   await semearIngresso(COD_PASSADO, ORG_CASA, EVENTO_CASA, SESSAO_PASSADA, SETOR_CASA, LOTE_CASA)
   await semearIngresso(COD_VIZINHO, ORG_VIZINHA, EVENTO_VIZINHO, SESSAO_VIZINHA,
                        SETOR_VIZINHO, LOTE_VIZINHO)
+  await semearIngresso(COD_ANTIGO, ORG_CASA, EVENTO_CASA, SESSAO_ABERTA, SETOR_CASA, LOTE_CASA)
 
   // Porteiro de verdade, com o papel de portaria — o mesmo caminho do tablet
   // na porta. A senha vem do hash já semeado, pra o teste não gerar hash.
@@ -437,6 +439,28 @@ describe('catraca', () => {
 
     const t = await ingresso(COD_PASSADO)
     expect(t.status, 'o QR fabricado mexeu no ingresso').toBe('valido')
+  }, 20_000)
+
+  it('QR de uma chave que SAIU da lista entra pelo código, pedindo o documento — e só uma vez', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    // kid que não está no TICKET_KEYS deste servidor = chave aposentada (a troca de chave): é o
+    // ingresso de quem pagou antes da troca, não QR fabricado. Até 28/09 a porta dizia "Ingresso
+    // inválido" e trocar a chave barrava o público inteiro. Mutação conferida: sem o `qrAntigo`
+    // em checkin.post.ts, o primeiro `expect` vira 'invalido'.
+    const antigo = `DT2:zzvelha:${EVENTO_CASA}:${COD_ANTIGO}:QUALQUERASSINATURA`
+    const { corpo } = await ler(antigo)
+    expect(corpo.resultado, 'trocar a chave barrou quem pagou antes da troca').toBe('ok')
+    expect(corpo.qrAntigo).toBe(true)
+    expect(corpo.aviso).toMatch(/confira o documento/)
+    expect((await ingresso(COD_ANTIGO)).status).toBe('usado')
+
+    const deNovo = await ler(antigo, EVENTO_CASA, 'PORTAO-2')
+    expect(deNovo.corpo.resultado, 'o QR antigo furou a trava de uma entrada só').toBe('ja_usado')
+    // chave aposentada NÃO é passe livre: código que não existe continua inválido, e o de outro
+    // evento continua sendo de outro evento
+    expect((await ler(`DT2:zzvelha:${EVENTO_CASA}:${cod('ZZZZ')}:X`)).corpo.resultado).toBe('invalido')
+    expect((await ler(`DT2:zzvelha:${EVENTO_VIZINHO}:${COD_VIZINHO}:X`)).corpo.resultado).toBe('evento_errado')
+    expect((await ingresso(COD_VIZINHO)).status, 'o QR antigo queimou ingresso da vizinha').toBe('valido')
   }, 20_000)
 
   it('ingresso cancelado é barrado', async (ctx) => {

@@ -144,7 +144,11 @@ export default defineEventHandler(async (event) => {
     // O QR pode vir assinado (DT1:…) ou o operador digitou o código legível —
     // o mesmo par de casos do leitor online.
     const lido = lerQr(item.qr)
-    const codigo = lido.ok ? lido.code! : item.qr.trim().toUpperCase()
+    // QR de uma chave que saiu da lista (troca de TICKET_KEYS) é ingresso de quem pagou antes da
+    // troca, não QR fabricado: o código de dentro vale como o digitado — o mesmo do leitor online
+    // (`AVISO_QR_ANTIGO` em api/checkin.post.ts)
+    const qrAntigo = !lido.ok && lido.chaveAposentada === true && !!lido.code
+    const codigo = lido.ok || qrAntigo ? lido.code! : item.qr.trim().toUpperCase()
 
     // A hora do aparelho passa pela cerca ANTES de virar linha: o que é
     // recusado é o INSTANTE, nunca a passagem (ver a nota em utils/catraca.ts).
@@ -169,8 +173,8 @@ export default defineEventHandler(async (event) => {
 
     // Assinatura errada = QR fabricado. Não entra no livro: contar gente que
     // não existe é pior do que perder o registro de uma que existe.
-    if (!lido.ok && lido.motivo === 'assinatura') { registra('invalido'); continue }
-    if (lido.ok && lido.eventId !== eventId) { registra('invalido'); continue }
+    if (!lido.ok && lido.motivo === 'assinatura' && !qrAntigo) { registra('invalido'); continue }
+    if ((lido.ok || qrAntigo) && lido.eventId !== eventId) { registra('invalido'); continue }
 
     const ingresso = await q1<any>(
       `SELECT t.id, t.status, s.sessions_covered

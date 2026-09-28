@@ -45,6 +45,8 @@ export type Resposta = {
   entrarDeNovo?: boolean
   /** o código veio DIGITADO, sem a assinatura do QR — a tela pede pra conferir o documento */
   digitado?: boolean
+  /** QR assinado com uma chave que saiu da lista (troca de chave): vale como digitado, com o aviso */
+  qrAntigo?: boolean
 }
 
 /** o mesmo mínimo do servidor (`qr: z.string().min(4)` em `/api/checkin`) */
@@ -1360,10 +1362,10 @@ useHead({ title: 'Leitor de entrada' })
       <!-- Código digitado não tem a assinatura do QR (ADM-25): a porta não trava, mas pede o
            documento de quem passa. Logo abaixo do título: no celular, o resto do cartão fica
            abaixo da dobra. -->
-      <p v-if="ultima.digitado && ultima.ok && !ultima.consulta"
+      <p v-if="(ultima.digitado || ultima.qrAntigo) && ultima.ok && !ultima.consulta"
          class="mx-auto mt-3 max-w-md rounded-xl bg-white/20 px-3 py-2 text-lg font-semibold"
          data-parte="codigo-digitado">
-        Digitado à mão: confira o documento
+        {{ ultima.qrAntigo ? 'QR de antes da troca de chave: confira o documento' : 'Digitado à mão: confira o documento' }}
       </p>
       <p v-if="ultima.entrarDeNovo" class="mt-3">
         <a :href="`/entrar?de=${encodeURIComponent(`/admin/evento/${id}/validacao`)}`"
