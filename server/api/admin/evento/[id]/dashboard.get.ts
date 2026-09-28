@@ -33,6 +33,15 @@ import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
 
 /**
+ * PEDIDO QUE PAGOU ALGUMA COISA — a população do ticket médio (ADM-12).
+ *
+ * Cortesia (`channel = 'cortesia'`) e venda que fechou em zero (lote grátis, cupom de 100%) são
+ * pedido VIVO — contam em "pedidos" e ocupam lugar —, mas não trazem dinheiro: no denominador da
+ * média, 40 cortesias transformavam R$ 100 por ingresso em R$ 20. Relatórios usa a mesma régua.
+ */
+export const PAGANTE = `o.channel <> 'cortesia' AND o.total_cents > 0`
+
+/**
  * `de` e `ate` chegam como DIA (`2026-09-21`), e dia é coisa de calendário —
  * do calendário DO EVENTO, não do servidor.
  *
@@ -159,7 +168,9 @@ export default defineEventHandler(async (event) => {
               COUNT(*)::int                            AS pedidos,
               COUNT(*) FILTER (WHERE o.status = 'pago')::int AS fechados,
               COUNT(*) FILTER (WHERE o.status = 'estornado_parcial')::int AS com_estorno,
-              COALESCE(SUM(oi.n),0)::int               AS ingressos
+              COALESCE(SUM(oi.n),0)::int               AS ingressos,
+              COUNT(*) FILTER (WHERE ${PAGANTE})::int  AS pagantes,
+              COALESCE(SUM(oi.n) FILTER (WHERE ${PAGANTE}),0)::int AS ingressos_pagantes
          FROM orders o
          LEFT JOIN LATERAL (SELECT SUM(quantity)::int AS n FROM order_items WHERE order_id = o.id) oi ON true
         WHERE o.event_id = $1 AND ${vivoNoPeriodo}`, p),
@@ -313,13 +324,17 @@ export default defineEventHandler(async (event) => {
   //                             usar o total aí faria a conta da tela não bater
   //                             com ela mesma.
   const devolvido = await q1<any>(
-    `SELECT COALESCE(SUM(refunded_cents),0)::bigint AS total
+    `SELECT COALESCE(SUM(refunded_cents),0)::bigint AS total,
+            count(*) FILTER (WHERE refunded_cents > 0)::int AS pedidos
        FROM orders
       WHERE event_id = $1 AND paid_at BETWEEN $2 AND $3`, p)
 
   const emitidos = Number(totais.ingressos)
   const gratis = Number(cortesias?.n ?? 0)
   const pedidos = Number(totais.pedidos)
+  // quem PAGOU — a população do ticket médio (ADM-12, ver `PAGANTE`)
+  const pagantes = Number(totais.pagantes)
+  const ingressosPagantes = Number(totais.ingressos_pagantes)
 
   /**
    * O FUNIL FECHA POR CONSTRUÇÃO.
@@ -359,6 +374,8 @@ export default defineEventHandler(async (event) => {
       // tudo que voltou pro comprador, inclusive o pedido estornado por
       // inteiro — a régua está explicada na consulta lá em cima
       estornadoCents: Number(devolvido?.total ?? 0),
+      // em quantos pedidos — a tela escreve "R$ X em N pedidos, fora do total"
+      pedidosComDevolucao: Number(devolvido?.pedidos ?? 0),
       // a parte da devolução que já está descontada do líquido
       estornadoNoLiquidoCents: Number(totais.estornado),
       // o que sobra pro produtor — mesma conta do borderô e dos financeiros
@@ -389,9 +406,20 @@ export default defineEventHandler(async (event) => {
       //
       // Os dois saem daqui agora, cada um com o nome da sua régua, e a tela
       // escolhe qual mostrar em vez de adivinhar.
-      ticketMedioPorIngressoCents: emitidos ? Math.round(Number(totais.cobrado) / emitidos) : 0,
-      ticketMedioPorPedidoCents: pedidos ? Math.round(Number(totais.cobrado) / pedidos) : 0,
-      ingressosPorPedido: pedidos ? Number((emitidos / pedidos).toFixed(2)) : 0,
+      //
+      // E a população é a de quem PAGOU (ADM-12): cortesia e venda de R$ 0 não
+      // somam nada no cobrado e, no denominador, derrubavam a média — medido:
+      // 10 pedidos de R$ 100 e uma emissão de 40 cortesias davam R$ 90,91 por
+      // pedido e R$ 20,00 por ingresso. `pedidos` (acima) continua sendo a
+      // população dos vivos, a que as outras telas contam.
+      ticketMedioPorIngressoCents: ingressosPagantes
+        ? Math.round(Number(totais.cobrado) / ingressosPagantes) : 0,
+      ticketMedioPorPedidoCents: pagantes ? Math.round(Number(totais.cobrado) / pagantes) : 0,
+      ingressosPorPedido: pagantes ? Number((ingressosPagantes / pagantes).toFixed(2)) : 0,
+      pedidosPagantes: pagantes,
+      ingressosPagantes,
+      // o que ficou fora da média, com nome: cortesias e vendas que fecharam em zero
+      pedidosSemCobranca: pedidos - pagantes,
     },
     // quem passou pela catraca — pessoa, não ingresso emitido
     publico: {

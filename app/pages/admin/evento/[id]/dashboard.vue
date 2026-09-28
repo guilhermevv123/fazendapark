@@ -37,6 +37,14 @@ const motivoDaFalha = computed(() => {
 
 const num = (n: number) => n.toLocaleString('pt-BR')
 
+/**
+ * A devolução em duas partes que NÃO se subtraem do total: a do pedido estornado por inteiro (que
+ * nem é pedido vivo — já está fora do total) e a do estorno parcial (que está no total, mas já
+ * saiu do líquido). `estornadoCents` é a soma das duas.
+ */
+const devolvidoPorInteiro = computed(() => Math.max(0,
+  (data.value?.totais?.estornadoCents ?? 0) - (data.value?.totais?.estornadoNoLiquidoCents ?? 0)))
+
 // ---------------------------------------------------- gráfico de linha (SVG)
 const L = { w: 820, h: 240, e: 64, d: 8, t: 12, b: 34 }
 const linha = computed(() => {
@@ -219,14 +227,12 @@ useHead({ title: 'Dashboard do evento' })
             <p class="numero-kpi mt-2">{{ reais(data.totais.cobradoCents) }}</p>
             <p class="mt-1 text-sm text-acao">{{ reais(data.totais.hojeCents) }} hoje</p>
             <!--
-              A devolução aparece NOMEADA, e não escondida dentro do total.
-              O painel calculava este número e não mostrava em lugar nenhum:
-              o estorno total (pedido devolvido por inteiro) não existia em
-              nenhuma tela de relatório. Total cobrado e dinheiro que voltou
-              são duas coisas, e as duas ficam na cara de quem abre a tela.
+              O LÍQUIDO — o que sobra pro produtor (SQL_LIQUIDO, o mesmo do
+              borderô e dos financeiros). Vinha na resposta e não aparecia em
+              lugar nenhum (ADM-11).
             -->
-            <p v-if="data.totais.estornadoCents" class="mt-1 text-sm text-erro">
-              − {{ reais(data.totais.estornadoCents) }} devolvidos ao comprador
+            <p class="mt-1 text-sm text-tinta-suave" data-parte="liquido">
+              líquido do produtor <strong class="text-tinta">{{ reais(data.totais.liquidoCents) }}</strong>
             </p>
           </div>
           <span class="grid size-12 shrink-0 place-items-center rounded-2xl shadow-sm bg-gradient-to-br from-pool-500 to-pool-700 text-white">
@@ -269,10 +275,18 @@ useHead({ title: 'Dashboard do evento' })
 
         <article class="card flex items-start justify-between">
           <div>
-            <p class="rotulo-kpi">Pedidos concluídos</p>
-            <p class="numero-kpi mt-2">{{ num(data.totais.pedidos) }}</p>
+            <!--
+              Pedidos que PAGARAM (ADM-12): a cortesia e a venda de R$ 0 são
+              pedido vivo, mas no ticket médio e no "por pedido" derrubavam a
+              conta. Ficam contadas à parte, com nome.
+            -->
+            <p class="rotulo-kpi">Pedidos pagos</p>
+            <p class="numero-kpi mt-2" data-parte="pedidos-pagos">{{ num(data.totais.pedidosPagantes ?? data.totais.pedidos) }}</p>
             <p class="mt-1 text-sm text-tinta-suave">
-              {{ data.totais.ingressosPorPedido }} ingressos por pedido
+              {{ num(data.totais.ingressosPorPedido) }} ingressos por pedido
+            </p>
+            <p v-if="data.totais.pedidosSemCobranca" class="mt-1 text-xs text-tinta-fraca">
+              + {{ num(data.totais.pedidosSemCobranca) }} sem cobrança (cortesia ou R$ 0)
             </p>
           </div>
           <span class="grid size-12 shrink-0 place-items-center rounded-2xl shadow-sm bg-gradient-to-br from-citrus-400 to-citrus-600 text-white">
@@ -280,6 +294,24 @@ useHead({ title: 'Dashboard do evento' })
           </span>
         </article>
       </div>
+
+      <!--
+        DEVOLVIDO AO COMPRADOR — linha própria, sem sinal de menos (ADM-11).
+        Aparecia como "− R$ X" debaixo do total, e quem lia descontava de novo:
+        o pedido estornado por inteiro nem está no total (não é pedido vivo), e
+        o estorno parcial já saiu do líquido. É informação, não subtração.
+      -->
+      <p v-if="data.totais.estornadoCents" class="mt-3 text-sm text-tinta-suave" data-parte="devolvido">
+        Devolvido ao comprador:
+        <strong class="text-tinta">{{ reais(data.totais.estornadoCents) }}</strong>
+        <template v-if="data.totais.pedidosComDevolucao">
+          em {{ num(data.totais.pedidosComDevolucao) }}
+          {{ data.totais.pedidosComDevolucao === 1 ? 'pedido' : 'pedidos' }}</template>.
+        Não subtraia do total:
+        <template v-if="devolvidoPorInteiro">{{ reais(devolvidoPorInteiro) }} de pedido estornado por inteiro, que já não entra nele</template><template
+          v-if="devolvidoPorInteiro && data.totais.estornadoNoLiquidoCents">; </template><template
+          v-if="data.totais.estornadoNoLiquidoCents">{{ reais(data.totais.estornadoNoLiquidoCents) }} de estorno parcial, já descontado do líquido</template>.
+      </p>
 
       <!-- ============================================ ritmo + funil ------ -->
       <div class="mt-4 grid gap-4 xl:grid-cols-[1fr_360px]">

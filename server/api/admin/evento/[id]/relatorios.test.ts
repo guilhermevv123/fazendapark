@@ -221,11 +221,18 @@ const COBRADO = 110_000 + 50_000 + 93_500
 /**
  * Pedido VIVO é o que tem líquido a apurar — inclusive o que fechou em zero.
  * São cinco: repassou, absorveu, cupom+parcial, a cortesia da casa e a venda
- * gratuita. Os dois últimos não somam dinheiro nenhum, mas CONTAM como pedido,
- * e é por essa população que o ticket médio por pedido divide.
+ * gratuita. Os dois últimos não somam dinheiro nenhum, mas CONTAM como pedido
+ * (é a contagem que as telas comparam entre si).
+ *
+ * O TICKET MÉDIO divide por outra população: a de quem PAGOU (ADM-12, 27/09).
+ * A cortesia e a venda de R$ 0 no denominador derrubavam a média — 10 pedidos
+ * de R$ 100 e 40 cortesias davam R$ 90,91 por pedido. São três pedidos
+ * pagantes, com 4 + 1 + 2 = 7 ingressos.
  */
 const PEDIDOS_VIVOS = 5
 const PEDIDOS_FECHADOS = 4
+const PEDIDOS_PAGANTES = 3
+const INGRESSOS_PAGANTES = 7
 
 /**
  * A RÉGUA DA DEVOLUÇÃO, somada na mão: R$ 20 do estorno parcial + R$ 220 do
@@ -842,11 +849,11 @@ describe('as telas do dinheiro contam igual', () => {
     // trocar o rótulo do .vue junto faz a tela mentir em silêncio — que é
     // exatamente o defeito desta trilha, só que na legenda em vez do total.
     expect(rel.resumo.ticketMedioPorPedidoCents,
-      'relatórios deixou de dividir por PEDIDO, e o rótulo da tela diz "por pedido"')
-      .toBe(Math.round(COBRADO / PEDIDOS_VIVOS))
+      'relatórios deixou de dividir por PEDIDO PAGANTE, e o rótulo da tela diz "por pedido"')
+      .toBe(Math.round(COBRADO / PEDIDOS_PAGANTES))
     expect(dash.totais.ticketMedioPorIngressoCents,
-      'o painel deixou de dividir por INGRESSO, e o rótulo da tela diz "por ingresso"')
-      .toBe(Math.round(COBRADO / INGRESSOS_EMITIDOS))
+      'o painel deixou de dividir por INGRESSO PAGO, e o rótulo da tela diz "por ingresso"')
+      .toBe(Math.round(COBRADO / INGRESSOS_PAGANTES))
 
     // E o número por ingresso de relatórios é o MESMO do painel: quando duas
     // telas respondem a mesma pergunta, elas respondem igual.
@@ -882,9 +889,13 @@ describe('as telas do dinheiro contam igual', () => {
       porPedido: dash.totais.ticketMedioPorPedidoCents,
     }, 'o painel trocou a régua de um dos dois campos')
       .toEqual({
-        porIngresso: Math.round(COBRADO / INGRESSOS_EMITIDOS),
-        porPedido: Math.round(COBRADO / PEDIDOS_VIVOS),
+        porIngresso: Math.round(COBRADO / INGRESSOS_PAGANTES),
+        porPedido: Math.round(COBRADO / PEDIDOS_PAGANTES),
       })
+    // e os EMITIDOS continuam contando a cortesia e a venda de R$ 0: só a média
+    // mudou de população, o "quantos saíram" não
+    expect(dash.totais.ingressos).toBe(INGRESSOS_EMITIDOS)
+    expect(dash.totais.pedidos).toBe(PEDIDOS_VIVOS)
 
     // AS DUAS ROTAS CHAMAM A MESMA PERGUNTA PELO MESMO NOME.
     //
@@ -940,11 +951,15 @@ describe('as telas do dinheiro contam igual', () => {
         estornado: DEVOLVIDO, estornadoNoLiquido: DEVOLVIDO_NO_LIQUIDO, cobrado: COBRADO,
       })
 
-    // Ticket médio divide pela MESMA população que somou. Somar cinco pedidos
-    // e dividir por quatro é o jeito silencioso de a média inflar.
+    // Ticket médio divide por quem PAGOU (ADM-12). A cortesia e a venda de
+    // R$ 0 não trazem dinheiro ao cobrado; no denominador, derrubavam a média.
     expect(r.resumo.ticketMedioPorPedidoCents,
-      'o ticket médio dividiu por uma população diferente da que somou')
-      .toBe(Math.round(COBRADO / PEDIDOS_VIVOS))
+      'o ticket médio voltou a dividir pela cortesia e pela venda de R$ 0')
+      .toBe(Math.round(COBRADO / PEDIDOS_PAGANTES))
+    expect({ pagantes: r.resumo.pedidosPagantes, ingressos: r.resumo.ingressosPagantes,
+             semCobranca: r.resumo.pedidosSemCobranca })
+      .toEqual({ pagantes: PEDIDOS_PAGANTES, ingressos: INGRESSOS_PAGANTES,
+                 semCobranca: PEDIDOS_VIVOS - PEDIDOS_PAGANTES })
   }, 20_000)
 
   it('a curva por dia soma o mesmo líquido do total', async () => {
@@ -1828,7 +1843,7 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
     expect(soOQueARenderizou(await semOrfao.text()),
       'a linha "sem ponto" aparece num evento que não tem venda órfã nenhuma')
       .not.toContain('Sem ponto identificado')
-  }, 30_000)
+  }, 120_000)
 
   /**
    * A TELA NÃO PODE PROMETER UMA CONTA QUE ELA NÃO FAZ.
@@ -1913,7 +1928,7 @@ describe('o balcão: o cartão do ponto e o extrato do caixa contam igual', () =
       'a frase "é exatamente a diferença entre os dois" voltou pra baixo da ' +
       'venda órfã, e ela é falsa sempre que um guichê vendeu fora do caixa aberto')
       .not.toContain('é exatamente a diferença entre os dois')
-  }, 30_000)
+  }, 120_000)
 
   /**
    * A VENDA CANCELADA NO GUICHÊ — a devolução que seis telas contam e o

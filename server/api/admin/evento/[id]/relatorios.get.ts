@@ -68,7 +68,7 @@
 import { q, q1 } from '../../../../utils/db'
 import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
-import { fusoDoEvento } from './dashboard.get'
+import { fusoDoEvento, PAGANTE } from './dashboard.get'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -212,6 +212,8 @@ export default defineEventHandler(async (event) => {
               count(*) FILTER (WHERE o.status = 'pago')::int AS fechados,
               count(*) FILTER (WHERE o.status = 'estornado_parcial')::int AS com_estorno,
               COALESCE(SUM(oi.n),0)::int AS ingressos,
+              count(*) FILTER (WHERE ${PAGANTE})::int AS pagantes,
+              COALESCE(SUM(oi.n) FILTER (WHERE ${PAGANTE}),0)::int AS ingressos_pagantes,
               MIN(o.paid_at) AS primeira, MAX(o.paid_at) AS ultima
          FROM orders o
          LEFT JOIN LATERAL (SELECT SUM(quantity)::int AS n FROM order_items WHERE order_id = o.id) oi ON true
@@ -242,14 +244,21 @@ export default defineEventHandler(async (event) => {
 
   const pedidos = Number(resumo.pedidos)
   const ingressos = Number(resumo.ingressos)
+  const pagantes = Number(resumo.pagantes)
+  const ingressosPagantes = Number(resumo.ingressos_pagantes)
 
   // As duas réguas do ticket médio, calculadas UMA vez cada. Quem compra 6 de
-  // uma vez é um cliente, não seis — por isso "por pedido" divide pela mesma
-  // população que somou o cobrado; "por ingresso" responde a outra pergunta e
-  // é o número que o painel mostra com esse nome.
-  const ticketMedioPorPedido = pedidos > 0 ? Math.round(Number(resumo.cobrado) / pedidos) : 0
-  const ticketMedioPorIngresso = ingressos > 0
-    ? Math.round(Number(resumo.cobrado) / ingressos) : 0
+  // uma vez é um cliente, não seis — por isso "por pedido" divide por pedido;
+  // "por ingresso" responde a outra pergunta e é o número que o painel mostra
+  // com esse nome.
+  //
+  // A população é a de quem PAGOU (`PAGANTE`, ADM-12): cortesia e venda de
+  // R$ 0 não somam nada no cobrado e, no denominador, derrubavam a média —
+  // 10 pedidos de R$ 100 e 40 cortesias davam R$ 90,91 por pedido e R$ 20,00
+  // por ingresso. Mesma régua do painel.
+  const ticketMedioPorPedido = pagantes > 0 ? Math.round(Number(resumo.cobrado) / pagantes) : 0
+  const ticketMedioPorIngresso = ingressosPagantes > 0
+    ? Math.round(Number(resumo.cobrado) / ingressosPagantes) : 0
 
   const porStatus: Record<string, number> = {}
   for (const f of funil) porStatus[f.status] = Number(f.n)
@@ -307,7 +316,11 @@ export default defineEventHandler(async (event) => {
       // novos, estas duas linhas saem.
       ticketMedioCents: ticketMedioPorPedido,
       porIngressoCents: ticketMedioPorIngresso,
-      ingressosPorPedido: pedidos > 0 ? Math.round((ingressos / pedidos) * 100) / 100 : 0,
+      ingressosPorPedido: pagantes > 0 ? Math.round((ingressosPagantes / pagantes) * 100) / 100 : 0,
+      // a população da média, e o que ficou fora dela com nome
+      pedidosPagantes: pagantes,
+      ingressosPagantes,
+      pedidosSemCobranca: pedidos - pagantes,
       primeiraVenda: resumo.primeira, ultimaVenda: resumo.ultima,
     },
     // quem passou pela catraca — pessoa, não ingresso
