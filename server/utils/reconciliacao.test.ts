@@ -670,16 +670,16 @@ describe('a janela é dia de calendário LOCAL', () => {
     const j = lerJanela('2026-09-01', '2026-09-30')
     // `new Date('2026-09-01')` nasce à meia-noite UTC — 31/08 às 21h na Bahia.
     // A conferência começaria três horas antes do que a tela promete e puxaria
-    // a venda da noite anterior pra dentro do período.
-    expect(j.inicio.getDate(), 'a janela começou no dia errado').toBe(1)
-    expect(j.inicio.getHours(), 'a janela começou no horário errado').toBe(0)
-    expect(j.inicio.getMonth()).toBe(8)
+    // a venda da noite anterior pra dentro do período. "Daqui" é o PARQUE
+    // (America/Bahia), não o relógio do processo — o instante confere em
+    // qualquer servidor (27/09: antes o teste lia `getHours()` do processo e
+    // só passava porque esta máquina está na Bahia).
+    expect(j.inicio.toISOString(), 'a janela começou no dia ou no horário errado').toBe('2026-09-01T03:00:00.000Z')
   })
 
   it('o fim é exclusivo: pega o último dia inteiro', () => {
     const j = lerJanela('2026-09-01', '2026-09-30')
-    expect(j.fim.getDate()).toBe(1)
-    expect(j.fim.getMonth(), 'o fim tem que ser 1º de outubro à meia-noite').toBe(9)
+    expect(j.fim.toISOString(), 'o fim tem que ser 1º de outubro à meia-noite do parque').toBe('2026-10-01T03:00:00.000Z')
     expect(j.dias).toBe(30)
   })
 
@@ -1118,5 +1118,26 @@ describe('o catálogo das divergências', () => {
       expect(c.acao.rotulo, `${tipo} sem ação`).toBeTruthy()
       expect(c.acao.comoFazer.length, `${tipo} sem instrução`).toBeGreaterThan(40)
     }
+  })
+})
+
+/* ======================= 5b. a janela é do PARQUE, não do relógio do servidor */
+
+describe('a janela é dia de calendário do parque, em qualquer servidor', () => {
+  it('servidor em UTC às 22h30 da Bahia: "hoje" ainda é o dia do parque, e o início é a meia-noite dele', () => {
+    // 2026-09-22T01:30Z = 21/09 22h30 na Bahia. Pelo relógio de um contêiner em UTC, já seria 22/09.
+    const j = lerJanela(undefined, undefined, new Date('2026-09-22T01:30:00Z'), 'America/Bahia')
+    expect(j.ate).toBe('2026-09-21')
+    expect(j.de).toBe('2026-09-01')
+    expect(j.inicio.toISOString(), 'a janela começou na meia-noite de Londres').toBe('2026-09-01T03:00:00.000Z')
+    expect(j.fim.toISOString()).toBe('2026-09-22T03:00:00.000Z')
+    expect(j.dias).toBe(21)
+  })
+
+  it('o dia pedido vale no fuso do parque (Manaus é uma hora depois de Brasília)', () => {
+    const j = lerJanela('2026-09-01', '2026-09-30', new Date('2026-09-15T12:00:00Z'), 'America/Manaus')
+    expect(j.inicio.toISOString()).toBe('2026-09-01T04:00:00.000Z')
+    expect(j.fim.toISOString()).toBe('2026-10-01T04:00:00.000Z')
+    expect(j.dias).toBe(30)
   })
 })

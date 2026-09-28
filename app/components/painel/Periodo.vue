@@ -18,7 +18,10 @@ const props = defineProps<{
   de: string | null
   ate: string | null
   carregando?: boolean
+  /** atalhos que a tela não oferece (a Reconciliação não tem "Tudo": o extrato precisa de começo) */
+  sem?: string[]
 }>()
+const atalhos = computed(() => PERIODOS.filter((p) => !props.sem?.includes(p.chave)))
 const emit = defineEmits<{ escolher: [chave: string]; datas: [p: { de: string | null; ate: string | null }] }>()
 
 const abertoAMao = ref(props.periodo === null)
@@ -40,7 +43,7 @@ function aplicar() {
   <div class="grid gap-3">
     <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
       <div class="-mx-1 flex min-w-0 max-w-full gap-2 overflow-x-auto px-1 pb-0.5 sem-barra" role="group" aria-label="Período">
-        <button v-for="p in PERIODOS" :key="p.chave" type="button"
+        <button v-for="p in atalhos" :key="p.chave" type="button"
                 class="shrink-0 min-h-[40px] sm:min-h-0"
                 :class="periodo === p.chave ? 'chip-ativo' : 'chip'"
                 :aria-pressed="periodo === p.chave"

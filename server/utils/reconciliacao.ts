@@ -52,6 +52,9 @@
  * taxa DO ASAAS, que não é a nossa `platform_cents`.
  */
 import { PEDIDO_VIVO } from './liquido'
+import { FUSO_DO_BANCO } from './db'
+import { hojeNoFuso, somarDiasNoCalendario } from '../../app/composables/painelPeriodo'
+import { instanteNoFuso } from '../../app/composables/fusoHorario'
 import { ambienteDaChave, reaisParaCentavos, traduzirStatus, type ConfigAsaas } from './asaas'
 
 /* ===================================================== o que é "tem dinheiro" */
@@ -832,17 +835,23 @@ export interface Janela {
 const DIA = /^(\d{4})-(\d{2})-(\d{2})$/
 
 /**
- * Lê `?de=&ate=` como DIA DE CALENDÁRIO local e devolve os instantes.
+ * Lê `?de=&ate=` como DIA DE CALENDÁRIO do PARQUE e devolve os instantes.
  *
  * `new Date('2026-09-01')` nasce à meia-noite UTC — 20:59 do dia 31/08 na
  * Bahia. Uma conferência que começa três horas antes do que a tela promete
  * puxa as vendas da noite anterior pra dentro do período e não fecha com o
- * extrato do Asaas, que corta por dia de calendário. Por isso o construtor
- * com ano/mês/dia separados, que é local, e nunca `new Date(texto)`.
+ * extrato do Asaas, que corta por dia de calendário.
+ *
+ * O dia é o do fuso do parque (`FUSO_DO_BANCO`), não o do processo. A versão
+ * anterior usava o relógio LOCAL do Node (`new Date(a, m, d)`), que nesta
+ * máquina é Bahia e passava nos testes — e no contêiner de produção (UTC) o
+ * "hoje" virava amanhã às 21h e a janela começava três horas depois da
+ * meia-noite do parque (a mesma doença de REL-01/FIN-01 no pool do banco).
+ * Agora a conta é `hojeNoFuso` e `instanteNoFuso`, iguais em qualquer servidor.
  */
-export function lerJanela(deBruto: unknown, ateBruto: unknown, hoje = new Date()): Janela {
-  const padraoAte = diaLocal(hoje)
-  const padraoDe = diaLocal(new Date(hoje.getFullYear(), hoje.getMonth(), 1))
+export function lerJanela(deBruto: unknown, ateBruto: unknown, hoje = new Date(), fuso = FUSO_DO_BANCO): Janela {
+  const padraoAte = hojeNoFuso(fuso, hoje)
+  const padraoDe = `${padraoAte.slice(0, 8)}01`
 
   const de = DIA.test(String(deBruto ?? '')) ? String(deBruto) : padraoDe
   const ate = DIA.test(String(ateBruto ?? '')) ? String(ateBruto) : padraoAte
@@ -851,16 +860,16 @@ export function lerJanela(deBruto: unknown, ateBruto: unknown, hoje = new Date()
     throw new Error('A data inicial é depois da final. Confira o período.')
   }
 
-  const inicio = meiaNoiteLocal(de)
-  const fim = meiaNoiteLocal(ate)
-  fim.setDate(fim.getDate() + 1)
-  const dias = Math.round((fim.getTime() - inicio.getTime()) / 86_400_000)
+  const inicio = meiaNoiteNoFuso(de, fuso)
+  const fim = meiaNoiteNoFuso(somarDiasNoCalendario(ate, 1), fuso)
+  const dias = Math.round((Date.parse(`${ate}T12:00:00Z`) - Date.parse(`${de}T12:00:00Z`)) / 86_400_000) + 1
   return { de, ate, inicio, fim, dias }
 }
 
-function meiaNoiteLocal(dia: string): Date {
-  const [, a, m, d] = DIA.exec(dia)!
-  return new Date(Number(a), Number(m) - 1, Number(d), 0, 0, 0, 0)
+function meiaNoiteNoFuso(dia: string, fuso: string): Date {
+  const iso = instanteNoFuso(`${dia}T00:00`, fuso)
+  if (!iso) throw new Error(`Data inválida no período: ${dia}. Confira o período.`)
+  return new Date(iso)
 }
 
 /** `YYYY-MM-DD` do relógio LOCAL — nunca `toISOString().slice(0,10)`. */
