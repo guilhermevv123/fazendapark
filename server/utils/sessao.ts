@@ -22,7 +22,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { isIP } from 'node:net'
 import { createError, getRequestHeader, setResponseHeader, type H3Event } from 'h3'
 import { q, q1, tx } from './db'
-import { ehPapel, papelDoRoleLegado, type Papel } from './papeis'
+import { ehPapel, papelDoRoleLegado, RECADO_DA_PORTARIA, type Papel } from './papeis'
 
 export const COOKIE = 'dt_sessao'
 const DIAS = 30
@@ -670,15 +670,37 @@ const PODE: Record<PapelLegado, string[]> = {
 export const podeFazer = (papel: PapelLegado, area: string) =>
   PODE[papel]?.includes('*') || PODE[papel]?.includes(area) || false
 
+/**
+ * A recusa do porteiro antigo escrita pra quem lê: "Seu acesso (portaria) não inclui evento." era o
+ * nome interno do papel e da área, e a portaria — quem mais esbarra nela, de celular na mão, com
+ * fila na frente — ficava sem saber pra onde ir (auditoria 28/09). A frase da portaria diz o
+ * caminho; a dos outros, a quem pedir. A grade nova (`utils/papeis.ts`) fala do mesmo jeito.
+ */
+const PAPEL_LEGIVEL: Record<string, string> = {
+  master: 'Master', admin: 'Administrador', financeiro: 'Financeiro', marketing: 'Marketing',
+  operacional: 'Operação', portaria: 'Portaria', leitura: 'Leitura',
+}
+const AREA_LEGIVEL: Record<string, string> = {
+  evento: 'os eventos e a configuração deles', ingresso: 'os ingressos e lotes',
+  venda: 'os pedidos e participantes', cortesia: 'as cortesias', cupom: 'os cupons',
+  promoter: 'os promoters', relatorio: 'os relatórios', financeiro: 'o dinheiro do evento',
+  portaria: 'o leitor de entrada', equipe: 'a equipe', auditoria: 'a auditoria',
+}
+export function recusaDeArea(papel: string, area: string): string {
+  const oQue = AREA_LEGIVEL[area] ?? area
+  if (papel === 'portaria') {
+    return `Seu acesso é de Portaria: ele abre só o leitor de entrada, não ${oQue}. ${RECADO_DA_PORTARIA}`
+  }
+  return `Seu acesso é de ${PAPEL_LEGIVEL[papel] ?? papel} e não inclui ${oQue}. `
+    + 'Peça a um master da sua organização.'
+}
+
 /** Igual a `lerSessao`, mas explode com 401/403 em vez de devolver null. */
 export async function exigir(event: H3Event, area?: string): Promise<Sessao> {
   const s = await lerSessao(event)
   if (!s) throw createError({ statusCode: 401, statusMessage: 'Faça login para continuar' })
   if (area && !podeFazer(s.papel, area)) {
-    throw createError({
-      statusCode: 403,
-      statusMessage: `Seu acesso (${s.papel}) não inclui ${area}.`,
-    })
+    throw createError({ statusCode: 403, statusMessage: recusaDeArea(s.papel, area) })
   }
   return s
 }

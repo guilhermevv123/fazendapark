@@ -45,10 +45,10 @@ import { comSessao } from '../../scripts/teste-sessao'
 import { compraPagaDeTeste } from '../../scripts/teste-compra'
 import { menuDoEvento } from '../../app/composables/menuDoEvento'
 import { db, q, q1 } from './db'
-import { podeFazer } from './sessao'
+import { podeFazer, recusaDeArea } from './sessao'
 import {
   areaDaPagina, areaDaRota, decidirAcesso, papelPode, podeAbrirPagina, roleLegado, rotaGateada,
-  CATALOGO, PAPEIS, ROTULO, SO_DO_MASTER,
+  CATALOGO, PAPEIS, RECADO_DA_PORTARIA, ROTULO, SO_DO_MASTER,
 } from './papeis'
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
@@ -206,6 +206,24 @@ describe('a grade de papéis (tabela)', () => {
     expect(d.motivo).toContain('Portaria')
     expect(d.motivo).toContain('master')
     expect(d.motivo).not.toMatch(/40[13]|forbidden|invalid/i)
+  })
+
+  // 28/09: o porteiro antigo respondia "Seu acesso (portaria) não inclui evento." — o nome interno
+  // do papel e da área, e nenhum caminho. As duas grades agora falam igual, e a da portaria diz
+  // pra onde ir (o leitor), porque é ela quem mais esbarra nisso, com fila na frente.
+  it('a recusa da portaria diz pra onde ir, nas DUAS grades; a dos outros, a quem pedir', () => {
+    const nova = decidirAcesso('portaria', `/api/admin/evento/${EVENTO}/vendas`).motivo
+    const antiga = recusaDeArea('portaria', 'evento')
+    for (const m of [nova, antiga]) {
+      expect(m).toContain('Seu acesso é de Portaria: ele abre só o leitor de entrada')
+      expect(m).toContain(RECADO_DA_PORTARIA)
+      expect(m, 'o nome interno do papel voltou').not.toContain('(portaria)')
+    }
+    expect(antiga).toContain('os eventos e a configuração deles')
+    expect(recusaDeArea('financeiro', 'equipe'))
+      .toBe('Seu acesso é de Financeiro e não inclui a equipe. Peça a um master da sua organização.')
+    expect(recusaDeArea('operacional', 'area_nova'), 'área sem nome ainda: sai o código, sem quebrar')
+      .toBe('Seu acesso é de Operação e não inclui area_nova. Peça a um master da sua organização.')
   })
 
   it('tranca /api/admin e a catraca, e não opina sobre o resto', () => {
@@ -920,6 +938,20 @@ describe('o papel decide na ROTA, não no menu', () => {
     const leitura = await bater('portariaSolta', '/api/checkin', 'POST',
       { qr: codigo, eventId: EVENTO, gate: 'teste-papeis' })
     expect(leitura.status, JSON.stringify(leitura.corpo)).toBe(200)
+  }, PRAZO)
+
+  // a portaria de verdade (role portaria) esbarra no porteiro ANTIGO primeiro: é ele que fala com
+  // ela na tela do evento — e falava "Seu acesso (portaria) não inclui evento."
+  it('a portaria que abre uma tela do evento lê pra onde ir, não o código do papel', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
+    for (const tela of ['vendas', 'financeiro']) {
+      const r = await bater('portaria', `/api/admin/evento/${EVENTO}/${tela}`)
+      expect(r.status, `${tela}: ${JSON.stringify(r.corpo)}`).toBe(403)
+      const motivo = r.corpo.statusMessage ?? r.corpo.message ?? ''
+      expect(motivo, tela).toContain('ele abre só o leitor de entrada')
+      expect(motivo, tela).toContain(RECADO_DA_PORTARIA)
+      expect(motivo, `${tela}: o nome interno voltou`).not.toMatch(/\(portaria\)|não inclui evento/)
+    }
   }, PRAZO)
 
   it('operação também não lê o cadastro e as credenciais de cobrança', async () => {

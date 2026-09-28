@@ -492,6 +492,15 @@ const NOME_DA_AREA: Record<Area, string> = {
 
 export type Decisao = { liberado: boolean; area: Area | null; motivo: string }
 
+/**
+ * Pra onde a portaria vai quando esbarra numa tela que não é dela (o início do painel leva o login
+ * da portaria direto ao leitor). Mora aqui, e não em `sessao.ts`, porque o navegador também lê
+ * este arquivo — e o porteiro antigo (`sessao.ts`) usa a MESMA frase.
+ */
+export const RECADO_DA_PORTARIA =
+  'Para validar ingressos, volte ao início do painel — é por lá que se abre o leitor. '
+  + 'Para mais que isso, peça a um master da sua organização.'
+
 /** A decisão, com o motivo já escrito. Nenhuma rota decide por conta própria. */
 export function decidirAcesso(papel: Papel, caminho: string): Decisao {
   const area = areaDaRota(caminho)
@@ -509,6 +518,15 @@ export function decidirAcesso(papel: Papel, caminho: string): Decisao {
 
   if (PODE[papel]?.includes(area)) return { liberado: true, area, motivo: '' }
 
+  // a portaria tem um lugar só pra ir — a frase diz qual (a mesma do porteiro antigo, `sessao.ts`)
+  if (papel === 'portaria') {
+    return {
+      liberado: false,
+      area,
+      motivo: `Seu acesso é de Portaria: ele abre só o leitor de entrada, não ${NOME_DA_AREA[area]}. `
+        + RECADO_DA_PORTARIA,
+    }
+  }
   return {
     liberado: false,
     area,

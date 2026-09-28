@@ -27,7 +27,7 @@
  *   dentro do payload. Sem isso a tela responde uma pergunta que ninguém faz.
  */
 import { FUSO_DO_BANCO, q, q1 } from '../../utils/db'
-import { podeFazer } from '../../utils/sessao'
+import { podeFazer, recusaDeArea } from '../../utils/sessao'
 import { ehChavePeriodo, faixaDoPeriodo, hojeNoFuso } from '../../../app/composables/painelPeriodo'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -79,10 +79,7 @@ export default defineEventHandler(async (event) => {
   // nenhuma área da lista dele — então a área se declara aqui, senão a
   // portaria leria o histórico financeiro inteiro da produtora.
   if (!podeFazer(sessao.papel, 'financeiro')) {
-    throw createError({
-      statusCode: 403,
-      statusMessage: `Seu acesso (${sessao.papel}) não inclui a auditoria.`,
-    })
+    throw createError({ statusCode: 403, statusMessage: recusaDeArea(sessao.papel, 'auditoria') })
   }
 
   const p = getQuery(event)

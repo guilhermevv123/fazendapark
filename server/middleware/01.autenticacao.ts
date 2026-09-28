@@ -11,7 +11,7 @@
  * precisa entrar na lista `PUBLICAS` de propósito, e isso aparece no diff.
  */
 import { caminhoDaRota, mutacaoDeOutroSite } from '../utils/caminho'
-import { lerSessao, podeFazer, type Sessao } from '../utils/sessao'
+import { lerSessao, podeFazer, recusaDeArea, type Sessao } from '../utils/sessao'
 
 /** Rotas administrativas que rodam sem login. Adicionar aqui é decisão. */
 const PUBLICAS: string[] = []
@@ -59,10 +59,7 @@ export default defineEventHandler(async (event) => {
 
   const area = portaria ? 'portaria' : AREAS.find(([p]) => caminho.startsWith(p))?.[1]
   if (area && !podeFazer(sessao.papel, area)) {
-    throw createError({
-      statusCode: 403,
-      statusMessage: `Seu acesso (${sessao.papel}) não inclui ${area}.`,
-    })
+    throw createError({ statusCode: 403, statusMessage: recusaDeArea(sessao.papel, area) })
   }
 
   // Disponível para os handlers sem repetir a consulta.
