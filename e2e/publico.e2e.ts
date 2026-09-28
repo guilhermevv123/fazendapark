@@ -1,0 +1,791 @@
+/**
+ * publico.e2e.ts — o site de quem COMPRA, no navegador de verdade (Chrome do sistema, 1366×860).
+ *
+ * É a trilha F1 da auditoria do público (27/09): a vitrine, o pagamento, a página dos ingressos, a
+ * transferência, a página de erro e a home — e a API pública que elas chamam. Cada caso diz no
+ * título o número da `matriz[]` de `auditoria-publico.json` (ou o defeito B/PROD) que ele exercita;
+ * é esse título que `frota/f1/cobertura.json` cita.
+ *
+ * Regras da casa pra bateria (e2e/apoio.ts): só contra a instância de E2E; o que o caso usa, ele
+ * cria — pela MESMA API que uma tela chamaria (checkout, painel de cupom/promoter/transferência,
+ * catraca) —, e o gateway é o simulado da máquina (`/api/dev/pagar`, `/api/dev/fatura/…`). O único
+ * atalho de fora do navegador é o aviso do Asaas (`/api/webhooks/asaas`), que na máquina aceita sem
+ * token: é assim que o estorno parcial e o total chegam, igual em produção.
+ *
+ *   E2E_BASE=http://127.0.0.1:3121 npx playwright test e2e/publico.e2e.ts
+ */
+import { expect, test, type APIRequestContext, type Browser, type Page } from '@playwright/test'
+import { BASE, EVENTO_SEED, hidratada, sessao, travaDeBase } from './apoio'
+
+const SLUG = EVENTO_SEED.slug
+const EVENTO_ID = EVENTO_SEED.id
+
+test.beforeAll(() => travaDeBase(BASE))
+
+/* ------------------------------------------------------------------ apoio */
+
+/** CPF sintético que passa no dígito verificador. */
+function cpf(): string {
+  const d = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10))
+  const dig = (arr: number[], peso: number) => {
+    const r = (arr.reduce((a, n, i) => a + n * (peso - i), 0) * 10) % 11
+    return r === 10 ? 0 : r
+  }
+  d.push(dig(d, 10)); d.push(dig(d, 11))
+  return d.join('')
+}
+const sufixo = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+const emailNovo = (p = 'publico') => `e2e.${p}.${sufixo()}@teste.invalido`
+
+/**
+ * Vigia de console: erro, exceção, 5xx e — ao contrário do `vigiar` da casa — AVISO DE
+ * HIDRATAÇÃO. O B24 é justamente o SSR e o navegador escrevendo textos diferentes.
+ */
+function vigia(page: Page) {
+  const problemas: string[] = []
+  page.on('console', (m) => {
+    const t = m.text()
+    if (/favicon|DevTools|\[vite\]|Download the Vue Devtools/i.test(t)) return
+    if (m.type() === 'error' || /hydration/i.test(t)) problemas.push(`console(${m.type()}): ${t.slice(0, 300)}`)
+  })
+  page.on('pageerror', (e) => problemas.push(`exceção: ${e.message}`))
+  page.on('response', (r) => {
+    if (r.status() >= 500 && !r.request().url().includes('/__')) {
+      problemas.push(`${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`)
+    }
+  })
+  return problemas
+}
+
+/** A vitrine como a API devolve — pra saber lote, tipo e preço sem adivinhar. */
+async function vitrine(request: APIRequestContext) {
+  const r = await request.get(`/api/e/${SLUG}`)
+  expect(r.status()).toBe(200)
+  const v = await r.json()
+  const sabado = v.setores[0].lotes[0]
+  return {
+    v,
+    lote: sabado.id as string,
+    inteira: sabado.variacoes.find((x: any) => !x.ehMeia),
+    meia: sabado.variacoes.find((x: any) => x.ehMeia),
+  }
+}
+
+/** Compra pela MESMA rota que a tela de pagamento chama. */
+async function comprarPelaApi(request: APIRequestContext, opcoes: {
+  quantidade?: number; forma?: 'pix' | 'credito'; promoter?: string; cupom?: string
+} = {}) {
+  const { lote, inteira } = await vitrine(request)
+  const r = await request.post('/api/checkout', {
+    headers: { origin: BASE },
+    data: {
+      eventSlug: SLUG, itens: [{ lotId: lote, ticketTypeId: inteira.tipoId, quantidade: opcoes.quantidade ?? 1 }],
+      comprador: { nome: 'Comprador E2E Público', email: emailNovo(), documento: cpf() },
+      forma: opcoes.forma ?? 'pix', ...(opcoes.promoter ? { promoter: opcoes.promoter } : {}),
+      ...(opcoes.cupom ? { cupom: opcoes.cupom } : {}),
+    },
+  })
+  expect(r.status(), await r.text()).toBe(200)
+  return r.json()
+}
+
+/** "O PIX caiu" — o gateway simulado confirma pela emissão de verdade. */
+async function pagarSimulado(request: APIRequestContext, codigo: string) {
+  const r = await request.post('/api/dev/pagar', { headers: { origin: BASE }, data: { pedido: codigo } })
+  expect(r.status(), await r.text()).toBe(200)
+  expect((await r.json()).emitiu).toBe(true)
+}
+
+/** O aviso do Asaas, como ele chega (na máquina o webhook aceita sem token). */
+async function avisoDoAsaas(request: APIRequestContext, evento: string, pedidoId: string, pagamento: Record<string, any>) {
+  const r = await request.post('/api/webhooks/asaas', {
+    data: { id: `evt_e2e_${sufixo()}`, event: evento,
+      payment: { id: `sim_e2e_${sufixo()}`, externalReference: pedidoId, ...pagamento } },
+  })
+  expect(r.status(), await r.text()).toBe(200)
+}
+
+/** Um contexto logado com um papel (o cookie que o `preparo` guardou). */
+async function logado(browser: Browser, papel: 'master' | 'portaria') {
+  return browser.newContext({ storageState: sessao(papel) })
+}
+
+/** O texto que o SSR e o navegador têm de concordar: a data no fuso do evento. */
+function noFusoDoParque(iso: string) {
+  return new Date(iso).toLocaleString('pt-BR', {
+    day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia',
+  })
+}
+
+/** A cor calculada de um elemento — medida, não suposta. */
+const cor = (page: Page, seletor: string, prop: 'color' | 'backgroundColor' = 'backgroundColor') =>
+  page.locator(seletor).first().evaluate((el, p) => getComputedStyle(el)[p as any], prop)
+
+/** Preenche o formulário do pagamento como a pessoa preenche (sem CEP: o ViaCEP é externo). */
+async function preencherComprador(page: Page, extra: { email?: string } = {}) {
+  await page.locator('#nome').fill('Maria E2E Pública')
+  await page.locator('#email').fill(extra.email ?? emailNovo('tela'))
+  await page.locator('#cpf').fill(cpf())
+  // a tela exige a data de nascimento (a máscara põe as barras)
+  await page.locator('#nascimento').fill('15031990')
+  await page.locator('#cidade').fill('Ubatã')
+  await page.locator('#estado').selectOption('BA')
+}
+
+/** Da vitrine até a tela de pagamento com `n` inteiras de sábado. */
+async function irAoPagamento(page: Page, n = 1, caminho = `/e/${SLUG}`) {
+  await page.goto(caminho)
+  await hidratada(page)
+  const mais = page.getByRole('button', { name: 'Adicionar um Inteira' }).first()
+  for (let i = 0; i < n; i++) await mais.click()
+  await page.getByRole('button', { name: 'Ir para pagamento' }).click()
+  await expect(page).toHaveURL(new RegExp(`/e/${SLUG}/pagamento`))
+  await hidratada(page)
+  await expect(page.getByRole('heading', { name: 'Finalizar compra' })).toBeVisible()
+}
+
+/** O pedido que esta aba acabou de criar (a tela guarda em `dt:pedido`). */
+const pedidoDaAba = (page: Page) => page.evaluate(() => JSON.parse(sessionStorage.getItem('dt:pedido') || 'null')?.pedido)
+
+/* ================================================================= erro */
+
+test.describe('erro e caminho codificado', () => {
+  test('matriz 14 · B10/B25 — evento que não existe: HTTP 404, página em português com saída', async ({ page }) => {
+    const problemas = vigia(page)
+    const r = await page.goto('/e/evento-que-nao-existe')
+    expect(r?.status(), 'o evento inexistente respondia 200').toBe(404)
+    await expect(page.getByRole('heading', { name: 'Evento não encontrado' })).toBeVisible()
+    await expect(page.getByText(/Page not found|not found/i)).toHaveCount(0)
+    const voltar = page.getByRole('link', { name: 'Ver os eventos à venda' })
+    await expect(voltar).toHaveAttribute('href', '/')
+    // o botão é o azul da marca (pool-700), medido
+    expect(await cor(page, 'main a.btn-primario')).toBe('rgb(20, 111, 131)')
+    expect(problemas.filter((p) => !p.includes('404'))).toEqual([])
+  })
+
+  test('B25 — endereço qualquer: 404 com "Página não encontrada"', async ({ page }) => {
+    const r = await page.goto('/qualquer-coisa-que-nao-existe')
+    expect(r?.status()).toBe(404)
+    await expect(page.getByRole('heading', { name: 'Página não encontrada' })).toBeVisible()
+    await expect(page.getByText('Código do erro: 404')).toBeVisible()
+  })
+
+  test('B22 — /e/..%2Fadmin%2Fclientes logado como master não vira /api/admin/clientes', async ({ browser }) => {
+    const ctx = await logado(browser, 'master')
+    const page = await ctx.newPage()
+    const pedidas: string[] = []
+    page.on('request', (q) => pedidas.push(new URL(q.url()).pathname))
+    const r = await page.goto('/e/..%2Fadmin%2Fclientes')
+    expect(r?.status(), 'o slug subiu de pasta e abriu a rota do painel').toBe(404)
+    await expect(page.getByRole('heading', { name: 'Evento não encontrado' })).toBeVisible()
+    // nenhum dado de cliente do painel na página
+    expect(await page.content()).not.toMatch(/"clientes"\s*:/)
+    // e pela navegação do NAVEGADOR (quem normaliza o `..` é o fetch do navegador, com o cookie)
+    await page.goto('/')
+    await hidratada(page)
+    await page.evaluate(() => (document.querySelector('#__nuxt') as any).__vue_app__.config.globalProperties.$router
+      .push('/e/..%2Fadmin%2Fclientes'))
+    await expect(page.getByText('Evento não encontrado').first()).toBeVisible()
+    expect(pedidas.filter((p) => p.startsWith('/api/admin/')),
+      'o slug cru subiu de pasta: a vitrine pediu uma rota do painel com o cookie de quem abriu').toEqual([])
+    await ctx.close()
+  })
+
+  test('matriz 134 · /api/%61dmin/eventos sem sessão: 401/404, nunca 200', async ({ request }) => {
+    for (const caminho of ['/api/%61dmin/eventos', `/api/admin/%65vento/${EVENTO_ID}/vendas`]) {
+      const r = await request.get(caminho)
+      expect([401, 403, 404], caminho).toContain(r.status())
+    }
+  })
+})
+
+/* =============================================================== vitrine */
+
+test.describe('vitrine', () => {
+  test('matriz 16 · B10 — a bilheteria fora do ar: "não respondeu", com Tentar de novo (nunca "não encontrado")', async ({ page }) => {
+    await page.goto('/')
+    await hidratada(page)
+    // a navegação SEGUINTE é do navegador (NuxtLink), e é essa consulta que cai
+    await page.route('**/api/e/**', (rota) => rota.fulfill({ status: 500, contentType: 'application/json',
+      body: JSON.stringify({ statusCode: 500, statusMessage: 'banco fora do ar' }) }))
+    await page.locator(`a[href="/e/${SLUG}"]`).first().click()
+    await expect(page.getByText('A bilheteria não respondeu agora')).toBeVisible()
+    await expect(page.getByText('Evento não encontrado')).toHaveCount(0)
+    await page.unroute('**/api/e/**')
+    await page.getByRole('button', { name: 'Tentar de novo' }).click()
+    await expect(page.getByRole('heading', { name: /Escolha seus/ })).toBeVisible()
+  })
+
+  test('B24 — navegador em Manaus: a hora é a do PARQUE, e o SSR e a hidratação concordam', async ({ browser, request }) => {
+    const { v } = await vitrine(request)
+    const esperado = noFusoDoParque(v.evento.inicio)
+    const ctx = await browser.newContext({ timezoneId: 'America/Manaus', locale: 'pt-BR' })
+    const page = await ctx.newPage()
+    const problemas = vigia(page)
+    await page.goto(`/e/${SLUG}`)
+    await hidratada(page)
+    await page.waitForTimeout(500)
+    await expect(page.locator('dl').first()).toContainText(esperado)
+    expect(problemas, 'hidratação trocou o texto (ou erro no console)').toEqual([])
+    await ctx.close()
+  })
+
+  test('matriz 27 · B19 — F5 com 2 ingressos: a seleção volta, sem dado pessoal guardado', async ({ page }) => {
+    await page.goto(`/e/${SLUG}`)
+    await hidratada(page)
+    const mais = page.getByRole('button', { name: 'Adicionar um Inteira' }).first()
+    await mais.click(); await mais.click()
+    const total = await page.locator('aside').getByText(/^R\$/).last().textContent()
+    await page.reload()
+    await hidratada(page)
+    await expect(page.locator('aside')).toContainText('2×')
+    await expect(page.locator('aside')).toContainText(total!.trim())
+    const guardado = await page.evaluate(() => sessionStorage.getItem('dt:carrinho'))
+    expect(guardado).not.toMatch(/"documento":"[^"]+"/)
+  })
+
+  test('matriz 21/22 · meia-entrada: sem motivo trava; só Estudante e Jovem pedem número; "Leve na entrada"', async ({ page }) => {
+    await page.goto(`/e/${SLUG}`)
+    await hidratada(page)
+    await page.getByRole('button', { name: 'Adicionar um Meia-entrada' }).first().click()
+    const pagar = page.getByRole('button', { name: 'Ir para pagamento' })
+    await expect(pagar).toBeDisabled()
+    await expect(page.locator('aside')).toContainText('Falta preencher para continuar')
+    const motivo = page.getByLabel('Motivo').first()
+    const opcoes = (await motivo.locator('option').allTextContents()).filter((t) => t !== 'Escolha…')
+    expect(opcoes).toHaveLength(6)
+    const pedemNumero: string[] = []
+    for (const o of opcoes) {
+      await motivo.selectOption({ label: o })
+      if (await page.getByLabel('Número do documento').count()) pedemNumero.push(o)
+      await expect(page.getByText(/Leve na entrada:/).first()).toBeVisible()
+    }
+    expect(pedemNumero.map((x) => x.toLowerCase()).join(' | ')).toMatch(/estudante/)
+    expect(pedemNumero).toHaveLength(2)
+    await motivo.selectOption({ label: pedemNumero[0] })
+    await page.getByLabel('Número do documento').first().fill('CARTEIRINHA-E2E-1')
+    await expect(pagar).toBeEnabled()
+  })
+
+  test('matriz 20 · teto do pedido somando linhas: pendência com a conta e botão desligado', async ({ page, request }) => {
+    const { v } = await vitrine(request)
+    const teto = Number(v.evento.maxPorPedido)
+    // quantos cada linha deixa (o teto da linha vem da vitrine), até passar o do pedido
+    const linhas = [
+      { botao: page.getByRole('button', { name: 'Adicionar um Inteira' }).nth(0), max: v.setores[0].lotes[0].variacoes[0].maxPorCompra },
+      { botao: page.getByRole('button', { name: 'Adicionar um Inteira' }).nth(1), max: v.setores[1].lotes[0].variacoes[0].maxPorCompra },
+      { botao: page.getByRole('button', { name: /Adicionar um COMBO/ }).first(), max: v.setores[2].lotes[0].variacoes[0].maxPorCompra },
+    ]
+    await page.goto(`/e/${SLUG}`)
+    await hidratada(page)
+    let n = 0
+    for (const l of linhas) {
+      for (let i = 0; i < Number(l.max) && n <= teto; i++) { await l.botao.click(); n++ }
+      if (n > teto) break
+    }
+    expect(n, 'as linhas da vitrine não somam além do teto do pedido — o caso não tem o que provar').toBeGreaterThan(teto)
+    await expect(page.locator('aside')).toContainText(`Cada pedido leva no máximo ${teto} ingressos`)
+    await expect(page.getByRole('button', { name: 'Ir para pagamento' })).toBeDisabled()
+  })
+
+  test('matriz 28/32 · botões com nome pro leitor de tela; "Ir para pagamento" grava o carrinho v2 carimbado', async ({ page }) => {
+    await page.goto(`/e/${SLUG}`)
+    await hidratada(page)
+    await expect(page.getByRole('button', { name: 'Remover um Inteira' }).first()).toBeDisabled()
+    await page.getByRole('button', { name: 'Adicionar um Inteira' }).first().click()
+    await expect(page.locator('[aria-live="polite"]').first()).toHaveText('1')
+    await page.getByRole('button', { name: 'Ir para pagamento' }).click()
+    await expect(page).toHaveURL(/\/pagamento$/)
+    const c = await page.evaluate(() => JSON.parse(sessionStorage.getItem('dt:carrinho') || 'null'))
+    expect(c).toMatchObject({ versao: 2, slug: SLUG })
+    expect(typeof c.criadoEm).toBe('number')
+  })
+
+  test('matriz 33 · B07 — a venda pelo link do promoter é do promoter', async ({ browser, page }) => {
+    const painel = await logado(browser, 'master')
+    const criado = await painel.request.post(`/api/admin/evento/${EVENTO_ID}/promoters`, {
+      headers: { origin: BASE }, data: { nome: `E2E Promoter ${sufixo()}`, comissaoBps: 1000 } })
+    expect(criado.status(), await criado.text()).toBe(200)
+    const promoter = await criado.json()
+    const codigo = promoter.codigo ?? promoter.promoter?.codigo ?? promoter.code
+    expect(codigo).toBeTruthy()
+
+    await irAoPagamento(page, 1, `/e/${SLUG}?promoter=${encodeURIComponent(String(codigo).toLowerCase())}`)
+    await preencherComprador(page)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const pedido = await pedidoDaAba(page)
+    await pagarSimulado(page.request, pedido.pedido)
+    await expect(page.getByRole('heading', { name: 'Ingressos emitidos' })).toBeVisible({ timeout: 20_000 })
+
+    const lista = await (await painel.request.get(`/api/admin/evento/${EVENTO_ID}/promoters`)).json()
+    const dele = lista.promoters.find((p: any) => p.codigo === codigo)
+    expect(dele?.pedidos, 'o link do promoter não atribuiu a venda').toBe(1)
+    await painel.close()
+  })
+})
+
+/* ============================================================= pagamento */
+
+test.describe('pagamento', () => {
+  test('matriz 34 · sem carrinho: volta pra vitrine', async ({ page }) => {
+    await page.goto(`/e/${SLUG}/pagamento`)
+    await expect(page).toHaveURL(new RegExp(`/e/${SLUG}$`), { timeout: 30_000 })
+  })
+
+  test('matriz 59/60/61 · B17 — não existe campo de senha (sem login de cliente, sem senha)', async ({ page }) => {
+    await irAoPagamento(page)
+    await expect(page.locator('input[type="password"]')).toHaveCount(0)
+    await expect(page.getByText(/Mostrar|Ocultar/)).toHaveCount(0)
+  })
+
+  test('matriz 36/58 · B29 — limites no campo iguais aos do servidor; "Número (opcional)"', async ({ page }) => {
+    await irAoPagamento(page)
+    await expect(page.locator('#nome')).toHaveAttribute('maxlength', '120')
+    await expect(page.locator('#rua')).toHaveAttribute('maxlength', '120')
+    await expect(page.locator('#numero')).toHaveAttribute('maxlength', '20')
+    await expect(page.locator('#bairro')).toHaveAttribute('maxlength', '80')
+    await expect(page.getByText('Número (opcional)')).toBeVisible()
+    await expect(page.getByText('Celular (opcional)')).toBeVisible()
+  })
+
+  test('matriz 38 · B11 — e-mail a@b: campo marcado com a frase, e nenhuma ida ao checkout', async ({ page }) => {
+    await irAoPagamento(page)
+    await preencherComprador(page, { email: 'a@b' })
+    let foiAoCheckout = false
+    page.on('request', (q) => { if (q.url().includes('/api/checkout')) foiAoCheckout = true })
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByRole('alert')).toContainText('Confira o e-mail')
+    await expect(page.locator('#email')).toHaveAttribute('aria-invalid', 'true')
+    expect(foiAoCheckout, 'a tela gastou a ida ao servidor com um e-mail que ela já sabia torto').toBe(false)
+  })
+
+  test('matriz 88 · B23 — forma de pagamento com estado anunciado (aria-pressed)', async ({ page }) => {
+    await irAoPagamento(page)
+    const pix = page.getByRole('button', { name: 'PIX — na hora' })
+    const cartao = page.getByRole('button', { name: 'Cartão de crédito' })
+    await expect(pix).toHaveAttribute('aria-pressed', 'true')
+    await cartao.click()
+    await expect(cartao).toHaveAttribute('aria-pressed', 'true')
+    await expect(pix).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  test('matriz 67 · B18 — "Continuar sem o cupom" com a cidade vazia é barrado como o botão principal', async ({ page }) => {
+    await irAoPagamento(page)
+    await preencherComprador(page)
+    await page.locator('#cidade').fill('')
+    await page.locator('#cupom').fill(`NAOEXISTE${sufixo().toUpperCase()}`)
+    await page.locator('#nome').click() // sai do campo: a tela confere o cupom
+    const seguir = page.getByRole('button', { name: 'Continuar sem o cupom' })
+    await expect(seguir).toBeVisible()
+    let foiAoCheckout = false
+    page.on('request', (q) => { if (q.url().includes('/api/checkout')) foiAoCheckout = true })
+    await seguir.click()
+    await expect(page.getByText('Diga em que cidade você mora.')).toBeVisible()
+    expect(foiAoCheckout, 'o pedido nascia sem cidade').toBe(false)
+  })
+
+  test('matriz 71 · B21 — parcelas sobre o total COM o cupom, e "sem juros"', async ({ browser, page }) => {
+    const painel = await logado(browser, 'master')
+    const codigo = `E2E50${sufixo().toUpperCase()}`.slice(0, 20)
+    const r = await painel.request.post(`/api/admin/evento/${EVENTO_ID}/cupons`, {
+      headers: { origin: BASE }, data: { codigo, tipo: 'percentual', valor: 5000, maxUsos: 50, maxPorCliente: 5 } })
+    expect(r.status(), await r.text()).toBe(200)
+    await painel.close()
+
+    await irAoPagamento(page, 4)
+    await preencherComprador(page)
+    await page.locator('#cupom').fill(codigo)
+    await page.locator('#nome').click()
+    await expect(page.getByText(/Desconto de/)).toBeVisible()
+    await page.getByRole('button', { name: 'Cartão de crédito' }).click()
+    const opcoes = await page.locator('#parcelas option').allTextContents()
+    expect(opcoes.slice(1).every((o) => /sem juros/.test(o)), opcoes.join(' | ')).toBe(true)
+    // a última parcela × n volta ao total com desconto (arredondado pra cima), nunca ao total cheio
+    const avista = opcoes[0].match(/R\$\s*([\d.]+,\d{2})/)![1]
+    const cents = (s: string) => Math.round(Number(s.replace(/\./g, '').replace(',', '.')) * 100)
+    const totalComCupom = cents(avista)
+    const semCupom = await page.evaluate(() => JSON.parse(sessionStorage.getItem('dt:carrinho') || 'null')?.totais?.total)
+    expect(totalComCupom, 'o rótulo das parcelas usava o total antes do cupom').toBeLessThan(semCupom)
+    const duas = opcoes.find((o) => o.startsWith('2×'))!
+    expect(Math.ceil(totalComCupom / 2)).toBe(cents(duas.match(/R\$\s*([\d.]+,\d{2})/)![1]))
+  })
+
+  test('matriz 44/68/78/80/81 · PIX sem celular: QR, copiar, relógio; F5 na cobrança volta nela; o PIX cai e em segundos "Ingressos emitidos"; F5 leva ao ingresso', async ({ page }) => {
+    const problemas = vigia(page)
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE })
+    await irAoPagamento(page, 2)
+    await preencherComprador(page) // sem celular: é opcional (matriz 44)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByAltText('QR Code do PIX')).toBeVisible()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const pedido = await pedidoDaAba(page)
+    // matriz 80: copiar o código
+    await page.getByRole('button', { name: 'Copiar código PIX' }).click()
+    await expect(page.getByRole('button', { name: 'Copiado!' })).toBeVisible()
+    // matriz 78: F5 no meio da cobrança volta NA MESMA cobrança, sem formulário
+    await page.reload()
+    await hidratada(page)
+    await expect(page.getByAltText('QR Code do PIX')).toBeVisible()
+    await expect(page.getByText(pedido.pedido).first()).toBeVisible()
+    await expect(page.locator('#cpf')).toHaveCount(0)
+    await pagarSimulado(page.request, pedido.pedido)
+    await expect(page.getByRole('heading', { name: 'Ingressos emitidos' })).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('img[src^="/api/ingresso/"]')).toHaveCount(2)
+    await page.reload()
+    await expect(page).toHaveURL(new RegExp(`/ingressos/${pedido.pedido}$`), { timeout: 30_000 })
+    expect(problemas).toEqual([])
+  })
+
+  test('matriz 79 · B13 — voltou e montou outro carrinho: a tela mostra o novo, avisa do anterior, e pagar larga o velho', async ({ page }) => {
+    await irAoPagamento(page, 1)
+    await preencherComprador(page)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const anterior = await pedidoDaAba(page)
+
+    // volta pra vitrine NA MESMA ABA e monta outra coisa
+    await irAoPagamento(page, 3)
+    const aviso = page.getByRole('status').filter({ hasText: 'Você tem um pedido aguardando pagamento.' })
+    await expect(aviso).toContainText(anterior.pedido)
+    // nome, e-mail e CPF voltam do pedido anterior; nascimento e endereço não ficam no
+    // sessionStorage de propósito (dado pessoal) — a pessoa digita de novo
+    await expect(page.locator('#nome')).toHaveValue('Maria E2E Pública')
+    await preencherComprador(page)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const novo = await pedidoDaAba(page)
+    expect(novo.pedido).not.toBe(anterior.pedido)
+    const velho = await (await page.request.get(`/api/pedido/${anterior.pedidoId}`)).json()
+    expect(velho.status, 'o pedido velho ficou segurando lugar no CPF').toBe('expirado')
+  })
+
+  test('B13 — "Trocar a forma de pagamento" volta ao formulário com o mesmo carrinho e larga o pedido', async ({ page }) => {
+    await irAoPagamento(page, 1)
+    await preencherComprador(page)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByText(/Seus ingressos estão reservados por/)).toBeVisible()
+    const pedido = await pedidoDaAba(page)
+    await page.getByRole('button', { name: 'Trocar a forma de pagamento ou mudar os ingressos' }).click()
+    await expect(page.getByRole('heading', { name: 'Finalizar compra' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Pagar com PIX' })).toBeVisible()
+    expect((await (await page.request.get(`/api/pedido/${pedido.pedidoId}`)).json()).status).toBe('expirado')
+  })
+
+  test('matriz 82 · B20 — o prazo do PIX vence: o QR e o copia-e-cola somem, e a tela diz por quê', async ({ page }) => {
+    await page.clock.install({ time: new Date() })
+    await irAoPagamento(page, 1)
+    await preencherComprador(page)
+    await page.getByRole('button', { name: 'Pagar com PIX' }).click()
+    await expect(page.getByAltText('QR Code do PIX')).toBeVisible()
+    await page.clock.fastForward('25:00')
+    await expect(page.getByText('O prazo deste PIX venceu')).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByAltText('QR Code do PIX')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Copiar código PIX' })).toHaveCount(0)
+  })
+
+  test('matriz 69/92 · B08 — cartão: a fatura abre (nova aba), o outro aparelho também paga, e as duas telas viram', async ({ browser, page }) => {
+    await irAoPagamento(page, 1)
+    await preencherComprador(page)
+    await page.getByRole('button', { name: 'Cartão de crédito' }).click()
+    await page.getByRole('button', { name: 'Pagar com cartão' }).click()
+    const abrir = page.getByRole('link', { name: 'Abrir pagamento com cartão' })
+    await expect(abrir).toBeVisible()
+    await expect(abrir).toHaveAttribute('target', '_blank')
+    const pedido = await pedidoDaAba(page)
+
+    // outro aparelho, sem a aba do pagamento: a página do pedido oferece a fatura
+    const celular = await browser.newContext()
+    const outro = await celular.newPage()
+    await outro.goto(`/ingressos/${pedido.pedido}`)
+    await hidratada(outro)
+    const pagarNoOutro = outro.getByRole('link', { name: 'Pagar com cartão' })
+    await expect(pagarNoOutro, 'quem fechou a aba do cartão não tinha como pagar').toBeVisible()
+    const [fatura] = await Promise.all([celular.waitForEvent('page'), pagarNoOutro.click()])
+    await fatura.waitForLoadState()
+    await fatura.getByRole('button', { name: 'Pagar com cartão (simulado)' }).click()
+    await expect(fatura.getByText('Pagamento aprovado')).toBeVisible()
+
+    await expect(page.getByRole('heading', { name: 'Ingressos emitidos' })).toBeVisible({ timeout: 20_000 })
+    await expect(outro.locator('img[src^="/api/ingresso/"]')).toHaveCount(1, { timeout: 20_000 })
+    await celular.close()
+  })
+})
+
+/* ============================================================= ingressos */
+
+test.describe('ingressos', () => {
+  test('matriz 89 · B10/B25 — código que não existe: HTTP 404 e "Pedido não encontrado"', async ({ page }) => {
+    const r = await page.goto('/ingressos/PED-NAOE-XIST')
+    expect(r?.status()).toBe(404)
+    await expect(page.getByRole('heading', { name: 'Pedido não encontrado' })).toBeVisible()
+  })
+
+  test('matriz 90 · B10 — a consulta falha (500): "não respondeu", com Tentar de novo', async ({ page, request }) => {
+    const pedido = await comprarPelaApi(request)
+    await page.goto('/')
+    await hidratada(page)
+    await page.route('**/api/pedido/**', (rota) => rota.fulfill({ status: 500, contentType: 'application/json',
+      body: JSON.stringify({ statusCode: 500 }) }))
+    // navegação do NAVEGADOR (o roteador da própria página), que é quem consulta a API
+    await page.evaluate((c) => (document.querySelector('#__nuxt') as any).__vue_app__.config.globalProperties.$router
+      .push(`/ingressos/${c}`), pedido.pedido)
+    await expect(page.getByText('A bilheteria não respondeu agora')).toBeVisible()
+    await expect(page.getByText('Pedido não encontrado')).toHaveCount(0)
+    await page.unroute('**/api/pedido/**')
+    await page.getByRole('button', { name: 'Tentar de novo' }).click()
+    await expect(page.getByText(pedido.pedido).first()).toBeVisible()
+  })
+
+  test('matriz 91 · PIX pendente: QR, copiar e relógio — e "Total", não "Total pago"', async ({ page, request }) => {
+    const pedido = await comprarPelaApi(request)
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await hidratada(page)
+    await expect(page.getByAltText('QR Code do PIX')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Copiar código PIX' })).toBeVisible()
+    await expect(page.getByText(/Reserva garantida por/)).toBeVisible()
+    await expect(page.getByText('AGUARDANDO PAGAMENTO')).toBeVisible()
+    await expect(page.getByText('Total pago')).toHaveCount(0)
+  })
+
+  test('matriz 93 · pago: um bloco por ingresso, QR carregado e VÁLIDO (selo verde medido)', async ({ page, request }) => {
+    const pedido = await comprarPelaApi(request, { quantidade: 2 })
+    await pagarSimulado(request, pedido.pedido)
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await hidratada(page)
+    await expect(page.locator('article')).toHaveCount(2)
+    const qr = page.locator('img[src^="/api/ingresso/"]').first()
+    await expect(qr).toBeVisible()
+    expect(await qr.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true)
+    await expect(page.getByText('VÁLIDO').first()).toBeVisible()
+    // selo-ok = success-100 no fundo, success-800 no texto (tailwind.config.js), medido
+    expect(await cor(page, 'article .selo-ok')).toBe('rgb(211, 248, 224)')
+    expect(await cor(page, 'article .selo-ok', 'color')).toBe('rgb(22, 101, 52)')
+  })
+
+  test('matriz 97 · B01 — estorno PARCIAL: os ingressos continuam, com QR, e a página diz quanto voltou', async ({ page, request }) => {
+    const pedido = await comprarPelaApi(request, { quantidade: 3 })
+    await pagarSimulado(request, pedido.pedido)
+    await avisoDoAsaas(request, 'PAYMENT_PARTIALLY_REFUNDED', pedido.pedidoId,
+      { status: 'PARTIALLY_REFUNDED', value: pedido.totalCents / 100, refundedValue: 20 })
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await hidratada(page)
+    await expect(page.getByText('PAGO · DEVOLUÇÃO PARCIAL')).toBeVisible()
+    await expect(page.getByText('R$ 20,00 deste pedido foram devolvidos')).toBeVisible()
+    await expect(page.locator('article')).toHaveCount(3)
+    await expect(page.locator('img[src^="/api/ingresso/"]')).toHaveCount(3)
+    await expect(page.getByText('ainda não foi pago')).toHaveCount(0)
+  })
+
+  test('matriz 96/B10 — estorno TOTAL: "devolvido", sem ingresso, e o PNG do QR não abre', async ({ page, request }) => {
+    const pedido = await comprarPelaApi(request, { quantidade: 1 })
+    await pagarSimulado(request, pedido.pedido)
+    const antes = await (await request.get(`/api/pedido/${pedido.pedido}`)).json()
+    const ingressoId = antes.ingressos[0].id
+    await avisoDoAsaas(request, 'PAYMENT_REFUNDED', pedido.pedidoId,
+      { status: 'REFUNDED', value: pedido.totalCents / 100, refundedValue: pedido.totalCents / 100 })
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await hidratada(page)
+    await expect(page.getByText('O valor deste pedido foi devolvido')).toBeVisible()
+    await expect(page.getByText('DEVOLVIDO', { exact: true })).toBeVisible()
+    await expect(page.getByText('ainda não foi pago')).toHaveCount(0)
+    await expect(page.getByText('Total pago')).toHaveCount(0)
+    await expect(page.locator('article')).toHaveCount(0)
+    const png = await request.get(`/api/ingresso/${ingressoId}/qr.png?pedido=${pedido.pedido}`)
+    expect([404, 410]).toContain(png.status())
+  })
+
+  test('matriz 100/135 · QR com credencial trocada: 404; sem credencial: 400', async ({ request }) => {
+    const pedido = await comprarPelaApi(request, { quantidade: 1 })
+    await pagarSimulado(request, pedido.pedido)
+    const v = await (await request.get(`/api/pedido/${pedido.pedido}`)).json()
+    const id = v.ingressos[0].id
+    expect((await request.get(`/api/ingresso/${id}/qr.png?pedido=${pedido.pedido}`)).status()).toBe(200)
+    expect((await request.get(`/api/ingresso/${id}/qr.png?pedido=PED-OUTR-OPED`)).status()).toBe(404)
+    expect((await request.get(`/api/ingresso/${id}/qr.png`)).status()).toBe(400)
+  })
+
+  test('B24 — página do pedido em Manaus: a hora é a do parque, sem aviso de hidratação', async ({ browser, request }) => {
+    const pedido = await comprarPelaApi(request)
+    const v = await (await request.get(`/api/pedido/${pedido.pedido}`)).json()
+    const ctx = await browser.newContext({ timezoneId: 'America/Manaus', locale: 'pt-BR' })
+    const page = await ctx.newPage()
+    const problemas = vigia(page)
+    await page.goto(`/ingressos/${pedido.pedido}`)
+    await hidratada(page)
+    await page.waitForTimeout(500)
+    await expect(page.locator('main, body').first()).toContainText(noFusoDoParque(v.evento.inicio))
+    expect(problemas).toEqual([])
+    await ctx.close()
+  })
+})
+
+/* ========================================================= transferência */
+
+test.describe('transferência', () => {
+  let painel: Awaited<ReturnType<typeof logado>>
+  test.beforeAll(async ({ browser }) => {
+    painel = await logado(browser, 'master')
+    const r = await painel.request.patch(`/api/admin/evento/${EVENTO_ID}/transferencias`, {
+      headers: { origin: BASE }, data: { permitir: true } })
+    expect(r.status(), await r.text()).toBe(200)
+  })
+  test.afterAll(async () => {
+    await painel.request.patch(`/api/admin/evento/${EVENTO_ID}/transferencias`, {
+      headers: { origin: BASE }, data: { permitir: false } })
+    await painel.close()
+  })
+
+  /** Um ingresso pago e o link de transferência dele (pela tela do painel). */
+  async function transferir(request: APIRequestContext) {
+    const pedido = await comprarPelaApi(request, { quantidade: 1 })
+    await pagarSimulado(request, pedido.pedido)
+    const v = await (await request.get(`/api/pedido/${pedido.pedido}`)).json()
+    const r = await painel.request.post(`/api/admin/evento/${EVENTO_ID}/transferencias`, {
+      headers: { origin: BASE },
+      data: { codigo: v.ingressos[0].codigo, paraNome: 'Ana Recebe E2E', paraEmail: emailNovo('recebe') } })
+    expect(r.status(), await r.text()).toBe(200)
+    const t = await r.json()
+    const link = t.link ?? t.transferencia?.link
+    expect(link).toMatch(/^\/transferencia\//)
+    return { link, qr: v.ingressos[0].qr as string, pedido }
+  }
+
+  test('matriz 103 · B10/B25 — link que não existe: HTTP 404 e "Link não encontrado"', async ({ page }) => {
+    const r = await page.goto('/transferencia/token-que-nao-existe')
+    expect(r?.status()).toBe(404)
+    await expect(page.getByRole('heading', { name: 'Link não encontrado' })).toBeVisible()
+  })
+
+  test('matriz 104/105 · aguardando: evento, setor, remetente mascarado, nome preenchido e limites no campo', async ({ page, request }) => {
+    const { link } = await transferir(request)
+    await page.goto(link)
+    await hidratada(page)
+    await expect(page.getByText('Você recebeu um ingresso')).toBeVisible()
+    await expect(page.getByText(/•••@/)).toBeVisible()
+    const nome = page.getByLabel('Nome completo')
+    await expect(nome).toHaveValue('Ana Recebe E2E')
+    await expect(nome).toHaveAttribute('maxlength', '120')
+    await expect(nome).toHaveAttribute('required', '')
+  })
+
+  test('matriz 106 · B33 — CPF com letra/emoji: recusado com a frase e o campo marcado', async ({ page, request }) => {
+    const { link } = await transferir(request)
+    await page.goto(link)
+    await hidratada(page)
+    const campoCpf = page.locator('input[inputmode="numeric"]')
+    await campoCpf.fill('abc😀')
+    await page.getByRole('button', { name: 'Aceitar ingresso' }).click()
+    await expect(page.getByRole('alert')).toContainText('Digite só os números do CPF.')
+    await expect(campoCpf).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  test('matriz 107 · duplo clique em Aceitar: uma aceitação só', async ({ page, request }) => {
+    const { link } = await transferir(request)
+    await page.goto(link)
+    await hidratada(page)
+    const posts: string[] = []
+    page.on('request', (q) => { if (q.method() === 'POST' && q.url().includes('/api/transferencia/')) posts.push(q.url()) })
+    await page.getByRole('button', { name: 'Aceitar ingresso' }).dblclick()
+    await expect(page.getByText(/Ingresso é seu/)).toBeVisible()
+    expect(posts.length, 'o duplo clique aceitou duas vezes').toBe(1)
+  })
+
+  // O "usado antes do aceite" (matriz 111) não dá pra montar aqui: a sessão do evento semeado é em
+  // outubro e a catraca barra fora da janela, sem marcar o ingresso. O mesmo defeito (B33) tem o
+  // irmão CANCELADO, que chega pelo estorno — é esse que o navegador exercita.
+  test('B33 — ingresso cancelado ANTES do aceite (estorno): sem formulário, e a página diz por quê', async ({ page, request }) => {
+    const { link, pedido } = await transferir(request)
+    await avisoDoAsaas(request, 'PAYMENT_REFUNDED', pedido.pedidoId,
+      { status: 'REFUNDED', value: pedido.totalCents / 100, refundedValue: pedido.totalCents / 100 })
+    await page.goto(link)
+    await hidratada(page)
+    await expect(page.getByRole('heading', { name: 'Ingresso cancelado' })).toBeVisible()
+    await expect(page.getByText('Este ingresso foi cancelado e não pode mais ser transferido.')).toBeVisible()
+    await expect(page.locator('form')).toHaveCount(0)
+  })
+})
+
+/* ================================================================== home */
+
+test.describe('home', () => {
+  test('B23 — os títulos descem em ordem (h2 → h3), sem pular pra h4', async ({ page }) => {
+    await page.goto('/')
+    await hidratada(page)
+    const niveis = await page.locator('h1, h2, h3, h4, h5, h6').evaluateAll((els) =>
+      els.map((e) => Number(e.tagName.slice(1))))
+    for (let i = 1; i < niveis.length; i++) {
+      expect(niveis[i] - niveis[i - 1], `pulo de h${niveis[i - 1]} pra h${niveis[i]}`).toBeLessThanOrEqual(1)
+    }
+    await expect(page.locator('#ingressos h3').first()).toBeVisible()
+  })
+
+  test('B31 — a descrição do evento guarda as quebras de linha (white-space medido)', async ({ page }) => {
+    await page.goto('/')
+    await hidratada(page)
+    const ws = await page.locator('#ingressos h2#precos + p').evaluate((el) => getComputedStyle(el).whiteSpace)
+    expect(ws).toBe('pre-line')
+  })
+
+})
+
+/* =================================================================== API */
+
+test.describe('API pública', () => {
+  test('matriz 121 · preço no corpo é ignorado: o total é o do banco', async ({ request }) => {
+    const { lote, inteira } = await vitrine(request)
+    const r = await request.post('/api/checkout', { headers: { origin: BASE }, data: {
+      eventSlug: SLUG, itens: [{ lotId: lote, ticketTypeId: inteira.tipoId, quantidade: 1, unitTotalCents: 1, precoCents: 1 }],
+      totalCents: 1, comprador: { nome: 'Comprador E2E Público', email: emailNovo(), documento: cpf() } } })
+    expect(r.status()).toBe(200)
+    expect((await r.json()).totalCents).toBe(inteira.totalCents)
+  })
+
+  test('matriz 122/123 · quantidade 0, -1, 51, 1e9 e 21 itens: 400', async ({ request }) => {
+    const { lote, inteira } = await vitrine(request)
+    const corpo = (itens: any[]) => ({ eventSlug: SLUG, itens,
+      comprador: { nome: 'Comprador E2E Público', email: emailNovo(), documento: cpf() } })
+    for (const quantidade of [0, -1, 51, 1e9]) {
+      const r = await request.post('/api/checkout', { headers: { origin: BASE },
+        data: corpo([{ lotId: lote, ticketTypeId: inteira.tipoId, quantidade }]) })
+      expect(r.status(), `quantidade ${quantidade}`).toBe(400)
+    }
+    const vinteEUm = Array.from({ length: 21 }, () => ({ lotId: lote, ticketTypeId: inteira.tipoId, quantidade: 1 }))
+    expect((await request.post('/api/checkout', { headers: { origin: BASE }, data: corpo(vinteEUm) })).status()).toBe(400)
+  })
+
+  test('matriz 127 · declaração de meia numa inteira: 422 meia_em_inteira', async ({ request }) => {
+    const { lote, inteira } = await vitrine(request)
+    const r = await request.post('/api/checkout', { headers: { origin: BASE }, data: {
+      eventSlug: SLUG, itens: [{ lotId: lote, ticketTypeId: inteira.tipoId, quantidade: 1,
+        meia: { motivo: 'estudante', documento: 'CART-123' } }],
+      comprador: { nome: 'Comprador E2E Público', email: emailNovo(), documento: cpf() } } })
+    expect(r.status()).toBe(422)
+    expect(JSON.stringify(await r.json())).toContain('meia_em_inteira')
+  })
+
+  test('matriz 137/138 · portaria sem login: 401; catraca com origem de outro site: 403', async ({ browser, request }) => {
+    expect((await request.post('/api/portaria/sincronizar', { data: {} })).status()).toBe(401)
+    const portaria = await logado(browser, 'portaria')
+    const r = await portaria.request.post('/api/checkin', {
+      headers: { origin: 'https://site-de-fora.example' }, data: { qr: 'DT2:x:y:z:w', eventId: EVENTO_ID } })
+    expect(r.status()).toBe(403)
+    await portaria.close()
+  })
+
+  test('B03/B04/B15 — a própria máquina não é freada (o E2E compra em sequência)', async ({ request }) => {
+    for (let i = 0; i < 25; i++) {
+      expect((await request.get(`/api/pedido/PED-ZZ00-${String(i).padStart(4, '0')}`)).status()).toBe(404)
+    }
+  })
+
+  test('/api/saude — responde e não vaza segredo', async ({ request }) => {
+    const r = await request.get('/api/saude')
+    expect([200, 503]).toContain(r.status())
+    const corpo = await r.text()
+    expect(corpo).not.toMatch(/postgres(ql)?:\/\/|\$aact_|dmd_live_|smtp:\/\//i)
+    const j = JSON.parse(corpo)
+    expect(j.banco?.ok).toBe(true)
+    expect(Object.values(j.config ?? {}).every((x: any) => ['SIM', 'NÃO'].includes(String(x)) || typeof x === 'object')).toBe(true)
+  })
+})

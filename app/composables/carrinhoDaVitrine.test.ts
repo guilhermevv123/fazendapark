@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { db, q, q1 } from '../../server/utils/db'
 import {
-  ajustarQuantidade, carimboDePago, carrinhoParaGuardar, chaveDaLinha, codigoDePromoter,
+  ajustarQuantidade, caminhoDoErro, carimboDePago, carrinhoParaGuardar, chaveDaLinha, codigoDePromoter,
   dataNoFuso, destinoSemCarrinho, enderecoDoLocal, falhaDaConsulta, faltaNaDeclaracao,
   impedimentoDaLinha, itensDoCheckout, minimoDaLinha, paginaDeErro, pedeDeclaracaoDeMeia,
   pendenciasDoCarrinho, restaurarCarrinho, situacaoDaCobranca, situacaoDoPedido, tetoDaLinha,
@@ -324,6 +324,16 @@ describe('B25 · a página de erro do site, em português', () => {
   it('quem estava no painel volta pro painel; o comprador volta pros eventos', () => {
     expect(paginaDeErro(404, '/admin/eventos').voltar).toEqual({ para: '/admin', rotulo: 'Voltar ao painel' })
     expect(paginaDeErro(404, '/e/x').voltar.para).toBe('/')
+  })
+  it('o caminho do erro: no navegador vale a barra de endereço, não a rota de antes da navegação', () => {
+    // a navegação pelo roteador pra um evento que não existe: a rota "atual" ainda é a home
+    expect(caminhoDoErro({ enderecoDoNavegador: '/e/nao-existe', rota: '/' })).toBe('/e/nao-existe')
+    expect(paginaDeErro(404, caminhoDoErro({ enderecoDoNavegador: '/e/nao-existe', rota: '/' })).titulo)
+      .toBe('Evento não encontrado')
+    // no servidor: a rota; sem rota, a URL inteira do erro
+    expect(caminhoDoErro({ rota: '/ingressos/PED-X' })).toBe('/ingressos/PED-X')
+    expect(caminhoDoErro({ url: 'http://127.0.0.1:3121/transferencia/abc?x=1' })).toBe('/transferencia/abc')
+    expect(caminhoDoErro({})).toBe('/')
   })
   it('nada de inglês em frase nenhuma', () => {
     for (const [s, c] of [[404, '/'], [404, '/e/x'], [500, '/'], [400, '/'], [404, '/admin']] as const) {

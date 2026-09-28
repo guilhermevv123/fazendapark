@@ -16,13 +16,26 @@
  * Os links são `<a href>` e não `<NuxtLink>`: saindo de um erro, a carga
  * inteira da página é o caminho que sempre funciona.
  */
-import { paginaDeErro } from '~/composables/carrinhoDaVitrine'
+import { caminhoDoErro, paginaDeErro } from '~/composables/carrinhoDaVitrine'
 
 const props = defineProps<{ error: { statusCode?: number; url?: string } | null }>()
 const route = useRoute()
 
 const status = computed(() => Number(props.error?.statusCode) || 500)
-const pagina = computed(() => paginaDeErro(status.value, route?.path || props.error?.url || ''))
+
+/**
+ * O caminho que deu erro. No navegador vale a barra de endereço: numa navegação
+ * que falhou (o `throw createError` da vitrine num link seguido pelo próprio
+ * site), a rota "atual" do Nuxt ainda é a página de ANTES — o erro nasceu antes
+ * de a nova montar —, e a página dizia "Página não encontrada" pra um evento.
+ * No servidor, a rota da requisição; `error.url` (URL inteira) é a última rede.
+ */
+const caminho = computed(() => caminhoDoErro({
+  enderecoDoNavegador: import.meta.client && typeof window !== 'undefined' ? window.location.pathname : null,
+  rota: route?.path,
+  url: props.error?.url,
+}))
+const pagina = computed(() => paginaDeErro(status.value, caminho.value))
 
 useHead(() => ({ title: pagina.value.titulo }))
 

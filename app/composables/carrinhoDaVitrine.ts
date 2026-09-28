@@ -587,6 +587,22 @@ export function paginaDeErro(status: unknown, caminho = ''): {
 }
 
 /**
+ * Qual caminho deu erro, pra `paginaDeErro` escolher a frase. No navegador vale
+ * a BARRA DE ENDEREÇO: numa navegação do próprio site que falhou (a vitrine
+ * lança 404 num link seguido pelo roteador), a rota "atual" do Nuxt ainda é a
+ * página de antes — medido no E2E: o evento que não existe lia "Página não
+ * encontrada". No servidor vale a rota da requisição; `error.url` (a URL
+ * inteira) é a última rede.
+ */
+export function caminhoDoErro(o: {
+  enderecoDoNavegador?: string | null; rota?: string | null; url?: string | null
+}): string {
+  if (o.enderecoDoNavegador) return o.enderecoDoNavegador
+  if (o.rota) return o.rota
+  try { return new URL(String(o.url ?? ''), 'http://x').pathname } catch { return '' }
+}
+
+/**
  * "Endereço — Cidade/UF", sem pedaço solto (B31): evento sem logradouro
  * renderizava " — Cidade/UF", com o travessão na frente de nada.
  */
