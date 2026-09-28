@@ -101,3 +101,39 @@ export function rotuloDoPeriodo(de: string | null | undefined, ate: string | nul
 export function nomeDoPeriodo(chave: string | null | undefined): string {
   return PERIODOS.find((p) => p.chave === chave)?.rotulo ?? 'Período'
 }
+
+/**
+ * O dia de HOJE no calendário de um fuso (`en-CA` escreve `AAAA-MM-DD`). As rotas passam o fuso do
+ * parque (`FUSO_DO_BANCO`); `toISOString().slice(0, 10)` cortaria em UTC e às 21h "hoje" viraria
+ * amanhã.
+ */
+export function hojeNoFuso(fuso: string, agora: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: fuso, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(agora)
+}
+
+export type RecorteLido = { periodo: ChavePeriodo | null; de: string | null; ate: string | null }
+
+/**
+ * Lê `?periodo=` / `?de=` / `?ate=` do jeito que TODA rota de painel entende (Visão geral e
+ * Financeiro): data à mão ganha do atalho; o atalho vira `[de, até]` no calendário do parque
+ * (`hoje` é o dia de lá); o que está errado volta como UMA frase, pro 400 dizer o porquê.
+ * Sem nada na consulta, `{ periodo: null, de: null, ate: null }`: a vida toda — o padrão de cada
+ * TELA (30 dias, Tudo) é decisão dela, mandado explícito na URL.
+ */
+export function lerRecorte(consulta: Record<string, unknown>, hoje: string): { erro: string } | RecorteLido {
+  const texto = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null)
+  const de = texto(consulta.de)
+  const ate = texto(consulta.ate)
+  if (de && !diaDeCalendario(de)) return { erro: 'A data inicial não é uma data válida. Use dia, mês e ano.' }
+  if (ate && !diaDeCalendario(ate)) return { erro: 'A data final não é uma data válida. Use dia, mês e ano.' }
+  if (de && ate && de > ate) return { erro: 'A data inicial vem depois da final.' }
+  const chave = consulta.periodo
+  if (chave !== undefined && chave !== null && chave !== '' && !ehChavePeriodo(chave)) {
+    return { erro: 'Período desconhecido. Escolha um dos atalhos da tela.' }
+  }
+  if (de || ate) return { periodo: null, de, ate }
+  if (ehChavePeriodo(chave)) return { periodo: chave, ...faixaDoPeriodo(chave, hoje) }
+  return { periodo: null, de: null, ate: null }
+}

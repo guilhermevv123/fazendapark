@@ -67,3 +67,30 @@ describe('datas digitadas (REL-10: De depois de Até não derruba a tela)', () =
     expect(rotuloDoPeriodo(null, null)).toBe('todo o período')
   })
 })
+
+describe('o recorte que as rotas leem (Visão geral e Financeiro falam a mesma língua)', () => {
+  const hoje = '2026-09-27'
+
+  it('o atalho vira as datas; a data digitada ganha do atalho; nada = a vida toda', async () => {
+    const { lerRecorte } = await import('./painelPeriodo')
+    expect(lerRecorte({ periodo: '7d' }, hoje)).toEqual({ periodo: '7d', de: '2026-09-21', ate: '2026-09-27' })
+    expect(lerRecorte({ periodo: '7d', de: '2026-09-01' }, hoje)).toEqual({ periodo: null, de: '2026-09-01', ate: null })
+    expect(lerRecorte({}, hoje)).toEqual({ periodo: null, de: null, ate: null })
+    expect(lerRecorte({ periodo: 'tudo' }, hoje)).toEqual({ periodo: 'tudo', de: null, ate: null })
+  })
+
+  it('o que está errado volta como frase (o 400 diz o porquê)', async () => {
+    const { lerRecorte } = await import('./painelPeriodo')
+    expect(lerRecorte({ de: '2026-02-31' }, hoje)).toEqual({ erro: 'A data inicial não é uma data válida. Use dia, mês e ano.' })
+    expect(lerRecorte({ ate: '2026-13-01' }, hoje)).toEqual({ erro: 'A data final não é uma data válida. Use dia, mês e ano.' })
+    expect(lerRecorte({ de: '2026-05-02', ate: '2026-05-01' }, hoje)).toEqual({ erro: 'A data inicial vem depois da final.' })
+    expect(lerRecorte({ periodo: '90d' }, hoje)).toEqual({ erro: 'Período desconhecido. Escolha um dos atalhos da tela.' })
+  })
+
+  it('hoje é o dia do PARQUE: 23h30 na Bahia ainda é hoje, mesmo já sendo amanhã em UTC', async () => {
+    const { hojeNoFuso } = await import('./painelPeriodo')
+    const noite = new Date('2026-09-28T02:30:00Z') // 27/09 23h30 na Bahia (-03)
+    expect(hojeNoFuso('America/Bahia', noite)).toBe('2026-09-27')
+    expect(hojeNoFuso('UTC', noite)).toBe('2026-09-28')
+  })
+})

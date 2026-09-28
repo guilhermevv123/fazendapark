@@ -24,6 +24,7 @@
  * Sem nada na URL, abre em "30 dias" (proposta 10: "Tudo" como padrão abria a vida inteira).
  */
 import { baixarCsv } from '~/composables/baixarCsv'
+import { centavosParaPlanilha } from '~/composables/painelPlanilha'
 import { ehPapel, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
 import {
   ehChavePeriodo, problemaNoPeriodo, rotuloDoPeriodo, type ChavePeriodo,
@@ -255,11 +256,7 @@ const partesDoCanal = computed(() => canaisDeVenda.value.map((c: any) => ({
  * o Excel não soma. Agora cada tabela é um arquivo, e dinheiro sai como NÚMERO no formato que o
  * Excel brasileiro lê (`1234,56`, sem milhar e sem `R$`) — a coluna diz que é em reais.
  */
-const numeroCsv = (cents: number) => {
-  const v = Math.round(Number(cents ?? 0))
-  const abs = Math.abs(v)
-  return `${v < 0 ? '-' : ''}${Math.floor(abs / 100)},${String(abs % 100).padStart(2, '0')}`
-}
+const numeroCsv = centavosParaPlanilha
 const exportarAberto = ref(false)
 const sufixo = computed(() => {
   const f = data.value?.filtro ?? {}
@@ -515,7 +512,7 @@ useHead({ title: 'Visão geral' })
             <h2 id="titulo-tipo" class="titulo text-lg font-semibold text-ink-900">Por tipo de ingresso</h2>
             <p class="mb-3 text-sm text-ink-700">Pelo preço de cada ingresso na compra, antes de cupom e devolução.</p>
             <p v-if="!(data.porTipo ?? []).length" class="text-sm text-ink-700">Nenhum ingresso vendido nesse recorte.</p>
-            <div v-else class="overflow-x-auto">
+            <div v-else class="relative overflow-x-auto">
               <table class="w-full text-sm">
                 <thead>
                   <tr class="border-b border-ink-200 text-left text-xs font-semibold uppercase tracking-wide text-ink-600">
@@ -541,7 +538,7 @@ useHead({ title: 'Visão geral' })
         <!-- ---------------------------------------------------- por evento -->
         <section class="card mt-4 p-0" aria-labelledby="titulo-evento">
           <h2 id="titulo-evento" class="titulo border-b border-ink-200 px-4 py-3 text-lg font-semibold text-ink-900 sm:px-5">Por evento</h2>
-          <div class="overflow-x-auto">
+          <div class="relative overflow-x-auto">
             <table class="w-full text-sm sm:min-w-[36rem]">
               <thead>
                 <tr class="border-b border-ink-200 text-left text-xs font-semibold uppercase tracking-wide text-ink-600">
@@ -577,7 +574,7 @@ useHead({ title: 'Visão geral' })
         <!-- ------------------------------------------------ forma de pagamento -->
         <section class="card mt-4" aria-labelledby="titulo-forma">
           <h2 id="titulo-forma" class="titulo text-lg font-semibold text-ink-900">Forma de pagamento</h2>
-          <div class="mt-3 overflow-x-auto">
+          <div class="relative mt-3 overflow-x-auto">
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-ink-200 text-left text-xs font-semibold uppercase tracking-wide text-ink-600">
@@ -719,7 +716,7 @@ useHead({ title: 'Visão geral' })
             </p>
           </div>
           <!-- e-mail comprido não quebra sozinho: a tabela rola dentro do cartão em vez de esticar a página -->
-          <div class="overflow-x-auto">
+          <div class="relative overflow-x-auto">
             <table class="w-full text-sm sm:min-w-[30rem]">
               <thead>
                 <tr class="border-b border-ink-200 text-left text-xs font-semibold uppercase tracking-wide text-ink-600">

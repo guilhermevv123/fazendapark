@@ -52,18 +52,12 @@ import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../utils/liquido'
 import { FAIXAS_ETARIAS, SQL_FAIXA } from '../../utils/cadastro'
 import { CANAL_CORTESIA } from '../../utils/emissao'
 import { papelPode, type Papel } from '../../utils/papeis'
-import {
-  diaDeCalendario, ehChavePeriodo, faixaDoPeriodo, periodoAnterior, type ChavePeriodo,
-} from '../../../app/composables/painelPeriodo'
+import { hojeNoFuso, lerRecorte, periodoAnterior } from '../../../app/composables/painelPeriodo'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** O dia de hoje no calendário do PARQUE (`en-CA` escreve ISO; `toISOString` cortaria em UTC). */
-export function hojeNoParque(agora = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: FUSO_DO_BANCO, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(agora)
-}
+/** O dia de hoje no calendário do PARQUE (o fuso da sessão do banco, `utils/db.ts`). */
+export const hojeNoParque = (agora = new Date()) => hojeNoFuso(FUSO_DO_BANCO, agora)
 
 /**
  * "an***@exemplo.com". O e-mail inteiro dos maiores compradores é dado da BASE de clientes, que é
@@ -165,31 +159,17 @@ export default defineEventHandler(async (event) => {
 
   const consulta = getQuery(event) as Record<string, string | undefined>
   const { evento } = consulta
-  let { de, ate } = consulta
   if (evento && !UUID.test(evento)) {
     throw createError({ statusCode: 400, statusMessage: 'Evento inválido.' })
   }
-  for (const [nome, v] of [['inicial', de], ['final', ate]] as const) {
-    if (v && !diaDeCalendario(v)) {
-      throw createError({ statusCode: 400,
-        statusMessage: `A data ${nome} não é uma data válida. Use dia, mês e ano.` })
-    }
-  }
-  if (de && ate && de > ate) {
-    throw createError({ statusCode: 400, statusMessage: 'A data inicial vem depois da final.' })
-  }
-  if (consulta.periodo !== undefined && !ehChavePeriodo(consulta.periodo)) {
-    throw createError({ statusCode: 400, statusMessage: 'Período desconhecido. Escolha um dos atalhos da tela.' })
-  }
-
-  // O atalho só vale quando ninguém digitou data: as datas à mão ganham.
+  // A MESMA leitura do Financeiro (`lerRecorte`): data à mão ganha do atalho, e o atalho vira
+  // datas no calendário do parque.
   const hoje = hojeNoParque()
-  const periodo: ChavePeriodo | null = !de && !ate && consulta.periodo ? consulta.periodo as ChavePeriodo : null
-  if (periodo) {
-    const f = faixaDoPeriodo(periodo, hoje)
-    de = f.de ?? undefined
-    ate = f.ate ?? undefined
-  }
+  const recorte = lerRecorte(consulta, hoje)
+  if ('erro' in recorte) throw createError({ statusCode: 400, statusMessage: recorte.erro })
+  const { periodo } = recorte
+  const de = recorte.de ?? undefined
+  const ate = recorte.ate ?? undefined
 
   // O recorte, montado uma vez e usado por todas as consultas abaixo — é o que
   // garante que resumo, curva e quebras falam da MESMA população de pedidos.
