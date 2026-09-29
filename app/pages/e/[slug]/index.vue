@@ -16,11 +16,12 @@
  */
 import { MOTIVOS, CHAVES_DE_MOTIVO } from '~~/server/utils/meia-entrada'
 import {
-  ajustarQuantidade, carrinhoParaGuardar, chaveDaLinha, codigoDePromoter, dataNoFuso,
+  ajustarQuantidade, carrinhoParaGuardar, chaveDaLinha, ehGratis, codigoDePromoter, dataNoFuso,
   enderecoDoLocal, falhaDaConsulta, impedimentoDaLinha, minimoDaLinha, pedeDeclaracaoDeMeia,
   pendenciasDoCarrinho, restaurarCarrinho, tetoDaLinha, totaisDoCarrinho,
   type DeclaracaoDeMeia, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
+import { GRATIS_POR_CPF } from '~~/server/utils/gratis'
 
 const route = useRoute()
 const slug = String(route.params.slug ?? '')
@@ -92,8 +93,25 @@ function outrasDoLote(lote: any, v: any): number {
   return n
 }
 
+/**
+ * Grátis é 1 por CPF SOMANDO todos os tipos grátis do evento (`server/utils/gratis.ts`): com um
+ * grátis no carrinho, o "+" dos outros grátis trava — senão a pessoa só descobre no checkout.
+ */
+function gratisForaDesta(lote: any, v: any): number {
+  let n = 0
+  for (const l of linhas.value) {
+    if (l.unitTotalCents !== 0) continue
+    if (l.loteId === lote.id && (l.tipoId ?? null) === (v?.tipoId ?? null)) continue
+    n += l.quantidade
+  }
+  return n
+}
+const gratisEsgotadoNoCarrinho = (lote: any, v: any) =>
+  ehGratis(v) && gratisForaDesta(lote, v) >= GRATIS_POR_CPF
+
 function ajustar(lote: any, v: any, delta: number) {
   const k = chaveDaLinha(lote.id, v.tipoId)
+  if (delta > 0 && gratisEsgotadoNoCarrinho(lote, v)) return
   const novo = ajustarQuantidade(quantidades.value[k] ?? 0, delta, lote, v, outrasDoLote(lote, v))
   if (novo === 0) {
     delete quantidades.value[k]
@@ -351,7 +369,7 @@ useHead(() => ({
        como página de erro (HTTP 404); aqui chega o "Tentar de novo" que voltou
        404 e, principalmente, a bilheteria fora do ar. -->
   <div v-if="falha" class="min-h-screen">
-    <CabecalhoPublico />
+    <CabecalhoPublico :evento="slug" />
     <main class="mx-auto max-w-2xl px-4 py-16">
       <div class="card py-10 text-center" role="alert">
         <template v-if="falha === 'nao_encontrado'">
@@ -378,8 +396,8 @@ useHead(() => ({
   </div>
 
   <div v-else-if="data" class="min-h-screen pb-44 lg:pb-16" :style="recheioDaBarra">
-    <CabecalhoPublico>
-      <span class="truncate text-ink-500">{{ data.evento.organizacao }}</span>
+    <CabecalhoPublico :evento="slug">
+      <span class="hidden truncate text-ink-500 sm:inline">{{ data.evento.organizacao }}</span>
     </CabecalhoPublico>
 
     <main class="mx-auto max-w-5xl px-4">
@@ -523,8 +541,9 @@ useHead(() => ({
                          qual. `<span>` com display:block dentro de `<p>` é
                          válido; o que não pode é `<div>`/`<p>` aninhado. -->
                     <p class="mt-0.5">
-                      <span class="titulo text-lg font-semibold text-tinta">{{ reais(v.totalCents) }}</span>
-                      <span v-if="v.taxaCents" class="block text-sm text-tinta-fraca sm:ml-2 sm:inline">
+                      <span class="titulo text-lg font-semibold text-tinta">{{ ehGratis(v) ? 'Grátis' : reais(v.totalCents) }}</span>
+                      <span v-if="ehGratis(v)" class="block text-sm text-tinta-fraca sm:ml-2 sm:inline">1 por CPF</span>
+                      <span v-else-if="v.taxaCents" class="block text-sm text-tinta-fraca sm:ml-2 sm:inline">
                         {{ reais(v.faceCents) }} + {{ reais(v.taxaCents) }} de taxa
                       </span>
                     </p>
@@ -562,7 +581,8 @@ useHead(() => ({
                                    text-white ring-1 ring-inset ring-pool-700 transition-colors hover:bg-pool-800
                                    disabled:cursor-not-allowed disabled:opacity-40"
                             :disabled="!!impedimentoDaLinha(lote, v, outrasDoLote(lote, v))
-                                       || quantidade(lote, v) >= tetoDaLinha(lote, v)"
+                                       || quantidade(lote, v) >= tetoDaLinha(lote, v)
+                                       || gratisEsgotadoNoCarrinho(lote, v)"
                             :aria-label="`Adicionar um ${v.nome ?? lote.nome}`"
                             @click="ajustar(lote, v, 1)">+</button>
                   </div>

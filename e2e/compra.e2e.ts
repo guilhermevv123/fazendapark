@@ -10,7 +10,8 @@
 import { expect, test } from '@playwright/test'
 import { hidratada, travaDeBase, vigiar } from './apoio'
 import {
-  SLUG, abrirVitrine, botaoIrPagar, botaoPagar, cpfDeTeste, irParaPagamento, mais, menos, preencherDados,
+  SLUG, SENHA_DE_TESTE, abrirVitrine, botaoIrPagar, botaoPagar, cpfDeTeste, criarConta, irParaPagamento, mais, menos,
+  pagar, preencherDados,
 } from './compra-apoio'
 
 travaDeBase()
@@ -101,7 +102,7 @@ test.describe('vitrine: escolher os ingressos', () => {
   })
 })
 
-test.describe('pagamento: dados do comprador', () => {
+test.describe('pagamento: quem compra é a conta (034)', () => {
   test('entrar no pagamento sem carrinho (link direto) devolve pra vitrine', async ({ page }) => {
     await page.goto(`/e/${SLUG}/pagamento`)
     await expect(page).toHaveURL(new RegExp(`/e/${SLUG}$`))
@@ -124,170 +125,96 @@ test.describe('pagamento: dados do comprador', () => {
     await expect(page).toHaveURL(new RegExp(`/e/${SLUG}$`))
     await page.goForward()
     await hidratada(page)
-    await expect(page.locator('#nome')).toBeVisible()
+    await expect(page.locator('[data-parte="avancar"]')).toBeVisible()
     await expect(page.getByText('R$ 33,00').first()).toBeVisible()
   })
 
-  test('formulário vazio: o navegador segura e nenhuma cobrança é criada', async ({ page }) => {
+  test('sem conta: a janela de entrar abre sozinha, o checkout não pede dados e nenhuma cobrança nasce', async ({ page }) => {
     let checkouts = 0
     page.on('request', (r) => { if (r.url().endsWith('/api/checkout') && r.method() === 'POST') checkouts++ })
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
-    await botaoPagar(page).click()
-    await page.waitForTimeout(600)
-    expect(checkouts).toBe(0)
-    await expect(page.locator('#nome')).toBeFocused()
-  })
-
-  test('as máscaras formatam CPF, celular e data enquanto digita', async ({ page }) => {
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await page.locator('#cpf').pressSequentially('52998224725')
-    await expect(page.locator('#cpf')).toHaveValue('529.982.247-25')
-    await page.locator('#tel').pressSequentially('73998260963')
-    await expect(page.locator('#tel')).toHaveValue('(73) 99826-0963')
-    await page.locator('#nascimento').pressSequentially('25121990')
-    await expect(page.locator('#nascimento')).toHaveValue('25/12/1990')
-  })
-
-  test('data de nascimento incompleta: recado no campo, sem chamar o servidor', async ({ page }) => {
-    let checkouts = 0
-    page.on('request', (r) => { if (r.url().endsWith('/api/checkout') && r.method() === 'POST') checkouts++ })
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await preencherDados(page, { nascimento: '25/12' })
-    await botaoPagar(page).click()
-    await expect(page.getByText(/Confira a data de nascimento/)).toBeVisible()
-    await expect(page.locator('#nascimento')).toBeFocused()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await expect(page.getByRole('dialog')).toContainText('Pra comprar, entre na sua conta')
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    for (const id of ['nome', 'email', 'cpf', 'tel', 'nascimento', 'cidade']) {
+      await expect(page.locator(`#${id}`), `o checkout voltou a pedir #${id}`).toHaveCount(0)
+    }
+    await expect(page.locator('[data-parte="avancar"]')).toBeDisabled()
+    await page.waitForTimeout(300)
     expect(checkouts).toBe(0)
   })
 
-  test('data que não existe (31/02) é recusada pelo servidor e o foco vai pro campo', async ({ page }) => {
+  test('criar conta pela janela: máscaras no CPF e celular, e a compra segue com os dados da conta', async ({ page }) => {
+    await abrirVitrine(page)
+    await mais(page, 'Inteira').click()
+    await irParaPagamento(page)
+    const janela = page.getByRole('dialog')
+    await janela.getByRole('tab', { name: 'Criar conta' }).click()
+    await janela.locator('#conta-nome').fill('Cliente da Janela Teste')
+    await janela.locator('#conta-cpf').pressSequentially(cpfDeTeste())
+    await expect(janela.locator('#conta-cpf')).toHaveValue(/^\d{3}\.\d{3}\.\d{3}-\d{2}$/)
+    await janela.locator('#conta-telefone').pressSequentially('73998260963')
+    await expect(janela.locator('#conta-telefone')).toHaveValue('(73) 99826-0963')
+    await janela.locator('#conta-email').fill(`janela.${Date.now()}@teste.invalido`)
+    await janela.locator('#conta-senha-nova').fill(SENHA_DE_TESTE)
+    await janela.getByRole('button', { name: 'Criar conta e continuar' }).click()
+    await expect(janela).toHaveCount(0)
+    await expect(page.locator('[data-parte="seus-dados"]')).toContainText('Cliente da Janela Teste')
+    await expect(page.getByRole('button', { name: 'Entrar' })).toHaveCount(0)
+  })
+
+  test('CPF com dígito errado: a janela recusa com recado no campo (sem 500)', async ({ page }) => {
     const problemas = vigiar(page)
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
-    await preencherDados(page, { nascimento: '31/02/1990' })
-    await botaoPagar(page).click()
-    await expect(page.locator('.faixa-erro').first()).toBeVisible()
-    await expect(page.locator('#nascimento')).toBeFocused()
-    await expect(page.getByText('Pague com PIX')).toHaveCount(0)
-    expect(problemas.filter((p) => !p.startsWith('console'))).toEqual([])
+    const janela = page.getByRole('dialog')
+    await janela.getByRole('tab', { name: 'Criar conta' }).click()
+    await janela.locator('#conta-nome').fill('Cliente do CPF Torto')
+    await janela.locator('#conta-cpf').fill('52998224724')
+    await janela.locator('#conta-telefone').fill('73998260963')
+    await janela.locator('#conta-email').fill(`torto.${Date.now()}@teste.invalido`)
+    await janela.locator('#conta-senha-nova').fill(SENHA_DE_TESTE)
+    await janela.getByRole('button', { name: 'Criar conta e continuar' }).click()
+    await expect(janela.getByRole('alert')).toContainText(/CPF/)
+    await expect(janela.locator('#conta-cpf')).toHaveAttribute('aria-invalid', 'true')
+    expect(problemas.filter((p) => !p.startsWith('console') && !p.includes('400'))).toEqual([])
   })
 
-  test('CPF com dígito errado é recusado com recado na tela (sem 500)', async ({ page }) => {
-    const problemas = vigiar(page)
+  test('entrar com CPF e senha de uma conta que já existe', async ({ page }) => {
+    const { corpo } = await criarConta(page)
+    await page.request.post('/api/conta/sair', { data: {} })
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
-    await preencherDados(page, { cpf: '52998224724' })
-    await botaoPagar(page).click()
-    await expect(page.getByText(/CPF inválido/i)).toBeVisible()
-    expect(problemas.filter((p) => !p.startsWith('console'))).toEqual([])
+    const janela = page.getByRole('dialog')
+    await janela.locator('#conta-login').fill(corpo.cpf)
+    await janela.locator('#conta-senha').fill(SENHA_DE_TESTE)
+    await janela.getByRole('button', { name: 'Entrar', exact: true }).click()
+    await expect(janela).toHaveCount(0)
+    await expect(page.locator('[data-parte="seus-dados"]')).toContainText(corpo.nome)
   })
 
-  test('CEP: achou preenche o endereço; não existe avisa; serviço fora avisa — nenhum trava a compra', async ({ page }) => {
+  test('F5 no pagamento com a conta aberta: carrinho e conta continuam', async ({ page }) => {
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
-
-    let resposta: 'achou' | 'nao_existe' | 'fora' = 'achou'
-    await page.route('https://viacep.com.br/**', (rota) => {
-      if (resposta === 'fora') return rota.abort()
-      return rota.fulfill({
-        contentType: 'application/json',
-        body: JSON.stringify(resposta === 'achou'
-          ? { cep: '45550-000', localidade: 'Ubatã', uf: 'BA', logradouro: 'Rua do Parque', bairro: 'Centro' }
-          : { erro: true }),
-      })
-    })
-
-    await page.locator('#cep').pressSequentially('45550000')
-    await expect(page.locator('#cidade')).toHaveValue('Ubatã')
-    await expect(page.locator('#estado')).toHaveValue('BA')
-    await expect(page.locator('#rua')).toHaveValue('Rua do Parque')
-
-    resposta = 'nao_existe'
-    await page.locator('#cep').fill('')
-    await page.locator('#cep').pressSequentially('99999999')
-    await expect(page.getByText(/Não achamos esse CEP/)).toBeVisible()
-
-    resposta = 'fora'
-    await page.locator('#cep').fill('')
-    await page.locator('#cep').pressSequentially('45550001')
-    await expect(page.getByText(/Não deu pra buscar o CEP agora/)).toBeVisible()
-  })
-
-  test('F5 com os dados meio preenchidos: o carrinho fica (os dados digitados não — sem cobrança criada)', async ({ page }) => {
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await page.locator('#nome').fill('Pessoa que Apertou F5')
+    await preencherDados(page)
     await page.reload()
     await hidratada(page)
-    await expect(page.locator('#nome')).toBeVisible()
+    await expect(page.locator('[data-parte="seus-dados"]')).toBeVisible()
     await expect(page.getByText('R$ 33,00').first()).toBeVisible()
-    // registro do comportamento atual: o formulário não é guardado antes da cobrança existir
-    test.info().annotations.push({ type: 'observação', description: `nome depois do F5: "${await page.locator('#nome').inputValue()}"` })
   })
 })
 
-test.describe('cupom', () => {
-  test('cupom que não existe: recado colado no campo e "Continuar sem o cupom" segue a compra', async ({ page }) => {
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await preencherDados(page)
-    await page.locator('#cupom').fill('NAOEXISTE2026')
-    await page.locator('#cupom').blur()
-    const semCupom = page.getByRole('button', { name: 'Continuar sem o cupom' })
-    await expect(semCupom).toBeVisible()
-    await semCupom.click()
-    await expect(page.getByText('Pague com PIX')).toBeVisible()
-    await expect(page.getByText('R$ 33,00').first()).toBeVisible()
-  })
-
-  test('cupom VIZINHO (15%): a tela mostra o desconto antes e a cobrança sai com ele', async ({ page }) => {
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await preencherDados(page)
-    await page.locator('#cupom').fill('vizinho')
-    await page.locator('#cupom').blur()
-    await expect(page.getByText(/Desconto de/)).toBeVisible()
-    await botaoPagar(page).click()
-    await expect(page.getByText('Pague com PIX')).toBeVisible()
-    await expect(page.getByText(/Cupom aplicado: −R\$/)).toBeVisible()
-    // o desconto é sobre o valor de face (R$ 30,00 → R$ 4,50); a taxa não entra no desconto
-    const cabecalho = await page.locator('section').filter({ hasText: 'Pedido' }).first().innerText()
-    test.info().annotations.push({ type: 'cobrança com VIZINHO', description: cabecalho.split('\n').slice(0, 3).join(' | ') })
-    await expect(page.getByText('Cupom aplicado')).toBeVisible()
-  })
-
-  test('cupom IMPRENSA (100%): cobre o ingresso inteiro, a taxa de serviço continua — e o pagamento emite', async ({ page }) => {
-    // Regra do sistema (server/utils/cupom.ts): desconto nunca passa do valor de FACE. O evento do
-    // seed repassa 10% de taxa, então o "100%" deixa R$ 3,00 pra pagar. Nos eventos criados pelo
-    // painel a taxa padrão é 0% (ordem do dono, 23/09) e aí o pedido nasce pago, sem gateway.
-    await abrirVitrine(page)
-    await mais(page, 'Inteira').click()
-    await irParaPagamento(page)
-    await preencherDados(page)
-    await page.locator('#cupom').fill('IMPRENSA')
-    await page.locator('#cupom').blur()
-    await expect(page.getByText(/Desconto de/)).toBeVisible()
-    await botaoPagar(page).click()
-    await expect(page.getByRole('heading', { name: 'Pague com PIX' })).toBeVisible()
-    await expect(page.getByText('Cupom aplicado: −R$ 30,00')).toBeVisible()
-    await expect(page.getByText(/Pedido\s+PED-\S+\s+·\s+R\$ 3,00/)).toBeVisible()
-    await page.getByRole('button', { name: 'Simular pagamento recebido' }).click()
-    await expect(page.getByRole('heading', { name: 'Ingressos emitidos' })).toBeVisible()
-    // F5 depois de pago: vai pro ingresso, não pra vitrine
-    await page.reload()
-    await expect(page).toHaveURL(/\/ingressos\//)
-  })
+// O campo de cupom está escondido no checkout por enquanto (pedido do dono, 28/09 — `MOSTRAR_CUPOM`
+// em pagamento.vue). A régua do cupom segue coberta no servidor (checkout.test.ts, cupom.test.ts);
+// estes voltam quando o campo voltar.
+test.describe.skip('cupom (campo escondido por enquanto)', () => {
+  test('cupom que não existe: recado colado no campo', async () => {})
 })
 
 test.describe('pagar e receber o ingresso', () => {
@@ -301,7 +228,7 @@ test.describe('pagar e receber o ingresso', () => {
     await preencherDados(page)
     const [resposta] = await Promise.all([
       page.waitForResponse((r) => r.url().endsWith('/api/checkout') && r.request().method() === 'POST'),
-      botaoPagar(page).click(),
+      pagar(page),
     ])
     const codigo: string = (await resposta.json()).pedido
     expect(codigo, 'número do pedido na resposta do checkout').toMatch(/^PED-/)
@@ -344,26 +271,31 @@ test.describe('pagar e receber o ingresso', () => {
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
     await preencherDados(page)
+    await page.locator('[data-parte="avancar"]').click()
     await botaoPagar(page).dblclick()
     await expect(page.getByRole('heading', { name: 'Pague com PIX' })).toBeVisible()
     expect(checkouts).toBe(1)
   })
 
-  test('cartão: as parcelas respeitam o piso de R$ 5,00 e trocar pra PIX e voltar mantém a escolha', async ({ page }) => {
+  test('cartão: as parcelas respeitam o piso de R$ 5,00, débito é à vista e voltar pro Pix mantém a escolha', async ({ page }) => {
     await abrirVitrine(page)
     await mais(page, 'Inteira').click() // R$ 33,00 → no máximo 6× (33/5 = 6,6)
     await irParaPagamento(page)
-    await page.getByRole('button', { name: 'Cartão de crédito' }).click()
+    await preencherDados(page)
+    await page.locator('[data-parte="avancar"]').click()
+    await page.locator('[data-forma="credito"]').click()
     const parcelas = page.locator('#parcelas')
     await expect(parcelas).toBeVisible()
     await expect(parcelas.locator('option')).toHaveCount(6)
     await expect(parcelas.locator('option').first()).toHaveText(/À vista — R\$ 33,00/)
     await parcelas.selectOption('3')
-    await expect(botaoPagar(page)).toHaveText('Pagar com cartão')
-    await page.getByRole('button', { name: 'PIX — na hora' }).click()
+    await expect(botaoPagar(page)).toHaveText('Pagar em 3× no crédito')
+    await page.locator('[data-forma="debito"]').click()
     await expect(parcelas).toHaveCount(0)
-    await expect(botaoPagar(page)).toHaveText('Pagar com PIX')
-    await page.getByRole('button', { name: 'Cartão de crédito' }).click()
+    await expect(botaoPagar(page)).toHaveText('Pagar R$ 33,00 no débito')
+    await page.locator('[data-forma="pix"]').click()
+    await expect(botaoPagar(page)).toHaveText('Pagar R$ 33,00 com Pix')
+    await page.locator('[data-forma="credito"]').click()
     await expect(page.locator('#parcelas')).toHaveValue('3')
   })
 
@@ -374,9 +306,7 @@ test.describe('pagar e receber o ingresso', () => {
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
     await preencherDados(page)
-    await page.getByRole('button', { name: 'Cartão de crédito' }).click()
-    await page.locator('#parcelas').selectOption('3')
-    await botaoPagar(page).click()
+    await pagar(page, 'credito', '3')
     await expect(page.getByRole('heading', { name: 'Pague com cartão' })).toBeVisible()
     await expect(page.getByText(/ambiente seguro do Asaas/)).toBeVisible()
     await page.getByRole('button', { name: 'Simular pagamento recebido' }).click()
@@ -394,7 +324,7 @@ test.describe('pagar e receber o ingresso', () => {
     await irParaPagamento(page)
     await expect(page.getByText(/Estudante/).first()).toBeVisible()
     await preencherDados(page)
-    await botaoPagar(page).click()
+    await pagar(page)
     await expect(page.getByRole('heading', { name: 'Pague com PIX' })).toBeVisible()
     await expect(page.getByText('R$ 16,50').first()).toBeVisible()
     await page.getByRole('button', { name: 'Simular pagamento recebido' }).click()
@@ -408,12 +338,18 @@ test.describe('pagar e receber o ingresso', () => {
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
-    await preencherDados(page, { nome: 'Ana <img src=x onerror=alert(1)> <script>alert(2)</script>' })
-    await botaoPagar(page).click()
-    const chegou = await Promise.race([
-      page.getByRole('heading', { name: 'Pague com PIX' }).waitFor().then(() => 'cobranca'),
-      page.locator('.faixa-erro').first().waitFor().then(() => 'recusado'),
-    ])
+    // o nome com HTML vai na CONTA (é de lá que o pedido tira o comprador)
+    const c = await criarConta(page, { nome: 'Ana <img src=x onerror=alert(1)> <script>alert(2)</script>' })
+    let chegou = 'recusado'
+    if (c.status === 200) {
+      await page.reload()
+      await hidratada(page)
+      await pagar(page)
+      chegou = await Promise.race([
+        page.getByRole('heading', { name: 'Pague com PIX' }).waitFor().then(() => 'cobranca'),
+        page.locator('.faixa-erro').first().waitFor().then(() => 'recusado'),
+      ])
+    }
     test.info().annotations.push({ type: 'nome com HTML', description: chegou })
     if (chegou === 'cobranca') {
       await page.getByRole('button', { name: 'Simular pagamento recebido' }).click()

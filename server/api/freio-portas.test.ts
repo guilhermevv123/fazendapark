@@ -128,20 +128,24 @@ describe('B03 · /api/checkout', () => {
     expect((await chamar(checkout, requisicao(novoIp(), 'POST', '/api/checkout', { eventSlug: slug }))).status).toBe(400)
   })
 
-  it('o balde de INGRESSOS conta o que foi reservado: 3 + 2 num limite de 4 leva 429', async () => {
-    // trava: `marcarNoFreio(event, 'checkout_ingressos', ingressosPedidos)` depois da reserva
-    limites({ FREIO_CHECKOUT_INGRESSOS: '4/600', FREIO_CHECKOUT: '0' })
+  it('o balde de INGRESSOS conta o que foi reservado: 1 + 1 + 1 num limite de 2 leva 429', async () => {
+    // trava: `marcarNoFreio(event, 'checkout_ingressos', ingressosPedidos)` depois da reserva.
+    // O lote daqui é GRÁTIS, e grátis é 1 por CPF (utils/gratis.ts): cada pedido leva 1 ingresso
+    // de um CPF novo — o balde é do ENDEREÇO, então os três contam juntos.
+    limites({ FREIO_CHECKOUT_INGRESSOS: '2/600', FREIO_CHECKOUT: '0' })
     const ip = novoIp()
     const compra = (quantidade: number) => chamar(checkout, requisicao(ip, 'POST', '/api/checkout', {
       eventSlug: slug, itens: [{ lotId, quantidade }],
       comprador: { nome: 'Maria de Teste', email: `freio.${randomUUID().slice(0, 8)}@teste.invalido`, documento: cpf() },
     }))
-    const primeira = await compra(3)
-    expect(primeira.status, JSON.stringify(primeira)).toBe(200)
-    expect(primeira.corpo?.status).toBe('pago')
-    const segunda = await compra(2)
-    expect(segunda.status, 'sessenta lugares presos por um script não tinham freio').toBe(429)
-    expect(segunda.data).toMatchObject({ freio: 'checkout_ingressos' })
+    for (let i = 0; i < 2; i++) {
+      const r = await compra(1)
+      expect(r.status, JSON.stringify(r)).toBe(200)
+      expect(r.corpo?.status).toBe('pago')
+    }
+    const terceira = await compra(1)
+    expect(terceira.status, 'sessenta lugares presos por um script não tinham freio').toBe(429)
+    expect(terceira.data).toMatchObject({ freio: 'checkout_ingressos' })
   })
 })
 

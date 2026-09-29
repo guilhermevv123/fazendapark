@@ -323,62 +323,92 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
             bilheteria com o pedido <strong class="text-tinta">{{ data.pedido }}</strong>.
           </p>
 
-          <article v-for="(t, i) in data.ingressos" :key="t.id"
-                   class="card flex flex-col gap-4 sm:flex-row sm:items-center">
-            <!-- O primeiro QR carrega `eager`: é ele que a portaria lê, e é o
-                 que precisa estar pronto antes de a pessoa chegar na catraca.
-                 Do segundo em diante vale adiar — pedido de 10 ingressos são
-                 10 PNGs, e os de baixo esperam a rolagem sem prejudicar
-                 ninguém. `lazy` no primeiro já rendeu `complete: false` com a
-                 rota devolvendo 200 na medição do navegador. -->
-            <img v-if="t.qr" :src="`/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.pedido)}`"
-                 :alt="`QR do ingresso ${t.codigo}`"
-                 class="mx-auto h-40 w-40 shrink-0 rounded-card border border-linha bg-white p-1 sm:mx-0"
-                 :loading="i === 0 ? 'eager' : 'lazy'" decoding="async">
-            <p v-else
-               class="mx-auto flex h-40 w-40 shrink-0 items-center justify-center rounded-card border border-dashed border-linha p-3 text-center text-sm font-medium text-tinta-suave sm:mx-0">
-              {{ SEM_QR[t.status] ?? 'Ingresso sem QR' }}
-            </p>
-
-            <div class="min-w-0 flex-1">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <p class="titulo text-base font-semibold text-tinta">
-                    {{ t.tipo ?? 'Ingresso' }} {{ i + 1 }}/{{ data.ingressos.length }}
-                  </p>
-                  <p class="text-sm text-tinta-suave">{{ t.setor }}<template v-if="t.lote"> · {{ t.lote }}</template></p>
-                  <p v-if="t.sessao" class="text-sm text-tinta-suave">{{ t.sessao }}</p>
-                </div>
-                <div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                  <!-- CORTESIA só no convite de verdade. A régua vem da API
-                       (origem do pedido), nunca do valor: o ingresso que a
-                       pessoa comprou com o cupom dela fechou em zero igual, e
-                       escrever CORTESIA nele é dizer que lhe deram esmola. -->
-                  <span v-if="t.cortesia" class="selo-neutro"
-                        title="Convite da casa: você não paga nada por esta entrada.">
-                    CORTESIA
-                  </span>
-                  <span :class="estado[t.status]?.c ?? 'selo-neutro'">
-                    {{ estado[t.status]?.t ?? t.status.toUpperCase() }}
-                  </span>
-                </div>
+          <!-- O ingresso como bilhete (dono, 28/09): a imagem do evento em cima, o QR grande no meio,
+               as informações embaixo. Usado/cancelado/transferido: o QR some e o aviso fica no lugar dele. -->
+          <article v-for="(t, i) in data.ingressos" :key="t.id" data-parte="bilhete"
+                   class="mx-auto w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-card ring-1 ring-ink-200/70 print:break-inside-avoid print:shadow-none">
+            <div class="relative h-36 bg-gradient-to-br from-pool-600 via-pool-700 to-grape-700 sm:h-44">
+              <img v-if="data.evento.banner" :src="data.evento.banner" alt=""
+                   class="absolute inset-0 h-full w-full object-cover" :loading="i === 0 ? 'eager' : 'lazy'">
+              <div class="absolute inset-0 bg-gradient-to-t from-ink-950/80 via-ink-950/25 to-transparent" />
+              <div class="absolute inset-x-0 bottom-0 p-4 text-white">
+                <p class="titulo text-lg font-semibold leading-snug">{{ data.evento.nome }}</p>
+                <p class="text-sm text-white/85">{{ quando(data.evento.inicio) }}</p>
               </div>
-
-              <dl class="mt-3 border-t border-linha pt-3 text-sm">
-                <div v-if="t.codigo" class="flex justify-between gap-3">
-                  <dt class="text-tinta-fraca">Código</dt>
-                  <dd class="font-mono font-medium tracking-wider text-tinta">{{ t.codigo }}</dd>
-                </div>
-                <div v-if="t.titular" class="mt-1 flex justify-between gap-3">
-                  <dt class="text-tinta-fraca">Titular</dt>
-                  <dd class="truncate text-tinta-corpo">{{ t.titular }}</dd>
-                </div>
-                <div v-if="t.usadoEm" class="mt-1 flex justify-between gap-3">
-                  <dt class="text-tinta-fraca">Entrada em</dt>
-                  <dd class="text-tinta-corpo">{{ quando(t.usadoEm) }}</dd>
-                </div>
-              </dl>
+              <span class="absolute right-3 top-3 rounded-md bg-white/90 px-2 py-0.5 text-xs font-semibold tabular-nums text-ink-800">
+                {{ i + 1 }}/{{ data.ingressos.length }}
+              </span>
             </div>
+
+            <!-- o picote do bilhete -->
+            <div class="relative h-0 border-t-2 border-dashed border-ink-200" aria-hidden="true">
+              <span class="absolute -left-3 -top-3 size-6 rounded-full bg-fundo" />
+              <span class="absolute -right-3 -top-3 size-6 rounded-full bg-fundo" />
+            </div>
+
+            <div class="flex flex-col items-center px-6 pb-2 pt-6">
+              <!-- O primeiro QR carrega `eager`: é ele que a portaria lê, e é o
+                   que precisa estar pronto antes de a pessoa chegar na catraca.
+                   Do segundo em diante vale adiar — pedido de 10 ingressos são
+                   10 PNGs, e os de baixo esperam a rolagem sem prejudicar
+                   ninguém. `lazy` no primeiro já rendeu `complete: false` com a
+                   rota devolvendo 200 na medição do navegador. -->
+              <img v-if="t.qr" :src="`/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.pedido)}`"
+                   :alt="`QR do ingresso ${t.codigo}`"
+                   class="h-56 w-56 rounded-2xl border border-linha bg-white p-2"
+                   :loading="i === 0 ? 'eager' : 'lazy'" decoding="async">
+              <p v-else
+                 class="flex h-56 w-56 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-linha p-4 text-center font-semibold text-tinta-suave">
+                <span class="titulo text-lg text-tinta">{{ estado[t.status]?.t ?? 'SEM QR' }}</span>
+                <span class="text-sm font-medium">{{ SEM_QR[t.status] ?? 'Ingresso sem QR' }}</span>
+              </p>
+              <p v-if="t.codigo" class="mt-3 font-mono text-base font-semibold tracking-[0.18em] text-tinta"
+                 data-parte="codigo-do-ingresso">{{ t.codigo }}</p>
+              <div class="mt-2 flex flex-wrap items-center justify-center gap-1.5">
+                <!-- CORTESIA só no convite de verdade. A régua vem da API
+                     (origem do pedido), nunca do valor: o ingresso que a
+                     pessoa comprou com o cupom dela fechou em zero igual, e
+                     escrever CORTESIA nele é dizer que lhe deram esmola. -->
+                <span v-if="t.cortesia" class="selo-neutro"
+                      title="Convite da casa: você não paga nada por esta entrada.">
+                  CORTESIA
+                </span>
+                <span :class="estado[t.status]?.c ?? 'selo-neutro'">
+                  {{ estado[t.status]?.t ?? t.status.toUpperCase() }}
+                </span>
+              </div>
+            </div>
+
+            <dl class="mx-6 mb-6 mt-4 grid gap-2 border-t border-linha pt-4 text-sm">
+              <div class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Ingresso</dt>
+                <dd class="text-right font-medium text-tinta">{{ t.tipo ?? 'Ingresso' }}</dd>
+              </div>
+              <div class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Setor</dt>
+                <dd class="text-right text-tinta-corpo">{{ t.setor }}<template v-if="t.lote"> · {{ t.lote }}</template></dd>
+              </div>
+              <div v-if="t.sessao" class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Sessão</dt>
+                <dd class="text-right text-tinta-corpo">{{ t.sessao }}</dd>
+              </div>
+              <div v-if="data.evento.local" class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Local</dt>
+                <dd class="text-right text-tinta-corpo">{{ data.evento.local }}</dd>
+              </div>
+              <div v-if="t.titular" class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Titular</dt>
+                <dd class="truncate text-right text-tinta-corpo">{{ t.titular }}</dd>
+              </div>
+              <div v-if="t.usadoEm" class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Entrada em</dt>
+                <dd class="text-right text-tinta-corpo">{{ quando(t.usadoEm) }}</dd>
+              </div>
+              <div class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Pedido</dt>
+                <dd class="text-right font-medium tabular-nums text-tinta">{{ data.pedido }}</dd>
+              </div>
+            </dl>
           </article>
 
           <p class="text-center text-sm text-tinta-fraca print:hidden">

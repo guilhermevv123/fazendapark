@@ -11,10 +11,16 @@
  *
  * `largura` casa com a coluna da página (`max-w-5xl` na vitrine, `max-w-2xl`
  * no pagamento), pra logo ficar alinhada com o conteúdo e não com a janela.
+ *
+ * No canto direito, depois do que a tela pôs, fica a conta de quem compra (034): "Entrar" ou o
+ * nome. `evento` diz de qual organização é a conta; `conta: false` tira o botão (a tela de erro,
+ * que não tem a janela de entrar montada).
  */
-withDefaults(defineProps<{ para?: string; largura?: string }>(), {
+withDefaults(defineProps<{ para?: string; largura?: string; evento?: string | null; conta?: boolean }>(), {
   para: '/',
   largura: 'max-w-5xl',
+  evento: null,
+  conta: true,
 })
 </script>
 
@@ -26,6 +32,7 @@ withDefaults(defineProps<{ para?: string; largura?: string }>(), {
       </NuxtLink>
       <div class="flex min-w-0 items-center gap-3 text-sm text-ink-600">
         <slot />
+        <BotaoDaConta v-if="conta" :evento="evento" />
       </div>
     </div>
   </header>

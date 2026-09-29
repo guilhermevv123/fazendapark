@@ -41,22 +41,60 @@ export async function irParaPagamento(page: Page) {
   await botaoIrPagar(page).click()
   await expect(page).toHaveURL(new RegExp(`/e/${SLUG}/pagamento`))
   await hidratada(page)
-  await expect(page.locator('#nome')).toBeVisible()
+  await expect(page.locator('[data-parte="avancar"]')).toBeVisible()
 }
 
-export interface Dados { nome?: string; email?: string; cpf?: string; nascimento?: string; cidade?: string; estado?: string }
+/**
+ * A senha das contas de cliente que os testes criam (034). Só existe no banco `_e2e` — cada teste
+ * cria uma conta nova, com CPF e e-mail sorteados.
+ */
+export const SENHA_DE_TESTE = 'senha-do-e2e-2026'
 
+export interface Dados { nome?: string; email?: string; cpf?: string; telefone?: string; cidade?: string; estado?: string }
+
+/**
+ * Cria a conta do cliente pela API, no MESMO navegador (o `page.request` divide os cookies com a
+ * página): a sessão vale na tela sem passar pela janela de criar conta. Devolve o que foi mandado
+ * e a resposta — quem quer testar a recusa olha o `status`.
+ */
+export async function criarConta(page: Page, d: Dados = {}) {
+  const corpo = {
+    nome: d.nome ?? 'Cliente do Teste Ponta a Ponta',
+    email: d.email ?? `cliente.e2e.${Date.now()}.${Math.random().toString(36).slice(2, 7)}@teste.invalido`,
+    cpf: d.cpf ?? cpfDeTeste(),
+    telefone: d.telefone ?? '73998260963',
+    senha: SENHA_DE_TESTE,
+    endereco: d.cidade ? { cidade: d.cidade, estado: d.estado ?? 'BA' } : null,
+    evento: SLUG,
+  }
+  const r = await page.request.post('/api/conta/criar', { data: corpo })
+  return { corpo, status: r.status(), resposta: await r.json().catch(() => ({})) }
+}
+
+/**
+ * O que era "preencher o formulário do comprador": agora é ENTRAR (034). Cria a conta e recarrega o
+ * pagamento — o carrinho mora no sessionStorage e continua; a tela passa a mostrar "Seus dados".
+ */
 export async function preencherDados(page: Page, d: Dados = {}) {
-  await page.locator('#nome').fill(d.nome ?? 'Cliente do Teste Ponta a Ponta')
-  await page.locator('#email').fill(d.email ?? `cliente.e2e.${Date.now()}@teste.invalido`)
-  await page.locator('#cpf').fill(d.cpf ?? cpfDeTeste())
-  await page.locator('#tel').fill('73998260963')
-  await page.locator('#nascimento').fill(d.nascimento ?? '25/12/1990')
-  await page.locator('#cidade').fill(d.cidade ?? 'Ubatã')
-  await page.locator('#estado').selectOption(d.estado ?? 'BA')
+  const c = await criarConta(page, d)
+  expect(c.status, JSON.stringify(c.resposta)).toBe(200)
+  await page.reload()
+  await hidratada(page)
+  await expect(page.locator('[data-parte="seus-dados"]')).toBeVisible()
+  return c.corpo
 }
 
-export const botaoPagar = (page: Page) => page.getByRole('button', { name: /^Pagar com (PIX|cartão)$/ })
+/** O botão do passo 2 (Pix, crédito ou débito). */
+export const botaoPagar = (page: Page) => page.locator('[data-parte="pagar"]')
+
+/** Do passo 1 ("Avançar") até o pedido criado, na forma escolhida. */
+export async function pagar(page: Page, forma: 'pix' | 'credito' | 'debito' = 'pix', parcelas?: string) {
+  await page.locator('[data-parte="avancar"]').click()
+  await expect(page.getByRole('heading', { name: 'Como você quer pagar?' })).toBeVisible()
+  if (forma !== 'pix') await page.locator(`[data-forma="${forma}"]`).click()
+  if (parcelas) await page.locator('#parcelas').selectOption(parcelas)
+  await botaoPagar(page).click()
+}
 
 /** Soma do resumo do carrinho na tela de pagamento (o total que a pessoa viu). */
 export async function totalDoResumo(page: Page) {

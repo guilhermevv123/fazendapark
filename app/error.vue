@@ -46,7 +46,7 @@ function tentarDeNovo() {
 
 <template>
   <div class="min-h-screen">
-    <CabecalhoPublico />
+    <CabecalhoPublico :conta="false" />
     <main class="mx-auto max-w-xl px-4 py-12 sm:py-16">
       <section class="card flex flex-col items-center px-6 py-10 text-center" role="alert">
         <span class="grid size-14 place-items-center rounded-2xl bg-pool-50 text-pool-700" aria-hidden="true">

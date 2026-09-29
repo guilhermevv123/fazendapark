@@ -23,6 +23,7 @@
  * de lote isso trava a fila inteira.
  */
 import type { PoolClient } from 'pg'
+import { GRATIS_POR_CPF } from '../utils/gratis'
 import { z } from 'zod'
 import { q, q1, tx } from '../utils/db'
 import { CadastroInvalido, prepararCadastro, type Cadastro } from '../utils/cadastro'
@@ -53,6 +54,7 @@ import { cpfValido } from '../utils/documento'
 import * as simulado from '../utils/gateway-simulado'
 import { pixPeloMercadoPago } from '../utils/mercadopago-conta'
 import { gerarPixDoPedido, type PixDoPedido } from '../utils/mercadopago'
+import { compradorDaConta, contaDaSessaoDoCliente } from '../utils/conta-do-cliente'
 
 /**
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa.
@@ -118,6 +120,10 @@ export const Entrada = z.object({
       documento: z.string().trim().min(3).max(40).optional(),
     }).nullish(),
   })).min(1).max(20),
+  /**
+   * Quem compra. Com a CONTA do cliente na sessão (034) este bloco é ignorado: quem compra é o
+   * dono da conta. Sem conta ele ainda vale — só onde a organização não exige a conta.
+   */
   comprador: z.object({
     nome: z.string().min(3).max(120),
     email: z.string().email(),
@@ -151,10 +157,12 @@ export const Entrada = z.object({
     senha: z.string().max(200).optional(),
     /** `true`/`false` só quando a pessoa marcou/desmarcou; ausente NÃO mexe no consentimento. */
     aceitaNovidades: z.boolean().optional(),
-  }),
+  }).optional(),
   cupom: z.string().max(40).optional(),
   promoter: z.string().max(40).optional(),
-  forma: z.enum(['pix', 'credito']).default('pix'),
+  // `debito` é o cartão à vista: a fatura do Asaas de CREDIT_CARD é quem oferece o débito (a API
+  // não recebe dado de cartão de débito). Por dentro vira `credito` em 1×.
+  forma: z.enum(['pix', 'credito', 'debito']).default('pix'),
   parcelas: z.number().int().min(1).max(12).default(1),
 })
 
@@ -166,7 +174,21 @@ export default defineEventHandler(async (event) => {
   const body = await readBody(event)
   const p = Entrada.safeParse(body)
   if (!p.success) throw recusaDeFormato(p.error)
-  const dados = p.data
+  // A conta do cliente (034): com ela na sessão, quem compra é o DONO DA CONTA, e o `comprador`
+  // do corpo é ignorado. Sem ela, só passa onde a organização não exige a conta (conferido depois
+  // de ler o evento).
+  const conta = await contaDaSessaoDoCliente(event)
+  const comprador = conta ? compradorDaConta(conta) : p.data.comprador
+  if (!comprador) {
+    throw createError({ statusCode: 401, statusMessage: 'Entre na sua conta para comprar.',
+      data: { tipo: 'conta' } })
+  }
+  const debito = p.data.forma === 'debito'
+  const dados = {
+    ...p.data, comprador,
+    forma: (debito ? 'credito' : p.data.forma) as 'pix' | 'credito',
+    parcelas: debito ? 1 : p.data.parcelas,
+  }
   const documento = dados.comprador.documento.replace(/\D/g, '')
   if (!cpfValido(documento)) {
     throw createError({ statusCode: 400, statusMessage: 'CPF inválido. Confira os 11 números.',
@@ -196,7 +218,8 @@ export default defineEventHandler(async (event) => {
 
   // ------------------------------------------------------------- 1. evento
   const ev = await q1<any>(
-    `SELECT e.*, o.asaas_api_key, o.asaas_env, o.asaas_wallet, o.mp_access_token, o.mp_test
+    `SELECT e.*, o.asaas_api_key, o.asaas_env, o.asaas_wallet, o.mp_access_token, o.mp_test,
+            o.customer_account_required
        FROM events e JOIN organizations o ON o.id = e.org_id
       WHERE e.slug = $1`, [dados.eventSlug])
   // Rascunho e oculto: o MESMO 404 do slug que não existe, igual à vitrine.
@@ -216,6 +239,16 @@ export default defineEventHandler(async (event) => {
   if (!porta.aberta) {
     throw createError({ statusCode: 409, statusMessage: porta.recado!,
       data: { tipo: 'venda_fechada', motivo: porta.motivo } })
+  }
+
+  // A conta é da organização: a de um parque não compra no outro.
+  if (conta && conta.orgId !== ev.org_id) {
+    throw createError({ statusCode: 401, statusMessage: 'Entre com a sua conta deste site para comprar.',
+      data: { tipo: 'conta' } })
+  }
+  if (!conta && ev.customer_account_required) {
+    throw createError({ statusCode: 401, statusMessage: 'Entre na sua conta para comprar.',
+      data: { tipo: 'conta' } })
   }
 
   // --------------------------------------------- 2. preços, lidos do banco
@@ -336,7 +369,7 @@ export default defineEventHandler(async (event) => {
   const expiraEm = prazoDeReserva(ev.hold_minutes)
 
   const pedido = await tx(async (c) => {
-    await conferirTetoPorDocumento(c, ev, dados.itens, documento, porLote, porTipo)
+    await conferirTetoPorDocumento(c, ev, dados.itens, documento, porLote, porTipo, linhas)
 
     // O que a vitrine mostra fechado, a porta recusa — e com a frase dela.
     // Vem antes de `reservar` porque é uma pergunta de outra natureza ("este
@@ -389,9 +422,9 @@ export default defineEventHandler(async (event) => {
       `INSERT INTO orders (org_id, event_id, customer_id, code, status, channel,
                            face_cents, fee_cents, platform_cents, discount_cents, total_cents,
                            payment_method, installments, promo_code_id, promoter_id, expires_at,
-                           cadastro_pendente)
+                           cadastro_pendente, customer_account_id)
        VALUES ($1,$2,$3,$4,'aguardando_pagamento','online',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-               $15::jsonb)
+               $15::jsonb, $16)
        RETURNING id, code`,
       [ev.org_id, ev.id, cliente.id, codigo,
        total.faceCents, total.feeCents, total.platformCents, total.discountCents, total.totalCents,
@@ -399,7 +432,7 @@ export default defineEventHandler(async (event) => {
        cupom?.id ?? null, promoter?.id ?? null, expiraEm,
        JSON.stringify(cadastroPendente({
          documento, nome: dados.comprador.nome, telefone: dados.comprador.telefone ?? null, cadastro,
-       }))])
+       })), conta?.id ?? null])
 
     for (let i = 0; i < dados.itens.length; i++) {
       const it = dados.itens[i]
@@ -1137,8 +1170,33 @@ function conferirDeclaracoesDeMeia(
 async function conferirTetoPorDocumento(
   c: PoolClient, ev: any, itens: any[], documento: string,
   porLote: Map<string, any>, porTipo: Map<string, any>,
+  linhas: { quantidade: number; faceUnitCents: number }[] = [],
 ) {
   await c.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, [ev.id, documento])
+
+  // Ingresso GRÁTIS (lote ou tipo de preço zero): 1 por CPF no evento, somando o que o CPF já
+  // pegou no site (ordem do dono, 28/09). Com a trava do par (evento, CPF) já na mão: dois cliques
+  // em "Gerar ingresso" chegando juntos não pegam dois.
+  const gratisAgora = itens.reduce((s: number, it: any, i: number) =>
+    s + (linhas[i] && Number(linhas[i].faceUnitCents) === 0 ? it.quantidade : 0), 0)
+  if (gratisAgora > 0) {
+    const { rows: [g] } = await c.query(
+      `SELECT COALESCE(SUM(oi.quantity), 0)::int AS n
+         FROM orders o
+         JOIN order_items oi ON oi.order_id = o.id
+         JOIN customers cu   ON cu.id = o.customer_id
+        WHERE o.event_id = $1 AND cu.document = $2 AND o.channel = 'online'
+          AND oi.unit_face_cents = 0 AND o.status = ANY($3::text[])`,
+      [ev.id, documento, PEDIDO_EM_PE as unknown as string[]])
+    const antes = Number(g?.n ?? 0)
+    if (antes + gratisAgora > GRATIS_POR_CPF) {
+      throw createError({ statusCode: 409,
+        statusMessage: antes > 0
+          ? 'O ingresso grátis é 1 por CPF, e este CPF já pegou o dele neste evento.'
+          : `O ingresso grátis é 1 por CPF. Deixe 1 no carrinho para gerar o seu.`,
+        data: { tipo: 'gratis_por_cpf', teto: GRATIS_POR_CPF, antes } })
+    }
+  }
 
   // O que este CPF já tem no evento, quebrado por setor/lote/tipo numa
   // consulta só. `JOIN customers` (e não LEFT) de propósito: pedido sem
@@ -1231,6 +1289,7 @@ async function conferirTetoPorDocumento(
     }
   }
 }
+
 
 // Re-exportado porque o balcão e os testes já importavam daqui. A regra em si
 // mora em utils/documento.ts, uma cópia só pros dois caixas.

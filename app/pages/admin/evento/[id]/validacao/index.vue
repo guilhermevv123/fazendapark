@@ -710,7 +710,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
   // Passaporte de vários dias: `usadoAqui` é de UM dia, não do ingresso (ADM-04)
   const passaporte = Number(t.diasCobertos ?? 1) > 1
   if (t.status === 'usado' || (t.usadoAqui && !passaporte)) {
-    return { ...base, resultado: 'ja_usado', mensagem: 'Este ingresso já entrou',
+    return { ...base, resultado: 'ja_usado', mensagem: 'Ingresso já foi usado — não pode ser usado novamente',
              titular: t.titular, entrouEm: t.usadoAqui?.em ?? null,
              portao: t.usadoAqui?.gate ?? null }
   }

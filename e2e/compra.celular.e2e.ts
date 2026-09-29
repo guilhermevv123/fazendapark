@@ -7,7 +7,7 @@
  */
 import { expect, test } from '@playwright/test'
 import { hidratada, travaDeBase, vigiar } from './apoio'
-import { SLUG, abrirVitrine, botaoPagar, irParaPagamento, mais, preencherDados } from './compra-apoio'
+import { SLUG, abrirVitrine, irParaPagamento, mais, pagar, preencherDados } from './compra-apoio'
 
 travaDeBase()
 
@@ -44,10 +44,13 @@ test.describe('compra no celular', () => {
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
     await irParaPagamento(page)
-    for (const id of ['cpf', 'tel', 'nascimento', 'cep']) {
-      await expect(page.locator(`#${id}`), `#${id}`).toHaveAttribute('inputmode', 'numeric')
+    // os dados agora são digitados na janela da conta (034), aberta sozinha no pagamento
+    const janela = page.getByRole('dialog')
+    await janela.getByRole('tab', { name: 'Criar conta' }).click()
+    for (const id of ['conta-cpf', 'conta-telefone']) {
+      await expect(janela.locator(`#${id}`), `#${id}`).toHaveAttribute('inputmode', 'numeric')
     }
-    await expect(page.locator('#email')).toHaveAttribute('type', 'email')
+    await expect(janela.locator('#conta-email')).toHaveAttribute('type', 'email')
   })
 
   test('PIX de ponta a ponta no celular: cobrança, F5, pagamento simulado e o ingresso na tela', async ({ page }) => {
@@ -58,7 +61,7 @@ test.describe('compra no celular', () => {
     await preencherDados(page)
     const [resposta] = await Promise.all([
       page.waitForResponse((r) => r.url().endsWith('/api/checkout') && r.request().method() === 'POST'),
-      botaoPagar(page).click(),
+      pagar(page),
     ])
     const codigo: string = (await resposta.json()).pedido
     await expect(page.getByRole('heading', { name: 'Pague com PIX' })).toBeVisible()

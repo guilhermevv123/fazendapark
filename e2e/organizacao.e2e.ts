@@ -222,13 +222,13 @@ test.describe('menu por papel (layout)', () => {
 
   test.describe('operação', () => {
     test.use({ storageState: sessao('operacao') })
-    test('menu da operação: só Eventos; a faixa do dia sem dinheiro nenhum (EVT-02)', async ({ page }) => {
+    test('menu da operação: só Eventos; sem dinheiro nenhum na lista (EVT-02)', async ({ page }) => {
       await abrir(page, '/admin')
       const nomes = await nomesDoMenu(page)
       expect(nomes).toContain('Eventos')
       for (const fora of ['Clientes', 'Relatórios', 'Financeiro', 'Configurações']) expect(nomes, fora).not.toContain(fora)
-      await expect(page.locator('[data-parte="faixa-do-dia"]')).toBeVisible()
-      await expect(page.locator('[data-parte="faixa-do-dia"]')).not.toContainText('R$')
+      // a faixa de números saiu da lista (28/09: "vai ser tudo em relatórios") — e dinheiro nenhum
+      await expect(page.locator('[data-parte="faixa-do-dia"]')).toHaveCount(0)
       await expect(kpi(page, 'liquido-30')).toHaveCount(0)
       await expect(page.locator('header[data-parte="topo"] a[href="/admin/suporte"]')).toHaveCount(1)
       await page.getByRole('button', { name: 'Mais ações deste evento' }).first().click()
@@ -332,16 +332,11 @@ test.describe('gaveta do celular (NAV-05)', () => {
 test.describe('Eventos (/admin)', () => {
   test.use({ storageState: sessao('master') })
 
-  test('faixa do dia: os números são os das rotas da Visão geral e do Financeiro', async ({ page }) => {
+  test('a lista de eventos não tem mais a faixa de números: os números moram em Relatórios (28/09)', async ({ page }) => {
     await abrir(page, '/admin')
-    const vg = await api(page, '/api/admin/relatorios?periodo=30d')
-    const caixa = await api(page, '/api/admin/financeiro')
-    expect(centavos(await kpi(page, 'liquido-30').innerText())).toBe(vg.resumo.liquidoCents)
-    expect(centavos(await kpi(page, 'disponivel').innerText())).toBe(caixa.totais.disponivelCents)
-    const hoje = vg.porDia.find((d: any) => d.dia === vg.filtro.hoje)
-    expect(centavos(await kpi(page, 'hoje').innerText())).toBe(hoje?.cobradoCents ?? 0)
-    const eventos = await api(page, '/api/admin/eventos')
-    expect(await kpi(page, 'a-venda').innerText()).toBe(String(eventos.filter((e: any) => e.status === 'ativo').length))
+    await expect(page.locator('li[data-evento]').first()).toBeVisible()
+    await expect(page.locator('[data-parte="faixa-do-dia"]')).toHaveCount(0)
+    for (const k of ['liquido-30', 'disponivel', 'hoje', 'a-venda']) await expect(kpi(page, k), k).toHaveCount(0)
   })
 
   test('EVT-04: busca e situação na URL — o F5 mantém e o clique no menu limpa', async ({ page }) => {

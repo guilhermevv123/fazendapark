@@ -311,7 +311,7 @@ test.describe('Eventos (/admin)', () => {
     })
   })
 
-  test('#43 Botões do topo › por papel: Visão geral (relatórios) pra master e financeiro; Criar evento pra master e operação', async ({ browser }) => {
+  test('#43 Botões do topo › por papel: Relatórios pra master e financeiro; Criar evento pra master e operação', async ({ browser }) => {
     const esperado: Record<Papel, { relatorios: boolean; criar: boolean }> = {
       master: { relatorios: true, criar: true },
       financeiro: { relatorios: true, criar: false },
@@ -326,7 +326,7 @@ test.describe('Eventos (/admin)', () => {
         // o topo da lista é o bloco do h1 "Eventos" (a lateral também tem "Visão geral": não conta)
         const topo = page.locator('div.py-5', { has: page.locator('h1', { hasText: 'Eventos' }) })
         await expect(topo, papel).toBeVisible()
-        await expect(topo.locator('a[href="/admin/relatorios"]', { hasText: 'Visão geral' }), `${papel}: Visão geral`)
+        await expect(topo.locator('a[href="/admin/relatorios"]', { hasText: 'Relatórios' }), `${papel}: Relatórios`)
           .toHaveCount(esperado[papel].relatorios ? 1 : 0)
         await expect(topo.locator('a[href="/admin/evento/novo"]', { hasText: 'Criar evento' }), `${papel}: Criar evento`)
           .toHaveCount(esperado[papel].criar ? 1 : 0)
@@ -990,14 +990,16 @@ test.describe('Criar evento — nomenclatura, término, rascunho, sessão, image
       await p.getByRole('button', { name: /^(Ir para pagamento|Pagar)$/ }).filter({ visible: true }).first().click()
       await expect(p).toHaveURL(new RegExp(`/e/${slug}/pagamento`))
       await hidratada(p)
-      await p.locator('#nome').fill(`${PREFIXO} Comprador`)
-      await p.locator('#email').fill(`zzvarorg.checkout.${marcaNova()}@teste.invalido`)
-      await p.locator('#cpf').fill(cpfDeTeste())
-      await p.locator('#tel').fill('73998260963')
-      await p.locator('#nascimento').fill('25/12/1990')
-      await p.locator('#cidade').fill('Ubatã')
-      await p.locator('#estado').selectOption('BA')
-      await p.getByRole('button', { name: 'Pagar com PIX' }).click()
+      // quem compra é a conta (034) — da organização DESTE evento
+      const conta = await p.request.post('/api/conta/criar', { headers: { origin: BASE }, data: {
+        nome: `${PREFIXO} Comprador`, email: `zzvarorg.checkout.${marcaNova()}@teste.invalido`,
+        cpf: cpfDeTeste(), telefone: '73998260963', senha: 'senha-do-e2e-2026', evento: slug } })
+      expect(conta.status(), await conta.text()).toBe(200)
+      await p.reload()
+      await hidratada(p)
+      await expect(p.locator('[data-parte="seus-dados"]')).toBeVisible()
+      await p.locator('[data-parte="avancar"]').click()
+      await p.locator('[data-parte="pagar"]').click()
       await expect(p.getByText(/Seus ingressos estão reservados por/)).toBeVisible({ timeout: 30_000 })
       await expect(p.getByText('Ambiente de teste')).toBeVisible()
       await expect(p.getByRole('button', { name: 'Simular pagamento recebido' })).toBeVisible()

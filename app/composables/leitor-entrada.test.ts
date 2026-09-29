@@ -522,7 +522,7 @@ describe('leitor montado com a lista de chaves (ADM-25)', () => {
     await lerCodigo(t, COD)
     expect(t.find('[data-parte="veredito"]').text(),
       'baixar a lista no apagão devolveu a "válido" quem já passou por este portão').toBe('BARRADO')
-    expect(t.text()).toContain('Este ingresso já entrou')
+    expect(t.text()).toContain('Ingresso já foi usado — não pode ser usado novamente')
   })
 })
 
@@ -550,7 +550,7 @@ describe('código digitado à mão pede o documento (ADM-25)', () => {
   })
 
   it('recusa e "só conferir" não ganham o aviso — ele é sobre quem ENTRA', async () => {
-    const t = await abrirLeitor({ ok: false, resultado: 'ja_usado', mensagem: 'Este ingresso já entrou' })
+    const t = await abrirLeitor({ ok: false, resultado: 'ja_usado', mensagem: 'Ingresso já foi usado — não pode ser usado novamente' })
     await lerCodigo(t, 'CON-AAAA-BBBB')
     expect(t.find('[data-parte="codigo-digitado"]').exists()).toBe(false)
   })

@@ -286,7 +286,7 @@ export type ResultadoCheckin =
 
 export const MENSAGEM_CHECKIN: Record<ResultadoCheckin, string> = {
   ok: 'Liberado',
-  ja_usado: 'Este ingresso já entrou',
+  ja_usado: 'Ingresso já foi usado — não pode ser usado novamente',
   invalido: 'Ingresso inválido',
   cancelado: 'Ingresso cancelado',
   fora_da_sessao: 'Fora do horário desta sessão',

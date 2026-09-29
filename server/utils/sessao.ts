@@ -493,6 +493,7 @@ export function origemDaRequisicao(event: H3Event): { ip: string | null; proxySe
  *     compras. Fica desligado, e a falta grita no log e em `/api/saude`.
  */
 export type NomeDoFreio = 'checkout' | 'checkout_ingressos' | 'cupom' | 'cupom_errado' | 'pedido_404'
+  | 'conta_entrar' | 'conta_criar'
 
 export const FREIO_PUBLICO_PADRAO: Record<NomeDoFreio, { limite: number; janelaSeg: number }> = {
   checkout: { limite: 20, janelaSeg: 600 },
@@ -500,6 +501,9 @@ export const FREIO_PUBLICO_PADRAO: Record<NomeDoFreio, { limite: number; janelaS
   cupom: { limite: 30, janelaSeg: 600 },
   cupom_errado: { limite: 10, janelaSeg: 900 },
   pedido_404: { limite: 20, janelaSeg: 600 },
+  // a conta do cliente (034): errar senha é humano; criar trinta contas do mesmo endereço, não
+  conta_entrar: { limite: 30, janelaSeg: 900 },
+  conta_criar: { limite: 10, janelaSeg: 3600 },
 }
 
 const VARIAVEL_DO_FREIO: Record<NomeDoFreio, string> = {
@@ -508,6 +512,8 @@ const VARIAVEL_DO_FREIO: Record<NomeDoFreio, string> = {
   cupom: 'FREIO_CUPOM',
   cupom_errado: 'FREIO_CUPOM_ERRADO',
   pedido_404: 'FREIO_PEDIDO_404',
+  conta_entrar: 'FREIO_CONTA_ENTRAR',
+  conta_criar: 'FREIO_CONTA_CRIAR',
 }
 
 /** A regra valendo: a do ambiente (`20/600`, ou `0` pra desligar) ou a padrão. */
@@ -600,6 +606,8 @@ function recusarPorFreio(event: H3Event, nome: NomeDoFreio, ip: string, esperarS
     cupom: 'Muitas conferências de cupom deste endereço em pouco tempo.',
     cupom_errado: 'Muitos códigos de cupom que não existem, deste endereço.',
     pedido_404: 'Muitas consultas de pedido que não existem, deste endereço.',
+    conta_entrar: 'Muitas tentativas de entrar deste endereço em pouco tempo.',
+    conta_criar: 'Muitas contas criadas a partir deste endereço em pouco tempo.',
   }
   throw createError({
     statusCode: 429,

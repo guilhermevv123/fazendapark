@@ -43,6 +43,10 @@ export default defineNuxtConfig({
     '/entrar': { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } },
     '/api/admin/**': { headers: { 'Cache-Control': 'no-store' } },
     '/api/auth/**': { headers: { 'Cache-Control': 'no-store' } },
+    // a conta de quem compra (034): nada dela em cache compartilhado nem em buscador
+    '/conta': { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } },
+    '/conta/**': { headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } },
+    '/api/conta/**': { headers: { 'Cache-Control': 'no-store' } },
   },
   // Geist, a fonte do site do parque, servida por nós e não pelo Google: vem de
   // /_nuxt/, que o service worker da portaria guarda, então o leitor de entrada

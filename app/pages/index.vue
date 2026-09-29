@@ -440,7 +440,7 @@ useSeoMeta({
               <NuxtLink :to="`/e/${e.slug}`" data-revelar
                         class="group flex h-full flex-col rounded-3xl bg-white p-6 shadow-card ring-1 ring-ink-200/70 transition duration-300 hover:-translate-y-1.5 hover:shadow-pop hover:ring-pool-300">
                 <span class="flex items-start justify-between gap-3">
-                  <span class="titulo text-lg font-semibold leading-snug text-ink-900">{{ e.nome }}</span>
+                  <h3 class="titulo text-lg font-semibold leading-snug text-ink-900">{{ e.nome }}</h3>
                   <span class="shrink-0"><span :class="selo(e.situacao).classe">{{ selo(e.situacao).texto }}</span></span>
                 </span>
                 <!-- O separador só existe quando há os dois lados: evento sem

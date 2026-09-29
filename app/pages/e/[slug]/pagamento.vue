@@ -1,10 +1,14 @@
 <script setup lang="ts">
 /**
- * Checkout: identificação + pagamento.
+ * Checkout, em passos (28/09, pedido do dono):
  *
- * Fica numa página só de propósito. Cada passo extra de wizard derruba
- * conversão, e aqui só há três blocos: quem é você, onde mora (o cadastro que o
- * parque guarda pra falar com quem compra) e como paga.
+ *   1. **Conferir** — o resumo do carrinho, QUEM compra (a conta) e o cupom. Sem conta, a janela
+ *      de entrar/criar abre sozinha; o formulário de nome, CPF e endereço que morava aqui saiu —
+ *      os dados vêm da conta (034), preenchidos uma vez só.
+ *   2. **Pagar** — Pix, crédito (com parcelas) ou débito. Ingresso GRÁTIS pula este passo
+ *      inteiro: nada de Pix nem cartão na tela, só "Gerar ingresso".
+ *   3. **Cobrança** — o QR do Pix ou o link do cartão, com o relógio da reserva.
+ *   4. **Pago** — os ingressos, com o QR, na mesma tela.
  *
  * Três coisas que esta tela NÃO faz, e o porquê:
  *
@@ -13,17 +17,18 @@
  *     no pedido. Quando os dois divergem (lote virou, cupom entrou), ela diz
  *     isso em voz alta em vez de escolher um dos dois em silêncio.
  *  2. **Não guarda cartão.** Cartão vai pro ambiente do Asaas, que é quem tem
- *     PCI — daqui sai só o link da fatura.
+ *     PCI — daqui sai só o link da fatura. Débito também: o Asaas não recebe
+ *     cartão de débito pela API, então a fatura dele é que oferece o débito.
  *  3. **Não decide se o PIX caiu.** Quem manda é o webhook; esta tela pergunta
  *     ao servidor de quatro em quatro segundos e obedece.
  */
 import {
-  carimboDePago, conferirAntesDePagar, destinoSemCarrinho, idDoCampo, itensDoCheckout, pedidoVivo,
+  carimboDePago, destinoSemCarrinho, itensDoCheckout, pedidoVivo,
   LIMITES_DO_FORMULARIO as LIMITE, opcoesDeParcela as parcelasPossiveis, situacaoDaCobranca,
   totaisDoCarrinho, VERSAO_DO_CARRINHO, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
+import { cpfEscondido, telefoneLegivel, useContaDoCliente } from '~/composables/contaDoCliente'
 import { MOTIVOS } from '~~/server/utils/meia-entrada'
-import { UFS } from '~~/server/utils/cadastro'
 
 const route = useRoute()
 const slug = route.params.slug as string
@@ -58,27 +63,37 @@ const CHAVE_PEDIDO = 'dt:pedido'
 const CHAVE_PAGO = 'dt:pago'
 
 const carrinho = ref<Carrinho | null>(null)
-const etapa = ref<'dados' | 'cobranca' | 'pago'>('dados')
+const etapa = ref<'dados' | 'pagamento' | 'cobranca' | 'pago'>('dados')
 const erro = ref('')
+/** o servidor recusou um dado DA CONTA (o gateway não aceitou o celular, B12): o conserto é lá */
+const erroNosDados = ref(false)
 const enviando = ref(false)
+
+/**
+ * Quem compra: a conta do cliente (034). A tela nunca lê o cookie — pergunta ao servidor
+ * (`/api/conta/eu`), e o checkout confere de novo do lado de lá.
+ */
+const { estado: contaEstado, abrir: abrirConta, sair: sairDaConta, garantir, carregar } = useContaDoCliente()
+const conta = computed(() => contaEstado.value.conta)
+const MOTIVO_DA_JANELA = 'Pra comprar, entre na sua conta — ou crie uma em menos de um minuto.'
 
 /**
  * O estado do cupom, num lugar só.
  *
  * Antes o comprador digitava o código e só descobria que ele não servia no
- * clique de pagar — depois de nome, e-mail, CPF e forma de pagamento. Código de
- * cupom vem de story, panfleto ou promoter: errar é o caso comum, e a hora de
- * saber é a hora de digitar. `POST /api/cupom/conferir` responde com a MESMA
- * régua do checkout (utils/cupom.ts), então o sim daqui não briga com o não de
- * lá.
+ * clique de pagar. Código de cupom vem de story, panfleto ou promoter: errar é
+ * o caso comum, e a hora de saber é a hora de digitar. `POST /api/cupom/conferir`
+ * responde com a MESMA régua do checkout (utils/cupom.ts), então o sim daqui não
+ * briga com o não de lá.
  *
  * `nao_vale` cobre os dois caminhos que existem — a conferência prévia e o 409
  * do checkout — porque são a mesma notícia pro comprador e o mesmo lugar na
  * tela. Dois estados separados para a mesma frase é como as duas acabam
  * aparecendo juntas.
  *
- * `parcial` é o cupom conferido sem CPF: tudo confere menos "uma vez por
- * pessoa", que precisa do documento. A tela avisa em vez de prometer.
+ * `parcial` é o cupom conferido sem CPF (a conta ainda não entrou): tudo confere
+ * menos "uma vez por pessoa", que precisa do documento. A tela avisa em vez de
+ * prometer.
  */
 const cupom = reactive({
   estado: 'vazio' as 'vazio' | 'conferindo' | 'vale' | 'nao_vale',
@@ -86,6 +101,11 @@ const cupom = reactive({
   descontoCents: null as number | null,
   parcial: false,
 })
+/**
+ * O campo de cupom está ESCONDIDO por enquanto (pedido do dono, 28/09): o parque ainda não usa
+ * cupom no site. A régua inteira continua de pé, aqui e no servidor — voltar é trocar pra `true`.
+ */
+const MOSTRAR_CUPOM = false
 const pedido = ref<any>(null)
 const ingressos = ref<any[]>([])
 const copiado = ref(false)
@@ -107,38 +127,24 @@ const situacao = ref<ReturnType<typeof situacaoDaCobranca>>(null)
 const statusDaCobranca = ref('')
 const desistindo = ref(false)
 
-const form = reactive({ nome: '', email: '', documento: '', telefone: '', cupom: '' })
-
 /**
- * O cadastro do cliente: o que o parque guarda pra falar com quem compra.
- *
- * FICA FORA de `form` DE PROPÓSITO. O `form` inteiro é gravado em sessionStorage
- * (`{ ...form }` em `pagar`) pra o F5 não perder a cobrança, e o cadastro
- * (nascimento, endereço) não precisa estar lá — sessionStorage é legível por
- * qualquer script da página.
- *
- * Sem senha (B17): não existe login de cliente, então a senha era coleta sem
- * finalidade (LGPD) — e qualquer um gravava a PRIMEIRA senha de um e-mail alheio.
+ * O que sobrou do formulário: o cupom. É gravado em sessionStorage junto do pedido (F5), então
+ * nada de dado pessoal aqui dentro — a conta mora no servidor.
  */
-const cadastro = reactive({
-  nascimento: '', instagram: '',
-  cep: '', rua: '', numero: '', bairro: '', cidade: '', estado: '',
-  aceitaNovidades: false,
-})
-const buscandoCep = ref(false)
-const avisoDeCep = ref('')
-/** O `id` do campo que o servidor (ou esta tela) apontou — ganha contorno e foco. */
+const form = reactive({ cupom: '' })
+/** o e-mail que a tela de "deu certo" cita — o da conta, ou o do pedido reaberto depois do F5 */
+const emailDoPedido = ref('')
+/** B23: o leitor de tela também precisa saber qual campo está errado */
 const campoComErro = ref('')
 const marca = (campo: string) => (campoComErro.value === campo ? 'ring-2 ring-danger-600' : '')
-/**
- * O campo "Número" do endereço vai por constante, não literal, no `:class`: a
- * varredura de classe morta (`telas.test.ts`) lê `'numero'` dentro de um
- * `:class` como a família `numero-*` da casa (`numero-kpi`) e grita.
- */
-const CAMPO_NUMERO = 'numero'
-/** B23: o leitor de tela também precisa saber qual campo está errado */
 const invalido = (campo: string) => (campoComErro.value === campo ? 'true' : undefined)
-const forma = ref<'pix' | 'credito'>('pix')
+
+/**
+ * Pix, crédito ou débito. Débito vai pro servidor como `debito` e ele cobra como cartão à vista
+ * (a fatura do Asaas é que oferece o débito — ver `checkout.post.ts`).
+ */
+type Forma = 'pix' | 'credito' | 'debito'
+const forma = ref<Forma>('pix')
 const parcelas = ref(1)
 
 /**
@@ -155,6 +161,26 @@ const totalACobrar = computed(() => {
 })
 const opcoesDeParcela = computed(() => parcelasPossiveis(totalACobrar.value, PARCELA_MINIMA_CENTS))
 watch(opcoesDeParcela, (o) => { if (parcelas.value > o.length) parcelas.value = o.length })
+/**
+ * Ingresso grátis (o carrinho, ou o cupom, zerou o total): a compra não passa por gateway nenhum
+ * e a tela não mostra NADA de pagamento — nem Pix, nem cartão. Só "Gerar ingresso".
+ */
+const gratis = computed(() => !!carrinho.value && totalACobrar.value === 0)
+const nIngressos = computed(() => carrinho.value?.totais.n ?? 0)
+
+const FORMAS: { id: Forma; titulo: string; frase: string }[] = [
+  { id: 'pix', titulo: 'Pix', frase: 'Aprovação na hora. Pague pelo app do seu banco.' },
+  { id: 'credito', titulo: 'Cartão de crédito', frase: 'Em até 12× sem juros, conforme o valor.' },
+  { id: 'debito', titulo: 'Cartão de débito', frase: 'À vista, direto da sua conta.' },
+]
+const rotuloDoBotao = computed(() => {
+  if (enviando.value) return 'Gerando a cobrança…'
+  const total = reais(totalACobrar.value)
+  if (forma.value === 'pix') return `Pagar ${total} com Pix`
+  if (forma.value === 'debito') return `Pagar ${total} no débito`
+  const n = parcelas.value
+  return n > 1 ? `Pagar em ${n}× no crédito` : `Pagar ${total} no crédito`
+})
 
 const lerJson = (chave: string) => {
   try { return JSON.parse(sessionStorage.getItem(chave) || 'null') } catch { return null }
@@ -180,8 +206,8 @@ onMounted(() => {
       // agora a tela mostra o novo, avisa do anterior e deixa voltar pra ele.
       if (c?.criadoEm && p.criadoEm && c.criadoEm > p.criadoEm) {
         pedidoAnterior.value = p
-        Object.assign(form, p.comprador ?? {})
         carrinho.value = c
+        pedirConta()
         return
       }
       retomarCobranca(p)
@@ -192,6 +218,18 @@ onMounted(() => {
 
   if (!c) return void semCarrinho()
   carrinho.value = c
+  pedirConta()
+})
+
+/** Lê a conta; quem chegou sem ela vê a janela de entrar abrir sozinha. */
+async function pedirConta() {
+  const s = await garantir(slug)
+  if (!s.conta && etapa.value === 'dados') abrirConta('entrar', MOTIVO_DA_JANELA)
+}
+
+// a conta entrou (ou trocou) com cupom no campo: a conferência deixa de ser parcial
+watch(() => conta.value?.cpf, (cpf, antes) => {
+  if (cpf && cpf !== antes && form.cupom.trim()) void conferirCupom()
 })
 
 /** Volta pra cobrança do pedido guardado nesta aba (F5, ou "voltar ao pedido anterior"). */
@@ -199,7 +237,8 @@ function retomarCobranca(p: any) {
   pedidoAnterior.value = null
   pedido.value = p.pedido
   linhasDoPedido.value = p.linhas ?? []
-  Object.assign(form, p.comprador ?? {})
+  emailDoPedido.value = p.email ?? ''
+  form.cupom = typeof p.cupom === 'string' ? p.cupom : ''
   forma.value = p.pedido.pagamento?.forma === 'credito' ? 'credito' : 'pix'
   etapa.value = 'cobranca'
   comecarContagem(p.pedido.expiraEm)
@@ -218,72 +257,6 @@ function semCarrinho() {
   navigateTo(destinoSemCarrinho(slug, pago))
 }
 
-function mascaraCpf(v: string) {
-  const d = v.replace(/\D/g, '').slice(0, 11)
-  return d.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2')
-          .replace(/(\d{3})(\d{1,2})$/, '$1-$2')
-}
-function mascaraTel(v: string) {
-  const d = v.replace(/\D/g, '').slice(0, 11)
-  if (d.length <= 10) return d.replace(/(\d{2})(\d)/, '($1) $2').replace(/(\d{4})(\d)/, '$1-$2')
-  return d.replace(/(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d)/, '$1-$2')
-}
-function mascaraData(v: string) {
-  const d = v.replace(/\D/g, '').slice(0, 8)
-  return d.replace(/(\d{2})(\d)/, '$1/$2').replace(/(\d{2}\/\d{2})(\d)/, '$1/$2')
-}
-function mascaraCep(v: string) {
-  return v.replace(/\D/g, '').slice(0, 8).replace(/(\d{5})(\d)/, '$1-$2')
-}
-
-/** `25/12/1990` → `1990-12-25`; o que não tiver esse formato vira null (o servidor confere se a data existe). */
-function nascimentoEmIso(texto: string): string | null {
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(texto.trim())
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : null
-}
-
-/** Marca o campo, diz o que houve e leva o foco até ele (que rola a tela junto). */
-function recusar(campo: string, recado: string) {
-  campoComErro.value = campo
-  erro.value = recado
-  document.getElementById(campo)?.focus()
-}
-
-/**
- * Digitou o CEP inteiro: pergunta ao ViaCEP e preenche cidade, estado, rua e
- * bairro. CEP é conveniência — serviço fora do ar ou CEP que não existe NÃO
- * trava a compra, a pessoa digita o resto (mesmo desenho do formulário de
- * criação de evento no painel).
- */
-async function buscarCep() {
-  const cep = cadastro.cep.replace(/\D/g, '')
-  avisoDeCep.value = ''
-  if (cep.length !== 8) return
-  buscandoCep.value = true
-  try {
-    const r: any = await $fetch(`https://viacep.com.br/ws/${cep}/json/`)
-    // digitou outro CEP enquanto a resposta vinha: essa resposta é velha
-    if (cadastro.cep.replace(/\D/g, '') !== cep) return
-    if (r.erro) { avisoDeCep.value = 'Não achamos esse CEP. Preencha a cidade e o estado.'; return }
-    cadastro.cidade = r.localidade || cadastro.cidade
-    cadastro.estado = r.uf || cadastro.estado
-    cadastro.rua = r.logradouro || cadastro.rua
-    cadastro.bairro = r.bairro || cadastro.bairro
-  } catch {
-    avisoDeCep.value = 'Não deu pra buscar o CEP agora. Preencha o endereço abaixo.'
-  } finally { buscandoCep.value = false }
-}
-
-/**
- * Manda o pedido.
- *
- * `semDeclaracao` existe por causa de um caso só, descrito em
- * `pedeDeclaracaoDeMeia`: a vitrine pública não recebe a espécie do tipo, e um
- * ingresso de preço cheio que exige documento é classificado como inteira pelo
- * banco e como meia por ela. Quando o servidor diz `meia_em_inteira`, a tela
- * reenvia sem a declaração — reclamar de um campo que o servidor recusa
- * deixaria o comprador preso numa tela sem saída.
- */
 /** Os itens do carrinho como id + quantidade — nunca preço (ver `itensDoCheckout`). */
 const itensCrus = () => (carrinho.value?.linhas ?? []).map((l) => ({
   lotId: l.loteId, ticketTypeId: l.tipoId ?? null, quantidade: l.quantidade,
@@ -292,10 +265,10 @@ const itensCrus = () => (carrinho.value?.linhas ?? []).map((l) => ({
 /**
  * Confere o cupom agora, sem cobrar nada.
  *
- * Chamada quando o comprador sai do campo do cupom e quando ele termina o CPF
- * (aí a conferência deixa de ser parcial). Não grava nada e não reserva o uso:
- * quem dá a palavra final continua sendo o checkout, com a linha do cupom
- * travada — por isso o recado de sucesso não promete, só informa.
+ * Chamada quando o comprador sai do campo do cupom e quando a conta entra (aí a
+ * conferência deixa de ser parcial). Não grava nada e não reserva o uso: quem dá
+ * a palavra final continua sendo o checkout, com a linha do cupom travada — por
+ * isso o recado de sucesso não promete, só informa.
  *
  * Falha de rede NÃO vira erro vermelho: o cupom não foi recusado, só não deu
  * pra perguntar. Pintar de vermelho aqui faria o comprador tirar um cupom bom.
@@ -312,7 +285,7 @@ async function conferirCupom() {
       method: 'POST',
       body: {
         eventSlug: slug, codigo,
-        documento: form.documento.replace(/\D/g, '') || undefined,
+        documento: conta.value?.cpf || undefined,
         itens: itensCrus(),
       },
     })
@@ -326,15 +299,6 @@ async function conferirCupom() {
     console.error('[pagamento] não deu pra conferir o cupom', e?.data ?? e)
     Object.assign(cupom, { estado: 'vazio', recado: '', descontoCents: null, parcial: false })
   }
-}
-
-/**
- * O CPF acabou de ser preenchido: se há cupom no campo, vale reconferir.
- * A conferência sem CPF é parcial — "uma vez por pessoa" só dá pra responder
- * com o documento na mão, e é justamente esse o limite que mais recusa.
- */
-function revisarCupomComCpf() {
-  if (form.cupom.trim()) void conferirCupom()
 }
 
 /**
@@ -353,18 +317,49 @@ async function largarPedido(pedidoId: string): Promise<boolean> {
   }
 }
 
+/** Sem conta não há passo 2: a janela abre, e a tela diz por quê. */
+function precisaDaConta(): boolean {
+  if (conta.value) return false
+  abrirConta('entrar', MOTIVO_DA_JANELA)
+  return true
+}
+
+/**
+ * "Avançar" do passo 1. O cupom digitado e ainda não conferido é conferido ANTES (quem apertou
+ * Enter no campo do cupom não pode chegar no pagamento com um cupom que não vale); o grátis não
+ * tem passo 2 — gera o ingresso aqui mesmo.
+ */
+async function avancar() {
+  erro.value = ''
+  erroNosDados.value = false
+  campoComErro.value = ''
+  if (!carrinho.value || enviando.value || precisaDaConta()) return
+  if (form.cupom.trim() && cupom.estado === 'vazio') await conferirCupom()
+  if (cupom.estado === 'nao_vale' || cupom.estado === 'conferindo') return
+  if (gratis.value) return void pagar()
+  etapa.value = 'pagamento'
+  if (import.meta.client) window.scrollTo({ top: 0 })
+}
+
+/**
+ * Manda o pedido.
+ *
+ * `semDeclaracao` existe por causa de um caso só, descrito em
+ * `pedeDeclaracaoDeMeia`: a vitrine pública não recebe a espécie do tipo, e um
+ * ingresso de preço cheio que exige documento é classificado como inteira pelo
+ * banco e como meia por ela. Quando o servidor diz `meia_em_inteira`, a tela
+ * reenvia sem a declaração — reclamar de um campo que o servidor recusa
+ * deixaria o comprador preso numa tela sem saída.
+ *
+ * Quem compra NÃO vai no corpo: o servidor tira da sessão da conta (034) — mandar daqui seria
+ * deixar a tela dizer em nome de quem sai o ingresso.
+ */
 async function pagar(semDeclaracao = false) {
   if (!carrinho.value) return
   erro.value = ''
+  erroNosDados.value = false
   campoComErro.value = ''
-  // A mesma conferência pelos dois caminhos que pagam: o botão e o "Continuar
-  // sem o cupom" (B18 — ele passava por fora da validação do formulário).
-  const falta = conferirAntesDePagar({ ...form, cidade: cadastro.cidade, estado: cadastro.estado })
-  if (falta) return void recusar(falta.campo, falta.recado)
-  const nascimento = nascimentoEmIso(cadastro.nascimento)
-  if (!nascimento) {
-    return void recusar('nascimento', 'Confira a data de nascimento: dia, mês e ano (ex.: 25/12/1990).')
-  }
+  if (precisaDaConta()) return
   enviando.value = true
   try {
     // B13: vai pagar o carrinho novo — o pedido anterior desta aba sai antes
@@ -373,38 +368,23 @@ async function pagar(semDeclaracao = false) {
       pedidoAnterior.value = null
       sessionStorage.removeItem(CHAVE_PEDIDO)
     }
+    // o grátis não escolhe forma nenhuma (o servidor nem chega no gateway); `pix` é só o padrão
+    const f: Forma = gratis.value ? 'pix' : forma.value
     const r = await $fetch<any>('/api/checkout', {
       method: 'POST',
       body: {
         eventSlug: slug,
         itens: itensDoCheckout(carrinho.value.linhas, { semDeclaracao }),
-        comprador: {
-          nome: form.nome.trim(),
-          email: form.email.trim(),
-          documento: form.documento.replace(/\D/g, ''),
-          telefone: form.telefone.replace(/\D/g, '') || undefined,
-          nascimento,
-          instagram: cadastro.instagram.trim() || undefined,
-          endereco: {
-            cep: cadastro.cep.replace(/\D/g, '') || undefined,
-            rua: cadastro.rua.trim() || undefined,
-            numero: cadastro.numero.trim() || undefined,
-            bairro: cadastro.bairro.trim() || undefined,
-            cidade: cadastro.cidade.trim(),
-            estado: cadastro.estado,
-          },
-          // só manda quando marcou: desmarcado é "não disse nada", não "revogou"
-          aceitaNovidades: cadastro.aceitaNovidades ? true : undefined,
-        },
         cupom: form.cupom.trim() || undefined,
         // B07: a venda que veio pelo link do promoter é dele
         promoter: carrinho.value.promoter || undefined,
-        forma: forma.value,
-        parcelas: forma.value === 'credito' ? parcelas.value : 1,
+        forma: f,
+        parcelas: f === 'credito' ? parcelas.value : 1,
       },
     })
     pedido.value = r
     linhasDoPedido.value = carrinho.value.linhas
+    emailDoPedido.value = conta.value?.email ?? ''
     conferirOPrecoCobrado(r)
     sessionStorage.removeItem(CHAVE_CARRINHO)
 
@@ -422,9 +402,10 @@ async function pagar(semDeclaracao = false) {
 
     // Guardado pra o F5 não perder a cobrança (ver onMounted) — com as linhas,
     // que a etapa de cobrança mostra e que voltam pro carrinho se a pessoa
-    // desistir deste pedido pra pagar de outro jeito.
+    // desistir deste pedido pra pagar de outro jeito. Da pessoa, só o e-mail
+    // que a tela de "deu certo" cita.
     sessionStorage.setItem(CHAVE_PEDIDO, JSON.stringify({
-      slug, pedido: r, comprador: { ...form }, linhas: carrinho.value?.linhas ?? [],
+      slug, pedido: r, email: emailDoPedido.value, cupom: form.cupom.trim(), linhas: carrinho.value?.linhas ?? [],
       criadoEm: Date.now(),
     }))
     etapa.value = 'cobranca'
@@ -442,28 +423,41 @@ async function pagar(semDeclaracao = false) {
       enviando.value = false
       return await pagar(true)
     }
-    // Erro de cadastro fica no campo que o servidor apontou (B11/B12 — inclusive
-    // o que o GATEWAY recusou, com `origem: 'gateway'`). O documento da meia
-    // não mora nesta tela: aí o recado vem com o caminho de volta.
-    if (tipo === 'cadastro' && corpo.data?.campo && !String(corpo.data.campo).startsWith('meia_')) {
-      return void recusar(idDoCampo(corpo.data.campo), recado)
+    // A sessão da conta caiu no meio (expirou, saiu em outra aba): relê e pede de novo.
+    if (tipo === 'conta') {
+      await carregar(slug)
+      etapa.value = 'dados'
+      abrirConta('entrar', recado)
+      return
     }
     // Erro de cupom fica COLADO no campo do cupom, com o botão de seguir sem
-    // ele. Numa faixa geral, o comprador relê o formulário inteiro procurando
-    // o que errou.
-    if (tipo === 'cupom') {
+    // ele. Numa faixa geral, o comprador relê a tela inteira procurando o que
+    // errou. O campo mora no passo 1: a tela volta pra ele.
+    if (tipo === 'cupom' && MOSTRAR_CUPOM) {
       Object.assign(cupom, { estado: 'nao_vale', recado, descontoCents: null, parcial: false })
-    } else erro.value = recado
+      etapa.value = 'dados'
+      return
+    }
+    // Dado da conta recusado (o gateway não aceitou o celular — B12): o conserto é em "Meus dados".
+    // O documento da meia não mora na conta: esse recado vem com o caminho de volta pra vitrine.
+    erroNosDados.value = tipo === 'cadastro' && !String(corpo.data?.campo ?? '').startsWith('meia_')
+    erro.value = recado
   } finally {
     enviando.value = false
   }
 }
 
-/** Tira o cupom recusado do caminho e tenta de novo, sem desconto. */
+/** Tira o cupom recusado do caminho e segue, sem desconto. */
 async function seguirSemCupom() {
   form.cupom = ''
   Object.assign(cupom, { estado: 'vazio', recado: '', descontoCents: null, parcial: false })
-  await pagar()
+  await avancar()
+}
+
+/** "Não é você? Sair": a conta sai e a janela abre pra a pessoa certa entrar. */
+async function trocarDeConta() {
+  await sairDaConta()
+  abrirConta('entrar', MOTIVO_DA_JANELA)
 }
 
 /**
@@ -600,8 +594,9 @@ onUnmounted(pararRelogios)
 
 /**
  * "Trocar a forma de pagamento ou desistir" (B13): larga este pedido e volta
- * pro formulário com o MESMO carrinho, pra pagar de outro jeito ou mudar a
- * escolha. Não havia saída: a cobrança mostrava só código e total.
+ * pra escolha da forma de pagamento com o MESMO carrinho, pra pagar de outro
+ * jeito — o "Voltar" de lá leva ao resumo, pra mudar a escolha. Não havia
+ * saída: a cobrança mostrava só código e total.
  */
 async function trocarPagamento() {
   if (!pedido.value?.pedidoId || desistindo.value) return
@@ -621,7 +616,11 @@ async function trocarPagamento() {
     carrinho.value = c
     pedido.value = null
     situacao.value = null
-    etapa.value = 'dados'
+    etapa.value = c.totais.total > 0 ? 'pagamento' : 'dados'
+    // o cupom do pedido largado segue no campo; conferido de novo, o total da escolha já sai com ele
+    Object.assign(cupom, { estado: 'vazio', recado: '', descontoCents: null, parcial: false })
+    await garantir(slug)
+    if (form.cupom.trim()) await conferirCupom()
   } finally {
     desistindo.value = false
   }
@@ -681,18 +680,30 @@ const ehPix = computed(() => (pedido.value?.pagamento?.forma ?? 'pix') === 'pix'
 const pixVencido = computed(() => etapa.value === 'cobranca' && restante.value <= 0
   && !!pedido.value?.expiraEm && statusDaCobranca.value !== 'em_analise')
 
+/** Na tela de "deu certo": o e-mail pra onde vai a confirmação. */
+const emailDaConfirmacao = computed(() => emailDoPedido.value || conta.value?.email || '')
+/** O pedido que acabou de sair é grátis — a tela de "deu certo" não fala de pagamento. */
+const pedidoGratis = computed(() => Number(pedido.value?.totalCents ?? -1) === 0)
+
 useHead({ title: 'Pagamento' })
 </script>
 
 <template>
   <div class="min-h-screen">
-    <CabecalhoPublico :para="`/e/${slug}`" largura="max-w-2xl" />
+    <CabecalhoPublico :para="`/e/${slug}`" largura="max-w-2xl" :evento="slug" />
 
     <div class="mx-auto max-w-2xl px-4 py-6">
-      <!-- ---------------------------------------------- dados do comprador -->
+      <!-- ------------------------------------------ passo 1 · conferir -->
       <section v-if="etapa === 'dados'">
         <NuxtLink :to="`/e/${slug}`" class="text-sm text-acao hover:underline">← Voltar</NuxtLink>
-        <h1 class="titulo mt-3 text-2xl font-semibold text-tinta">Finalizar compra</h1>
+        <div class="mt-3 flex items-baseline justify-between gap-3">
+          <h1 class="titulo text-2xl font-semibold text-tinta">
+            {{ gratis ? (nIngressos === 1 ? 'Seu ingresso grátis' : 'Seus ingressos grátis') : 'Finalizar compra' }}
+          </h1>
+          <p v-if="!gratis" class="shrink-0 text-xs font-semibold uppercase tracking-wide text-tinta-fraca">
+            Passo 1 de 2
+          </p>
+        </div>
 
         <div v-if="carrinho" class="card mt-4">
           <p class="rotulo-kpi">Resumo</p>
@@ -709,20 +720,23 @@ useHead({ title: 'Pagamento' })
                 </span>
               </span>
               <span class="shrink-0 tabular-nums text-tinta">
-                {{ reais(l.unitTotalCents * l.quantidade) }}
+                {{ l.unitTotalCents ? reais(l.unitTotalCents * l.quantidade) : 'Grátis' }}
               </span>
             </li>
           </ul>
           <div class="mt-3 flex items-baseline justify-between border-t border-linha pt-3">
             <span class="text-tinta-corpo">
-              {{ carrinho.totais.n }} {{ carrinho.totais.n === 1 ? 'ingresso' : 'ingressos' }}
+              {{ nIngressos }} {{ nIngressos === 1 ? 'ingresso' : 'ingressos' }}
             </span>
             <span class="titulo text-2xl font-bold tabular-nums text-tinta">
-              {{ reais(carrinho.totais.total) }}
+              {{ carrinho.totais.total ? reais(carrinho.totais.total) : 'Grátis' }}
             </span>
           </div>
           <p v-if="carrinho.totais.taxa" class="mt-1 text-right text-xs text-tinta-fraca">
             {{ reais(carrinho.totais.face) }} de ingressos + {{ reais(carrinho.totais.taxa) }} de taxa de serviço
+          </p>
+          <p v-if="!carrinho.totais.total" class="mt-1 text-right text-xs text-tinta-fraca">
+            Ingresso grátis: 1 por CPF.
           </p>
         </div>
 
@@ -732,7 +746,7 @@ useHead({ title: 'Pagamento' })
           <p class="font-semibold text-tinta">Você tem um pedido aguardando pagamento.</p>
           <p class="mt-1">
             Pedido <strong class="text-tinta">{{ pedidoAnterior.pedido.pedido }}</strong>
-            ({{ reais(pedidoAnterior.pedido.totalCents) }}). Se você pagar a escolha abaixo, esse pedido
+            ({{ reais(pedidoAnterior.pedido.totalCents) }}). Se você seguir com a escolha abaixo, esse pedido
             é cancelado e os ingressos dele voltam para a venda.
           </p>
           <button type="button" class="btn-secundario mt-2 w-full py-2" @click="retomarCobranca(pedidoAnterior)">
@@ -740,121 +754,60 @@ useHead({ title: 'Pagamento' })
           </button>
         </div>
 
-        <form class="mt-5 space-y-4" novalidate @submit.prevent="pagar()">
-          <div>
-            <label for="nome" class="rotulo">Nome completo</label>
-            <input id="nome" v-model="form.nome" required minlength="3" :maxlength="LIMITE.nome"
-                   autocomplete="name" class="campo" :class="marca('nome')" :aria-invalid="invalido('nome')">
+        <!-- -------------------------------------------- quem compra -->
+        <div v-if="!contaEstado.carregada" class="card mt-4 h-36 animate-pulse bg-ink-50" aria-busy="true"
+             aria-label="Carregando a sua conta" />
+        <div v-else-if="conta" class="card mt-4" data-parte="seus-dados">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="rotulo-kpi">{{ nIngressos === 1 ? 'O ingresso sai no nome de' : 'Os ingressos saem no nome de' }}</p>
+              <p class="titulo mt-1 truncate text-lg font-semibold text-tinta">{{ conta.nome }}</p>
+            </div>
+            <NuxtLink :to="`/conta?volta=${encodeURIComponent(`/e/${slug}/pagamento`)}`"
+                      class="shrink-0 text-sm font-semibold text-acao hover:underline">
+              Editar
+            </NuxtLink>
           </div>
-          <div>
-            <label for="email" class="rotulo">E-mail</label>
-            <input id="email" v-model="form.email" type="email" required :maxlength="LIMITE.email"
-                   autocomplete="email" class="campo" :class="marca('email')" :aria-invalid="invalido('email')">
-            <p class="mt-1 text-xs text-tinta-fraca">É pra onde vão os ingressos.</p>
-          </div>
-          <div class="grid gap-4 sm:grid-cols-2">
+          <dl class="mt-3 grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[auto_1fr_auto]">
             <div>
-              <label for="cpf" class="rotulo">CPF</label>
-              <input id="cpf" :value="form.documento" required inputmode="numeric" class="campo tabular-nums"
-                     autocomplete="off" :class="marca('cpf')" :aria-invalid="invalido('cpf')"
-                     @input="form.documento = mascaraCpf(($event.target as HTMLInputElement).value)"
-                     @blur="revisarCupomComCpf">
-              <p class="mt-1 text-xs text-tinta-fraca">Vai impresso no ingresso.</p>
+              <dt class="text-xs text-tinta-fraca">CPF</dt>
+              <dd class="tabular-nums text-tinta">{{ cpfEscondido(conta.cpf) }}</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-xs text-tinta-fraca">E-mail</dt>
+              <dd class="break-all text-tinta">{{ conta.email }}</dd>
             </div>
             <div>
-              <label for="tel" class="rotulo">
-                Celular <span class="font-normal text-tinta-fraca">(opcional)</span>
-              </label>
-              <input id="tel" :value="form.telefone" inputmode="numeric" autocomplete="tel"
-                     class="campo tabular-nums" :class="marca('tel')" :aria-invalid="invalido('tel')"
-                     placeholder="(73) 99999-0000"
-                     @input="form.telefone = mascaraTel(($event.target as HTMLInputElement).value)">
+              <dt class="text-xs text-tinta-fraca">Celular</dt>
+              <dd class="tabular-nums text-tinta">{{ telefoneLegivel(conta.telefone) }}</dd>
             </div>
+          </dl>
+          <p class="mt-3 border-t border-linha pt-3 text-xs text-tinta-suave">
+            {{ nIngressos === 1 ? 'O ingresso chega' : 'Os ingressos chegam' }} no seu e-mail e ficam
+            guardados em <NuxtLink to="/conta" class="font-semibold text-acao hover:underline">Minha conta</NuxtLink>.
+            <button type="button" class="ml-1 font-semibold text-tinta-suave underline hover:text-tinta"
+                    @click="trocarDeConta">
+              Não é você? Sair
+            </button>
+          </p>
+        </div>
+        <div v-else class="card mt-4 text-center" data-parte="entre-para-comprar">
+          <p class="titulo text-lg font-semibold text-tinta">Entre para continuar</p>
+          <p class="mx-auto mt-1 max-w-sm text-sm text-tinta-suave">
+            A compra fica guardada na sua conta e os ingressos chegam no seu e-mail. Criar a conta leva
+            menos de um minuto.
+          </p>
+          <div class="mt-4 grid gap-2 sm:grid-cols-2">
+            <button type="button" class="btn-cta py-3" @click="abrirConta('criar', null)">Criar conta</button>
+            <button type="button" class="btn-secundario py-3" @click="abrirConta('entrar', null)">
+              Já tenho conta
+            </button>
           </div>
-          <div class="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label for="nascimento" class="rotulo">Data de nascimento</label>
-              <!-- `autocomplete="off"` de propósito: o navegador preenche a data no formato
-                   DELE, e a máscara daqui (dd/mm/aaaa) embaralharia o que chegasse pronto. -->
-              <input id="nascimento" :value="cadastro.nascimento" required inputmode="numeric"
-                     maxlength="10" placeholder="dd/mm/aaaa" autocomplete="off"
-                     class="campo tabular-nums" :class="marca('nascimento')"
-                     :aria-invalid="invalido('nascimento')"
-                     @input="cadastro.nascimento = mascaraData(($event.target as HTMLInputElement).value)">
-            </div>
-            <div>
-              <label for="instagram" class="rotulo">
-                Instagram <span class="font-normal text-tinta-fraca">(opcional)</span>
-              </label>
-              <input id="instagram" v-model="cadastro.instagram" placeholder="@seunome"
-                     :maxlength="LIMITE.instagram" autocomplete="off" autocapitalize="none" class="campo"
-                     :class="marca('instagram')" :aria-invalid="invalido('instagram')">
-            </div>
-          </div>
+        </div>
 
-          <!-- ------------------------------------------------- onde mora -->
-          <div class="border-t border-linha pt-4">
-            <p class="titulo text-base font-semibold text-tinta">Onde você mora</p>
-            <p class="mt-0.5 text-xs text-tinta-fraca">
-              Ajuda o parque a saber de onde vem o público. Digite o CEP e o resto vem sozinho.
-            </p>
-          </div>
-          <div class="grid grid-cols-[1fr_5.5rem] gap-4 sm:grid-cols-[9rem_1fr_6rem]">
-            <div class="col-span-2 sm:col-span-1">
-              <label for="cep" class="rotulo">CEP</label>
-              <input id="cep" :value="cadastro.cep" inputmode="numeric" maxlength="9" placeholder="00000-000"
-                     autocomplete="postal-code" class="campo tabular-nums" :class="marca('cep')"
-                     :aria-invalid="invalido('cep')"
-                     @input="cadastro.cep = mascaraCep(($event.target as HTMLInputElement).value); buscarCep()">
-            </div>
-            <div>
-              <label for="cidade" class="rotulo">Cidade</label>
-              <input id="cidade" v-model="cadastro.cidade" required autocomplete="address-level2"
-                     :maxlength="LIMITE.cidade" class="campo" :class="marca('cidade')"
-                     :aria-invalid="invalido('cidade')">
-            </div>
-            <div>
-              <label for="estado" class="rotulo">Estado</label>
-              <select id="estado" v-model="cadastro.estado" required autocomplete="address-level1"
-                      class="campo" :class="marca('estado')" :aria-invalid="invalido('estado')">
-                <option value="" disabled>UF</option>
-                <option v-for="uf in UFS" :key="uf" :value="uf">{{ uf }}</option>
-              </select>
-            </div>
-          </div>
-          <p v-if="buscandoCep" class="-mt-2 text-xs text-tinta-suave">Buscando o endereço…</p>
-          <p v-else-if="avisoDeCep" class="-mt-2 text-xs text-tinta-suave">{{ avisoDeCep }}</p>
-          <div class="grid grid-cols-[1fr_5.5rem] gap-4 sm:grid-cols-[1fr_7rem]">
-            <div>
-              <label for="rua" class="rotulo">
-                Rua <span class="font-normal text-tinta-fraca">(opcional)</span>
-              </label>
-              <input id="rua" v-model="cadastro.rua" :maxlength="LIMITE.rua" autocomplete="address-line1"
-                     class="campo" :class="marca('rua')" :aria-invalid="invalido('rua')">
-            </div>
-            <div>
-              <label for="numero" class="rotulo">
-                Número <span class="font-normal text-tinta-fraca">(opcional)</span>
-              </label>
-              <input id="numero" v-model="cadastro.numero" :maxlength="LIMITE.numero" autocomplete="off"
-                     class="campo" :class="marca(CAMPO_NUMERO)" :aria-invalid="invalido(CAMPO_NUMERO)">
-            </div>
-          </div>
-          <div>
-            <label for="bairro" class="rotulo">
-              Bairro <span class="font-normal text-tinta-fraca">(opcional)</span>
-            </label>
-            <input id="bairro" v-model="cadastro.bairro" :maxlength="LIMITE.bairro" autocomplete="off"
-                   class="campo" :class="marca('bairro')" :aria-invalid="invalido('bairro')">
-          </div>
-
-          <label class="flex items-start gap-2.5 border-t border-linha pt-4 text-sm text-tinta-corpo">
-            <input v-model="cadastro.aceitaNovidades" type="checkbox" class="mt-1 h-4 w-4 accent-pool-600">
-            <span>Quero receber novidades e ofertas do parque por WhatsApp, e-mail e Instagram.</span>
-          </label>
-
-          <div>
-            <label for="cupom" class="rotulo">Cupom (opcional)</label>
+        <form class="mt-5 space-y-4" novalidate @submit.prevent="avancar">
+          <div v-if="MOSTRAR_CUPOM">
+            <label for="cupom" class="rotulo">Cupom <span class="font-normal text-tinta-fraca">(opcional)</span></label>
             <!-- `@blur` e não `@input`: conferir a cada tecla mandaria uma
                  requisição por letra e diria "não encontramos o cupom ZZB"
                  enquanto a pessoa ainda digita ZZBOM. -->
@@ -878,12 +831,12 @@ useHead({ title: 'Pagamento' })
                 </template>
               </p>
               <p v-if="cupom.parcial" class="mt-1 text-tinta-suave">
-                O limite de uso por CPF é conferido quando você preencher o CPF.
+                O limite de uso por CPF é conferido quando você entrar na conta.
               </p>
             </div>
             <!-- O recado do cupom mora COLADO no campo, e vem com a saída:
-                 sem o botão, quem digitou um cupom vencido fica preso — o
-                 formulário inteiro está certo e o botão de pagar não passa. -->
+                 sem o botão, quem digitou um cupom vencido fica preso — a
+                 tela inteira está certa e o botão de seguir não passa. -->
             <div v-else-if="cupom.estado === 'nao_vale'" class="faixa-erro mt-2" role="alert">
               <p>{{ cupom.recado }}</p>
               <button type="button" class="btn-secundario mt-2 w-full py-2" :disabled="enviando"
@@ -893,28 +846,89 @@ useHead({ title: 'Pagamento' })
             </div>
           </div>
 
-          <!-- ------------------------------------------ forma de pagamento -->
-          <div>
-            <span id="rotulo-forma" class="rotulo">Como você quer pagar</span>
-            <!-- B23: o estado do chip é anunciado (antes era só cor) -->
-            <div class="flex flex-wrap gap-2" role="group" aria-labelledby="rotulo-forma">
-              <button type="button" :class="forma === 'pix' ? 'chip-ativo' : 'chip'"
-                      :aria-pressed="forma === 'pix'" @click="forma = 'pix'">PIX — na hora</button>
-              <button type="button" :class="forma === 'credito' ? 'chip-ativo' : 'chip'"
-                      :aria-pressed="forma === 'credito'" @click="forma = 'credito'">Cartão de crédito ou débito</button>
-            </div>
-            <div v-if="forma === 'credito'" class="mt-3">
-              <label for="parcelas" class="rotulo">Parcelas</label>
-              <select id="parcelas" v-model.number="parcelas" class="campo">
-                <option v-for="o in opcoesDeParcela" :key="o.n" :value="o.n">{{ o.rotulo }}</option>
-              </select>
-              <p class="mt-1 text-xs text-tinta-fraca">
-                Parcelas sem juros, sobre o total{{ cupom.estado === 'vale' ? ' já com o cupom' : '' }}.
-                No débito é sempre à vista.
-                Os dados do cartão são digitados no ambiente do Asaas — eles não passam por aqui.
-              </p>
-            </div>
+          <div v-if="erro" class="faixa-erro" role="alert">
+            <p>{{ erro }}</p>
+            <NuxtLink v-if="/meia-entrada/.test(erro)" :to="`/e/${slug}`"
+                      class="mt-1 block font-semibold text-acao hover:underline">
+              Corrigir na escolha dos ingressos →
+            </NuxtLink>
+            <NuxtLink v-else-if="erroNosDados" :to="`/conta?volta=${encodeURIComponent(`/e/${slug}/pagamento`)}`"
+                      class="mt-1 block font-semibold text-acao hover:underline">
+              Corrigir em Meus dados →
+            </NuxtLink>
           </div>
+
+          <button type="submit" :disabled="enviando || !conta" class="btn-cta w-full py-3 text-base"
+                  data-parte="avancar">
+            <template v-if="gratis">
+              {{ enviando ? 'Gerando…' : (nIngressos === 1 ? 'Gerar ingresso' : 'Gerar ingressos') }}
+            </template>
+            <template v-else>Avançar para o pagamento</template>
+          </button>
+          <p v-if="!conta && contaEstado.carregada" class="-mt-2 text-center text-xs text-tinta-fraca">
+            Entre na sua conta para seguir.
+          </p>
+        </form>
+      </section>
+
+      <!-- ----------------------------------------- passo 2 · pagamento -->
+      <section v-else-if="etapa === 'pagamento'">
+        <button type="button" class="text-sm text-acao hover:underline" @click="etapa = 'dados'">← Voltar</button>
+        <div class="mt-3 flex items-baseline justify-between gap-3">
+          <h1 class="titulo text-2xl font-semibold text-tinta">Como você quer pagar?</h1>
+          <p class="shrink-0 text-xs font-semibold uppercase tracking-wide text-tinta-fraca">Passo 2 de 2</p>
+        </div>
+        <p class="mt-1 text-tinta-suave">
+          {{ nIngressos }} {{ nIngressos === 1 ? 'ingresso' : 'ingressos' }} ·
+          <span class="font-semibold tabular-nums text-tinta">{{ reais(totalACobrar) }}</span>
+          <span v-if="cupom.estado === 'vale' && cupom.descontoCents" class="text-ok"> · com o cupom</span>
+        </p>
+
+        <form class="mt-5 space-y-4" novalidate @submit.prevent="pagar()">
+          <fieldset>
+            <legend class="sr-only">Forma de pagamento</legend>
+            <div class="space-y-3">
+              <label v-for="f in FORMAS" :key="f.id" :data-forma="f.id"
+                     class="flex cursor-pointer items-center gap-4 rounded-card border bg-white p-4 transition-colors focus-within:ring-2 focus-within:ring-acao"
+                     :class="forma === f.id ? 'border-acao bg-acao-fraco' : 'border-ink-200 hover:border-ink-300'">
+                <input v-model="forma" type="radio" name="forma" :value="f.id" class="sr-only">
+                <span class="grid h-11 w-11 shrink-0 place-items-center rounded-lg"
+                      :class="forma === f.id ? 'bg-acao text-white' : 'bg-ink-100 text-ink-700'" aria-hidden="true">
+                  <svg v-if="f.id === 'pix'" viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M12 3l3.2 3.2a2 2 0 0 0 1.4.6H18l3 3-3 3h-1.4a2 2 0 0 0-1.4.6L12 16.6l-3.2-3.2a2 2 0 0 0-1.4-.6H6l-3-3 3-3h1.4a2 2 0 0 0 1.4-.6z" stroke-linejoin="round" />
+                    <path d="M12 21l-2.5-2.5M12 21l2.5-2.5" stroke-linecap="round" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <rect x="2.5" y="5" width="19" height="14" rx="2" />
+                    <path d="M2.5 9.5h19" />
+                    <path d="M6 15h4" stroke-linecap="round" />
+                  </svg>
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block font-semibold text-tinta">{{ f.titulo }}</span>
+                  <span class="block text-sm text-tinta-suave">{{ f.frase }}</span>
+                </span>
+                <span class="grid h-5 w-5 shrink-0 place-items-center rounded-full border-2"
+                      :class="forma === f.id ? 'border-acao' : 'border-ink-300'" aria-hidden="true">
+                  <span v-if="forma === f.id" class="h-2.5 w-2.5 rounded-full bg-acao" />
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div v-if="forma === 'credito'">
+            <label for="parcelas" class="rotulo">Parcelas</label>
+            <select id="parcelas" v-model.number="parcelas" class="campo">
+              <option v-for="o in opcoesDeParcela" :key="o.n" :value="o.n">{{ o.rotulo }}</option>
+            </select>
+            <p class="mt-1 text-xs text-tinta-fraca">
+              Parcelas sem juros, sobre o total{{ cupom.estado === 'vale' ? ' já com o cupom' : '' }}.
+            </p>
+          </div>
+          <p v-if="forma !== 'pix'" class="text-xs text-tinta-fraca">
+            Os dados do cartão são digitados no ambiente seguro do Asaas — eles não passam por aqui.
+            <template v-if="forma === 'debito'">Lá, escolha a opção de débito.</template>
+          </p>
 
           <div v-if="erro" class="faixa-erro" role="alert">
             <p>{{ erro }}</p>
@@ -922,12 +936,14 @@ useHead({ title: 'Pagamento' })
                       class="mt-1 block font-semibold text-acao hover:underline">
               Corrigir na escolha dos ingressos →
             </NuxtLink>
+            <NuxtLink v-else-if="erroNosDados" :to="`/conta?volta=${encodeURIComponent(`/e/${slug}/pagamento`)}`"
+                      class="mt-1 block font-semibold text-acao hover:underline">
+              Corrigir em Meus dados →
+            </NuxtLink>
           </div>
 
-          <button type="submit" :disabled="enviando" class="btn-cta w-full py-3">
-            <template v-if="enviando">Gerando cobrança…</template>
-            <template v-else-if="forma === 'pix'">Pagar com PIX</template>
-            <template v-else>Pagar com cartão</template>
+          <button type="submit" :disabled="enviando" class="btn-cta w-full py-3 text-base" data-parte="pagar">
+            {{ rotuloDoBotao }}
           </button>
         </form>
       </section>
@@ -1062,8 +1078,12 @@ useHead({ title: 'Pagamento' })
           <span class="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-ok text-white">
             <IconeMenu nome="check" :tamanho="26" />
           </span>
-          <p class="text-xs font-semibold uppercase tracking-wide text-ok">Pagamento confirmado</p>
-          <h1 class="titulo mt-1 text-2xl font-semibold text-tinta">Ingressos emitidos</h1>
+          <p class="text-xs font-semibold uppercase tracking-wide text-ok">
+            {{ pedidoGratis ? 'Ingresso grátis' : 'Pagamento confirmado' }}
+          </p>
+          <h1 class="titulo mt-1 text-2xl font-semibold text-tinta">
+            {{ pedidoGratis ? (ingressos.length === 1 ? 'Ingresso gerado' : 'Ingressos gerados') : 'Ingressos emitidos' }}
+          </h1>
           <!--
             Diz "se não chegar", nunca "enviamos". Esta tela não sabe se o
             e-mail saiu: ela só viu `/api/pedido/:code` virar `pago`, e essa
@@ -1079,7 +1099,7 @@ useHead({ title: 'Pagamento' })
             Pedido <span class="font-medium">{{ pedido.pedido }}</span>.
             O ingresso está logo abaixo e no link desta página — ele vale sozinho, sem depender
             de e-mail. Se a confirmação não chegar em
-            <span class="font-medium break-all">{{ form.email }}</span>, procure por
+            <span class="font-medium break-all">{{ emailDaConfirmacao || 'seu e-mail' }}</span>, procure por
             <span class="font-medium">Conquista Park</span> no spam.
           </p>
         </div>
