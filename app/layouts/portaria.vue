@@ -32,7 +32,7 @@ async function sair() {
 
 <template>
   <div class="min-h-dvh bg-fundo-cinza">
-    <header class="sticky top-0 z-30 border-b border-ink-200/70 bg-white/95 backdrop-blur">
+    <header data-parte="topo-portaria" class="sticky top-0 z-30 border-b border-ink-200/70 bg-white/95 backdrop-blur">
       <div class="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
         <NuxtLink v-if="noLeitor" to="/portaria" data-parte="voltar-eventos"
                   class="flex min-h-[44px] items-center gap-1.5 font-semibold text-acao">

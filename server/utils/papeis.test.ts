@@ -1708,7 +1708,12 @@ describe('o topo da tela não oferece porta fechada', () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
     for (const papel of PAPEIS) {
-      for (const pagina of ['/admin', `/admin/evento/${EVENTO}/validacao`]) {
+      // a portaria não fica em /admin: cai em /portaria, que não tem o cabeçalho do painel
+      // (30/09) — o caso dela é o de baixo e o "lista que deu 403" mais adiante
+      const paginas = papel === 'portaria'
+        ? [`/admin/evento/${EVENTO}/validacao`]
+        : ['/admin', `/admin/evento/${EVENTO}/validacao`]
+      for (const pagina of paginas) {
         const oferecidos = await abrir(papel, pagina)
         const fechados = oferecidos.filter((l) => !podeAbrirPagina(papel, l))
         expect(fechados,
@@ -1909,21 +1914,17 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
     expect(texto, 'ofereceu "Criar evento" a quem leva 403 até pra listar')
       .not.toContain('Criar evento')
 
-    if (eventos.length === 1) {
-      // Um evento só: o login cai direto no leitor (o servidor redireciona).
-      // Antes disto a tela parava em "esta lista não é do seu acesso" — a
-      // portaria entrava com o login certo e não tinha pra onde ir.
-      expect(html, 'a portaria com um único evento ficou na lista morta em vez de cair no leitor')
-        .toMatch(/<title>Leitor de entrada/)
-      expect(texto, 'o beco sem saída voltou').not.toContain('não é do seu acesso')
-    } else if (eventos.length > 1) {
-      for (const e of eventos) {
-        expect(html, `faltou o leitor de "${e.nome}" na escolha`)
-          .toContain(`/admin/evento/${e.id}/validacao`)
-      }
-    } else {
-      expect(texto, 'sem evento no ar a tela tem que dizer isso, e não "sem acesso"')
-        .toContain('Nenhum evento com leitor aberto agora')
+    // Desde 30/09 a portaria tem endereço próprio: /admin a leva a /portaria (o servidor
+    // redireciona), que lista os eventos abertos com validados e faltam. A lista é desenhada
+    // no navegador (os números se renovam), então aqui a prova é o destino e cada leitor
+    // abrindo; os cartões e o toque são do E2E (variacoes-organizacao #33).
+    expect(html, 'a portaria ficou no painel em vez de cair em /portaria')
+      .toMatch(/<title>Portaria/)
+    expect(texto, 'o beco sem saída voltou').not.toContain('não é do seu acesso')
+    for (const e of eventos) {
+      const leitor = await pagina('portaria', `/portaria/${e.id}`)
+      expect(leitor, `o leitor de "${e.nome}" não abriu em /portaria/<id>`)
+        .toContain('data-parte="topo-portaria"')
     }
   }, PRAZO_TELA)
 
@@ -1932,7 +1933,7 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
    * passa pelo porteiro nem pela tabela de áreas — ela nasceria aberta se a
    * autenticação à mão sumisse. Os três casos abaixo são as três cercas dela.
    */
-  it('a rota do leitor diz à portaria quais eventos abrir — id e nome, e mais nada', async () => {
+  it('a rota do leitor diz à portaria quais eventos abrir — nome e números da entrada, e mais nada', async () => {
     if (!noAr) return void console.warn('  (pulado: servidor fora do ar)')
 
     const r = await bater('portaria', '/api/portaria/destino')
@@ -1941,9 +1942,11 @@ describe('a barra de abas e o suporte não oferecem porta fechada', () => {
     expect(eventos.map((e) => e.id), 'o evento em andamento da organização não veio')
       .toContain(EVENTO)
     for (const e of eventos) {
+      // 30/09: a lista de /portaria mostra validados e faltam — só contagem, nenhum dinheiro
+      // nem dado de cliente. Campo novo aqui é decisão, não descuido: some ao teste também.
       expect(Object.keys(e).sort(),
-        'a portaria recebeu mais que id e nome: a lista de eventos vazou por esta rota')
-        .toEqual(['id', 'nome'])
+        'a portaria recebeu mais que o nome e os números da entrada: a lista de eventos vazou por esta rota')
+        .toEqual(['aptos', 'comparecimentoPct', 'faltam', 'fim', 'id', 'inicio', 'nome', 'validados'])
     }
   }, PRAZO)
 
