@@ -166,7 +166,7 @@ test.describe('pagamento: quem compra é a conta (034)', () => {
     await expect(page.getByRole('button', { name: 'Entrar' })).toHaveCount(0)
   })
 
-  test('CPF com dígito errado: a janela recusa com recado no campo (sem 500)', async ({ page }) => {
+  test('CPF com dígito errado: a janela avisa na hora, no campo, e não envia (sem 500)', async ({ page }) => {
     const problemas = vigiar(page)
     await abrirVitrine(page)
     await mais(page, 'Inteira').click()
@@ -178,9 +178,15 @@ test.describe('pagamento: quem compra é a conta (034)', () => {
     await janela.locator('#conta-telefone').fill('73998260963')
     await janela.locator('#conta-email').fill(`torto.${Date.now()}@teste.invalido`)
     await janela.locator('#conta-senha-nova').fill(SENHA_DE_TESTE)
+    // avisa já no campo, antes de enviar (a mesma conta do servidor)
+    await expect(janela.locator('[data-parte="cpf-invalido"]')).toHaveText('CPF inválido. Confira os 11 números.')
+    await expect(janela.locator('#conta-cpf')).toHaveAttribute('aria-invalid', 'true')
+    let foiAoServidor = false
+    page.on('request', (q) => { if (q.url().includes('/api/conta/criar')) foiAoServidor = true })
     await janela.getByRole('button', { name: 'Criar conta e continuar' }).click()
     await expect(janela.getByRole('alert')).toContainText(/CPF/)
     await expect(janela.locator('#conta-cpf')).toHaveAttribute('aria-invalid', 'true')
+    expect(foiAoServidor, 'mandou ao servidor um CPF que a tela já sabia torto').toBe(false)
     expect(problemas.filter((p) => !p.startsWith('console') && !p.includes('400'))).toEqual([])
   })
 
@@ -207,6 +213,72 @@ test.describe('pagamento: quem compra é a conta (034)', () => {
     await hidratada(page)
     await expect(page.locator('[data-parte="seus-dados"]')).toBeVisible()
     await expect(page.getByText('R$ 33,00').first()).toBeVisible()
+  })
+})
+
+test.describe('conta: recuperar a senha e confirmar o e-mail (035)', () => {
+  /** o link que o servidor de teste gravou no e-mail simulado (transporte sem SMTP) */
+  async function linkDoEmail(email: string, caminho: string) {
+    const { readdir, readFile } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const pasta = process.env.EMAIL_PASTA_SIMULADO || join(tmpdir(), 'diamond-tickets-envios')
+    const chave = email.replace(/[^a-zA-Z0-9]/g, '_')
+    for (let i = 0; i < 20; i++) {
+      const nomes = (await readdir(pasta).catch(() => [] as string[])).filter((n) => n.includes(chave)).sort().reverse()
+      for (const n of nomes) {
+        const bruto = await readFile(join(pasta, n), 'utf8')
+        const b64 = /Content-Type: text\/plain; charset=UTF-8\r?\nContent-Transfer-Encoding: base64\r?\n\r?\n([A-Za-z0-9+/=\r\n]+?)\r?\n--/.exec(bruto)?.[1] ?? ''
+        const texto = Buffer.from(b64.replace(/\s/g, ''), 'base64').toString('utf8')
+        const m = new RegExp(`(https?://[^\\s]*${caminho}\\?t=[A-Za-z0-9_%-]+)`).exec(texto)
+        if (m) return new URL(m[1]!).pathname + new URL(m[1]!).search
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    throw new Error(`nenhum e-mail com ${caminho} para ${email}`)
+  }
+
+  test('esqueci a senha pela janela: o link do e-mail cria a senha nova e já entra', async ({ page }) => {
+    const { corpo } = await criarConta(page)
+    await page.request.post('/api/conta/sair', { data: {} })
+    await abrirVitrine(page)
+    await mais(page, 'Inteira').click()
+    await irParaPagamento(page)
+    const janela = page.getByRole('dialog')
+    await janela.locator('[data-parte="abrir-esqueci"]').click()
+    await janela.locator('#conta-login').fill(corpo.cpf)
+    await janela.getByRole('button', { name: 'Enviar o link' }).click()
+    await expect(janela.locator('[data-parte="esqueci-enviado"]')).toContainText('Se existir uma conta')
+
+    await page.goto(await linkDoEmail(corpo.email, '/conta/redefinir'))
+    await hidratada(page)
+    await expect(page.locator('[data-parte="nova-senha"]')).toBeVisible()
+    await page.locator('#senha-nova').fill('senha-nova-do-e2e-7')
+    await page.locator('#senha-repetir').fill('senha-nova-do-e2e-7')
+    await page.getByRole('button', { name: 'Salvar a senha nova' }).click()
+    await expect(page.locator('[data-parte="senha-trocada"]')).toBeVisible()
+    // o mesmo link de novo: vencido
+    await page.reload()
+    await hidratada(page)
+    await expect(page.locator('[data-parte="link-vencido"]')).toBeVisible()
+    // e a senha nova entra
+    await page.request.post('/api/conta/sair', { data: {} })
+    const r = await page.request.post('/api/conta/entrar', { data: { login: corpo.cpf, senha: 'senha-nova-do-e2e-7', evento: SLUG } })
+    expect(r.status()).toBe(200)
+  })
+
+  test('confirmar o e-mail: "Minha conta" pede, o link confirma e o aviso some', async ({ page }) => {
+    const { corpo } = await criarConta(page)
+    await page.goto('/conta')
+    await hidratada(page)
+    await expect(page.locator('[data-parte="confirmar-email"]')).toContainText(corpo.email)
+    await page.goto(await linkDoEmail(corpo.email, '/conta/confirmar-email'))
+    await hidratada(page)
+    await expect(page.locator('[data-parte="email-confirmado"]')).toContainText(corpo.email)
+    await page.goto('/conta')
+    await hidratada(page)
+    await expect(page.getByText('Olá,')).toBeVisible()
+    await expect(page.locator('[data-parte="confirmar-email"]')).toHaveCount(0)
   })
 })
 

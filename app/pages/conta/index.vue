@@ -46,6 +46,21 @@ function passou(p: any) {
   return Number.isFinite(inicio) && inicio + 24 * 3600_000 < Date.now()
 }
 
+/* ------------------------------------------------- confirmar o e-mail (035) */
+const reenvio = ref<{ enviando: boolean; recado: string; erro: boolean }>({ enviando: false, recado: '', erro: false })
+async function reenviarConfirmacao() {
+  reenvio.value = { enviando: true, recado: '', erro: false }
+  try {
+    const r = await $fetch<any>('/api/conta/email/reenviar', { method: 'POST' })
+    reenvio.value = {
+      enviando: false, erro: false,
+      recado: r.jaConfirmado ? 'Seu e-mail já está confirmado.' : `Mandamos o link para ${r.email}. Confira também o spam.`,
+    }
+  } catch (e: any) {
+    reenvio.value = { enviando: false, erro: true, recado: e?.data?.statusMessage || 'Não deu pra mandar agora. Tente de novo.' }
+  }
+}
+
 /* ---------------------------------------------------------------- dados */
 const dados = reactive({
   nome: '', email: '', telefone: '', instagram: '', cep: '', cidade: '', estado: '', aceitaNovidades: false,
@@ -166,6 +181,21 @@ useHead({ title: 'Minha conta' })
           <button type="button" class="shrink-0 rounded-md px-3 py-2 text-sm font-semibold text-tinta-suave transition-colors hover:bg-ink-100 hover:text-tinta"
                   data-parte="sair-da-conta" @click="sairDaConta">
             Sair
+          </button>
+        </div>
+
+        <!-- e-mail ainda não confirmado (035): não trava nada, mas é por ele que o ingresso chega -->
+        <div v-if="conta.emailConfirmado === false" class="faixa-aviso mt-4" data-parte="confirmar-email">
+          <p>
+            <strong>Confirme o seu e-mail.</strong> Mandamos um link para <strong>{{ conta.email }}</strong> —
+            é por esse e-mail que chegam os seus ingressos.
+          </p>
+          <p v-if="reenvio.recado" class="mt-1" :class="reenvio.erro ? 'font-semibold text-erro' : ''" role="status">
+            {{ reenvio.recado }}
+          </p>
+          <button v-else type="button" class="mt-1 font-semibold text-acao underline" :disabled="reenvio.enviando"
+                  data-parte="reenviar-confirmacao" @click="reenviarConfirmacao">
+            {{ reenvio.enviando ? 'Enviando…' : 'Mandar o link de novo' }}
           </button>
         </div>
 

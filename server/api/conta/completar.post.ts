@@ -24,6 +24,8 @@ export default defineEventHandler(async (event) => {
       ...dados, senha: null,
       googleSub: p.provedor === 'google' ? String(p.sub) : null,
       appleSub: p.provedor === 'apple' ? String(p.sub) : null,
+      // o provedor provou ESTE e-mail: a conta nasce com ele confirmado (035)
+      emailConfirmado: !!(p.email && p.emailVerificado && String(p.email).toLowerCase() === dados.email),
     })
     deleteCookie(event, COOKIE_DO_CADASTRO_SOCIAL, { path: '/' })
     await abrirSessaoDoCliente(event, conta.id)

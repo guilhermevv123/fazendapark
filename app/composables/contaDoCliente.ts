@@ -21,6 +21,8 @@ export interface ContaNaTela {
   temSenha: boolean
   google: boolean
   apple: boolean
+  /** clicou no link de confirmação (035) */
+  emailConfirmado: boolean
 }
 
 interface EstadoDaConta {

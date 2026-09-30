@@ -14,6 +14,7 @@ import {
 } from '~/composables/contaDoCliente'
 import { prenderTab, soltarRolagem, travarRolagem } from '~/composables/painelFoco'
 import { UFS } from '~~/server/utils/cadastro'
+import { cpfValido } from '~~/server/utils/documento'
 
 const { estado, janela, fechar, entrar, criar, urlSocial } = useContaDoCliente()
 const route = useRoute()
@@ -31,11 +32,19 @@ const buscandoCep = ref(false)
 const painel = ref<HTMLElement | null>(null)
 
 const login = reactive({ usuario: '', senha: '' })
+/** "Esqueci a senha" (035): o mesmo campo de CPF/e-mail, e a resposta que não revela quem tem conta */
+const esqueci = ref(false)
+const esqueciEnviado = ref('')
 const novo = reactive({
   nome: '', cpf: '', email: '', telefone: '', senha: '',
   instagram: '', cep: '', cidade: '', estado: '', aceitaNovidades: false,
 })
 
+/** CPF com os 11 números e o dígito errado: avisa na hora (a MESMA conta do servidor, `documento.ts`) */
+const cpfTorto = computed(() => {
+  const d = novo.cpf.replace(/\D/g, '')
+  return d.length === 11 && !cpfValido(d)
+})
 const marca = (campo: string) => (campoComErro.value === campo ? 'ring-2 ring-danger-600' : '')
 const invalido = (campo: string) => (campoComErro.value === campo ? 'true' : undefined)
 
@@ -84,9 +93,38 @@ async function enviarEntrar() {
   } catch (e) { falhou(e) } finally { enviando.value = false }
 }
 
+async function enviarEsqueci() {
+  erro.value = ''
+  campoComErro.value = ''
+  if (!login.usuario.trim()) {
+    erro.value = 'Digite o seu CPF ou o e-mail da conta.'
+    campoComErro.value = 'login'
+    return
+  }
+  enviando.value = true
+  try {
+    const r = await $fetch<any>('/api/conta/senha/esqueci', {
+      method: 'POST', body: { login: login.usuario, evento: estado.value.evento },
+    })
+    esqueciEnviado.value = r.mensagem
+  } catch (e) { falhou(e) } finally { enviando.value = false }
+}
+function abrirEsqueci(sim: boolean) {
+  esqueci.value = sim
+  esqueciEnviado.value = ''
+  erro.value = ''
+  campoComErro.value = ''
+}
+
 async function enviarCriar() {
   erro.value = ''
   campoComErro.value = ''
+  if (cpfTorto.value) {
+    erro.value = 'CPF inválido. Confira os 11 números.'
+    campoComErro.value = 'cpf'
+    nextTick(() => document.getElementById('conta-cpf')?.focus())
+    return
+  }
   enviando.value = true
   try {
     await criar({
@@ -182,7 +220,35 @@ const temSocial = computed(() => estado.value.social.google || estado.value.soci
           </div>
 
           <!-- ------------------------------------------------------------ entrar -->
-          <form v-if="aba === 'entrar'" class="mt-4 space-y-4" novalidate @submit.prevent="enviarEntrar">
+          <!-- ----------------------------------------------------- esqueci a senha -->
+          <form v-if="aba === 'entrar' && esqueci" class="mt-4 space-y-4" novalidate data-parte="esqueci-senha"
+                @submit.prevent="enviarEsqueci">
+            <div>
+              <p class="titulo text-lg font-semibold text-tinta">Esqueci a senha</p>
+              <p class="mt-1 text-sm text-tinta-suave">
+                Digite o CPF ou o e-mail da conta. Mandamos um link para o e-mail cadastrado criar uma senha nova.
+              </p>
+            </div>
+            <div>
+              <label for="conta-login" class="rotulo">CPF ou e-mail</label>
+              <input id="conta-login" :value="login.usuario" autocomplete="username" autocapitalize="none"
+                     inputmode="email" class="campo" :class="marca('login')" :aria-invalid="invalido('login')"
+                     placeholder="000.000.000-00"
+                     @input="login.usuario = mascaraLogin(($event.target as HTMLInputElement).value)">
+            </div>
+            <p v-if="esqueciEnviado" class="faixa-aviso" role="status" data-parte="esqueci-enviado">{{ esqueciEnviado }}</p>
+            <p v-if="erro" class="faixa-erro" role="alert">{{ erro }}</p>
+            <button v-if="!esqueciEnviado" type="submit" class="btn-cta w-full py-3 text-base" :disabled="enviando">
+              {{ enviando ? 'Enviando…' : 'Enviar o link' }}
+            </button>
+            <p class="text-center text-sm">
+              <button type="button" class="font-semibold text-acao hover:underline" @click="abrirEsqueci(false)">
+                Voltar para entrar
+              </button>
+            </p>
+          </form>
+
+          <form v-else-if="aba === 'entrar'" class="mt-4 space-y-4" novalidate @submit.prevent="enviarEntrar">
             <div>
               <label for="conta-login" class="rotulo">CPF ou e-mail</label>
               <input id="conta-login" :value="login.usuario" autocomplete="username" autocapitalize="none"
@@ -202,6 +268,12 @@ const temSocial = computed(() => estado.value.social.google || estado.value.soci
                 </button>
               </div>
             </div>
+            <p class="-mt-2 text-right">
+              <button type="button" class="text-sm font-semibold text-acao hover:underline" data-parte="abrir-esqueci"
+                      @click="abrirEsqueci(true)">
+                Esqueci a senha
+              </button>
+            </p>
             <p v-if="erro" class="faixa-erro" role="alert">{{ erro }}</p>
             <button type="submit" class="btn-cta w-full py-3 text-base" :disabled="enviando">
               {{ enviando ? 'Entrando…' : 'Entrar' }}
@@ -226,9 +298,13 @@ const temSocial = computed(() => estado.value.social.google || estado.value.soci
               <div>
                 <label for="conta-cpf" class="rotulo">CPF</label>
                 <input id="conta-cpf" :value="novo.cpf" inputmode="numeric" autocomplete="off"
-                       class="campo tabular-nums" :class="marca('cpf')" :aria-invalid="invalido('cpf')"
+                       class="campo tabular-nums" :class="cpfTorto ? 'ring-2 ring-danger-600' : marca('cpf')"
+                       :aria-invalid="cpfTorto ? 'true' : invalido('cpf')" aria-describedby="conta-cpf-aviso"
                        placeholder="000.000.000-00"
                        @input="novo.cpf = mascaraCpf(($event.target as HTMLInputElement).value)">
+                <p v-if="cpfTorto" id="conta-cpf-aviso" class="mt-1 text-sm font-semibold text-erro" data-parte="cpf-invalido">
+                  CPF inválido. Confira os 11 números.
+                </p>
               </div>
               <div>
                 <label for="conta-telefone" class="rotulo">Celular (WhatsApp)</label>

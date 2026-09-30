@@ -55,6 +55,8 @@ export interface ContaDoCliente {
   temSenha: boolean
   google: boolean
   apple: boolean
+  /** o dono clicou no link de confirmação (035) — ou o Google/Apple provou o e-mail */
+  emailConfirmado: boolean
   criadaEm: string
 }
 
@@ -62,7 +64,7 @@ const COLUNAS_DA_CONTA = `
   a.id, a.org_id, a.name, a.email, a.document, a.phone, a.instagram, a.zip_code, a.street,
   a.address_number, a.neighborhood, a.city, a.state, a.address_complement, a.marketing_opt_in,
   a.password_hash IS NOT NULL AS tem_senha, a.google_sub IS NOT NULL AS tem_google,
-  a.apple_sub IS NOT NULL AS tem_apple, a.created_at`
+  a.apple_sub IS NOT NULL AS tem_apple, a.email_confirmed_at IS NOT NULL AS email_confirmado, a.created_at`
 
 function contaDaLinha(r: any): ContaDoCliente {
   return {
@@ -75,6 +77,7 @@ function contaDaLinha(r: any): ContaDoCliente {
     },
     aceitaNovidades: !!r.marketing_opt_in,
     temSenha: !!r.tem_senha, google: !!r.tem_google, apple: !!r.tem_apple,
+    emailConfirmado: !!r.email_confirmado,
     criadaEm: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
   }
 }
@@ -192,6 +195,8 @@ function recusaDeRepetido(e: any): RecusaDaConta | null {
 
 export async function criarContaDoCliente(orgId: string, d: DadosDaConta & {
   senha?: string | null; googleSub?: string | null; appleSub?: string | null
+  /** o Google/Apple já provou o e-mail: nasce confirmado */
+  emailConfirmado?: boolean
 }): Promise<ContaDoCliente> {
   const hash = d.senha ? await bcrypt.hash(d.senha, 10) : null
   const e = d.endereco
@@ -200,13 +205,14 @@ export async function criarContaDoCliente(orgId: string, d: DadosDaConta & {
       `INSERT INTO customer_accounts
          (org_id, name, email, document, phone, password_hash, google_sub, apple_sub, instagram,
           zip_code, street, address_number, neighborhood, city, state, address_complement,
-          marketing_opt_in, marketing_opt_in_at, last_login_at)
+          marketing_opt_in, marketing_opt_in_at, last_login_at, email_confirmed_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-               CASE WHEN $17 THEN now() END, now())
+               CASE WHEN $17 THEN now() END, now(), CASE WHEN $18 THEN now() END)
        RETURNING id`,
       [orgId, d.nome, d.email, d.cpf, d.telefone, hash, d.googleSub ?? null, d.appleSub ?? null,
        d.instagram, e?.cep ?? null, e?.rua ?? null, e?.numero ?? null, e?.bairro ?? null,
-       e?.cidade ?? null, e?.estado ?? null, e?.complemento ?? null, d.aceitaNovidades])
+       e?.cidade ?? null, e?.estado ?? null, e?.complemento ?? null, d.aceitaNovidades,
+       d.emailConfirmado === true])
     return (await contaDoClientePorId(r!.id))!
   } catch (err) {
     throw recusaDeRepetido(err) ?? err
@@ -220,6 +226,8 @@ export async function atualizarContaDoCliente(conta: ContaDoCliente, d: Omit<Dad
     await q(
       `UPDATE customer_accounts
           SET name = $2, email = $3, phone = $4, instagram = $5,
+              -- e-mail novo não está provado: a confirmação volta a zero (035)
+              email_confirmed_at = CASE WHEN email IS DISTINCT FROM $3 THEN NULL ELSE email_confirmed_at END,
               zip_code = $6, street = $7, address_number = $8, neighborhood = $9, city = $10,
               state = $11, address_complement = $12,
               marketing_opt_in_at = CASE WHEN marketing_opt_in IS DISTINCT FROM $13 THEN now()
@@ -334,6 +342,32 @@ export async function sairDaContaDoCliente(event: H3Event): Promise<void> {
   ;(event.context as any).contaDoCliente = null
 }
 
+/**
+ * A senha nova pelo link de e-mail (035). Quem abriu o link provou a caixa de entrada: o e-mail
+ * fica confirmado (se ainda for o mesmo pra onde o link foi) e TODAS as sessões caem — quem
+ * estava entrando com a senha velha (o motivo da troca, às vezes) sai junto.
+ */
+export async function gravarSenhaNovaDoCliente(contaId: string, senha: string, emailDoLink: string): Promise<void> {
+  const hash = await bcrypt.hash(senha, 10)
+  await q(
+    `UPDATE customer_accounts
+        SET password_hash = $2, updated_at = now(),
+            email_confirmed_at = CASE WHEN email = $3 THEN COALESCE(email_confirmed_at, now()) ELSE email_confirmed_at END
+      WHERE id = $1`, [contaId, hash, emailDoLink])
+  await derrubarSessoesDoCliente(contaId)
+}
+
+/** A conta pelo CPF ou e-mail digitado, pro "esqueci a senha". Null quando não existe. */
+export async function contaPeloLogin(orgId: string, login: string): Promise<ContaDoCliente | null> {
+  const qual = tipoDoLogin(login)
+  if (!qual) return null
+  const r = await q1<any>(
+    `SELECT ${COLUNAS_DA_CONTA} FROM customer_accounts a
+      WHERE a.org_id = $1 AND ${'cpf' in qual ? 'a.document = $2' : 'a.email = $2'}`,
+    [orgId, 'cpf' in qual ? qual.cpf : qual.email])
+  return r ? contaDaLinha(r) : null
+}
+
 /** Troca de senha (ou conta que passou pro dono do e-mail): derruba as outras sessões. */
 export async function derrubarSessoesDoCliente(contaId: string): Promise<number> {
   const r = await q<any>(
@@ -368,7 +402,8 @@ export async function contaDaIdentidadeSocial(orgId: string, id: {
     [orgId, id.email])
   if (!porEmail || porEmail.ja_ligado) return null
   await q(
-    `UPDATE customer_accounts SET ${coluna} = $2, password_hash = NULL, last_login_at = now(), updated_at = now()
+    `UPDATE customer_accounts SET ${coluna} = $2, password_hash = NULL, last_login_at = now(), updated_at = now(),
+            email_confirmed_at = COALESCE(email_confirmed_at, now())
       WHERE id = $1`, [porEmail.id, id.sub])
   await derrubarSessoesDoCliente(porEmail.id)
   console.warn(`[conta] o ${id.provedor} provou o e-mail de uma conta: ligada ao ${id.provedor}, `
@@ -406,7 +441,7 @@ export function contaParaTela(c: ContaDoCliente) {
   return {
     nome: c.nome, primeiroNome: c.nome.split(' ')[0], email: c.email, cpf: c.cpf, telefone: c.telefone,
     instagram: c.instagram, endereco: c.endereco, aceitaNovidades: c.aceitaNovidades,
-    temSenha: c.temSenha, google: c.google, apple: c.apple,
+    temSenha: c.temSenha, google: c.google, apple: c.apple, emailConfirmado: c.emailConfirmado,
   }
 }
 

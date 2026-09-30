@@ -6,7 +6,8 @@
  * SameSite=Lax, e `mutacaoDeOutroSite` é o cinto além do suspensório.
  */
 import { mutacaoDeOutroSite } from '../../utils/caminho'
-import { frearPortaPublica } from '../../utils/sessao'
+import { frearPortaPublica, ipDaRequisicao } from '../../utils/sessao'
+import { mandarConfirmacaoDeEmail } from '../../utils/conta-email'
 import {
   abrirSessaoDoCliente, contaParaTela, criarContaDoCliente, erroDaConta, organizacaoDoSite,
   validarDadosDaConta, validarSenhaDaConta,
@@ -23,6 +24,10 @@ export default defineEventHandler(async (event) => {
     const senha = validarSenhaDaConta(b.senha, dados)
     const conta = await criarContaDoCliente(org.id, { ...dados, senha })
     await abrirSessaoDoCliente(event, conta.id)
+    // o link de confirmação sai sem segurar a resposta (a compra não espera o e-mail — 035)
+    const confirmacao = mandarConfirmacaoDeEmail(conta, ipDaRequisicao(event))
+      .catch((e) => console.warn(`[conta] confirmação de e-mail: ${String(e?.message ?? e).slice(0, 200)}`))
+    if (process.env.NODE_ENV !== 'production') await confirmacao
     return { ok: true, conta: contaParaTela(conta) }
   } catch (e) {
     erroDaConta(e)
