@@ -3,7 +3,7 @@
   "short_name": "Portaria",
   "description": "Leitor de ingressos da portaria do Conquista Park.",
   "lang": "pt-BR",
-  "start_url": "/admin",
+  "start_url": "/portaria",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

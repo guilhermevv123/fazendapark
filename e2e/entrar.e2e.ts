@@ -121,11 +121,11 @@ test.describe('cada papel cai onde trabalha', () => {
       const page = await ctx.newPage()
       const problemas = vigiar(page)
       await entrarPeloFormulario(page, email)
-      await page.waitForURL(/\/admin/, { timeout: 30_000 })
+      // a portaria cai no endereço dela (30/09): /portaria, com os eventos abertos e os números
+      await page.waitForURL(papel === 'portaria' ? /\/portaria$/ : /\/admin/, { timeout: 30_000 })
       await page.waitForLoadState('networkidle')
       if (papel === 'portaria') {
-        // a portaria só tem o leitor: cai nele (1 evento) ou na escolha do evento
-        await expect(page).toHaveURL(/validacao|\/admin/)
+        await expect(page.getByRole('heading', { name: 'Eventos abertos' })).toBeVisible()
         await expect(page.getByText(/nenhum evento aqui ainda/i)).toHaveCount(0)
       } else {
         await expect(page.getByRole('heading').first()).toBeVisible()

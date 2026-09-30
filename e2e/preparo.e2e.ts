@@ -27,7 +27,8 @@ test('aquece o servidor (compila as telas uma vez)', async ({ page }) => {
 for (const papel of PAPEIS) {
   test(`entra como ${papel} e guarda a sessão`, async ({ page }) => {
     await entrarPeloFormulario(page, LOGINS[papel])
-    await expect(page).toHaveURL(/\/admin/, { timeout: 30_000 })
+    // a portaria cai no endereço dela (30/09: /portaria); o resto, no painel
+    await expect(page).toHaveURL(papel === 'portaria' ? /\/portaria$/ : /\/admin/, { timeout: 30_000 })
     const eu = await page.request.get('/api/auth/eu')
     const corpo = await eu.json()
     expect(corpo.usuario?.email).toBe(LOGINS[papel])

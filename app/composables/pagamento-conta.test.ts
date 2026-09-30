@@ -170,13 +170,13 @@ describe('ingresso grátis · nada de pagamento na tela', () => {
     expect(tela!.text()).toContain('COD1')
   })
 
-  it('o segundo grátis do mesmo CPF: a recusa aparece na tela', async () => {
+  it('o grátis recusado pelo servidor (esgotou no meio): a recusa aparece na tela', async () => {
     const recusa = Object.assign(new Error('409'), { data: {
-      statusMessage: 'O ingresso grátis é 1 por CPF, e este CPF já pegou o dele neste evento.',
-      data: { tipo: 'gratis_por_cpf' } } })
+      statusMessage: 'Esgotou enquanto você escolhia: não sobrou ingresso grátis neste lote.',
+      data: { tipo: 'estoque' } } })
     await abrir({ '/api/checkout': recusa }, GRATIS)
     await avancar()
-    expect(tela!.get('.faixa-erro').text()).toContain('1 por CPF')
+    expect(tela!.get('.faixa-erro').text()).toContain('Esgotou')
     expect(sessionStorage.getItem('dt:pedido')).toBeNull()
   })
 })

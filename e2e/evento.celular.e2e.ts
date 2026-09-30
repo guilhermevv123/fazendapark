@@ -82,6 +82,26 @@ test.describe('leitor (portaria, 390 px)', () => {
     expect(await rolaNaHorizontal(page)).toBe(false)
   })
 
+  test('/portaria (30/09): a lista mostra validados e faltam do evento, o leitor abre no endereço curto e o número sobe', async ({ page }) => {
+    const [t] = await ingressos(1)
+    await abrir(page, '/portaria')
+    const cartaoDoEvento = page.locator(`[data-parte="eventos-da-portaria"] [data-evento="${ev.id}"]`)
+    await expect(cartaoDoEvento).toBeVisible()
+    const antes = Number(await cartaoDoEvento.locator('[data-parte="validados"]').innerText())
+    const faltavam = Number(await cartaoDoEvento.locator('[data-parte="faltam"]').innerText())
+    expect(faltavam, 'o ingresso novo não entrou no "faltam"').toBeGreaterThan(0)
+    await cartaoDoEvento.click()
+    await expect(page).toHaveURL(new RegExp(`/portaria/${ev.id}$`))
+    await ler(page, t.qr)
+    await expect(veredito(page)).toHaveText('PODE ENTRAR')
+    await page.locator('[data-parte="veredito-ok"]').click()
+    await page.locator('[data-parte="voltar-eventos"]').click()
+    await expect(page).toHaveURL(/\/portaria$/)
+    await expect(cartaoDoEvento.locator('[data-parte="validados"]')).toHaveText(String(antes + 1))
+    await expect(cartaoDoEvento.locator('[data-parte="faltam"]')).toHaveText(String(faltavam - 1))
+    expect(await rolaNaHorizontal(page)).toBe(false)
+  })
+
   test('#163 QR válido entra; o mesmo QR de novo é barrado com onde e quando; digitado pede documento', async ({ page }) => {
     const [a, b] = await ingressos(2)
     const problemas = vigiar(page)

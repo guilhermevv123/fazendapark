@@ -9,14 +9,17 @@
 import { erroDoPainel, perguntarAoPainel } from '../../../utils/agentes'
 
 export default defineEventHandler(async () => {
-  const [visao, saude] = await Promise.allSettled([
+  const [visao, saude, comentarios] = await Promise.allSettled([
     perguntarAoPainel('visao'),
     perguntarAoPainel('saude'),
+    // 30/09: os comentários do Instagram (fp_comentarios, gravados pelo fluxo "Comentários Instagram")
+    perguntarAoPainel('comentarios'),
   ])
   if (visao.status === 'rejected') throw erroDoPainel(visao.reason)
   return {
     visao: visao.value,
     saude: saude.status === 'fulfilled' ? saude.value : null,
+    comentarios: comentarios.status === 'fulfilled' ? comentarios.value : null,
     avisoSaude: saude.status === 'rejected'
       ? 'Não consegui ler a saúde dos fluxos agora; as conversas abaixo estão atualizadas.'
       : null,

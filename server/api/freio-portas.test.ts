@@ -130,7 +130,7 @@ describe('B03 · /api/checkout', () => {
 
   it('o balde de INGRESSOS conta o que foi reservado: 1 + 1 + 1 num limite de 2 leva 429', async () => {
     // trava: `marcarNoFreio(event, 'checkout_ingressos', ingressosPedidos)` depois da reserva.
-    // O lote daqui é GRÁTIS, e grátis é 1 por CPF (utils/gratis.ts): cada pedido leva 1 ingresso
+    // O lote daqui é GRÁTIS (sai pago na hora): cada pedido leva 1 ingresso
     // de um CPF novo — o balde é do ENDEREÇO, então os três contam juntos.
     limites({ FREIO_CHECKOUT_INGRESSOS: '2/600', FREIO_CHECKOUT: '0' })
     const ip = novoIp()

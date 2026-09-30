@@ -259,24 +259,41 @@ test.describe('Eventos (/admin)', () => {
     test.beforeAll(async () => { org = await criarOrganizacao('portaria', ['master', 'portaria']) })
     test.afterAll(async () => { if (org) await apagarOrganizacao(org.id) })
 
-    test('#33 403 portaria › um leitor: /admin vai direto pra /admin/evento/<id>/validacao', async ({ page, context }) => {
+    test('#33 portaria › /portaria: login próprio, eventos abertos com validados e faltam, um toque abre o leitor (30/09)', async ({ page, context }) => {
       const agora = Date.now()
       const ev = await criarEventoSql(org.id, {
         nome: `${org.nome} evento no ar`, inicio: new Date(agora - 3_600_000), fim: new Date(agora + 6 * 3_600_000),
       })
-      await logar(context, org.usuarios.portaria!)
-      await page.goto('/admin')
-      await expect(page).toHaveURL(new RegExp(`/admin/evento/${ev.id}/validacao$`))
-      await hidratada(page)
-      // o contraste: com DOIS leitores a tela oferece a escolha em vez de decidir sozinha
       const outro = await criarEventoSql(org.id, {
         nome: `${org.nome} segundo evento`, inicio: new Date(agora + 86_400_000), fim: new Date(agora + 90_000_000),
       })
-      await abrir(page, '/admin')
-      await expect(page).toHaveURL(/\/admin$/)
-      await expect(page.getByText('Abrir o leitor de entrada')).toBeVisible()
-      await expect(page.locator(`a[href="/admin/evento/${ev.id}/validacao"]`)).toBeVisible()
-      await expect(page.locator(`a[href="/admin/evento/${outro.id}/validacao"]`)).toBeVisible()
+      // sem sessão: o próprio /portaria pede o login
+      await page.goto('/portaria')
+      await hidratada(page)
+      await expect(page.locator('[data-parte="login-portaria"]')).toBeVisible()
+      await page.locator('#email').fill(org.usuarios.portaria!.email)
+      await page.locator('#senha').fill(SENHA)
+      await page.getByRole('button', { name: 'Entrar' }).click()
+      const lista = page.locator('[data-parte="eventos-da-portaria"]')
+      await expect(lista.locator(`[data-evento="${ev.id}"]`)).toContainText(`${org.nome} evento no ar`)
+      await expect(lista.locator(`[data-evento="${outro.id}"]`)).toBeVisible()
+      await expect(lista.locator(`[data-evento="${ev.id}"] [data-parte="validados"]`)).toHaveText('0')
+      await expect(lista.locator(`[data-evento="${ev.id}"] [data-parte="faltam"]`)).toHaveText(/^\d+$/)
+      // um toque: o leitor no endereço curto, com o nome do evento e sem as abas do painel
+      await lista.locator(`[data-evento="${ev.id}"]`).click()
+      await expect(page).toHaveURL(new RegExp(`/portaria/${ev.id}$`))
+      await hidratada(page)
+      await expect(page.locator('h1')).toHaveText(`${org.nome} evento no ar`)
+      await expect(page.locator('#cod')).toBeVisible()
+      await expect(page.locator('[data-parte="voltar-eventos"]')).toBeVisible()
+      await expect(page.locator('[data-parte="abas"]'), 'as abas do painel vazaram pra portaria').toHaveCount(0)
+      // e quem cai no painel vai pro endereço da portaria
+      await page.goto('/admin')
+      await expect(page).toHaveURL(/\/portaria$/)
+      await hidratada(page)
+      // sair volta pro login da portaria
+      await page.locator('[data-parte="sair"]').click()
+      await expect(page.locator('[data-parte="login-portaria"]')).toBeVisible()
     })
   })
 

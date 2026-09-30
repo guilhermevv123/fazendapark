@@ -72,7 +72,8 @@ function meInteressa(requisicao) {
   // A regra que não pode ser afrouxada: resposta de API não vira cache.
   if (url.pathname.startsWith('/api/')) return false
   // A tela da portaria e o que ela precisa pra abrir.
-  if (requisicao.mode === 'navigate') return url.pathname.includes('/validacao')
+  // (30/09: `/portaria` e `/portaria/<id>` são o endereço curto do mesmo leitor)
+  if (requisicao.mode === 'navigate') return url.pathname.includes('/validacao') || url.pathname.startsWith('/portaria')
   return url.pathname.startsWith('/_nuxt/')
     || url.pathname.startsWith('/brand/')
     || url.pathname.endsWith('.css')
@@ -109,7 +110,7 @@ async function redePrimeiro(requisicao) {
       // de dinossauro.
       if (requisicao.mode === 'navigate') {
         const qualquer = (await cache.keys())
-          .find((r) => new URL(r.url).pathname.includes('/validacao'))
+          .find((r) => { const c = new URL(r.url).pathname; return c.includes('/validacao') || c.startsWith('/portaria/') })
         if (qualquer) return (await cache.match(qualquer))
       }
       throw new Error('sem rede e sem cópia guardada')

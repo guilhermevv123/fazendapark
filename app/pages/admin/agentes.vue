@@ -26,7 +26,9 @@ useHead({ title: 'Atendimento IA' })
 // (o `navigateTo` da segunda troca era engolido pelo middleware da primeira) — ver consultaNaUrl.ts
 const consulta = useConsultaNaUrl()
 const naAbertura = consulta.atual.value
-const aba = ref(String(naAbertura.aba ?? 'conversas') === 'casos' ? 'casos' : 'conversas')
+const ABAS = ['conversas', 'casos', 'comentarios'] as const
+const abaValida = (v: unknown) => (ABAS as readonly string[]).includes(String(v)) ? String(v) : 'conversas'
+const aba = ref(abaValida(naAbertura.aba))
 const canal = ref(String(naAbertura.canal ?? ''))
 const recorte = ref(String(naAbertura.recorte ?? ''))
 const busca = ref(String(naAbertura.q ?? ''))
@@ -47,7 +49,7 @@ watch([aba, canal, recorte, busca, tipoCaso, aberto], () => {
 // os filtros acompanham. A busca compara aparada: o espaço que a pessoa acabou de digitar fica.
 watch(consulta.atual, (q) => {
   const texto = (v: unknown) => (typeof v === 'string' ? v : '')
-  const abaDaUrl = texto(q.aba) === 'casos' ? 'casos' : 'conversas'
+  const abaDaUrl = abaValida(texto(q.aba))
   if (aba.value !== abaDaUrl) aba.value = abaDaUrl
   if (canal.value !== texto(q.canal)) canal.value = texto(q.canal)
   if (recorte.value !== texto(q.recorte)) recorte.value = texto(q.recorte)
@@ -116,6 +118,26 @@ const deltaHoje = computed(() => {
   const p = Math.round(((h - o) / o) * 100)
   return p === 0 ? 'igual a ontem' : `${p > 0 ? '+' : ''}${p}% contra ontem (${num(o)})`
 })
+
+// ------------------------------------------------------------- comentários
+const CLASSES_DE_COMENTARIO: Record<string, string> = {
+  duvida: 'Dúvida', elogio: 'Elogio', reclamacao: 'Reclamação', neutro: 'Outro', spam: 'Spam',
+}
+const classeComentario = ref('')
+const comentarios = computed<any[]>(() => data.value?.comentarios?.comentarios ?? [])
+const comentariosFiltrados = computed(() =>
+  classeComentario.value ? comentarios.value.filter((c) => c.classe === classeComentario.value) : comentarios.value)
+const kpisDeComentario = computed(() => {
+  const k = data.value?.comentarios?.kpis ?? {}
+  return [
+    { rotulo: 'Comentários (7 dias)', valor: num(k.total_7d ?? 0), cor: 'text-tinta' },
+    { rotulo: 'Dúvidas e "quero ir"', valor: num(k.duvida_7d ?? 0), cor: 'text-pool-700' },
+    { rotulo: 'Reclamações', valor: num(k.reclamacao_7d ?? 0), cor: (k.reclamacao_7d ?? 0) ? 'text-erro' : 'text-tinta' },
+    { rotulo: 'Directs enviados', valor: num(k.dms_7d ?? 0), cor: 'text-ok' },
+  ]
+})
+const seloDaClasse = (c: string) =>
+  c === 'reclamacao' ? 'selo-erro' : c === 'elogio' ? 'selo-ok' : c === 'spam' ? 'selo-neutro' : 'selo-alerta'
 
 // ------------------------------------------------------------------- saúde
 const fluxos = computed(() => (saude.value?.fluxos ?? []).filter((f: any) => !/API do painel/i.test(f.nome)))
@@ -218,6 +240,24 @@ const carregandoDetalhe = ref(false)
 const erroDetalhe = ref('')
 async function abrir(contato: string) {
   aberto.value = contato
+  // "Ver conversa" de um caso: a conversa mora na aba de conversas (painel da direita)
+  aba.value = 'conversas'
+}
+/** A conversa abre já no fim, como no WhatsApp: o que interessa é a última troca. */
+const rolagemDaConversa = ref<HTMLElement | null>(null)
+watch(detalhe, () => nextTick(() => {
+  const el = rolagemDaConversa.value
+  if (el) el.scrollTop = el.scrollHeight
+}))
+/** O separador de dia entre as bolhas ("Hoje", "Ontem", "28/09") — só quando o dia muda. */
+function diaDoTurno(t: any, i: number): string {
+  const dia = (iso: string) => new Date(iso).toLocaleDateString('pt-BR', { timeZone: 'America/Bahia' })
+  const este = dia(t.criado_em)
+  const antes = i > 0 ? dia(detalhe.value.turnos[i - 1].criado_em) : ''
+  if (este === antes) return ''
+  const hoje = dia(new Date().toISOString())
+  const ontem = dia(new Date(Date.now() - 86_400_000).toISOString())
+  return este === hoje ? 'Hoje' : este === ontem ? 'Ontem' : este
 }
 async function carregarDetalhe() {
   if (!aberto.value) { detalhe.value = null; return }
@@ -284,23 +324,12 @@ const linkWhats = computed(() => canalAberto.value === 'whatsapp' ? `https://wa.
 
     <template v-else-if="visao">
       <!-- ========================================================= saúde -->
-      <section class="mt-5 card" aria-labelledby="t-saude">
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h2 id="t-saude" class="rotulo-kpi">Fluxos da automação</h2>
-          <p v-if="data?.avisoSaude" class="text-xs text-alerta">{{ data.avisoSaude }}</p>
-          <ul v-else class="flex flex-wrap gap-2">
-            <li v-for="f in fluxos" :key="f.id">
-              <span class="max-w-full whitespace-normal text-left [overflow-wrap:anywhere]"
-                    :class="f.ativo ? (f.erros_24h ? 'selo-alerta' : 'selo-ok') : (fluxosDeAtendimento.includes(f.nome) ? 'selo-erro' : 'selo-neutro')"
-                    :title="f.erros_24h ? `${f.erros_24h} erro(s) nas últimas 24h` : (f.ativo ? 'ligado' : 'desligado')">
-                <span class="size-1.5 rounded-full" :class="f.ativo ? 'bg-success-600' : 'bg-ink-400'" aria-hidden="true" />
-                {{ f.nome }}{{ f.ativo ? '' : ' · desligado' }}{{ f.erros_24h ? ` · ${f.erros_24h} erro(s)` : '' }}
-              </span>
-            </li>
-          </ul>
-        </div>
+      <!-- 30/09: a lista "Fluxos da automação" saiu (pedido do dono). Fluxo de atendimento
+           desligado ou com erro continua aparecendo nos ALERTAS (`alertasDeSaude`). -->
+      <section class="mt-5 card" aria-label="Vitrine do site e pulso da automação">
+        <p v-if="data?.avisoSaude" class="mb-3 text-xs text-alerta">{{ data.avisoSaude }}</p>
 
-        <div class="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <div class="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
           <div class="rounded-xl bg-fundo-cinza p-4">
             <p class="text-xs font-semibold uppercase tracking-wide text-tinta-fraca">Vitrine do site (Zig) · o que a Sofia oferece</p>
             <template v-if="vitrine">
@@ -461,59 +490,210 @@ const linkWhats = computed(() => canalAberto.value === 'whatsapp' ? `https://wa.
           <button type="button" role="tab" :aria-selected="aba === 'casos'" class="-mb-px border-b-2 px-3 pb-2.5 text-sm font-semibold"
                   :class="aba === 'casos' ? 'border-pool-700 text-pool-800' : 'border-transparent text-tinta-suave hover:text-tinta'"
                   @click="aba = 'casos'">Casos registrados <span class="ml-1 text-xs text-tinta-fraca">{{ (visao.casos ?? []).length }}</span></button>
+          <button type="button" role="tab" :aria-selected="aba === 'comentarios'" class="-mb-px border-b-2 px-3 pb-2.5 text-sm font-semibold"
+                  :class="aba === 'comentarios' ? 'border-pool-700 text-pool-800' : 'border-transparent text-tinta-suave hover:text-tinta'"
+                  data-parte="aba-comentarios"
+                  @click="aba = 'comentarios'">Comentários <span class="ml-1 text-xs text-tinta-fraca">{{ comentarios.length }}</span></button>
+        </div>
+
+        <!-- ---------------------------------------------- comentários (30/09) -->
+        <div v-if="aba === 'comentarios'" class="p-4" data-parte="comentarios">
+          <p v-if="!data?.comentarios" class="faixa-aviso">
+            Não consegui ler os comentários agora — as conversas e os casos seguem atualizados.
+          </p>
+          <template v-else>
+            <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div v-for="k in kpisDeComentario" :key="k.rotulo" class="rounded-xl bg-fundo-cinza p-3">
+                <p class="text-xs font-semibold text-tinta-suave">{{ k.rotulo }}</p>
+                <p class="titulo mt-0.5 text-2xl font-semibold tabular-nums" :class="k.cor">{{ k.valor }}</p>
+              </div>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-1.5">
+              <button type="button" :class="!classeComentario ? 'chip-ativo' : 'chip'" @click="classeComentario = ''">Todos</button>
+              <button v-for="(t, v) in CLASSES_DE_COMENTARIO" :key="v" type="button"
+                      :class="classeComentario === v ? 'chip-ativo' : 'chip'" @click="classeComentario = String(v)">{{ t }}</button>
+            </div>
+            <p v-if="!comentariosFiltrados.length" class="mt-6 text-center text-sm text-tinta-suave">
+              {{ comentarios.length ? 'Nenhum comentário nesse filtro.' : 'Nenhum comentário registrado ainda — cada comentário novo no Instagram aparece aqui.' }}
+            </p>
+            <ul v-else class="mt-4 divide-y divide-linha">
+              <li v-for="c in comentariosFiltrados" :key="c.id_comentario" class="py-3">
+                <div class="flex flex-wrap items-center gap-2 text-sm">
+                  <strong class="text-tinta">@{{ c.usuario || 'sem usuário' }}</strong>
+                  <span :class="seloDaClasse(c.classe)">{{ CLASSES_DE_COMENTARIO[c.classe] ?? c.classe }}</span>
+                  <span v-if="c.motivo === 'interesse'" class="selo-ok">quer ir</span>
+                  <span class="text-xs text-tinta-fraca">{{ quando(c.criado_em) }}</span>
+                </div>
+                <p class="mt-1 whitespace-pre-line text-tinta-corpo">{{ c.texto }}</p>
+                <p v-if="c.resposta_publica" class="mt-2 rounded-lg bg-pool-50 px-3 py-2 text-sm text-tinta-corpo">
+                  <span class="font-semibold">{{ c.publicada ? 'Sofia respondeu em público:' : 'Resposta NÃO publicada:' }}</span>
+                  {{ c.resposta_publica }}
+                  <span v-if="!c.publicada && c.motivos_suprimido" class="block text-xs text-alerta">motivo: {{ c.motivos_suprimido }}</span>
+                </p>
+                <p v-else-if="c.classe === 'spam'" class="mt-1 text-xs text-tinta-fraca">spam — sem resposta, de propósito</p>
+                <p v-if="c.dm_texto" class="mt-2 rounded-lg bg-fundo-cinza px-3 py-2 text-sm text-tinta-corpo">
+                  <span class="font-semibold">{{ c.dm_enviada ? 'Direct enviado:' : 'Direct não saiu:' }}</span> {{ c.dm_texto }}
+                </p>
+              </li>
+            </ul>
+          </template>
         </div>
 
         <!-- ------------------------------------------------ conversas -->
-        <div v-if="aba === 'conversas'" class="p-4">
-          <div class="flex flex-wrap items-center gap-2">
-            <input v-model="busca" type="search" class="campo max-w-xs" placeholder="Buscar nome, número ou mensagem" aria-label="Buscar conversa">
-            <select v-model="canal" class="campo w-auto" aria-label="Canal">
-              <option value="">Todos os canais</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="instagram">Instagram</option>
-            </select>
-            <div class="flex flex-wrap gap-1.5">
-              <button v-for="[v, t] in RECORTES" :key="v" type="button" :class="recorte === v ? 'chip-ativo' : 'chip'" @click="recorte = v">
-                {{ t }} <span class="ml-1 tabular-nums opacity-70">{{ contagem(v) }}</span>
-              </button>
+        <!-- 30/09: no formato do chat do CRM (pedido do dono) — a lista de todo mundo à esquerda, a
+             conversa inteira à direita, em bolhas. SÓ LEITURA: aqui ninguém manda mensagem. No
+             celular a lista ocupa a tela e a conversa abre por cima, com "voltar". -->
+        <div v-else-if="aba === 'conversas'" class="grid lg:h-[72vh] lg:min-h-[560px] lg:grid-cols-[360px_minmax(0,1fr)]"
+             data-parte="chat-conversas">
+          <!-- ======== lista -->
+          <div class="flex min-h-0 flex-col border-linha lg:border-r" :class="aberto ? 'max-lg:hidden' : ''">
+            <div class="space-y-2 border-b border-linha p-3">
+              <div class="relative">
+                <svg viewBox="0 0 24 24" class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-tinta-fraca" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+                <input v-model="busca" type="search" class="campo pl-9" placeholder="Buscar conversas, contatos ou mensagens" aria-label="Buscar conversa">
+              </div>
+              <div class="flex flex-wrap items-center gap-1.5 text-sm" role="group" aria-label="Canal">
+                <button v-for="[v, t] in [['', 'Todas'], ['whatsapp', 'WhatsApp'], ['instagram', 'Instagram']]" :key="v" type="button"
+                        class="rounded-md px-2 py-1 font-semibold" :class="canal === v ? 'bg-pool-50 text-pool-800' : 'text-tinta-suave hover:text-tinta'"
+                        :aria-pressed="canal === v" @click="canal = v">{{ t }}</button>
+              </div>
+              <div class="flex flex-wrap gap-1.5">
+                <button v-for="[v, t] in RECORTES" :key="v" type="button" :class="recorte === v ? 'chip-ativo' : 'chip'" @click="recorte = v">
+                  {{ t }} <span class="ml-1 tabular-nums opacity-70">{{ contagem(v) }}</span>
+                </button>
+              </div>
+            </div>
+
+            <ul v-if="filtradas.length" class="min-h-0 flex-1 overflow-y-auto max-lg:max-h-[70vh]" data-parte="lista-conversas">
+              <li v-for="c in visiveis" :key="c.contato">
+                <button type="button" class="flex w-full items-start gap-3 border-l-[3px] px-3 py-3 text-left transition-colors"
+                        :class="aberto === c.contato ? 'border-pool-600 bg-pool-50/70' : 'border-transparent hover:bg-fundo-cinza'"
+                        :aria-current="aberto === c.contato ? 'true' : undefined"
+                        :aria-label="`Abrir conversa com ${c.nome || contatoLegivel(c.contato)}`" @click="abrir(c.contato)">
+                  <span class="relative grid size-11 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                        :class="c.canalDe === 'instagram' ? 'bg-gradient-to-br from-grape-500 to-grape-700' : 'bg-gradient-to-br from-pool-500 to-pool-700'">
+                    {{ iniciais(c.nome, c.contato) }}
+                    <span class="absolute -bottom-0.5 -right-0.5 grid size-4 place-items-center rounded-full text-[8px] font-bold text-white ring-2 ring-white"
+                          :class="c.canalDe === 'instagram' ? 'bg-grape-600' : 'bg-success-600'" aria-hidden="true">{{ c.canalDe === 'instagram' ? 'IG' : 'W' }}</span>
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="flex items-baseline justify-between gap-2">
+                      <span class="truncate font-semibold text-tinta">{{ c.nome || contatoLegivel(c.contato) }}</span>
+                      <span class="shrink-0 text-[11px] text-tinta-fraca">{{ quando(c.ultimo_em) }}</span>
+                    </span>
+                    <span class="mt-0.5 flex flex-wrap items-center gap-1">
+                      <span :class="seloDoTom[c.r.tom]">{{ c.r.agente }}</span>
+                      <span v-if="c.caso_aberto" class="selo-erro">reclamação</span>
+                      <span v-if="c.humano_no_comando" class="selo-neutro">humano</span>
+                    </span>
+                    <span class="mt-1 block truncate text-sm text-tinta-suave">
+                      {{ c.ultima_resposta ? `Sofia: ${c.ultima_resposta}` : (c.ultima_mensagem || '—') }}
+                    </span>
+                  </span>
+                </button>
+              </li>
+              <li v-if="filtradas.length > visiveis.length" class="p-3 text-center">
+                <button type="button" class="btn-secundario" @click="quantasConversas += POR_VEZ">Mostrar mais {{ Math.min(POR_VEZ, filtradas.length - visiveis.length) }}</button>
+                <span class="mt-1 block text-xs text-tinta-fraca">{{ visiveis.length }} de {{ filtradas.length }}</span>
+              </li>
+            </ul>
+            <div v-else class="py-12 text-center">
+              <p class="text-sm font-semibold text-tinta">{{ conversas.length ? 'Nenhuma conversa nesse recorte.' : 'Nenhuma conversa nos últimos 7 dias.' }}</p>
+              <button v-if="conversas.length" type="button" class="btn-secundario mt-3" @click="canal = ''; recorte = ''; busca = ''">Limpar filtros</button>
             </div>
           </div>
 
-          <ul v-if="filtradas.length" class="mt-3 divide-y divide-linha">
-            <li v-for="c in visiveis" :key="c.contato">
-              <button type="button" class="flex w-full items-start gap-3 rounded-xl px-2 py-3 text-left transition-colors hover:bg-fundo-cinza"
-                      :aria-label="`Abrir conversa com ${c.nome || contatoLegivel(c.contato)}`" @click="abrir(c.contato)">
+          <!-- ======== conversa aberta -->
+          <div class="flex min-h-0 flex-col bg-fundo-cinza" :class="aberto ? 'max-lg:fixed max-lg:inset-0 max-lg:z-50' : 'max-lg:hidden'"
+               data-parte="conversa-aberta">
+            <div v-if="!aberto" class="grid flex-1 place-items-center p-8 text-center text-tinta-suave">
+              <div>
+                <p class="font-semibold text-tinta">Selecione uma conversa</p>
+                <p class="mt-1 text-sm">A conversa inteira aparece aqui — só pra acompanhar, sem enviar nada.</p>
+              </div>
+            </div>
+            <template v-else>
+              <header class="flex items-center gap-3 border-b border-linha bg-white px-4 py-3">
+                <button type="button" class="grid size-9 place-items-center rounded-md text-tinta-suave hover:bg-fundo-cinza lg:hidden"
+                        aria-label="Voltar para a lista" data-parte="voltar-lista" @click="aberto = ''">
+                  <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+                </button>
                 <span class="grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
-                      :class="c.canalDe === 'instagram' ? 'bg-gradient-to-br from-grape-500 to-grape-700' : 'bg-gradient-to-br from-pool-500 to-pool-700'">
-                  {{ iniciais(c.nome, c.contato) }}
+                      :class="canalAberto === 'instagram' ? 'bg-gradient-to-br from-grape-500 to-grape-700' : 'bg-gradient-to-br from-pool-500 to-pool-700'">
+                  {{ iniciais(nomeAberto, aberto) }}
                 </span>
-                <span class="min-w-0 flex-1">
-                  <span class="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span class="truncate font-semibold text-tinta">{{ c.nome || contatoLegivel(c.contato) }}</span>
-                    <span class="text-xs text-tinta-fraca">{{ ROTULO_DO_CANAL[c.canalDe as keyof typeof ROTULO_DO_CANAL] }}<template v-if="c.nome && c.canalDe === 'whatsapp'"> · {{ contatoLegivel(c.contato) }}</template></span>
-                    <span :class="seloDoTom[c.r.tom]">{{ c.r.agente }}</span>
-                    <span v-if="c.caso_aberto" class="selo-erro">reclamação aberta</span>
-                    <span v-if="c.humano_no_comando" class="selo-neutro">humano no comando</span>
-                    <span v-if="c.bloqueios" class="selo-alerta" :title="c.motivos || ''">{{ c.bloqueios }} barrada(s)</span>
-                  </span>
-                  <span class="mt-1 block truncate text-sm text-tinta-corpo"><b class="font-semibold">Cliente:</b> {{ c.ultima_mensagem || '—' }}</span>
-                  <span class="block truncate text-sm text-tinta-suave"><b class="font-semibold">Sofia:</b> {{ c.ultima_resposta || '—' }}</span>
-                  <span v-if="c.resumo?.resumo" class="mt-1 block text-xs text-tinta-fraca">Resumo: {{ c.resumo.resumo }}</span>
-                </span>
-                <span class="shrink-0 text-right text-xs text-tinta-fraca">
-                  <span class="block">{{ quando(c.ultimo_em) }}</span>
-                  <span class="block tabular-nums">{{ c.turnos }} {{ c.turnos === 1 ? 'resposta' : 'respostas' }}</span>
-                </span>
-              </button>
-            </li>
-          </ul>
-          <div v-if="filtradas.length > visiveis.length" class="mt-3 flex items-center justify-center gap-3">
-            <button type="button" class="btn-secundario" @click="quantasConversas += POR_VEZ">Mostrar mais {{ Math.min(POR_VEZ, filtradas.length - visiveis.length) }}</button>
-            <span class="text-xs text-tinta-fraca">{{ visiveis.length }} de {{ filtradas.length }}</span>
-          </div>
-          <div v-if="!filtradas.length" class="py-12 text-center">
-            <p class="text-sm font-semibold text-tinta">{{ conversas.length ? 'Nenhuma conversa nesse recorte.' : 'Nenhuma conversa nos últimos 7 dias.' }}</p>
-            <button v-if="conversas.length" type="button" class="btn-secundario mt-3" @click="canal = ''; recorte = ''; busca = ''">Limpar filtros</button>
+                <div class="min-w-0 flex-1">
+                  <p class="truncate font-semibold text-tinta" data-parte="nome-aberto">{{ nomeAberto || contatoLegivel(aberto) }}</p>
+                  <p class="truncate text-xs text-tinta-suave">{{ ROTULO_DO_CANAL[canalAberto] }} · {{ contatoLegivel(aberto) }}</p>
+                </div>
+                <span v-if="daLista" class="max-sm:hidden" :class="seloDoTom[daLista.r.tom]">{{ daLista.r.agente }}</span>
+                <a v-if="linkWhats" :href="linkWhats" target="_blank" rel="noopener" class="btn-secundario max-sm:hidden">Abrir no WhatsApp</a>
+              </header>
+
+              <!-- resumo por IA, recolhível: a conversa é o principal -->
+              <details class="border-b border-linha bg-white px-4 py-2 text-sm" data-parte="resumo">
+                <summary class="cursor-pointer font-semibold text-tinta">
+                  Resumo da conversa<span v-if="resumoAberto" class="font-normal text-tinta-suave"> · {{ resumoAberto.resumo }}</span>
+                </summary>
+                <div class="mt-2 space-y-2 text-tinta-corpo">
+                  <p v-if="erroResumo" class="faixa-erro">{{ erroResumo }}</p>
+                  <template v-if="resumoAberto">
+                    <div class="flex flex-wrap gap-2">
+                      <span v-if="resumoAberto.situacao" :class="seloDoTom[SITUACAO_DO_RESUMO[resumoAberto.situacao]?.tom ?? 'neutro']">{{ SITUACAO_DO_RESUMO[resumoAberto.situacao]?.texto ?? resumoAberto.situacao }}</span>
+                      <span v-if="resumoAberto.sentimento" class="selo-neutro">{{ SENTIMENTO[resumoAberto.sentimento] ?? resumoAberto.sentimento }}</span>
+                    </div>
+                    <p v-if="resumoAberto.quer"><b class="font-semibold">Quer:</b> {{ resumoAberto.quer }}</p>
+                    <p v-if="resumoAberto.proximo_passo && resumoAberto.proximo_passo !== 'nada'"><b class="font-semibold">Próximo passo:</b> {{ resumoAberto.proximo_passo }}</p>
+                    <p v-if="resumoAberto.alerta" class="faixa-erro">{{ resumoAberto.alerta }}</p>
+                  </template>
+                  <button type="button" class="btn-secundario" :disabled="resumindo || carregandoDetalhe || !detalhe?.turnos?.length"
+                          @click="resumir(!!resumoAberto)">
+                    {{ resumindo ? 'Resumindo…' : resumoAberto ? (detalhe?.resumo?.em_dia ? 'Refazer' : 'Atualizar resumo') : 'Gerar resumo' }}
+                  </button>
+                </div>
+              </details>
+
+              <div ref="rolagemDaConversa" class="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6" data-parte="bolhas"
+                   style="background-image: radial-gradient(rgb(0 0 0 / 0.035) 1px, transparent 1px); background-size: 18px 18px">
+                <p v-if="erroDetalhe" class="faixa-erro">{{ erroDetalhe }}</p>
+                <div v-else-if="carregandoDetalhe && !detalhe" class="space-y-3" aria-busy="true">
+                  <div v-for="i in 5" :key="i" class="h-12 w-2/3 animate-pulse rounded-2xl bg-white" :class="i % 2 ? '' : 'ml-auto'" />
+                </div>
+                <template v-else-if="detalhe">
+                  <div v-for="c in detalhe.casos ?? []" :key="c.id" class="mx-auto mb-3 max-w-md rounded-xl bg-alerta-claro px-3 py-2 text-center text-xs text-tinta-corpo">
+                    <b>{{ TIPOS[c.tipo]?.texto ?? c.tipo }}</b> · {{ STATUS_CASO[c.status] ?? c.status }}<template v-if="c.assunto"> — {{ c.assunto }}</template>
+                  </div>
+                  <ol v-if="detalhe.turnos?.length" class="space-y-2">
+                    <template v-for="(t, i) in detalhe.turnos" :key="t.id">
+                      <li v-if="diaDoTurno(t, i)" class="my-3 text-center">
+                        <span class="rounded-md bg-white px-2.5 py-1 text-[11px] font-semibold text-tinta-suave shadow-sm">{{ diaDoTurno(t, i) }}</span>
+                      </li>
+                      <li v-if="t.mensagem" class="flex justify-start">
+                        <div class="max-w-[80%] rounded-2xl rounded-tl-md bg-white px-3.5 py-2 text-sm text-tinta-corpo shadow-sm" data-parte="bolha-cliente">
+                          <p class="whitespace-pre-line break-words">{{ t.mensagem }}</p>
+                          <p class="mt-1 text-right text-[11px] italic text-tinta-fraca">Recebida {{ hora(t.criado_em) }}</p>
+                        </div>
+                      </li>
+                      <li v-if="t.resposta" class="flex justify-end">
+                        <div class="max-w-[80%] rounded-2xl rounded-tr-md bg-pool-700 px-3.5 py-2 text-sm text-white shadow-sm" data-parte="bolha-sofia">
+                          <p class="whitespace-pre-line break-words">{{ t.resposta }}</p>
+                          <p class="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-[11px] italic text-white/75">
+                            <span>{{ rotuloDaIntencao(t.intencao).agente }} · {{ hora(t.criado_em) }}</span>
+                            <span v-if="t.bloqueada" class="rounded bg-white/20 px-1.5 not-italic" :title="t.motivos || ''">resposta original barrada</span>
+                          </p>
+                        </div>
+                      </li>
+                    </template>
+                  </ol>
+                  <p v-else class="text-center text-sm text-tinta-suave">Nenhuma mensagem registrada com esse contato.</p>
+                </template>
+              </div>
+
+              <footer class="border-t border-linha bg-white px-4 py-3 text-center text-xs text-tinta-suave" data-parte="so-leitura">
+                Somente leitura — quem responde é a Sofia (ou a equipe, pelo WhatsApp do parque).
+              </footer>
+            </template>
           </div>
         </div>
 
@@ -548,82 +728,5 @@ const linkWhats = computed(() => canalAberto.value === 'whatsapp' ? `https://wa.
       </section>
     </template>
 
-    <!-- ============================================== a conversa aberta -->
-    <ModalLateral v-if="aberto" :titulo="nomeAberto || contatoLegivel(aberto)" largura="max-w-2xl" @fechar="aberto = ''">
-      <div class="flex flex-wrap items-center gap-2 text-sm">
-        <span class="selo-neutro">{{ ROTULO_DO_CANAL[canalAberto] }}</span>
-        <span class="text-tinta-suave">{{ contatoLegivel(aberto) }}</span>
-        <span v-if="daLista" :class="seloDoTom[daLista.r.tom]">{{ daLista.r.agente }}</span>
-        <span v-if="daLista?.humano_no_comando" class="selo-neutro">humano no comando</span>
-        <a v-if="linkWhats" :href="linkWhats" target="_blank" rel="noopener" class="btn-secundario ml-auto">Abrir no WhatsApp</a>
-      </div>
-
-      <section class="mt-4 rounded-2xl bg-fundo-cinza p-4" aria-labelledby="t-resumo">
-        <div class="flex items-center justify-between gap-2">
-          <h3 id="t-resumo" class="text-sm font-semibold text-tinta">Resumo da conversa</h3>
-          <button type="button" class="btn-secundario" :disabled="resumindo || carregandoDetalhe || !detalhe?.turnos?.length"
-                  @click="resumir(!!resumoAberto)">
-            {{ resumindo ? 'Resumindo…' : resumoAberto ? (detalhe?.resumo?.em_dia ? 'Refazer' : 'Atualizar resumo') : 'Gerar resumo' }}
-          </button>
-        </div>
-        <p v-if="erroResumo" class="faixa-erro mt-3">{{ erroResumo }}</p>
-        <div v-if="resumoAberto" class="mt-2 space-y-2 text-sm text-tinta-corpo">
-          <p>{{ resumoAberto.resumo }}</p>
-          <div class="flex flex-wrap gap-2">
-            <span v-if="resumoAberto.situacao" :class="seloDoTom[SITUACAO_DO_RESUMO[resumoAberto.situacao]?.tom ?? 'neutro']">{{ SITUACAO_DO_RESUMO[resumoAberto.situacao]?.texto ?? resumoAberto.situacao }}</span>
-            <span v-if="resumoAberto.sentimento" class="selo-neutro">{{ SENTIMENTO[resumoAberto.sentimento] ?? resumoAberto.sentimento }}</span>
-          </div>
-          <p v-if="resumoAberto.quer"><b class="font-semibold">Quer:</b> {{ resumoAberto.quer }}</p>
-          <p v-if="resumoAberto.proximo_passo && resumoAberto.proximo_passo !== 'nada'"><b class="font-semibold">Próximo passo:</b> {{ resumoAberto.proximo_passo }}</p>
-          <p v-if="resumoAberto.alerta" class="faixa-erro">{{ resumoAberto.alerta }}</p>
-          <p class="text-xs text-tinta-fraca">
-            escrito pela IA {{ quando(detalhe?.resumo?.criado_em) }}{{ detalhe?.resumo?.em_dia === false ? ' · a conversa andou depois disso' : '' }}
-          </p>
-        </div>
-        <p v-else-if="!resumindo" class="mt-2 text-sm text-tinta-suave">Clique em "Gerar resumo" pra IA ler a conversa e dizer em 2 frases o que a pessoa quer e como terminou.</p>
-      </section>
-
-      <p v-if="erroDetalhe" class="faixa-erro mt-4">{{ erroDetalhe }}</p>
-      <div v-else-if="carregandoDetalhe && !detalhe" class="mt-4 space-y-2" aria-busy="true">
-        <div v-for="i in 4" :key="i" class="h-12 animate-pulse rounded-xl bg-fundo-cinza" />
-      </div>
-
-      <template v-if="detalhe">
-        <section v-if="detalhe.casos?.length" class="mt-4">
-          <h3 class="text-sm font-semibold text-tinta">Casos desta pessoa</h3>
-          <ul class="mt-2 space-y-2">
-            <li v-for="c in detalhe.casos" :key="c.id" class="rounded-xl p-3 ring-1 ring-inset ring-linha">
-              <div class="flex flex-wrap items-center gap-2">
-                <span :class="TIPOS[c.tipo]?.selo ?? 'selo-neutro'">{{ TIPOS[c.tipo]?.texto ?? c.tipo }}</span>
-                <span class="selo-neutro">{{ STATUS_CASO[c.status] ?? c.status }}</span>
-                <span class="text-xs text-tinta-fraca">{{ quando(c.atualizado_em || c.criado_em) }}</span>
-              </div>
-              <p v-if="c.assunto" class="mt-1 text-sm font-semibold text-tinta-corpo">{{ c.assunto }}</p>
-              <p v-if="c.relato" class="mt-0.5 text-sm text-tinta-suave">{{ c.relato }}</p>
-            </li>
-          </ul>
-        </section>
-
-        <section class="mt-4">
-          <h3 class="text-sm font-semibold text-tinta">Conversa <span class="font-normal text-tinta-fraca">· {{ detalhe.turnos?.length ?? 0 }} respostas</span></h3>
-          <ol v-if="detalhe.turnos?.length" class="mt-2 space-y-3">
-            <li v-for="t in detalhe.turnos" :key="t.id" class="space-y-1.5">
-              <div v-if="t.mensagem" class="max-w-[85%] rounded-2xl rounded-tl-md bg-fundo-cinza px-3.5 py-2.5 text-sm text-tinta-corpo">
-                <p class="whitespace-pre-line break-words">{{ t.mensagem }}</p>
-                <p class="mt-1 text-[11px] text-tinta-fraca">{{ hora(t.criado_em) }}</p>
-              </div>
-              <div v-if="t.resposta" class="ml-auto max-w-[85%] rounded-2xl rounded-tr-md bg-pool-50 px-3.5 py-2.5 text-sm text-tinta-corpo ring-1 ring-inset ring-pool-100">
-                <p class="whitespace-pre-line break-words">{{ t.resposta }}</p>
-                <p class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-tinta-fraca">
-                  <span>{{ rotuloDaIntencao(t.intencao).agente }}</span>
-                  <span v-if="t.bloqueada" class="selo-alerta" :title="t.motivos || ''">resposta original barrada{{ t.motivos ? `: ${t.motivos}` : '' }}</span>
-                </p>
-              </div>
-            </li>
-          </ol>
-          <p v-else class="mt-2 text-sm text-tinta-suave">Nenhuma mensagem registrada com esse contato.</p>
-        </section>
-      </template>
-    </ModalLateral>
   </div>
 </template>

@@ -24,6 +24,7 @@
 import { q } from '../../utils/db'
 import { exigir } from '../../utils/sessao'
 import { papelPode, ROTULO } from '../../utils/papeis'
+import { SQL_PUBLICO, retratoDoPublico } from '../../utils/catraca'
 
 export default defineEventHandler(async (event) => {
   const sessao = await exigir(event, 'portaria')
@@ -38,8 +39,8 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const eventos = await q<{ id: string; nome: string }>(
-    `SELECT id, name AS nome
+  const eventos = await q<{ id: string; nome: string; inicio: string; fim: string | null }>(
+    `SELECT id, name AS nome, starts_at AS inicio, ends_at AS fim
        FROM events
       WHERE org_id = $1
         AND status = 'ativo'
@@ -49,5 +50,14 @@ export default defineEventHandler(async (event) => {
       LIMIT 20`,
     [sessao.orgId])
 
-  return { eventos }
+  // 30/09: a tela /portaria mostra, por evento, quantos já foram validados e quantos faltam — o
+  // MESMO retrato do leitor (`retratoDoPublico`), pra lista e leitor nunca discordarem. Só números:
+  // nenhum valor, nome de cliente ou pedido sai daqui. Até 20 eventos, uma consulta cada.
+  const comNumeros = await Promise.all(eventos.map(async (e) => {
+    const [linha] = await q<any>(SQL_PUBLICO, [e.id])
+    const r = retratoDoPublico(linha)
+    return { ...e, validados: r.ingressos, faltam: r.faltam, aptos: r.aptos, comparecimentoPct: r.comparecimentoPct }
+  }))
+
+  return { eventos: comNumeros }
 })

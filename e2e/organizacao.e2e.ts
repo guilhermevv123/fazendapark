@@ -255,23 +255,16 @@ test.describe('menu por papel (layout)', () => {
   test.describe('portaria', () => {
     test.use({ storageState: sessao('portaria') })
     test('portaria: no painel o menu diz o porquê; no leitor, sem "Voltar aos eventos" e sem EVENTOS como link (ADM-56)', async ({ page }) => {
-      await abrir(page, '/admin')
-      // o que a tela oferece segue a rota do leitor: um → vai direto pra ele; vários → um botão por
-      // evento; nenhum → a frase. Com UM (a base da bateria: só o evento de exemplo está à venda) a
-      // portaria nem fica no /admin, e a frase do menu é de quem fica — ela mora no teste de tela
-      // (telas.test.ts). Este caso passava só no banco da frota F2, que tinha sobra de outras rodadas.
+      // 30/09: o /admin da portaria leva ao endereço dela, /portaria — um cartão por evento aberto,
+      // cada um com o leitor a um toque (/portaria/<id>)
+      await page.goto('/admin')
+      await expect(page).toHaveURL(/\/portaria$/)
       const destino = await api(page, '/api/portaria/destino')
-      if (destino.eventos.length === 1) {
-        await expect(page).toHaveURL(new RegExp(`/admin/evento/${destino.eventos[0].id}/validacao`))
-      } else {
-        await expect(menu(page)).toContainText('Seu acesso é só o leitor de entrada')
-        if (destino.eventos.length > 1) {
-          for (const e of destino.eventos) await expect(page.locator(`a[href="/admin/evento/${e.id}/validacao"]`).first()).toBeVisible()
-        } else {
-          await expect(page.getByText('Nenhum evento com leitor aberto agora')).toBeVisible()
-        }
-        await expect(page.getByText('Nenhum evento aqui ainda')).toHaveCount(0)
+      for (const e of destino.eventos) {
+        await expect(page.locator(`[data-parte="eventos-da-portaria"] a[href="/portaria/${e.id}"]`)).toBeVisible()
       }
+      if (!destino.eventos.length) await expect(page.locator('[data-parte="sem-eventos"]')).toBeVisible()
+      await expect(page.getByText('Nenhum evento aqui ainda')).toHaveCount(0)
       await abrir(page, `/admin/evento/${EVENTO_SEED.id}/validacao`)
       expect(await nomesDoMenu(page)).toEqual(['Validação e acessos', 'Leitor de entrada'])
       await expect(page.getByText('Voltar aos eventos')).toHaveCount(0)

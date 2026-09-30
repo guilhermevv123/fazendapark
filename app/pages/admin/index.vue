@@ -74,8 +74,9 @@ const { data: portoes, execute: buscarPortoes } = useFetch<{ eventos: { id: stri
   '/api/portaria/destino', { immediate: false, key: 'portaria-destino' })
 if (semAcesso.value) {
   await buscarPortoes()
-  const unico = portoes.value?.eventos.length === 1 ? portoes.value.eventos[0] : null
-  if (unico) await navigateTo(`/admin/evento/${unico.id}/validacao`, { replace: true })
+  // 30/09: quem tem o leitor vai pro endereço dele, `/portaria` — a lista dos eventos abertos com
+  // validados e faltam, e o leitor a um toque. Sem leitor nenhum, fica aqui com o recado.
+  if (portoes.value) await navigateTo('/portaria', { replace: true })
 }
 
 /* ------------------------------------------------- busca e situação na URL */

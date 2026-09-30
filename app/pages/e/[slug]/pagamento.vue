@@ -735,9 +735,6 @@ useHead({ title: 'Pagamento' })
           <p v-if="carrinho.totais.taxa" class="mt-1 text-right text-xs text-tinta-fraca">
             {{ reais(carrinho.totais.face) }} de ingressos + {{ reais(carrinho.totais.taxa) }} de taxa de serviço
           </p>
-          <p v-if="!carrinho.totais.total" class="mt-1 text-right text-xs text-tinta-fraca">
-            Ingresso grátis: 1 por CPF.
-          </p>
         </div>
 
         <!-- B13: a pessoa voltou e montou OUTRO carrinho com um pedido ainda

@@ -18,7 +18,8 @@ test.describe('master', () => {
     await expect(page.getByRole('heading', { name: 'Atendimento IA' })).toBeVisible()
     const falhou = page.getByText(/painel ainda não ligado|não consegui ler o atendimento/i)
     if (await falhou.count()) test.skip(true, 'automação fora do ar ou não configurada nesta instância')
-    await expect(page.getByText('Fluxos da automação')).toBeVisible()
+    // a lista de fluxos saiu da tela (30/09, pedido do dono): os alertas cobrem fluxo parado
+    await expect(page.getByText('Fluxos da automação')).toHaveCount(0)
     await expect(page.getByText('Pessoas atendidas hoje')).toBeVisible()
     await expect(page.getByText(/Vitrine do site/i)).toBeVisible()
     await expect(page.getByRole('tab', { name: /conversas/i })).toBeVisible()

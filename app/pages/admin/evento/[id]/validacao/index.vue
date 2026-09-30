@@ -362,10 +362,30 @@ export function corDoPonto(r: Resposta): string {
  * localmente vem marcada como tal, porque a diferença importa — "pode entrar
  * (offline)" quer dizer "ainda não foi conferido com os outros portões".
  */
-definePageMeta({ layout: 'admin' })
+definePageMeta({
+  layout: 'admin',
+  // 30/09: o endereço curto do porteiro. `/portaria/<id>` é ESTA tela, na moldura da portaria
+  // (sem a lateral do painel) — a lista de eventos com os números mora em `/portaria`.
+  alias: '/portaria/:id',
+  middleware: [async (para) => {
+    if (!para.path.startsWith('/portaria/')) return
+    setPageLayout('portaria')
+    // o `admin.global` só guarda /admin: aqui a guarda é esta. Só volta pro login quando o
+    // SERVIDOR diz que não há sessão — sem rede, a portaria segue com o que o aparelho já tem.
+    const { data } = await useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
+    if (data.value && !data.value.usuario) return navigateTo('/portaria')
+  }],
+})
 
 const route = useRoute()
 const id = route.params.id as string
+/** aberta pelo endereço da portaria (`/portaria/<id>`): sem as abas do painel */
+const naPortaria = route.path.startsWith('/portaria/')
+// na portaria o título é o NOME do evento (sem as abas, a tela não dizia qual era); vem da mesma
+// lista que o porteiro acabou de tocar — só id, nome e números
+const { data: destinoDaPortaria } = useFetch<{ eventos: { id: string; nome: string }[] }>('/api/portaria/destino',
+  { key: 'portaria-destino-nome', server: false, immediate: naPortaria })
+const nomeNaPortaria = computed(() => destinoDaPortaria.value?.eventos.find((e) => e.id === id)?.nome ?? '')
 
 const codigo = ref('')
 const gate = ref('')
@@ -1115,7 +1135,7 @@ useHead({
   <div class="max-lg:flex max-lg:flex-col" data-parte="leitor-pagina">
     <div class="flex flex-wrap items-start justify-between gap-3 py-5 max-lg:order-first max-lg:py-3">
       <div>
-        <h1 class="titulo text-2xl font-semibold text-tinta">Leitor de entrada</h1>
+        <h1 class="titulo text-2xl font-semibold text-tinta">{{ naPortaria && nomeNaPortaria ? nomeNaPortaria : 'Leitor de entrada' }}</h1>
         <p class="mt-1 text-tinta-suave max-lg:hidden">
           Leia o QR ou digite o código. O campo já fica no foco — pode apontar o leitor.
         </p>
@@ -1126,7 +1146,7 @@ useHead({
     </div>
 
     <div class="max-lg:order-first">
-      <AbasSecao :evento-id="id" />
+      <AbasSecao v-if="!naPortaria" :evento-id="id" />
     </div>
 
     <!-- Faixa de estado da rede. Fica no topo e é a primeira coisa que o
@@ -1419,7 +1439,7 @@ useHead({
         {{ ultima.qrAntigo ? 'QR de antes da troca de chave: confira o documento' : 'Digitado à mão: confira o documento' }}
       </p>
       <p v-if="ultima.entrarDeNovo" class="mt-3">
-        <a :href="`/entrar?de=${encodeURIComponent(`/admin/evento/${id}/validacao`)}`"
+        <a :href="naPortaria ? '/portaria' : `/entrar?de=${encodeURIComponent(`/admin/evento/${id}/validacao`)}`"
            class="inline-block rounded-xl bg-white px-4 py-2 font-semibold text-tinta">
           Entrar de novo
         </a>

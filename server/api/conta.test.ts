@@ -8,7 +8,7 @@
  *   · "Meus dados" não troca o CPF;
  *   · o checkout tira o comprador da SESSÃO: o corpo que diz outro nome é ignorado, e o pedido
  *     nasce com `customer_account_id`; organização que exige conta recusa quem chega sem ela;
- *   · débito vai como cartão à vista; grátis é 1 por CPF;
+ *   · débito vai como cartão à vista; grátis sai pago na hora, sem limite de 1 por CPF (saiu 30/09);
  *   · uma conta não vê o pedido da outra em "Meus ingressos".
  *
  * Fixture própria (organização ZZ), apagada no fim. Sem servidor no ar, PULA.
@@ -203,19 +203,16 @@ describe('checkout com a conta', () => {
     expect(Number(o!.installments ?? 1)).toBe(1)
   })
 
-  it('grátis: sai pago na hora, e é 1 por CPF', async (ctx) => {
+  it('grátis: sai pago na hora, e o mesmo CPF pode pegar mais de um (o limite de 1 por CPF saiu, 30/09)', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const b = navegador()
     await b.chamar('POST', '/api/conta/criar', { ...novaPessoa(), evento: SLUG })
     const dois = await b.chamar('POST', '/api/checkout', { eventSlug: SLUG, itens: itens(loteGratis, tipoGratis, 2), forma: 'pix' })
-    expect(dois.status).toBe(409)
-    expect(dois.corpo.data?.tipo).toBe('gratis_por_cpf')
-    const um = await b.chamar('POST', '/api/checkout', { eventSlug: SLUG, itens: itens(loteGratis, tipoGratis, 1), forma: 'pix' })
-    expect(um.status, um.recado).toBe(200)
-    expect(um.corpo.status).toBe('pago')
+    expect(dois.status, dois.recado).toBe(200)
+    expect(dois.corpo.status).toBe('pago')
     const denovo = await b.chamar('POST', '/api/checkout', { eventSlug: SLUG, itens: itens(loteGratis, tipoGratis, 1), forma: 'pix' })
-    expect(denovo.status).toBe(409)
-    expect(denovo.recado).toMatch(/já pegou/)
+    expect(denovo.status, denovo.recado).toBe(200)
+    expect(denovo.corpo.status).toBe('pago')
   })
 
   it('"Meus ingressos": cada conta vê só o que comprou com ela', async (ctx) => {

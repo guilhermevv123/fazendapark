@@ -13,7 +13,7 @@
  * respondem 503 com o recado de o que falta — tela que diz "sem conversa" quando na verdade não
  * está ligada é o defeito da tela que afirma com tranquilidade algo falso.
  */
-export type AcaoDoPainel = 'visao' | 'conversa' | 'resumo' | 'saude'
+export type AcaoDoPainel = 'visao' | 'conversa' | 'resumo' | 'saude' | 'comentarios'
 
 export class PainelNaoConfigurado extends Error {}
 export class PainelForaDoAr extends Error {
@@ -24,6 +24,7 @@ const PACIENCIA_MS: Record<AcaoDoPainel, number> = {
   visao: 20_000,
   conversa: 20_000,
   saude: 25_000,
+  comentarios: 20_000,
   // o resumo chama a OpenAI quando não tem cache — é a única que pode demorar
   resumo: 60_000,
 }

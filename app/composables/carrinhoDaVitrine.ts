@@ -14,7 +14,6 @@
  * (server/api/e/[slug].get.ts) e o checkout relê tudo do banco. Somar é o que
  * a tela faz; decidir quanto custa, não.
  */
-import { GRATIS_POR_CPF } from '../../server/utils/gratis'
 import { MOTIVOS, motivoValido } from '../../server/utils/meia-entrada'
 import { reais } from './formato'
 
@@ -92,8 +91,6 @@ export function tetoDaLinha(lote: any, v: any): number {
   const teto = Math.min(
     Number.isFinite(doLote) ? doLote : 0,
     Number.isFinite(daVariacao) ? daVariacao : 0,
-    // grátis: 1 por CPF (o checkout recusa o segundo — ver `server/utils/gratis.ts`)
-    ehGratis(v) ? GRATIS_POR_CPF : Infinity,
   )
   return Math.max(teto, 0)
 }

@@ -23,7 +23,6 @@
  * de lote isso trava a fila inteira.
  */
 import type { PoolClient } from 'pg'
-import { GRATIS_POR_CPF } from '../utils/gratis'
 import { z } from 'zod'
 import { q, q1, tx } from '../utils/db'
 import { CadastroInvalido, prepararCadastro, type Cadastro } from '../utils/cadastro'
@@ -1174,29 +1173,8 @@ async function conferirTetoPorDocumento(
 ) {
   await c.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, [ev.id, documento])
 
-  // Ingresso GRÁTIS (lote ou tipo de preço zero): 1 por CPF no evento, somando o que o CPF já
-  // pegou no site (ordem do dono, 28/09). Com a trava do par (evento, CPF) já na mão: dois cliques
-  // em "Gerar ingresso" chegando juntos não pegam dois.
-  const gratisAgora = itens.reduce((s: number, it: any, i: number) =>
-    s + (linhas[i] && Number(linhas[i].faceUnitCents) === 0 ? it.quantidade : 0), 0)
-  if (gratisAgora > 0) {
-    const { rows: [g] } = await c.query(
-      `SELECT COALESCE(SUM(oi.quantity), 0)::int AS n
-         FROM orders o
-         JOIN order_items oi ON oi.order_id = o.id
-         JOIN customers cu   ON cu.id = o.customer_id
-        WHERE o.event_id = $1 AND cu.document = $2 AND o.channel = 'online'
-          AND oi.unit_face_cents = 0 AND o.status = ANY($3::text[])`,
-      [ev.id, documento, PEDIDO_EM_PE as unknown as string[]])
-    const antes = Number(g?.n ?? 0)
-    if (antes + gratisAgora > GRATIS_POR_CPF) {
-      throw createError({ statusCode: 409,
-        statusMessage: antes > 0
-          ? 'O ingresso grátis é 1 por CPF, e este CPF já pegou o dele neste evento.'
-          : `O ingresso grátis é 1 por CPF. Deixe 1 no carrinho para gerar o seu.`,
-        data: { tipo: 'gratis_por_cpf', teto: GRATIS_POR_CPF, antes } })
-    }
-  }
+  // 30/09: o limite de 1 ingresso GRÁTIS por CPF saiu (pedido do dono). O grátis segue o mesmo
+  // teto por CPF do evento (quando o organizador configura), igual ao pago.
 
   // O que este CPF já tem no evento, quebrado por setor/lote/tipo numa
   // consulta só. `JOIN customers` (e não LEFT) de propósito: pedido sem
