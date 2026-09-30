@@ -138,7 +138,10 @@ watch(conta, (c) => {
   if (pedidos.value === null) void buscarPedidos()
 }, { immediate: true })
 
-const statusDoPedido = (p: any) => situacaoDoPedido(p.status)
+// pedido cujos ingressos foram TODOS trocados de dia (036): não é "pago com 0 ingressos"
+const statusDoPedido = (p: any) => (p.status === 'pago' && !p.ingressos && p.reagendados
+  ? { selo: { texto: 'REAGENDADO', classe: 'selo-neutro' } }
+  : situacaoDoPedido(p.status))
 const quando = (p: any) => dataNoFuso(p.evento?.inicio, p.evento?.fuso)
 
 useHead({ title: 'Minha conta' })
@@ -248,7 +251,10 @@ useHead({ title: 'Minha conta' })
                           {{ p.ingressos }} {{ p.ingressos === 1 ? 'ingresso' : 'ingressos' }}
                           <template v-if="p.usados"> · {{ p.usados }} já {{ p.usados === 1 ? 'usado' : 'usados' }}</template>
                         </span>
-                        <span class="text-tinta-fraca">· {{ p.totalCents ? reais(p.totalCents) : 'Grátis' }}</span>
+                        <span v-if="p.reagendados" class="text-tinta-suave" data-parte="reagendados">
+                          {{ p.ingressos ? '·' : '' }} {{ p.reagendados }} {{ p.reagendados === 1 ? 'trocado' : 'trocados' }} para outro dia
+                        </span>
+                        <span class="text-tinta-fraca">· {{ p.reagendamento ? 'Troca de data' : p.totalCents ? reais(p.totalCents) : 'Grátis' }}</span>
                       </div>
                     </div>
                     <span class="grid shrink-0 place-items-center pr-4 text-acao" aria-hidden="true">

@@ -9,7 +9,8 @@
  *   · o checkout tira o comprador da SESSÃO: o corpo que diz outro nome é ignorado, e o pedido
  *     nasce com `customer_account_id`; organização que exige conta recusa quem chega sem ela;
  *   · débito vai como cartão à vista; grátis sai pago na hora, sem limite de 1 por CPF (saiu 30/09);
- *   · uma conta não vê o pedido da outra em "Meus ingressos".
+ *   · uma conta não vê o pedido da outra em "Meus ingressos";
+ *   · ingresso trocado de dia (036) não deixa o pedido antigo com "0 ingressos": vem contado à parte.
  *
  * Fixture própria (organização ZZ), apagada no fim. Sem servidor no ar, PULA.
  */
@@ -83,6 +84,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const pedidos = `SELECT id FROM orders WHERE org_id = $1`
+  // o pedido de troca aponta pro ingresso antigo (036): solta antes de apagar ingresso
+  await q(`UPDATE orders SET rescheduled_from_ticket_id = NULL WHERE org_id = $1`, [orgId])
   await q(`DELETE FROM order_items WHERE order_id IN (${pedidos})`, [orgId])
   await q(`DELETE FROM tickets WHERE order_id IN (${pedidos})`, [orgId])
   await q(`DELETE FROM payment_events WHERE order_id IN (${pedidos})`, [orgId]).catch(() => {})
@@ -227,5 +230,30 @@ describe('checkout com a conta', () => {
     expect(deA).toContain(compra.corpo.pedido)
     expect(deB).not.toContain(compra.corpo.pedido)
     expect((await navegador().chamar('GET', '/api/conta/ingressos')).status).toBe(401)
+  })
+})
+
+describe('"Meus ingressos" depois de trocar de dia (036)', () => {
+  it('o pedido antigo conta os trocados à parte; o novo é marcado como troca, não como grátis', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const b = navegador()
+    await b.chamar('POST', '/api/conta/criar', { ...novaPessoa(), evento: SLUG })
+    const antigo = await b.chamar('POST', '/api/checkout', { eventSlug: SLUG, itens: itens(loteGratis, tipoGratis, 2), forma: 'pix' })
+    const novo = await b.chamar('POST', '/api/checkout', { eventSlug: SLUG, itens: itens(loteGratis, tipoGratis, 1), forma: 'pix' })
+    expect(antigo.status, antigo.recado).toBe(200)
+    expect(novo.status, novo.recado).toBe(200)
+    // a troca como o reagendamento grava: o ingresso antigo cancelado, o pedido novo apontando pra ele
+    const trocados = await q<any>(
+      `UPDATE tickets SET status = 'cancelado'
+        WHERE order_id = (SELECT id FROM orders WHERE code = $1) RETURNING id`, [antigo.corpo.pedido])
+    expect(trocados).toHaveLength(2)
+    await q(`UPDATE orders SET rescheduled_from_ticket_id = $1 WHERE code = $2`, [trocados[0].id, novo.corpo.pedido])
+
+    const lista = (await b.chamar('GET', '/api/conta/ingressos')).corpo.pedidos
+    const velho = lista.find((x: any) => x.codigo === antigo.corpo.pedido)
+    const troca = lista.find((x: any) => x.codigo === novo.corpo.pedido)
+    // 2 cancelados, só 1 com pedido novo apontando: 1 trocado; o outro cancelado não vira "trocado"
+    expect(velho).toMatchObject({ ingressos: 0, reagendados: 1, reagendamento: false })
+    expect(troca).toMatchObject({ ingressos: 1, reagendados: 0, reagendamento: true })
   })
 })
