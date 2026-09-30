@@ -75,7 +75,15 @@ export default defineNuxtConfig({
         { name: 'theme-color', content: '#146f83' },
         { name: 'application-name', content: 'Conquista Park' },
       ],
-      link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+      // Ícone = a logo oficial no círculo azul (dono, 30/09). O Google mostra o
+      // favicon ao lado do resultado da busca e pede tamanho múltiplo de 48px;
+      // o .ico leva 16/32/48 pra aba do navegador. Gerados de
+      // public/brand/conquista-park.png — não desenhar à mão.
+      link: [
+        { rel: 'icon', href: '/favicon.ico', sizes: '48x48' },
+        { rel: 'icon', type: 'image/png', sizes: '192x192', href: '/icone-192.png' },
+        { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' },
+      ],
     },
   },
   nitro: {
