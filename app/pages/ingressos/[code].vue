@@ -61,6 +61,15 @@ const estado: Record<string, { t: string; c: string }> = {
  * transferido é de outra pessoa agora (mostrar o QR dele aqui deixava o
  * remetente e o destinatário entrarem os dois).
  */
+/*
+ * Reagendar / pedir reembolso (dono, 30/09): só no ingresso que ainda ENTRA,
+ * antes de o dia começar, e fora do convite da casa. Quem decide de verdade é
+ * a rota (`server/utils/reagendamento.ts`); aqui é só não oferecer botão que
+ * vai dar "não pode".
+ */
+const podeTrocar = (t: any) => t.status === 'valido' && !t.cortesia
+  && !!data.value?.evento?.inicio && new Date(data.value.evento.inicio).getTime() > Date.now()
+
 const SEM_QR: Record<string, string> = {
   cancelado: 'Ingresso cancelado',
   transferido: 'Ingresso transferido para outra pessoa',
@@ -359,8 +368,17 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                    :loading="i === 0 ? 'eager' : 'lazy'" decoding="async">
               <p v-else
                  class="flex h-56 w-56 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-linha p-4 text-center font-semibold text-tinta-suave">
-                <span class="titulo text-lg text-tinta">{{ estado[t.status]?.t ?? 'SEM QR' }}</span>
-                <span class="text-sm font-medium">{{ SEM_QR[t.status] ?? 'Ingresso sem QR' }}</span>
+                <template v-if="t.reagendadoPara">
+                  <span class="titulo text-lg text-tinta">REAGENDADO</span>
+                  <span class="text-sm font-medium">Este ingresso foi trocado por outro dia.</span>
+                  <NuxtLink :to="`/ingressos/${t.reagendadoPara}`" class="btn-primario mt-1 px-3 py-2 text-sm">
+                    Ver o ingresso novo
+                  </NuxtLink>
+                </template>
+                <template v-else>
+                  <span class="titulo text-lg text-tinta">{{ estado[t.status]?.t ?? 'SEM QR' }}</span>
+                  <span class="text-sm font-medium">{{ SEM_QR[t.status] ?? 'Ingresso sem QR' }}</span>
+                </template>
               </p>
               <p v-if="t.codigo" class="mt-3 font-mono text-base font-semibold tracking-[0.18em] text-tinta"
                  data-parte="codigo-do-ingresso">{{ t.codigo }}</p>
@@ -373,7 +391,8 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                       title="Convite da casa: você não paga nada por esta entrada.">
                   CORTESIA
                 </span>
-                <span :class="estado[t.status]?.c ?? 'selo-neutro'">
+                <span v-if="t.reagendadoPara" class="selo-neutro">REAGENDADO</span>
+                <span v-else :class="estado[t.status]?.c ?? 'selo-neutro'">
                   {{ estado[t.status]?.t ?? t.status.toUpperCase() }}
                 </span>
               </div>
@@ -409,6 +428,18 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                 <dd class="text-right font-medium tabular-nums text-tinta">{{ data.pedido }}</dd>
               </div>
             </dl>
+
+            <!-- Reembolso e reagendamento (dono, 30/09): lado a lado no pé do bilhete. -->
+            <div v-if="podeTrocar(t)" data-parte="acoes-do-ingresso"
+                 class="mx-6 mb-6 grid grid-cols-2 gap-2 print:hidden">
+              <NuxtLink :to="`/reembolso?pedido=${encodeURIComponent(data.pedido)}`"
+                        class="btn-secundario justify-center text-sm">
+                Pedir reembolso
+              </NuxtLink>
+              <NuxtLink :to="`/reagendar/${t.id}`" class="btn-primario justify-center text-sm">
+                Reagendar
+              </NuxtLink>
+            </div>
           </article>
 
           <p class="text-center text-sm text-tinta-fraca print:hidden">

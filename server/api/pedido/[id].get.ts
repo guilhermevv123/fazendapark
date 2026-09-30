@@ -123,7 +123,9 @@ export default defineEventHandler(async (event) => {
                 EXISTS (SELECT 1 FROM ticket_transfers tr
                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido') AS transferido,
                 l.name AS lote, s.name AS setor, tt.name AS tipo,
-                ses.title AS sessao, ses.starts_at AS sessao_inicio
+                ses.title AS sessao, ses.starts_at AS sessao_inicio,
+                -- reagendado pelo cliente (036): o pedido novo que substituiu este ingresso
+                (SELECT o2.code FROM orders o2 WHERE o2.rescheduled_from_ticket_id = t.id) AS reagendado_para
            FROM tickets t
            JOIN lots l ON l.id = t.lot_id
            JOIN sectors s ON s.id = l.sector_id
@@ -149,6 +151,8 @@ export default defineEventHandler(async (event) => {
             gratuito: Boolean(t.is_courtesy) && !eCortesia(t.is_courtesy, o.channel),
             usadoEm: t.checked_in_at, setor: t.setor, lote: t.lote, tipo: t.tipo,
             sessao: t.sessao, sessaoInicio: t.sessao_inicio,
+            /** código do pedido novo quando o cliente trocou este ingresso de dia */
+            reagendadoPara: t.reagendado_para ?? null,
             qr: entra ? qrOuNada(t.code, o.event_id) : null,
           }
         })
