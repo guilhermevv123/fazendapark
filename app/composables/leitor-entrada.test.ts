@@ -377,13 +377,20 @@ describe('no celular, campo e veredito no topo (ADM-24)', () => {
     expect(pagina.classes()).toEqual(expect.arrayContaining(['max-lg:flex', 'max-lg:flex-col']))
     const filhos = pagina.element.children
     const primeiros = [...filhos].filter((f) => f.classList.contains('max-lg:order-first'))
-    expect(primeiros.length, 'algum bloco do topo perdeu o order-first').toBe(4)
+    expect(primeiros.length, 'algum bloco do topo perdeu o order-first').toBe(5)
     expect(primeiros[0].querySelector('h1')?.textContent).toContain('Leitor de entrada')
-    expect(primeiros[2].getAttribute('data-parte')).toBe('cartao-leitura')
-    expect(primeiros[2].querySelector('#cod'), 'o campo não está no cartão que sobe').toBeTruthy()
-    expect(primeiros[3].getAttribute('data-parte')).toBe('cartao-veredito')
-    // e o resto (estado da rede grande, contador, KPIs) NÃO sobe
+    // 29/09: os dois números da porta numa faixa curta logo acima da leitura (como no app do Funz)
+    expect(primeiros[2].getAttribute('data-parte')).toBe('contador-curto')
+    expect(primeiros[2].classList.contains('lg:hidden'), 'a faixa curta apareceu no computador').toBe(true)
+    expect(primeiros[3].getAttribute('data-parte')).toBe('cartao-leitura')
+    expect(primeiros[3].querySelector('#cod'), 'o campo não está no cartão que sobe').toBeTruthy()
+    // o veredito sobe e, no celular, vira folha fixa por cima da câmera (nasce sempre dentro da tela)
+    expect(primeiros[4].getAttribute('data-parte')).toBe('cartao-veredito')
+    expect(primeiros[4].classList.contains('max-lg:fixed'), 'o veredito voltou a nascer embaixo da câmera').toBe(true)
+    expect(primeiros[4].querySelector('[data-parte="veredito-ok"]'), 'sem o "OK, próximo" no celular').toBeTruthy()
+    // e o resto (estado da rede grande, contador grande, KPIs) NÃO sobe — o contador grande some no celular
     expect(t.find('[data-parte="contador"]').classes()).not.toContain('max-lg:order-first')
+    expect(t.find('[data-parte="contador"]').classes()).toContain('max-lg:hidden')
   })
 
   it('a rede aparece numa linha curta dentro do cartão de leitura', async () => {

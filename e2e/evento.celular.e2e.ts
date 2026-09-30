@@ -58,15 +58,27 @@ const cartao = (page: Page) => page.locator('[data-parte="cartao-veredito"]')
 test.describe('leitor (portaria, 390 px)', () => {
   test.use({ storageState: sessao('portaria') })
 
-  test('#172 no celular o campo e o veredito vêm logo abaixo do título (ADM-24)', async ({ page }) => {
+  test('#172 no celular: os números numa faixa curta no topo, a câmera/campo logo abaixo e o veredito dentro da tela (ADM-24)', async ({ page }) => {
     const [t] = await ingressos(1)
     await abrir(page, leitor())
+    const faixa = page.locator('[data-parte="contador-curto"]')
+    await expect(faixa).toContainText(/Validados\s*\d+/)
+    await expect(faixa).toContainText(/Faltam\s*\d+/)
+    await expect(page.locator('[data-parte="contador"]'), 'o contador grande fica só no computador').toBeHidden()
+    const f = (await faixa.boundingBox())!
+    const leitura = (await page.locator('[data-parte="cartao-leitura"]').boundingBox())!
+    expect(f.y, 'os números desceram pra baixo da leitura').toBeLessThan(leitura.y)
+    expect(f.height, 'a faixa dos números cresceu e empurra a leitura').toBeLessThan(110)
     const campo = await page.locator('#cod').boundingBox()
     expect(campo!.y, 'o campo desceu pra baixo da dobra').toBeLessThan(844 - 60)
+    // portão e "só conferir" ficam atrás de "Mais opções"
+    await expect(page.locator('#gate')).toBeHidden()
+    await expect(page.locator('[data-parte="so-conferir"]')).toBeHidden()
+    const antes = Number((await faixa.innerText()).match(/Validados\s*(\d+)/)![1])
     await ler(page, t.qr)
-    const v = await cartao(page).boundingBox()
-    const contador = await page.locator('[data-parte="contador"]').boundingBox()
-    expect(v!.y, 'o veredito ficou embaixo dos números').toBeLessThan(contador!.y)
+    const v = (await cartao(page).boundingBox())!
+    expect(v.y, 'o veredito nasceu fora da tela').toBeLessThan(844 - 60)
+    await expect(faixa, 'a faixa não contou a entrada').toContainText(new RegExp(`Validados\\s*${antes + 1}\\b`))
     expect(await rolaNaHorizontal(page)).toBe(false)
   })
 
@@ -74,6 +86,7 @@ test.describe('leitor (portaria, 390 px)', () => {
     const [a, b] = await ingressos(2)
     const problemas = vigiar(page)
     await abrir(page, leitor())
+    await page.locator('[data-parte="mais-opcoes"]').click()
     await page.locator('#gate').fill('Norte')
     await ler(page, a.qr)
     await expect(veredito(page)).toHaveText('PODE ENTRAR')
@@ -115,6 +128,7 @@ test.describe('leitor (portaria, 390 px)', () => {
   test('#165 "Só conferir" vale UMA leitura, diz que ninguém entrou, e desliga sozinho (ADM-03)', async ({ page }) => {
     const [t] = await ingressos(1)
     await abrir(page, leitor())
+    await page.locator('[data-parte="mais-opcoes"]').click()
     await page.locator('[data-parte="so-conferir"] input').check()
     await expect(page.locator('[data-parte="modo-consulta"]')).toContainText('MODO CONSULTA')
     await ler(page, t.qr)

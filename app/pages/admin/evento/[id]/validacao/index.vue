@@ -378,6 +378,10 @@ const campo = ref<HTMLInputElement | null>(null)
  * caem na mesma `ler()`, então a decisão é uma só.
  */
 const modoCamera = ref(false)
+/** no celular, portão e "só conferir" ficam atrás de "Mais opções" — a tela da porta é câmera + números */
+const maisOpcoes = ref(false)
+/** no celular o veredito sobe por cima da câmera; "OK, próximo" tira ele da frente (volta na próxima leitura) */
+const vereditoFechado = ref(false)
 
 /*
  * `Meia`, `Publico` e `Resposta` moram no <script> de cima, junto das
@@ -387,6 +391,7 @@ const modoCamera = ref(false)
  * diferentes lá embaixo.
  */
 const ultima = ref<Resposta | null>(null)
+watch(ultima, () => { vereditoFechado.value = false })
 const historico = ref<(Resposta & { codigo: string; quando: Date })[]>([])
 
 // o `key` é o do layout e das abas: a mesma resposta, sem outra ida ao servidor
@@ -583,7 +588,12 @@ onMounted(async () => {
 
   campo.value?.focus()
 
-  try { modoCamera.value = localStorage.getItem('dt_modo_leitura') === 'camera' } catch { /* aba anônima */ }
+  // A escolha salva vence. Sem ela, celular/tablet (dedo, não mouse) abre JÁ na câmera: é o que o
+  // porteiro usa; o campo segue embaixo pro leitor de código de barras e pro código digitado.
+  try {
+    const salvo = localStorage.getItem('dt_modo_leitura')
+    modoCamera.value = salvo ? salvo === 'camera' : window.matchMedia('(pointer: coarse)').matches
+  } catch { /* aba anônima */ }
   // Aquece o decodificador de reserva do QR enquanto ainda há rede: o service
   // worker guarda o pedaço, e a câmera abre mesmo que o 4G caia depois.
   if (!('BarcodeDetector' in window)) import('jsqr').catch(() => {})
@@ -1078,7 +1088,20 @@ const quando = (v: string | null | undefined) =>
 /** 0,5% e não "0.5%" — e sem casa decimal quando não precisa */
 const pct = (v: number) => Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 })
 
-useHead({ title: 'Leitor de entrada' })
+useHead({
+  title: 'Leitor de entrada',
+  // "Adicionar à tela inicial" / "Instalar app": abre em tela cheia, com o ícone da Portaria
+  link: [
+    { rel: 'manifest', href: '/portaria.webmanifest' },
+    { rel: 'apple-touch-icon', href: '/brand/apple-touch-icon-portaria.png' },
+  ],
+  meta: [
+    { name: 'apple-mobile-web-app-capable', content: 'yes' },
+    { name: 'mobile-web-app-capable', content: 'yes' },
+    { name: 'apple-mobile-web-app-title', content: 'Portaria' },
+    { name: 'apple-mobile-web-app-status-bar-style', content: 'default' },
+  ],
+})
 </script>
 
 <template>
@@ -1093,7 +1116,7 @@ useHead({ title: 'Leitor de entrada' })
     <div class="flex flex-wrap items-start justify-between gap-3 py-5 max-lg:order-first max-lg:py-3">
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Leitor de entrada</h1>
-        <p class="mt-1 text-tinta-suave">
+        <p class="mt-1 text-tinta-suave max-lg:hidden">
           Leia o QR ou digite o código. O campo já fica no foco — pode apontar o leitor.
         </p>
       </div>
@@ -1215,7 +1238,7 @@ useHead({ title: 'Leitor de entrada' })
     <!-- O contador da porta — o que o operador olha de relance: quantos já foram
          validados e quantos faltam. Sai do MESMO retrato (`publico`) dos cards
          abaixo, nunca de uma conta feita aqui, pelo motivo do comentário deles. -->
-    <div class="card mt-4" data-parte="contador">
+    <div class="card mt-4 max-lg:hidden" data-parte="contador">
       <div class="flex flex-wrap items-end gap-x-10 gap-y-3">
         <div>
           <p class="rotulo-kpi">Validados</p>
@@ -1287,6 +1310,24 @@ useHead({ title: 'Leitor de entrada' })
       </div>
     </div>
 
+    <!-- NO CELULAR: os dois números da porta numa faixa curta ACIMA da câmera (o que o porteiro olha
+         de relance, como no app do Funz). Curta de propósito: o veredito ainda nasce dentro da tela
+         (ADM-24). Mesmo retrato `publico` do contador grande, que no celular fica escondido. -->
+    <div class="card mt-2 px-4 py-3 lg:hidden max-lg:order-first" data-parte="contador-curto">
+      <div class="flex items-baseline justify-between gap-3">
+        <p class="text-sm font-semibold text-tinta-suave">
+          Validados <span class="titulo ml-1 text-2xl font-semibold tabular-nums text-ok">{{ publico ? publico.ingressos : '—' }}</span>
+        </p>
+        <p class="text-right text-sm font-semibold text-tinta-suave">
+          Faltam <span class="titulo ml-1 text-2xl font-semibold tabular-nums text-tinta">{{ publico ? publico.faltam : '—' }}</span>
+        </p>
+      </div>
+      <div v-if="publico" class="mt-2 h-2 overflow-hidden rounded-full bg-ink-100" aria-hidden="true">
+        <div class="h-full rounded-full bg-success-600 transition-[width] duration-300"
+             :style="{ width: `${publico.aptos ? Math.min(100, (publico.ingressos / publico.aptos) * 100) : 0}%` }" />
+      </div>
+    </div>
+
     <div class="card mt-4 max-lg:order-first" data-parte="cartao-leitura">
       <!-- a rede em uma linha, só no celular: o cartão grande de estado desceu pra baixo do veredito -->
       <p class="mb-3 flex items-center gap-2 text-sm font-semibold lg:hidden"
@@ -1317,7 +1358,7 @@ useHead({ title: 'Leitor de entrada' })
                  class="campo font-mono text-lg tracking-wider"
                  placeholder="CON-XXXX-XXXX ou leitura do QR">
         </div>
-        <div class="w-40">
+        <div class="w-40" :class="maisOpcoes ? '' : 'max-lg:hidden'">
           <label for="gate" class="rotulo">Portão</label>
           <input id="gate" v-model="gate" class="campo" placeholder="Norte, VIP…">
         </div>
@@ -1331,8 +1372,13 @@ useHead({ title: 'Leitor de entrada' })
       </p>
       <!-- "Só conferir" vale UMA leitura e desliga sozinho (ADM-03). Ligado, a faixa roxa diz
            com todas as letras que ninguém está entrando — o verde fica só pra quem entra. -->
+      <button type="button" class="mt-3 min-h-[44px] text-sm font-semibold text-acao lg:hidden"
+              :aria-expanded="maisOpcoes" data-parte="mais-opcoes" @click="maisOpcoes = !maisOpcoes">
+        {{ maisOpcoes ? 'Menos opções' : 'Mais opções (portão, só conferir)' }}
+      </button>
       <label class="mt-3 flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl px-3 text-sm font-semibold"
-             :class="apenasConsultar ? 'bg-grape-600 text-white' : 'bg-fundo-cinza text-tinta-suave'"
+             :class="[apenasConsultar ? 'bg-grape-600 text-white' : 'bg-fundo-cinza text-tinta-suave',
+                      maisOpcoes || apenasConsultar ? '' : 'max-lg:hidden']"
              data-parte="so-conferir">
         <input v-model="apenasConsultar" type="checkbox" class="h-5 w-5 accent-grape-600">
         Só conferir a próxima leitura (não marca entrada)
@@ -1343,7 +1389,12 @@ useHead({ title: 'Leitor de entrada' })
       </p>
     </div>
 
-    <div v-if="ultima" class="mt-4 rounded-card px-6 py-8 text-center entra-resposta max-lg:order-first"
+    <!-- No celular o veredito é uma folha fixa embaixo, por cima da câmera (como o app do Funz): nasce
+         SEMPRE dentro da tela, sem rolar (ADM-24), e "OK, próximo" tira ela da frente. -->
+    <div v-if="ultima && !vereditoFechado"
+         class="mt-4 rounded-card px-6 py-8 text-center entra-resposta max-lg:order-first
+                max-lg:fixed max-lg:inset-x-2 max-lg:bottom-2 max-lg:z-40 max-lg:mt-0 max-lg:max-h-[75dvh]
+                max-lg:overflow-y-auto max-lg:px-4 max-lg:py-6 max-lg:shadow-2xl"
          :class="classeDoVeredito(ultima)" data-parte="cartao-veredito">
       <!-- "Só conferir" agora responde mesmo fora do horário da sessão (o
            cliente que chega cedo é quem ainda dá tempo de mandar buscar o
@@ -1458,6 +1509,10 @@ useHead({ title: 'Leitor de entrada' })
       <p v-if="ultima.local" class="mt-2 text-sm opacity-90">
         decidido no aparelho, sem rede — será conferido na sincronização
       </p>
+      <button type="button" class="mt-5 min-h-[48px] w-full rounded-lg bg-white/95 text-lg font-semibold text-tinta lg:hidden"
+              data-parte="veredito-ok" @click="vereditoFechado = true; nextTick(() => campo?.focus())">
+        OK, próximo
+      </button>
     </div>
 
     <div v-if="conflitos.length" class="card mt-4 ring-alerta/50">

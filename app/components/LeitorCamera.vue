@@ -223,9 +223,11 @@ onBeforeUnmount(fechar)
         {{ lanterna ? 'Apagar lanterna' : 'Lanterna' }}
       </button>
       <!-- O veredito por cima da imagem, do tamanho de quem lê de relance. Sem
-           <Transition>: com a aba escondida o Vue deixa o elemento em opacidade 0. -->
+           <Transition>: com a aba escondida o Vue deixa o elemento em opacidade 0.
+           Só no computador/tablet grande: no celular o veredito já sobe numa folha por cima da
+           câmera (validacao/index.vue), e os dois juntos repetiam a mesma frase. -->
       <div v-if="mostrando && veredito" role="status"
-           class="absolute inset-0 grid place-content-center gap-1 p-4 text-center text-white"
+           class="absolute inset-0 grid place-content-center gap-1 p-4 text-center text-white max-lg:hidden"
            :class="veredito.classe">
         <p class="titulo text-3xl font-semibold">{{ veredito.titulo }}</p>
         <p v-if="veredito.detalhe" class="text-base">{{ veredito.detalhe }}</p>
