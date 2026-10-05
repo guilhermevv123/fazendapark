@@ -34,6 +34,8 @@ describe('ADM-52 · cada etapa por si', () => {
     expect(ETAPAS.map((e) => e.nome)).toEqual([
       'pedidos vencidos', 'cobranças de reserva vencida', 'transferências paradas',
       'análise de risco sem saída', 'cadastro de pedido morto',
+      // por último: a única etapa sem pressa (rede de baixo do webhook do Asaas, 05/10)
+      'cobranças do asaas pagas sem aviso',
     ])
   })
 })

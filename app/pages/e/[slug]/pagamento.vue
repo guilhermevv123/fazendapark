@@ -566,6 +566,13 @@ function lembrarPago(r: any) {
 function aplicarEstado(r: any) {
   situacao.value = situacaoDaCobranca(r.status)
   statusDaCobranca.value = r.status
+  // O QR do PIX que não veio no checkout (o Asaas ainda não tinha gerado) chega numa consulta
+  // seguinte — o servidor pergunta de novo ao gateway. Sem trazer pra cá, a tela seguia em
+  // "O QR está sendo gerado" com o código já pronto do outro lado.
+  if (r.status === 'aguardando_pagamento' && r.pagamento && pedido.value
+      && !pedido.value.pagamento?.pixPayload && r.pagamento.pixPayload) {
+    pedido.value = { ...pedido.value, pagamento: { ...pedido.value.pagamento, ...r.pagamento } }
+  }
   if (r.status === 'em_analise') {
     // B34: o relógio da reserva PARA — em análise o pedido não vence (a
     // varredura pergunta ao gateway antes de soltar o lugar) — e o vigia segue.
@@ -1031,9 +1038,20 @@ useHead({ title: 'Pagamento' })
           <img v-if="pedido.pagamento?.pixQrBase64"
                :src="`data:image/png;base64,${pedido.pagamento.pixQrBase64}`"
                alt="QR Code do PIX" class="mx-auto h-56 w-56 max-w-full">
-          <p v-else class="py-8 text-sm text-tinta-suave">
+          <p v-else-if="pedido.pagamento?.pixPayload" class="py-8 text-sm text-tinta-suave">
             O QR está sendo gerado. Use o código copia e cola abaixo.
           </p>
+          <!-- Nem QR nem copia e cola ainda (o gateway não gerou no segundo da compra): a página
+               pergunta de novo sozinha, e enquanto isso a fatura do Asaas já mostra o PIX. -->
+          <div v-else class="py-6">
+            <p class="text-sm text-tinta-suave">
+              O código PIX está sendo gerado e aparece aqui em instantes.
+            </p>
+            <a v-if="pedido.pagamento?.linkFatura" :href="pedido.pagamento.linkFatura"
+               target="_blank" rel="noopener" class="btn-cta mt-4 w-full py-3">
+              Abrir a fatura e pagar com PIX
+            </a>
+          </div>
 
           <div v-if="pedido.pagamento?.pixPayload" class="mt-4">
             <p class="break-all rounded-card bg-fundo-cinza p-3 text-left font-mono text-[11px] text-tinta-corpo">

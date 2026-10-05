@@ -12,6 +12,7 @@
  *   · a varredura de expirados roda (reserva vencida e ainda presa = parou —
  *     é o sinal de PROD-07 em produção, não só no build);
  *   · cartão em análise há mais de 48 h (B09);
+ *   · o webhook cadastrado no Asaas: desativado, com a fila interrompida ou sumido (crítico);
  *   · a configuração em SIM/NÃO, e os eventos à venda sem como cobrar.
  *
  * **Nunca sai valor de variável nem segredo** — nem pedaço de chave, nem URL
@@ -29,7 +30,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { q1 } from '../utils/db'
 import { PEDIDO_VIVO } from '../utils/liquido'
-import { conferirConfiguracao, eventosSemPagamentoOnline } from '../utils/asaas'
+import { conferirConfiguracao, conferirWebhooksDoAsaas, eventosSemPagamentoOnline } from '../utils/asaas'
 import { emPortugues, FILA_DE_ENVIO, vereditoDaFila } from '../utils/envio'
 import { estadoDoCofre } from '../utils/cofre-banco'
 
@@ -238,6 +239,17 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
     problemas.push({ item: 'cofre', critico: false,
       frase: `${cofre.emTextoPuro} chave(s) do Asaas guardada(s) em texto puro no banco. Ligue o cofre: `
         + 'COFRE_CHAVE (openssl rand -base64 32) no servidor e reinicie — o boot cifra sozinho.' })
+  }
+
+  // -------------------------------------- o webhook cadastrado no Asaas
+  // Desligado ou com a fila INTERROMPIDA do lado de lá (15 falhas seguidas pausam a fila da conta):
+  // o cartão para de virar ingresso pelo aviso e nada aqui percebe — crítico. Com cache de 5 min
+  // (o monitor pergunta a cada minuto; a cota do Asaas é por 12 h). Só em produção.
+  try {
+    problemas.push(...await conferirWebhooksDoAsaas())
+  } catch (e: any) {
+    problemas.push({ item: 'webhook do Asaas', critico: false,
+      frase: `Não deu pra conferir o webhook no Asaas: ${e?.message ?? e}` })
   }
 
   // ----------------------------------------------- venda online (PROD-06)

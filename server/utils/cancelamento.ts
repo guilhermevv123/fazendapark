@@ -54,7 +54,7 @@
 import type { Pool, PoolClient } from 'pg'
 import { db, q, q1 } from './db'
 import { PEDIDO_VIVO } from './liquido'
-import { buscarCobranca, estornar, valorEstornadoCents, type ConfigAsaas } from './asaas'
+import { conferirEstornosNoAsaas, estornarPedidoNoAsaas, type ConfigAsaas } from './asaas'
 import { conferirNoMp, estornarNoMp, PREFIXO_MP } from './mercadopago'
 
 /** Conexão OU pool: a reserva é um comando só e roda bem nos dois. */
@@ -422,8 +422,12 @@ export async function devolverPeloGateway(p: {
   if (p.retentativa) {
     try {
       const conferido = await conferirAgora(pedido)
-      if (conferido.devolvidoCents >= p.jaNoPedidoCents + p.valorCents) {
-        return { status: 'estornado', erro: null, reciboId: conferido.reciboId }
+      const v = veredictoDaConferencia(conferido, p.jaNoPedidoCents + p.valorCents)
+      if (v === 'saiu') return { status: 'estornado', erro: null, reciboId: conferido.reciboId }
+      if (v === 'a_caminho') {
+        return { status: 'falhou', reciboId: null,
+          erro: `A devolução de ${brl(p.valorCents)} já foi pedida e o banco ainda está processando. `
+            + 'NÃO mandei de novo — tente outra vez depois que ela confirmar.' }
       }
     } catch (e: any) {
       return {
@@ -493,10 +497,27 @@ export interface PedidoDeEstorno {
 /** O que o trabalhador chama pra mandar o dinheiro de volta. */
 export type Estornador = (p: PedidoDeEstorno) => Promise<{ id?: string | null }>
 
-/** O que o gateway já devolveu DESTA cobrança, somando tudo que não foi cancelado. */
+/** O que o gateway já devolveu DESTA cobrança (só estorno confirmado conta). */
 export interface ConferenciaDeEstorno {
   devolvidoCents: number
   reciboId: string | null
+  /**
+   * Pedido ao banco e ainda em processamento (Asaas: estorno PENDING). Não é devolvido — pode
+   * terminar CANCELLED —, mas também não se pede de novo enquanto estiver a caminho: seria o
+   * dinheiro em dobro se ele confirmar.
+   */
+  pendenteCents?: number
+}
+
+/**
+ * Já saiu, está a caminho, ou dá pra mandar? A decisão da retentativa, igual nas duas portas
+ * (fila e ficha). `aCaminho` = não mande de novo e não dê por devolvido: espere o banco.
+ */
+export function veredictoDaConferencia(c: ConferenciaDeEstorno, precisaCents: number):
+  'saiu' | 'a_caminho' | 'nao_saiu' {
+  if (c.devolvidoCents >= precisaCents) return 'saiu'
+  if (c.devolvidoCents + (c.pendenteCents ?? 0) >= precisaCents) return 'a_caminho'
+  return 'nao_saiu'
 }
 
 /**
@@ -543,27 +564,22 @@ const estornarNoAsaas: Estornador = async (p) => {
   // estornar — e o prefixo `sim_` é justamente o que deixa isso auditável.
   if (p.paymentId.startsWith('sim_')) return { id: `sim_refund_${p.orderId}` }
 
-  const r: any = await estornar(await configDaOrg(p.orgId), p.paymentId, p.valorCents)
+  // compra parcelada estorna o PARCELAMENTO inteiro (041), não só a 1ª parcela
+  const r: any = await estornarPedidoNoAsaas(await configDaOrg(p.orgId),
+    { orderId: p.orderId, paymentId: p.paymentId, valorCents: p.valorCents })
   return { id: r?.id ?? null }
 }
 
 /**
- * Quanto o gateway já devolveu desta cobrança — a pergunta antes de mandar de
- * novo. A cobrança carrega `refundedValue` (acumulado) e a lista `refunds[]`;
- * `valorEstornadoCents` já sabe ler as duas formas, inclusive descartando o
- * estorno CANCELADO.
+ * Quanto o gateway já devolveu deste pedido — a pergunta antes de mandar de
+ * novo. Compra parcelada soma TODAS as parcelas (`GET /payments?installment=`):
+ * olhar só a 1ª respondia "devolveu 1/3" de um parcelamento estornado inteiro, e
+ * a fila mandava de novo. Só estorno DONE conta como devolvido; o PENDING volta
+ * em `pendenteCents` (ver `veredictoDaConferencia`).
  */
 const conferirNoAsaas: Conferidor = async (p) => {
   if (p.paymentId.startsWith('sim_')) return { devolvidoCents: 0, reciboId: null }
-
-  const cobranca: any = await buscarCobranca(await configDaOrg(p.orgId), p.paymentId)
-  const lista = Array.isArray(cobranca?.refunds) ? cobranca.refunds : []
-  const ultimo = [...lista].reverse()
-    .find((r: any) => String(r?.status ?? '').toUpperCase() !== 'CANCELLED')
-  return {
-    devolvidoCents: valorEstornadoCents(cobranca) ?? 0,
-    reciboId: ultimo?.id ? String(ultimo.id) : null,
-  }
+  return conferirEstornosNoAsaas(await configDaOrg(p.orgId), { orderId: p.orderId, paymentId: p.paymentId })
 }
 
 /**
@@ -727,8 +743,12 @@ export async function processarUmEstorno(
         `Não consegui confirmar no gateway se a devolução de ${brl(valor)} já saiu, `
         + `e por isso NÃO mandei de novo: ${e?.message ?? e}`)
     }
-    if (conferido.devolvidoCents >= jaNoPedido + valor) {
-      return await fecharLinha(linha, valor, conferido.reciboId, 'estornado', true)
+    const v = veredictoDaConferencia(conferido, jaNoPedido + valor)
+    if (v === 'saiu') return await fecharLinha(linha, valor, conferido.reciboId, 'estornado', true)
+    if (v === 'a_caminho') {
+      return await devolverAFila(linha, valor,
+        `A devolução de ${brl(valor)} já foi pedida e o banco ainda está processando; `
+        + 'NÃO mandei de novo. A fila confere de novo na próxima volta.')
     }
   }
 

@@ -43,6 +43,7 @@ import { montarQr } from '../../utils/ingresso'
 import { CANAL_CORTESIA, eCortesia } from '../../utils/emissao'
 import { PEDIDO_VIVO } from '../../utils/liquido'
 import { conferirFreio, marcarNoFreio } from '../../utils/sessao'
+import { qrCodePix } from '../../utils/asaas'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -80,7 +81,7 @@ export default defineEventHandler(async (event) => {
     `SELECT o.id, o.code, o.status, o.face_cents, o.fee_cents, o.discount_cents,
             o.total_cents, o.refunded_cents, o.payment_method, o.installments,
             o.expires_at, o.channel, o.created_at, o.paid_at, o.pix_payload, o.pix_qr_base64,
-            o.invoice_url,
+            o.invoice_url, o.asaas_payment_id, o.org_id,
             (${PEDIDO_VIVO('o.')}) AS vivo,
             c.name AS comprador, c.email,
             e.id AS event_id, e.name AS evento, e.slug, e.starts_at, e.ticket_noun,
@@ -95,6 +96,16 @@ export default defineEventHandler(async (event) => {
   if (!o) {
     if (porCodigo) marcarNoFreio(event, 'pedido_404')
     throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado' })
+  }
+
+  // PIX do plano B (Asaas) que nasceu sem QR: o Asaas às vezes ainda não gerou o QR no segundo da
+  // cobrança, e o checkout aceita isso (`pix` nulo). A tela ficava em "O QR está sendo gerado"
+  // PARA SEMPRE — ninguém perguntava de novo. A consulta que a tela faz a cada 4 s pergunta, com
+  // freio: no máximo uma vez a cada 15 s por pedido (o Asaas tem cota, e a tela de quem esqueceu a
+  // aba aberta não pode gastá-la).
+  if (o.status === 'aguardando_pagamento' && o.payment_method === 'pix' && !o.pix_payload
+      && o.asaas_payment_id && !String(o.asaas_payment_id).startsWith('sim_')) {
+    Object.assign(o, await buscarQrDeNovo(o))
   }
 
   const itens = await q<any>(
@@ -222,6 +233,36 @@ export default defineEventHandler(async (event) => {
     pagoSemIngresso,
   }
 })
+
+/** Quando cada pedido perguntou o QR pela última vez (por processo — o freio é de cota, não de segurança). */
+const perguntouQr = new Map<string, number>()
+export const INTERVALO_QR_MS = 15_000
+
+async function buscarQrDeNovo(o: any): Promise<{ pix_payload?: string; pix_qr_base64?: string }> {
+  const agora = Date.now()
+  if ((perguntouQr.get(o.id) ?? 0) > agora - INTERVALO_QR_MS) return {}
+  perguntouQr.set(o.id, agora)
+  if (perguntouQr.size > 5000) {
+    for (const [id, quando] of perguntouQr) if (quando < agora - INTERVALO_QR_MS) perguntouQr.delete(id)
+  }
+  try {
+    const org = await q1<any>(
+      `SELECT asaas_api_key, asaas_env, asaas_wallet FROM organizations WHERE id = $1`, [o.org_id])
+    if (!org?.asaas_api_key) return {}
+    const pix = await qrCodePix(
+      { apiKey: org.asaas_api_key, environment: org.asaas_env, walletId: org.asaas_wallet },
+      String(o.asaas_payment_id))
+    if (!pix?.payload) return {}
+    // `pix_payload IS NULL`: duas consultas ao mesmo tempo não brigam, e um QR já gravado não é trocado
+    await q(`UPDATE orders SET pix_payload = $2, pix_qr_base64 = $3 WHERE id = $1 AND pix_payload IS NULL`,
+      [o.id, pix.payload, pix.encodedImage ?? null])
+    return { pix_payload: pix.payload, pix_qr_base64: pix.encodedImage ?? o.pix_qr_base64 }
+  } catch (e: any) {
+    // gateway fora: a tela segue com o link da fatura, e a próxima consulta (daqui a 15 s) tenta de novo
+    console.warn(`[pedido] QR do PIX do pedido ${o.code} ainda não veio do Asaas: ${e?.message ?? e}`)
+    return {}
+  }
+}
 
 /** joao.silva@gmail.com → jo•••••@gmail.com */
 function mascarar(email: string) {

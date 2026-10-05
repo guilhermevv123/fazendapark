@@ -35,10 +35,11 @@ import {
   aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
 import {
-  acharOuCriarCliente, centavosParaReais, criarCobranca, pagamentoOnline, pagamentoPeloAsaas,
+  acharOuCriarCliente, centavosParaReais, criarCobranca, ErroAsaas, pagamentoOnline, pagamentoPeloAsaas,
   qrCodePix, recusaDeDadoDoComprador, telefoneParaAsaas, valorDaCobranca, vencimentoEmDias,
   type ConfigAsaas,
 } from '../utils/asaas'
+import { baseDoSite } from '../utils/envio'
 import { conferirFreio, frearPortaPublica, marcarNoFreio } from '../utils/sessao'
 import {
   conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, MOTIVOS,
@@ -577,17 +578,16 @@ export default defineEventHandler(async (event) => {
 
   let cobranca: any
   try {
-    const asaasCustomer = pedido.asaasCustomerId || await acharOuCriarCliente(cfg, {
-      name: dados.comprador.nome, email: dados.comprador.email,
-      cpfCnpj: documento, ...telefoneParaAsaas(dados.comprador.telefone),
-    })
-    if (!pedido.asaasCustomerId) {
-      await q(`UPDATE customers SET asaas_customer_id = $2 WHERE id = $1`,
-        [pedido.customerId, asaasCustomer])
+    const clienteNoAsaas = async () => {
+      const id = await acharOuCriarCliente(cfg, {
+        name: dados.comprador.nome, email: dados.comprador.email,
+        cpfCnpj: documento, ...telefoneParaAsaas(dados.comprador.telefone),
+      })
+      await q(`UPDATE customers SET asaas_customer_id = $2 WHERE id = $1`, [pedido.customerId, id])
+      return id
     }
-
-    cobranca = await criarCobranca(cfg, {
-      customer: asaasCustomer,
+    const novaCobranca = (customer: string) => criarCobranca(cfg, {
+      customer,
       billingType: dados.forma === 'pix' ? 'PIX' : 'CREDIT_CARD',
       // à vista vai `value`; parcelado vai `installmentCount` + `totalValue` (ver valorDaCobranca)
       ...valorDaCobranca(total.totalCents, pedido.parcelas),
@@ -599,7 +599,20 @@ export default defineEventHandler(async (event) => {
       dueDate: vencimentoEmDias(1),
       description: `${ev.name} — pedido ${pedido.code}`,
       externalReference: pedido.id,       // é isto que liga o webhook ao pedido
+      ...retornoDaFatura(pedido.code),
     })
+
+    const asaasCustomer = pedido.asaasCustomerId || await clienteNoAsaas()
+    try {
+      cobranca = await novaCobranca(asaasCustomer)
+    } catch (e) {
+      // O `asaas_customer_id` guardado pode ser de OUTRA conta ou de outro ambiente (o cliente
+      // criado no sandbox, e a chave trocada pra produção): o Asaas recusa a cobrança por
+      // "cliente inválido" e o comprador recebia "tente de novo" pra sempre. Uma vez só: acha (ou
+      // cria) o cliente NESTA conta, grava, e tenta de novo.
+      if (!pedido.asaasCustomerId || !clienteRecusado(e)) throw e
+      cobranca = await novaCobranca(await clienteNoAsaas())
+    }
   } catch (e: any) {
     // Gateway caiu: devolve o estoque na hora. Sem isso, cada erro do Asaas
     // queima ingresso que ninguém comprou até a varredura de expirados passar.
@@ -621,12 +634,16 @@ export default defineEventHandler(async (event) => {
 
   // `invoice_url` (B08): a fatura do cartão fica no PEDIDO, não só na memória
   // da aba — a página do pedido oferece o link de qualquer aparelho.
+  //
+  // `asaas_installment_id` (041): no parcelado, `cobranca` é a 1ª PARCELA e o
+  // `installment` é o parcelamento inteiro. Jogar ele fora fazia estorno e
+  // cancelamento agirem só na 1ª parcela.
   await q(
     `UPDATE orders SET asaas_payment_id = $2, pix_payload = $3, pix_qr_base64 = $4,
-                       invoice_url = $5
+                       invoice_url = $5, asaas_installment_id = $6
       WHERE id = $1`,
     [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null,
-     cobranca.invoiceUrl ?? null])
+     cobranca.invoiceUrl ?? null, String(cobranca.installment ?? '').trim() || null])
 
   return {
     ok: true,
@@ -1329,4 +1346,33 @@ async function fidelidadeZeraOPedido(
     }),
   })
   return b.aplica && b.cents >= face
+}
+
+/**
+ * O Asaas recusou a cobrança por causa do CLIENTE (inexistente nesta conta, ou de outro ambiente)?
+ * A doc devolve 400 com `errors[{ code: 'invalid_customer' … }]` ("Cliente inválido ou não
+ * informado"); 404 em `customer` cobre a variação. Recusa de outro campo não entra: recriar o
+ * cliente não conserta valor, vencimento nem celular.
+ */
+function clienteRecusado(e: unknown): boolean {
+  if (!(e instanceof ErroAsaas) || ![400, 404].includes(e.status)) return false
+  const erros = (e.detalhes as any)?.errors
+  return Array.isArray(erros) && erros.some((x: any) =>
+    /customer/i.test(String(x?.code ?? '')) || /cliente/i.test(String(x?.description ?? '')))
+}
+
+/**
+ * A volta da fatura pro pedido depois do pagamento (`callback.successUrl` do Asaas).
+ *
+ * DESLIGADO por padrão: o Asaas só aceita a `successUrl` num domínio cadastrado na conta (Minha
+ * Conta → Informações → site), e com o domínio fora do cadastro ele RECUSA A COBRANÇA inteira —
+ * ligar antes do dono cadastrar seria derrubar toda venda de cartão. Liga com
+ * `ASAAS_CALLBACK_LIGADO=1` e um `PUBLIC_BASE_URL` válido; sem os dois, a cobrança sai sem callback
+ * (como sempre saiu).
+ */
+function retornoDaFatura(codigo: string): { callback?: { successUrl: string; autoRedirect: boolean } } {
+  if (process.env.ASAAS_CALLBACK_LIGADO !== '1') return {}
+  const base = baseDoSite()
+  if (!base) return {}
+  return { callback: { successUrl: `${base}/ingressos/${encodeURIComponent(codigo)}`, autoRedirect: true } }
 }

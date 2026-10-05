@@ -425,6 +425,8 @@ export async function soltarPedidoEmAnalise(
  */
 export const SQL_COBRANCAS_A_CANCELAR = `
   SELECT o.id, o.org_id, o.code, o.asaas_payment_id,
+         -- o parcelamento (041): cancelar só a 1ª parcela deixava as outras vivas e pagáveis
+         o.installments, o.asaas_installment_id,
          org.asaas_api_key, org.asaas_env, org.asaas_wallet
     FROM orders o
     JOIN organizations org ON org.id = o.org_id
@@ -432,9 +434,10 @@ export const SQL_COBRANCAS_A_CANCELAR = `
      AND o.asaas_payment_id IS NOT NULL
      AND left(o.asaas_payment_id, 4) <> 'sim_'
      AND o.canceled_at > now() - interval '3 days'
+     -- cancelada, ou descoberta PAGA ao tentar cancelar (e aplicada): nada mais a fazer
      AND NOT EXISTS (SELECT 1 FROM audit_log a
                       WHERE a.entity = 'order' AND a.entity_id = o.id::text
-                        AND a.action = 'cobranca_cancelada')
+                        AND a.action IN ('cobranca_cancelada', 'cobranca_paga_no_vao'))
      AND (SELECT count(*) FROM audit_log a
            WHERE a.entity = 'order' AND a.entity_id = o.id::text
              AND a.action = 'cobranca_cancelar_falhou') < $2

@@ -58,6 +58,32 @@ export class ErroAsaas extends Error {
   }
 }
 
+/**
+ * Quanto uma chamada ao Asaas pode demorar antes de desistir.
+ *
+ * Sem prazo, um Asaas pendurado (conexão aberta, resposta que não vem) segurava o checkout do
+ * comprador, a varredura de minuto e a fila de estorno pelo tempo que o socket quisesse — e o
+ * runner do Nitro não começa a rodada seguinte de uma tarefa com a anterior viva. Lido a cada
+ * chamada (e não no import) pra o teste conseguir encurtar.
+ */
+function prazoDoAsaasMs(): number {
+  const n = Number(process.env.ASAAS_PRAZO_MS)
+  return Number.isFinite(n) && n > 0 ? n : 20_000
+}
+
+/**
+ * A falha do Asaas é PASSAGEIRA (vale tentar depois) ou é uma recusa que vai se repetir?
+ *
+ * Passageira: rede, prazo estourado, 5xx e o 429 do limite de requisições. Quem varre para na
+ * primeira passageira — os pedidos seguintes ouviriam o mesmo não, e no 429 insistir é justamente
+ * o que a doc proíbe ("não execute retries imediatamente após 429"). A recusa escrita (4xx com
+ * `errors[]`) não melhora com o tempo e não trava a fila dos outros.
+ */
+export function falhaPassageiraDoAsaas(e: unknown): boolean {
+  if (e instanceof ErroAsaas) return e.status === 0 || e.status === 429 || e.status >= 500
+  return true
+}
+
 async function chamar<T = any>(
   cfg: ConfigAsaas, metodo: string, caminho: string, corpo?: any,
 ): Promise<T> {
@@ -72,7 +98,18 @@ async function chamar<T = any>(
       'User-Agent': 'diamond-tickets',
     },
     body: corpo ? JSON.stringify(corpo) : undefined,
+    signal: AbortSignal.timeout(prazoDoAsaasMs()),
   })
+
+  // 429: a cota (25.000 chamadas/12h, 50 GETs simultâneos) estourou. Vira erro com o status pra
+  // `falhaPassageiraDoAsaas` reconhecer, e com o `RateLimit-Reset` na frase — quem decide QUANDO
+  // tentar de novo é a próxima rodada da varredura, nunca um laço aqui dentro.
+  if (res.status === 429) {
+    const reinicia = res.headers?.get?.('RateLimit-Reset') ?? null
+    await res.text().catch(() => '')
+    throw new ErroAsaas(429, { rateLimitReset: reinicia },
+      `Asaas: limite de requisições atingido (429)${reinicia ? `, libera em ${reinicia} s` : ''}`)
+  }
 
   const texto = await res.text()
   let json: any = null
@@ -253,6 +290,8 @@ export interface NovaCobranca {
   }
   creditCardHolderInfo?: Record<string, any>
   remoteIp?: string
+  /** volta da fatura pro pedido — só com ASAAS_CALLBACK_LIGADO=1 (ver `retornoDaFatura` no checkout) */
+  callback?: { successUrl: string; autoRedirect?: boolean }
 }
 
 /** Centavos → reais, na borda e só aqui. Dentro do sistema é sempre centavo. */
@@ -305,13 +344,17 @@ export function reaisParaCentavos(v: unknown): number | null {
  *
  * `agora` é injetável pelo mesmo motivo do `prazoDeReserva` em estoque.ts: sem
  * isso o teste depende da hora em que roda e fica verde de dia.
+ *
+ * E "local" é o do PARQUE (America/Bahia), não o da máquina: o contêiner do EasyPanel nasce em
+ * UTC, e aí `getDate()` repetia o defeito do `toISOString()` por outro caminho — às 23:48 de
+ * Itapetinga o servidor já está no dia seguinte. A data do Asaas é a do calendário brasileiro.
  */
 export function vencimentoEmDias(dias: number, agora = new Date()): string {
-  const d = new Date(agora.getTime())
-  d.setDate(d.getDate() + dias)
-  const mes = String(d.getMonth() + 1).padStart(2, '0')
-  const dia = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${mes}-${dia}`
+  const [ano, mes, dia] = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bahia', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(agora).split('-').map(Number)
+  // aritmética de CALENDÁRIO, em UTC puro: sem fuso no meio, a virada de mês e de ano é do Date
+  return new Date(Date.UTC(ano, mes - 1, dia + dias)).toISOString().slice(0, 10)
 }
 
 export async function criarCobranca(cfg: ConfigAsaas, c: NovaCobranca): Promise<any> {
@@ -343,10 +386,140 @@ export async function cancelarCobranca(cfg: ConfigAsaas, id: string): Promise<an
   return chamar(cfg, 'DELETE', `/payments/${id}`)
 }
 
+/* ------------------------------------------------- o PARCELAMENTO (041) */
+/**
+ * Compra no cartão em 3x vira no Asaas UM parcelamento (`ins_…`) com TRÊS cobranças, uma por
+ * parcela. Tudo que age "no pedido inteiro" tem que agir no parcelamento:
+ *
+ *   · estorno: `POST /installments/{id}/refund` — sem `value` devolve tudo, com `value` é parcial
+ *     (docs.asaas.com/reference/estornar-parcelamento). `POST /payments/{1ª}/refund` devolvia só a
+ *     1ª parcela e o sistema dava o pedido por devolvido;
+ *   · cancelar: `DELETE /installments/{id}`. "Excluir uma parcela não cancela o parcelamento"
+ *     (docs.asaas.com/reference/excluir-cobranca): as parcelas 2..n continuavam vivas e pagáveis;
+ *   · conferir: `GET /payments?installment={id}` traz as parcelas, e o estornado é a SOMA delas.
+ *
+ * O id mora em `orders.asaas_installment_id`. Pedido de antes da coluna (ou o checkout que não
+ * conseguiu gravar) pergunta em `GET /payments/{id}` — a cobrança traz o campo `installment` — e
+ * grava o que achou, pra não perguntar de novo.
+ */
+export interface PedidoNoAsaas {
+  orderId?: string | null
+  paymentId: string
+  /** `orders.installments` */
+  parcelas?: number | null
+  /** `orders.asaas_installment_id` */
+  parcelamentoId?: string | null
+}
+
+export async function parcelamentoDoPedido(cfg: ConfigAsaas, p: PedidoNoAsaas): Promise<string | null> {
+  if (p.parcelamentoId) return p.parcelamentoId
+  // à vista não tem parcelamento: nada a perguntar (e nenhuma chamada a mais na cota)
+  if (!(Number(p.parcelas) > 1) || !p.paymentId || p.paymentId.startsWith('sim_')) return null
+  const cobranca = await buscarCobranca(cfg, p.paymentId)
+  const id = String(cobranca?.installment ?? '').trim() || null
+  if (id && p.orderId) {
+    await q(`UPDATE orders SET asaas_installment_id = $2 WHERE id = $1 AND asaas_installment_id IS NULL`,
+      [p.orderId, id]).catch(() => {})
+  }
+  return id
+}
+
+/** O pedido como o Asaas precisa vê-lo — lido do banco por id do pedido ou pelo da cobrança. */
+async function pedidoNoAsaas(a: { orderId?: string | null; paymentId: string }) {
+  const o = a.orderId
+    ? await q1<any>(`SELECT id, installments, asaas_installment_id, total_cents FROM orders WHERE id = $1`,
+        [a.orderId])
+    : await q1<any>(`SELECT id, installments, asaas_installment_id, total_cents FROM orders
+                      WHERE asaas_payment_id = $1`, [a.paymentId])
+  return {
+    pedido: { orderId: o?.id ?? a.orderId ?? null, paymentId: a.paymentId,
+              parcelas: o?.installments ?? null, parcelamentoId: o?.asaas_installment_id ?? null },
+    totalCents: o ? Number(o.total_cents) : null,
+  }
+}
+
+/**
+ * Devolve o dinheiro de UM PEDIDO pelo Asaas — o parcelamento inteiro quando a compra foi parcelada.
+ *
+ * `valorCents` é o que falta devolver. Igual ao total do pedido (ou ausente) vai SEM `value`, que
+ * é o estorno total da doc; menor, vai com `value` (parcial).
+ */
+export async function estornarPedidoNoAsaas(
+  cfg: ConfigAsaas, a: { orderId?: string | null; paymentId: string; valorCents?: number | null },
+): Promise<any> {
+  const { pedido, totalCents } = await pedidoNoAsaas(a)
+  const parcelamento = await parcelamentoDoPedido(cfg, pedido)
+  if (!parcelamento) return estornar(cfg, a.paymentId, a.valorCents ?? undefined)
+  const parcial = a.valorCents != null && totalCents != null && a.valorCents < totalCents
+  return chamar(cfg, 'POST', `/installments/${encodeURIComponent(parcelamento)}/refund`,
+    parcial ? { value: centavosParaReais(a.valorCents!) } : {})
+}
+
+/** Cancela a cobrança do pedido no gateway — o parcelamento inteiro, quando houver. */
+export async function cancelarCobrancaDoPedido(cfg: ConfigAsaas, p: PedidoNoAsaas): Promise<any> {
+  const parcelamento = await parcelamentoDoPedido(cfg, p)
+  if (parcelamento) return chamar(cfg, 'DELETE', `/installments/${encodeURIComponent(parcelamento)}`)
+  return cancelarCobranca(cfg, p.paymentId)
+}
+
+export interface EstornosNoAsaas {
+  /** devolvido de verdade: só estorno `DONE` conta (docs.asaas.com/docs/estornos) */
+  devolvidoCents: number
+  /** pedido ao banco e ainda `PENDING`: não conta como devolvido, mas também não se pede de novo */
+  pendenteCents: number
+  reciboId: string | null
+}
+
+/** Os estornos de UMA cobrança: o que já saiu (DONE) e o que está a caminho (PENDING). */
+function estornosDaCobranca(c: any): EstornosNoAsaas {
+  let devolvido = valorEstornadoCents(c)
+  // cobrança REFUNDED sem o detalhe dos estornos: o próprio status diz que voltou tudo
+  if (devolvido == null && String(c?.status ?? '').toUpperCase() === 'REFUNDED') {
+    devolvido = reaisParaCentavos(c?.value)
+  }
+  let pendente = 0
+  let recibo: string | null = null
+  for (const r of Array.isArray(c?.refunds) ? c.refunds : []) {
+    const s = String(r?.status ?? '').toUpperCase()
+    if (s === 'PENDING') pendente += reaisParaCentavos(r?.value) ?? 0
+    if (s === 'DONE' && r?.id) recibo = String(r.id)
+  }
+  return { devolvidoCents: devolvido ?? 0, pendenteCents: pendente, reciboId: recibo }
+}
+
+/**
+ * Quanto o Asaas já devolveu deste PEDIDO — somando todas as parcelas quando é parcelado.
+ *
+ * É a pergunta "o estorno já saiu?" da fila de devolução. Olhar só a 1ª parcela respondia
+ * "devolveu 1/3" de um parcelamento estornado inteiro (e a fila mandaria de novo) ou, no avesso,
+ * "devolveu tudo" com só a 1ª parcela de volta.
+ */
+export async function conferirEstornosNoAsaas(
+  cfg: ConfigAsaas, a: { orderId?: string | null; paymentId: string },
+): Promise<EstornosNoAsaas> {
+  const { pedido } = await pedidoNoAsaas(a)
+  const parcelamento = await parcelamentoDoPedido(cfg, pedido)
+  const cobrancas: any[] = parcelamento
+    ? (await chamar<any>(cfg, 'GET',
+        `/payments?installment=${encodeURIComponent(parcelamento)}&limit=100`))?.data ?? []
+    : [await buscarCobranca(cfg, a.paymentId)]
+  const soma: EstornosNoAsaas = { devolvidoCents: 0, pendenteCents: 0, reciboId: null }
+  for (const c of cobrancas) {
+    const e = estornosDaCobranca(c)
+    soma.devolvidoCents += e.devolvidoCents
+    soma.pendenteCents += e.pendenteCents
+    soma.reciboId = e.reciboId ?? soma.reciboId
+  }
+  return soma
+}
+
 /* ------------------------------------------- cobrança de reserva que caiu */
 
-/** Como a varredura cancela a cobrança no gateway. Injetável pelo teste. */
-export type Cancelador = (cfg: ConfigAsaas, paymentId: string) => Promise<any>
+/**
+ * Como a varredura cancela a cobrança no gateway. Injetável pelo teste. O terceiro argumento é o
+ * pedido (parcelas e parcelamento), pro cancelador de verdade apagar o PARCELAMENTO inteiro.
+ */
+export type Cancelador = (cfg: ConfigAsaas, paymentId: string, pedido?: PedidoNoAsaas) => Promise<any>
 
 let canceladorInjetado: Cancelador | null = null
 
@@ -399,17 +572,42 @@ export async function cancelarCobrancasDeExpirados(limite = 50): Promise<Resulta
     if (!travou) return feitos
 
     const pendentes = await q<any>(SQL_COBRANCAS_A_CANCELAR, [limite, MAX_TENTATIVAS_CANCELAR])
-    const cancelar = canceladorInjetado ?? cancelarCobranca
+    // o cancelador de verdade apaga o PARCELAMENTO inteiro quando a compra foi parcelada (041)
+    const cancelar: Cancelador = canceladorInjetado
+      ?? ((cfg, id, pedido) => cancelarCobrancaDoPedido(cfg, pedido ?? { paymentId: id }))
     for (const p of pendentes) {
       let erro: string | null = null
+      const cfg = { apiKey: p.asaas_api_key, environment: p.asaas_env, walletId: p.asaas_wallet }
       if (!p.asaas_api_key && !canceladorInjetado) {
         erro = 'organização sem chave do Asaas: não dá pra cancelar a cobrança'
       } else {
         try {
-          await cancelar({ apiKey: p.asaas_api_key, environment: p.asaas_env,
-                           walletId: p.asaas_wallet }, p.asaas_payment_id)
+          await cancelar(cfg, p.asaas_payment_id, {
+            orderId: p.id, paymentId: p.asaas_payment_id,
+            parcelas: p.installments ?? null, parcelamentoId: p.asaas_installment_id ?? null,
+          })
         } catch (e: any) {
           if (!(e instanceof ErroAsaas && e.status === 404)) erro = e?.message ?? String(e)
+        }
+      }
+
+      // O motivo mais comum de o Asaas recusar o cancelamento é o bom: o comprador PAGOU no último
+      // segundo (cobrança recebida não se apaga). Só anotar a recusa deixava o dinheiro entrar sem
+      // ingresso até um webhook que pode nunca vir. Pergunta ao gateway e, pago, aplica pelo MESMO
+      // caminho do webhook (a emissão refaz a reserva do pedido expirado, ou pendura "pago sem
+      // lugar" na tela de entregas).
+      if (erro) {
+        const pago = await aplicarSePago({ orgId: p.org_id, pedidoId: p.id, paymentId: p.asaas_payment_id })
+          .catch(() => null)
+        if (pago) {
+          await q(
+            `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+             VALUES ($1, 'order', $2, 'cobranca_paga_no_vao', $3::jsonb)`,
+            [p.org_id, p.id, JSON.stringify({ cobranca: p.asaas_payment_id, pedido: p.code,
+              statusNoGateway: pago.status, aplicado: pago.desfecho.ok,
+              erro: pago.desfecho.ok ? null : pago.desfecho.erro })])
+          feitos.push({ pedidoId: p.id, ok: true, erro: null })
+          continue
         }
       }
       await q(
@@ -529,14 +727,21 @@ export async function varrerEmAnalise(limite = 20): Promise<DesfechoDaAnalise[]>
       let solto = false
       if (d.soltar) solto = await tx((c) => soltarPedidoEmAnalise(c, p.id, d.para))
       const statusNoGateway = cobranca?.status ?? null
-      const motivo = erro ? `consulta falhou: ${erro}` : d.motivo
+      let motivo = erro ? `consulta falhou: ${erro}` : d.motivo
+      // PAGO no gateway e o webhook não baixou: antes era só um `console.warn` — o comprador pago
+      // seguia sem ingresso até alguém ler o log. Agora aplica pelo MESMO caminho do webhook (a
+      // consulta já está na mão: nenhuma chamada a mais), com a chave determinística da varredura.
+      if (!solto && cobranca && STATUS_PAGO.has(String(cobranca.status).toUpperCase())) {
+        const r = await aplicarCobrancaConsultada({ pedidoId: p.id, cobranca, paymentId: p.asaas_payment_id })
+          .catch((e: any) =>
+          ({ ok: false as const, erro: e?.message ?? String(e), indisponivel: true }))
+        motivo = r.ok ? `${d.motivo} — aplicado pela varredura` : `${d.motivo} — aplicar falhou: ${r.erro}`
+        if (!r.ok) console.warn(`[asaas] pedido ${p.code} em análise e PAGO no gateway: ${motivo}`)
+      }
       await q(
         `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
          VALUES ($1, 'order', $2, 'em_analise_consulta', $3::jsonb)`,
         [p.org_id, p.id, JSON.stringify({ pedido: p.code, statusNoGateway, solto, motivo })])
-      if (!solto && cobranca && STATUS_PAGO.has(String(cobranca.status).toUpperCase())) {
-        console.warn(`[asaas] pedido ${p.code} em análise e PAGO no gateway: ${d.motivo}`)
-      }
       feitos.push({ pedidoId: p.id, desfecho: solto ? 'solto' : 'mantido', statusNoGateway, motivo })
     }
     return feitos
@@ -1226,14 +1431,115 @@ export async function reconciliarPayoutPreso(
   return { ...base, adotada: true, status: 'processando', transferencia: idTransferencia, gatewayStatus, erro: null }
 }
 
-export async function testarConexao(cfg: ConfigAsaas): Promise<{ ok: boolean; ambiente: string; erro?: string }> {
+/**
+ * A chave abre a conta? `recusada` = o Asaas leu e disse não (401 `invalid_access_token`, 403);
+ * sem `recusada`, o Asaas não respondeu (fora, prazo, 5xx, 429) e não dá pra saber.
+ */
+export async function testarConexao(cfg: ConfigAsaas):
+  Promise<{ ok: boolean; ambiente: string; erro?: string; recusada?: boolean }> {
   const ambiente = ambienteDaChave(cfg.apiKey) || cfg.environment || 'sandbox'
   try {
     await chamar(cfg, 'GET', '/customers?limit=1')
     return { ok: true, ambiente }
   } catch (e: any) {
-    return { ok: false, ambiente, erro: e.message }
+    const recusada = e instanceof ErroAsaas && (e.status === 401 || e.status === 403)
+    return { ok: false, ambiente, erro: e.message, recusada }
   }
+}
+
+/* ------------------------------------------- o webhook cadastrado no Asaas */
+
+/**
+ * O webhook do Asaas pode estar DESLIGADO do lado de lá sem nenhum sinal do lado de cá.
+ *
+ * Após 15 falhas seguidas o Asaas INTERROMPE a fila de webhooks da conta e não manda mais nada —
+ * e evento com mais de 14 dias na fila é apagado (docs.asaas.com/docs/fila-pausada). Um deploy
+ * que devolveu 502 por meia hora basta. Daí pra frente nenhum cartão vira ingresso pelo aviso,
+ * e o painel daqui continua dizendo "webhook configurado". `GET /v3/webhooks` lista as
+ * configurações com `enabled` e `interrupted`: a saúde pergunta (com cache, pra não gastar cota a
+ * cada minuto do monitor) e acusa crítico quando a NOSSA está desligada, interrompida ou sumiu.
+ */
+export type ConsultaDeWebhooks = (cfg: ConfigAsaas) => Promise<any[]>
+
+let consultaDeWebhooksInjetada: ConsultaDeWebhooks | null = null
+const webhooksConferidos = new Map<string, { ate: number; problemas: ProblemaDeConfiguracao[] }>()
+
+/** Troca a consulta (o teste não fala com o Asaas) — e esquece o que estava guardado. */
+export function usarConsultaDeWebhooks(f: ConsultaDeWebhooks | null) {
+  consultaDeWebhooksInjetada = f
+  webhooksConferidos.clear()
+}
+
+export const CACHE_WEBHOOKS_MS = 5 * 60_000
+
+const ROTA_DO_WEBHOOK = '/api/webhooks/asaas'
+
+/** O que a lista de webhooks da conta diz do NOSSO. PURO. */
+export function avaliarWebhooksDoAsaas(lista: any[], org: string, base: string | null): ProblemaDeConfiguracao[] {
+  const caminho = (u: any) => { try { return new URL(String(u)).pathname.replace(/\/+$/, '') } catch { return '' } }
+  const host = (u: any) => { try { return new URL(String(u)).host } catch { return '' } }
+  const nossos = (Array.isArray(lista) ? lista : []).filter((w) => caminho(w?.url) === ROTA_DO_WEBHOOK)
+  if (!nossos.length) {
+    return [{ item: 'webhook do Asaas', critico: true,
+      frase: `O Asaas de "${org}" não tem webhook apontando pra ${base ?? ''}${ROTA_DO_WEBHOOK}: nenhum `
+        + 'pagamento de cartão vira ingresso pelo aviso (a varredura de minuto ainda pergunta, mas '
+        + 'com atraso). Cadastre em Integrações → Webhooks no painel do Asaas, com o ASAAS_WEBHOOK_TOKEN.' }]
+  }
+  const hostDaBase = base ? host(base) : ''
+  const daBase = hostDaBase ? nossos.filter((w) => host(w?.url) === hostDaBase) : nossos
+  const alvo = daBase.length ? daBase : nossos
+  const vivo = alvo.find((w) => w?.enabled !== false && w?.interrupted !== true)
+  if (!vivo) {
+    const w = alvo[0]
+    return [{ item: 'webhook do Asaas', critico: true,
+      frase: w?.interrupted === true
+        ? `A fila de webhooks do Asaas de "${org}" está INTERROMPIDA (15 falhas seguidas): o Asaas parou de `
+          + 'avisar pagamentos, e aviso com mais de 14 dias na fila é apagado. Reative no painel do Asaas '
+          + '(Integrações → Webhooks) depois de conferir que a rota responde.'
+        : `O webhook do Asaas de "${org}" está DESATIVADO no painel dele: nenhum aviso de pagamento chega. `
+          + 'Ative em Integrações → Webhooks.' }]
+  }
+  if (hostDaBase && !daBase.length) {
+    return [{ item: 'webhook do Asaas', critico: false,
+      frase: `O webhook do Asaas de "${org}" aponta pra ${host(vivo.url)}, e o site é ${hostDaBase}: `
+        + 'confira se o endereço não redireciona (redirecionamento conta como falha pro Asaas).' }]
+  }
+  return []
+}
+
+/**
+ * Os problemas do webhook de cada organização que cobra pelo Asaas. Só em produção (ou com a
+ * consulta trocada pelo teste): fora dela as chaves são de sandbox/fixture e perguntar seria
+ * gastar cota — ou falar com o Asaas de verdade a partir da suíte.
+ */
+export async function conferirWebhooksDoAsaas(agora = Date.now()): Promise<ProblemaDeConfiguracao[]> {
+  if (!consultaDeWebhooksInjetada && process.env.NODE_ENV !== 'production') return []
+  const consulta: ConsultaDeWebhooks = consultaDeWebhooksInjetada
+    ?? (async (cfg) => (await chamar<any>(cfg, 'GET', '/webhooks?limit=100'))?.data ?? [])
+  const orgs = await q<any>(
+    `SELECT id, name, asaas_api_key, asaas_env, asaas_wallet FROM organizations WHERE asaas_api_key IS NOT NULL`)
+  const problemas: ProblemaDeConfiguracao[] = []
+  for (const org of orgs) {
+    if (!pagamentoPeloAsaas(org).ok) continue // sem chave útil: a saúde já acusa por outro item
+    // a chave entra na chave do cache (resumida): trocar a chave no painel não espera 5 minutos
+    const marca = `${org.id}:${createHash('sha256').update(String(org.asaas_api_key)).digest('hex').slice(0, 12)}`
+    const guardado = webhooksConferidos.get(marca)
+    if (guardado && guardado.ate > agora) { problemas.push(...guardado.problemas); continue }
+    let achados: ProblemaDeConfiguracao[]
+    let validade = CACHE_WEBHOOKS_MS
+    try {
+      const lista = await consulta({ apiKey: org.asaas_api_key, environment: org.asaas_env, walletId: org.asaas_wallet })
+      achados = avaliarWebhooksDoAsaas(lista, org.name, baseDoSite())
+    } catch (e: any) {
+      // não saber não é "desligado": aviso, e pergunta de novo no minuto seguinte
+      achados = [{ item: 'webhook do Asaas', critico: false,
+        frase: `Não consegui conferir no Asaas o webhook de "${org.name}": ${e?.message ?? e}` }]
+      validade = 60_000
+    }
+    webhooksConferidos.set(marca, { ate: agora + validade, problemas: achados })
+    problemas.push(...achados)
+  }
+  return problemas
 }
 
 // ------------------------------------------------------------------ webhook
@@ -1282,6 +1588,9 @@ export const EVENTOS_QUE_IMPORTAM = new Set([
   'PAYMENT_CHARGEBACK_DISPUTE', 'PAYMENT_AWAITING_CHARGEBACK_REVERSAL',
   'PAYMENT_AWAITING_RISK_ANALYSIS', 'PAYMENT_APPROVED_BY_RISK_ANALYSIS',
   'PAYMENT_REPROVED_BY_RISK_ANALYSIS',
+  // existem na doc e eram só registrados: a cobrança apagada que VOLTA a ser pagável, e o
+  // "recebido em dinheiro" desfeito no painel — o ingresso tinha saído por um dinheiro que não veio
+  'PAYMENT_RESTORED', 'PAYMENT_RECEIVED_IN_CASH_UNDONE',
 ])
 
 /**
@@ -1378,12 +1687,30 @@ export const SQL_REGISTRAR_EVENTO = `
  * Devolve `null` quando o payload não diz — e aí NÃO é zero: gravar
  * `estornado_parcial` com zero devolvido faz o líquido contar o pedido inteiro
  * como se nada tivesse voltado, e isso não aparece em lugar nenhum.
+ *
+ * **Só estorno `DONE` conta** (docs.asaas.com/docs/estornos: o estorno nasce PENDING e pode
+ * terminar CANCELLED — conta sem saldo, por exemplo). Quando a lista traz o status de cada
+ * estorno, ela manda, e o acumulado `refundedValue` (que não diz se o que está nele já saiu) fica
+ * de fora. Lista com status e nenhum DONE é `null`: "ainda não voltou nada que dê pra contar" — a
+ * entrega fica pendurada e o reprocessador pergunta de novo ao gateway depois.
  */
 export function valorEstornadoCents(pagamento: any): number | null {
+  const lista = Array.isArray(pagamento?.refunds) ? pagamento.refunds : []
+  if (lista.some((r: any) => String(r?.status ?? '').trim())) {
+    let soma = 0
+    let achou = false
+    for (const r of lista) {
+      if (String(r?.status ?? '').toUpperCase() !== 'DONE') continue
+      const v = reaisParaCentavos(r?.value)
+      if (v != null && v > 0) { soma += v; achou = true }
+    }
+    return achou ? soma : null
+  }
+
   const direto = reaisParaCentavos(pagamento?.refundedValue)
   if (direto != null && direto > 0) return direto
 
-  const lista = Array.isArray(pagamento?.refunds) ? pagamento.refunds : []
+  // lista sem status (payload antigo, entrega manual): o que veio, e o cancelado não conta
   let soma = 0
   let achou = false
   for (const r of lista) {
@@ -1833,11 +2160,18 @@ export async function aplicarEventoDoAsaas(
   // O externalReference é nosso order.id. Se faltar, cai pro asaas_payment_id.
   // `FOR UPDATE` aqui e não depois: quem lê o status do pedido pra decidir
   // precisa ser o mesmo que o escreve, sem ninguém no meio.
-  const COLUNAS = 'id, status, total_cents, installments, payment_method, expires_at'
+  const COLUNAS = 'id, org_id, status, total_cents, installments, payment_method, expires_at, asaas_installment_id'
   const { rows: pedidos } = ehUuid(e.referencia)
     ? await c.query(`SELECT ${COLUNAS} FROM orders WHERE id = $1 FOR UPDATE`, [e.referencia])
     : await c.query(`SELECT ${COLUNAS} FROM orders WHERE asaas_payment_id = $1 FOR UPDATE`,
         [e.idCobranca])
+  // A parcela 2..n tem id PRÓPRIO (`pay_…`), diferente do que o pedido guarda (o da 1ª). Sem
+  // `externalReference`, só o parcelamento (041) liga a parcela ao pedido.
+  const parcelamento = String(e.pagamento?.installment ?? '').trim() || null
+  if (!pedidos[0] && parcelamento && !ehUuid(e.referencia)) {
+    pedidos.push(...(await c.query(
+      `SELECT ${COLUNAS} FROM orders WHERE asaas_installment_id = $1 FOR UPDATE`, [parcelamento])).rows)
+  }
   const pedido = pedidos[0]
 
   if (!pedido) {
@@ -1852,6 +2186,56 @@ export async function aplicarEventoDoAsaas(
   await c.query(
     `UPDATE payment_events SET order_id = $2 WHERE id = $1 AND order_id IS NULL`,
     [e.registroId, pedido.id])
+
+  // ------------------------------------------- cobrança apagada que VOLTOU
+  //
+  // PAYMENT_RESTORED: alguém restaurou no Asaas uma cobrança removida — ela volta a ser pagável.
+  // Com o pedido ainda esperando, nada muda. Com o pedido já desfeito (expirado, cancelado…), o
+  // QR/fatura volta a receber dinheiro de um pedido que não segura lugar nenhum: não há o que
+  // emitir agora, e calar seria o P0 de 22/09 de novo. Vira PENDÊNCIA visível — a entrega fica
+  // sem baixa (Financeiro → entregas, e a saúde conta), e a trilha do pedido diz o que houve. Se
+  // a cobrança for paga, o pagamento chega pelo caminho de sempre (o expirado refaz a reserva).
+  if (e.nomeEvento === 'PAYMENT_RESTORED') {
+    if (['aguardando_pagamento', 'em_analise', 'rascunho'].includes(pedido.status)) {
+      await concluir('cobrança restaurada com o pedido ainda esperando pagamento: nada a fazer')
+      return { ok: true, pedido: pedido.id, status: pedido.status }
+    }
+    const recado = `A cobrança ${e.idCobranca} foi RESTAURADA no Asaas com o pedido em `
+      + `${pedido.status}: ela voltou a ser pagável. Cancele-a no painel do Asaas, ou confira se `
+      + 'alguém pretende pagar — o ingresso não sai sozinho daqui.'
+    await c.query(
+      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+       SELECT $1, 'order', $2, 'cobranca_restaurada', $3::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM audit_log WHERE entity = 'order' AND entity_id = $2
+                             AND action = 'cobranca_restaurada')`,
+      [pedido.org_id, pedido.id, JSON.stringify({ cobranca: e.idCobranca, statusDoPedido: pedido.status })])
+    await c.query(`UPDATE payment_events SET attempts = attempts + 1, error = $2 WHERE id = $1`,
+      [e.registroId, recado])
+    return { ok: true, pedido: pedido.id, pendente: true, aviso: recado }
+  }
+
+  // ------------------------------- "recebido em dinheiro" desfeito no painel
+  //
+  // O ingresso saiu porque alguém marcou no Asaas que recebeu em dinheiro — e agora desmarcou: o
+  // dinheiro não veio. O pedido é desfeito como EXPIRADO, e não como cancelado, de propósito: a
+  // cobrança volta a esperar pagamento no Asaas, e 'expirado' é o estado que o resto do sistema
+  // já sabe tratar nesse caso — a varredura cancela a cobrança no gateway (fecha a porta), e se o
+  // comprador pagar antes disso a emissão refaz a reserva (ou pendura "pago sem lugar"). Com
+  // 'cancelado', um pagamento posterior seria baixado como "pedido em cancelado", em silêncio.
+  if (e.nomeEvento === 'PAYMENT_RECEIVED_IN_CASH_UNDONE') {
+    if (pedido.status !== 'pago' && pedido.status !== 'estornado_parcial') {
+      await concluir(`recebimento em dinheiro desfeito com o pedido em ${pedido.status}: nada a desfazer`)
+      return { ok: true, pedido: pedido.id, status: pedido.status }
+    }
+    await desfazerPedido(c, pedido, 'expirado', null)
+    await c.query(
+      `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+       VALUES ($1, 'order', $2, 'recebimento_em_dinheiro_desfeito', $3::jsonb)`,
+      [pedido.org_id, pedido.id, JSON.stringify({ cobranca: e.idCobranca, statusAntes: pedido.status,
+        ingressos: 'cancelados (os já usados ficam como usados)' })])
+    await concluir('recebimento em dinheiro desfeito no Asaas: pedido desfeito (expirado)')
+    return { ok: true, pedido: pedido.id, status: 'expirado', desfez: true }
+  }
 
   const novo = statusDoEvento(e.nomeEvento, e.pagamento)
   if (!novo) {
@@ -1905,6 +2289,14 @@ export async function aplicarEventoDoAsaas(
 
   // ---------------------------------------------------------- pagamento
   if (novo === 'pago') {
+    // Débito: o checkout grava 'credito' (a API não recebe cartão de débito; a fatura do Asaas é
+    // quem oferece a opção). Quem pagou com débito pela fatura chega aqui com `billingType`
+    // DEBIT_CARD — e o relatório por forma de pagamento passa a dizer a verdade.
+    if (String(e.pagamento?.billingType ?? '').toUpperCase() === 'DEBIT_CARD') {
+      await c.query(
+        `UPDATE orders SET payment_method = 'debito' WHERE id = $1 AND payment_method IS DISTINCT FROM 'debito'`,
+        [pedido.id])
+    }
     const v = conferirValorRecebido({
       pagamento: e.pagamento,
       totalCents: Number(pedido.total_cents),
@@ -1984,6 +2376,21 @@ export async function aplicarEventoDoAsaas(
     }
   }
 
+  // --------------------------------------- estorno de COMPRA PARCELADA (041)
+  //
+  // Cada parcela é uma cobrança, e o estorno chega UMA PARCELA POR VEZ: o estorno do parcelamento
+  // inteiro em 3x são três PAYMENT_REFUNDED, cada um com o valor da sua parcela. Os ramos de baixo
+  // leem o evento como se fosse o pedido: o 1º dos três desfazia a venda gravando 1/3 em
+  // `refunded_cents` (e os outros dois batiam em "já desfeito"), e um estorno parcial de UMA
+  // parcela virava `refunded_cents` do pedido inteiro. Aqui o devolvido é a SOMA das parcelas,
+  // tirada dos avisos já gravados deste pedido — sem rede dentro da transação.
+  // 'disputa'/'chargeback' seguem pelos ramos de sempre: ali o estorno tem outro significado.
+  if ((novo === 'estornado' || novo === 'estornado_parcial')
+      && pedido.status !== 'disputa'
+      && (parcelamento || Number(pedido.installments) > 1)) {
+    return await estornoDoParcelamento(c, e, pedido, concluir)
+  }
+
   // ---------------------------------------------------- estorno parcial
   if (novo === 'estornado_parcial') {
     const devolvido = valorEstornadoCents(e.pagamento)
@@ -2053,6 +2460,70 @@ export async function aplicarEventoDoAsaas(
   return { ok: true, pedido: pedido.id, status: novo }
 }
 
+/**
+ * O estorno que chega por PARCELA, somado no pedido. Ver o comentário no ponto de chamada.
+ *
+ * Por parcela vale o MAIOR valor visto (o `refundedValue`/`refunds[]` de uma cobrança é acumulado,
+ * então reentrega e aviso fora de ordem não inflam); entre parcelas, soma. PAYMENT_REFUNDED sem o
+ * detalhe dos estornos vale o valor da parcela (o status diz que ela voltou inteira).
+ */
+async function estornoDoParcelamento(
+  c: PoolClient, e: EntregaDoAsaas, pedido: any,
+  concluir: (erro?: string | null) => Promise<any>,
+): Promise<Record<string, any>> {
+  const total = Number(pedido.total_cents)
+  if (JA_DESFEITO.has(pedido.status)) {
+    await concluir(`estorno de parcela com o pedido já em ${pedido.status}`)
+    return { ok: true, pedido: pedido.id, status: pedido.status, desfez: false }
+  }
+  // Devolução na fila (cancelamento do evento, desistência, ficha): quem conta o dinheiro é a
+  // fila, quando o gateway confirma — e ela SOMA em `refunded_cents`. Contar aqui também seria o
+  // mesmo dinheiro duas vezes (o `WHERE status IN ('pago','estornado_parcial')` da fila deixa o
+  // pedido parcial passar).
+  const { rows: fila } = await c.query(
+    `SELECT 1 FROM refund_jobs WHERE order_id = $1 AND status IN ('na_fila', 'estornando') LIMIT 1`,
+    [pedido.id])
+  if (fila.length) {
+    await concluir('estorno de parcela com a devolução deste pedido na fila: quem conta o dinheiro é a fila')
+    return { ok: true, pedido: pedido.id, status: pedido.status, daFila: true }
+  }
+
+  const porParcela = new Map<string, number>()
+  const anotar = (nomeEvento: string, p: any) => {
+    const id = String(p?.id ?? '').trim()
+    if (!id) return
+    let v = valorEstornadoCents(p)
+    if (v == null && nomeEvento === 'PAYMENT_REFUNDED') v = reaisParaCentavos(p?.value)
+    if (v == null || v <= 0) return
+    porParcela.set(id, Math.max(porParcela.get(id) ?? 0, v))
+  }
+  const { rows } = await c.query(
+    `SELECT event_name, payload -> 'payment' AS p FROM payment_events
+      WHERE provider = 'asaas' AND order_id = $1
+        AND event_name IN ('PAYMENT_REFUNDED', 'PAYMENT_PARTIALLY_REFUNDED')`, [pedido.id])
+  for (const r of rows) anotar(r.event_name, r.p)
+  anotar(e.nomeEvento, e.pagamento) // a entrega de agora, com o payload já completado pelo reprocessador
+
+  const devolvido = limitar([...porParcela.values()].reduce((a, b) => a + b, 0), total)
+  if (devolvido <= 0) {
+    // mesma regra do estorno parcial sem valor: falha alto, fica na fila, e o reprocessador
+    // pergunta ao gateway quanto voltou (só estorno DONE conta)
+    throw new Error('estorno de parcela sem valor devolvido no payload')
+  }
+  if (devolvido >= total) {
+    await desfazerPedido(c, pedido, 'estornado', total)
+    await concluir(`estorno das ${porParcela.size} parcela(s) somou o total: estorno total`)
+    return { ok: true, pedido: pedido.id, status: 'estornado', estornadoCents: total, parcelas: porParcela.size }
+  }
+  await c.query(
+    `UPDATE orders SET status = 'estornado_parcial', refunded_at = now(),
+                       refunded_cents = GREATEST(refunded_cents, $2)
+      WHERE id = $1`, [pedido.id, devolvido])
+  await concluir(`estorno de parcela: ${real(devolvido)} devolvidos somando ${porParcela.size} parcela(s)`)
+  return { ok: true, pedido: pedido.id, status: 'estornado_parcial', estornadoCents: devolvido,
+           parcelas: porParcela.size }
+}
+
 export type DesfechoDaEntrega =
   | { ok: true; resultado: Record<string, any> }
   | { ok: false; erro: string; indisponivel: boolean }
@@ -2068,9 +2539,24 @@ function ehFalhaDeInfra(motivo: string): boolean {
  * Usada pela rota (entrega que chega agora) e pelo reprocessador (entrega que
  * ficou pendurada). As duas precisam se comportar igual, inclusive no erro.
  */
+/**
+ * O teto de cada comando da transação da entrega. O Asaas espera a resposta do webhook por até
+ * 10 s (docs.asaas.com/docs/fila-pausada) e conta como falha o que passar disso; 15 falhas
+ * seguidas PAUSAM a fila da conta inteira. Uma linha de pedido travada por outra transação (a fila
+ * de estorno, um cancelamento no painel) segurava a entrega pelo tempo do outro lado. Com o teto, a
+ * entrega desiste antes, a linha fica sem baixa e o reprocessador termina depois.
+ */
+export const PRAZO_DA_ENTREGA = '7s'
+
 export async function aplicarEntregaDoAsaas(e: EntregaDoAsaas): Promise<DesfechoDaEntrega> {
   try {
-    return { ok: true, resultado: await tx((c) => aplicarEventoDoAsaas(c, e)) }
+    return {
+      ok: true,
+      resultado: await tx(async (c) => {
+        await c.query(`SET LOCAL statement_timeout = '${PRAZO_DA_ENTREGA}'`)
+        return aplicarEventoDoAsaas(c, e)
+      }),
+    }
   } catch (erro: any) {
     const motivo = erro?.message ?? String(erro)
     // A transação já voltou atrás: nenhum efeito ficou pela metade. A conta da
@@ -2198,6 +2684,177 @@ const consultarCobrancaDeVerdade: ConsultaDeCobranca = async ({ orgId, paymentId
 
 const consultarCobranca = (a: { orgId: string | null; paymentId: string }) =>
   (consultaInjetada ?? consultarCobrancaDeVerdade)(a)
+
+/* ===================================================================== */
+/*  A REDE DE BAIXO DO WEBHOOK — perguntar ao Asaas pelo que está pago     */
+/* ===================================================================== */
+
+/**
+ * A cobrança que o gateway diz PAGA, aplicada pelo MESMO caminho do webhook.
+ *
+ * Vira linha em `payment_events` com chave determinística `poll:<cobrança>:<status>` — o índice
+ * único `(provider, gateway_event_id)` é a idempotência: duas varreduras (ou varredura + webhook
+ * ao mesmo tempo) não emitem duas vezes, porque a emissão trava a linha do pedido e a segunda vê
+ * 'pago'. O evento sintético carrega o nome que o Asaas teria mandado (CONFIRMED/RECEIVED), e o
+ * pedido é o NOSSO (achado pelo `asaas_payment_id`), nunca a referência que vem de fora.
+ */
+export async function aplicarCobrancaConsultada(a: {
+  pedidoId: string; cobranca: any; paymentId?: string | null
+}): Promise<DesfechoDaEntrega> {
+  const status = String(a.cobranca?.status ?? '').toUpperCase()
+  const paymentId = String(a.cobranca?.id ?? a.paymentId ?? '').trim()
+  if (!paymentId || !STATUS_PAGO.has(status)) {
+    return { ok: false, erro: `cobrança ${paymentId || '?'} não está paga (${status || 'sem status'})`, indisponivel: false }
+  }
+  const ref = a.cobranca?.externalReference
+  if (ref != null && ehUuid(ref) && ref !== a.pedidoId) {
+    return { ok: false, erro: `a cobrança ${paymentId} diz ser do pedido ${ref}, não deste: nada aplicado`, indisponivel: false }
+  }
+  const nomeEvento = status === 'RECEIVED_IN_CASH' ? 'PAYMENT_RECEIVED_IN_CASH'
+    : status === 'RECEIVED' ? 'PAYMENT_RECEIVED' : 'PAYMENT_CONFIRMED'
+  const chave = `poll:${paymentId}:${status}`
+  const pagamento = { ...a.cobranca, id: paymentId, status, externalReference: a.pedidoId }
+  const corpo = { id: chave, event: nomeEvento, origem: 'varredura', payment: pagamento }
+
+  const novo = await q<{ id: string }>(SQL_REGISTRAR_EVENTO,
+    [chave, paymentId, nomeEvento, a.pedidoId, JSON.stringify(corpo)])
+  let registroId = novo[0]?.id
+  if (!registroId) {
+    const antes = await q1<any>(
+      `SELECT id, processed_at FROM payment_events WHERE provider = 'asaas' AND gateway_event_id = $1`, [chave])
+    if (!antes || antes.processed_at) return { ok: true, resultado: { ok: true, repetido: true, evento: chave } }
+    registroId = antes.id as string
+  }
+  return aplicarEntregaDoAsaas({
+    registroId, chave, nomeEvento, pagamento, referencia: a.pedidoId, idCobranca: paymentId,
+  })
+}
+
+/**
+ * Pergunta ao gateway pela cobrança do pedido e, se estiver paga, aplica. `null` = não está paga
+ * (ou o gateway não disse). Erro da consulta sobe pra quem chama decidir.
+ */
+async function aplicarSePago(a: { orgId: string; pedidoId: string; paymentId: string }):
+  Promise<{ status: string; desfecho: DesfechoDaEntrega } | null> {
+  if (!podeVarrerOAsaas()) return null
+  const cobranca = await consultarCobranca({ orgId: a.orgId, paymentId: a.paymentId })
+  const status = String(cobranca?.status ?? '').toUpperCase()
+  if (!cobranca || !STATUS_PAGO.has(status)) return null
+  return { status, desfecho: await aplicarCobrancaConsultada({ pedidoId: a.pedidoId, cobranca, paymentId: a.paymentId }) }
+}
+
+/**
+ * Os pedidos do Asaas a perguntar. Hoje o cartão (e o Pix plano B) só virava ingresso pelo
+ * webhook: aviso perdido, fila do webhook pausada no Asaas (15 falhas seguidas), URL errada no
+ * painel — e o comprador pago ficava sem ingresso até alguém olhar.
+ *
+ *  · esperando pagamento há mais de 5 min (antes disso o aviso costuma chegar sozinho), uma vez
+ *    por rodada;
+ *  · expirados dos últimos 3 dias cuja cobrança NÃO foi cancelada no gateway (o pago no vão), a
+ *    cada 10 min — `asaas_checked_at` (041) espaça, e espaçar é a cota: 25.000 chamadas por 12 h.
+ *
+ * Ordem sorteada pelo mesmo motivo do Pix do MP (`SQL_PIX_ESPERANDO`): num pico com mais pedidos
+ * que o limite da rodada, "os mais velhos primeiro" deixaria os novos sem pergunta.
+ */
+export const SQL_COBRANCAS_A_CONFERIR = `
+  SELECT o.id, o.org_id, o.code, o.asaas_payment_id
+    FROM orders o
+    JOIN organizations org ON org.id = o.org_id AND org.asaas_api_key IS NOT NULL
+   WHERE o.asaas_payment_id IS NOT NULL
+     AND left(o.asaas_payment_id, 4) <> 'sim_'
+     AND ( ( o.status = 'aguardando_pagamento'
+             AND o.created_at < now() - interval '5 minutes'
+             AND (o.asaas_checked_at IS NULL OR o.asaas_checked_at < now() - interval '50 seconds') )
+        OR ( o.status = 'expirado'
+             AND o.canceled_at > now() - interval '3 days'
+             AND (o.asaas_checked_at IS NULL OR o.asaas_checked_at < now() - interval '10 minutes')
+             AND NOT EXISTS (SELECT 1 FROM audit_log a
+                              WHERE a.entity = 'order' AND a.entity_id = o.id::text
+                                AND a.action IN ('cobranca_cancelada', 'cobranca_paga_no_vao')) ) )
+   ORDER BY random()
+   LIMIT $1`
+
+export interface DesfechoDaConferencia {
+  pedidoId: string
+  ok: boolean
+  statusNoGateway?: string | null
+  /** pago no gateway e aplicado agora */
+  aplicado?: boolean
+  erro?: string
+  passageira?: boolean
+}
+
+/**
+ * Varredura de fundo fala com o Asaas? Não na máquina com PAGAMENTO_SIMULADO=1 (nunca liga em
+ * produção): os servidores de teste dividem banco com a suíte, e a suíte grava organizações com
+ * chave de MENTIRA — sem esta guarda, o servidor de outra trilha perguntaria ao Asaas de verdade
+ * pelos pedidos de fixture a cada minuto. O teste troca a consulta (`usarConsultaDeCobranca`) ou
+ * desliga o simulado no próprio processo.
+ */
+function podeVarrerOAsaas(): boolean {
+  return !!consultaInjetada || !simulado.ligado()
+}
+
+/** Uma cópia por vez em toda a frota (trava consultiva de SESSÃO), como as outras varreduras. */
+async function umaVarreduraPorVez<T>(nome: string, vazio: T, f: () => Promise<T>): Promise<T> {
+  const conexao = await db().connect()
+  let travou = false
+  try {
+    const { rows } = await conexao.query(`SELECT pg_try_advisory_lock(hashtext($1)) AS ok`, [nome])
+    travou = !!rows[0]?.ok
+    if (!travou) return vazio
+    return await f()
+  } finally {
+    if (travou) await conexao.query(`SELECT pg_advisory_unlock(hashtext($1))`, [nome]).catch(() => {})
+    conexao.release()
+  }
+}
+
+/**
+ * A varredura: pergunta `GET /payments/{id}` por cada pedido da vez e aplica o que estiver pago.
+ *
+ * Com prazo (`ate`) e limite por rodada, e PARA na primeira falha passageira (Asaas fora, 429,
+ * rede): os pedidos seguintes ouviriam o mesmo não — e no 429 a doc proíbe insistir. A marca
+ * `asaas_checked_at` só é posta quando o gateway respondeu: pergunta que falhou volta na rodada
+ * seguinte.
+ */
+export async function varrerCobrancasDoAsaas(r: { limite?: number; ate?: number } = {}):
+  Promise<DesfechoDaConferencia[]> {
+  const { limite = 30, ate = Date.now() + 20_000 } = r
+  if (!podeVarrerOAsaas()) return []
+  return umaVarreduraPorVez('dt:asaas-cobrancas', [] as DesfechoDaConferencia[], async () => {
+    const feitos: DesfechoDaConferencia[] = []
+    for (const o of await q<any>(SQL_COBRANCAS_A_CONFERIR, [limite])) {
+      if (Date.now() >= ate) break
+      let cobranca: any
+      try {
+        cobranca = await consultarCobranca({ orgId: o.org_id, paymentId: String(o.asaas_payment_id) })
+      } catch (e: any) {
+        const passageira = falhaPassageiraDoAsaas(e)
+        feitos.push({ pedidoId: o.id, ok: false, erro: e?.message ?? String(e), passageira })
+        if (passageira) break
+        // recusa de regra (404: cobrança de outra conta, apagada): não trava a fila, mas espaça
+        await q(`UPDATE orders SET asaas_checked_at = now() WHERE id = $1`, [o.id])
+        continue
+      }
+      await q(`UPDATE orders SET asaas_checked_at = now() WHERE id = $1`, [o.id])
+      const status = String(cobranca?.status ?? '').toUpperCase() || null
+      if (!status || !STATUS_PAGO.has(status)) {
+        feitos.push({ pedidoId: o.id, ok: true, statusNoGateway: status, aplicado: false })
+        continue
+      }
+      const d = await aplicarCobrancaConsultada({ pedidoId: o.id, cobranca, paymentId: o.asaas_payment_id })
+      if (!d.ok) {
+        console.warn(`[asaas] pedido ${o.code} PAGO no gateway e a aplicação falhou: ${d.erro}`)
+        feitos.push({ pedidoId: o.id, ok: false, statusNoGateway: status, erro: d.erro, passageira: d.indisponivel })
+        if (d.indisponivel) break
+        continue
+      }
+      feitos.push({ pedidoId: o.id, ok: true, statusNoGateway: status, aplicado: !d.resultado?.repetido })
+    }
+    return feitos
+  })
+}
 
 /**
  * O payload guardado não tem o que a entrega precisava — vai buscar no gateway.

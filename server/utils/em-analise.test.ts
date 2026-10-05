@@ -74,6 +74,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   usarConsultaDeCobranca(null)
+  // o pago aplicado pela varredura deixa a linha `poll:` da entrega
+  await q(`DELETE FROM payment_events WHERE gateway_event_id LIKE 'poll:pay_zz_ea_%'`)
   await q(`DELETE FROM organizations WHERE id = $1`, [orgId])
   await db().end()
 })
@@ -108,11 +110,16 @@ describe('B09 · varrerEmAnalise pergunta ao gateway antes de soltar', () => {
 
     expect(await status(pedidos.reprovado)).toBe('expirado')
     expect(await status(pedidos.apagado)).toBe('cancelado')
-    expect(await status(pedidos.pago), 'soltou o lugar de quem o gateway diz que pagou').toBe('em_analise')
+    // PAGO no gateway e o webhook não baixou: era só um console.warn e o comprador seguia sem
+    // ingresso. Agora a varredura aplica pelo caminho do webhook (P0-2, 05/10)
+    expect(await status(pedidos.pago), 'pago no gateway e a varredura não aplicou').toBe('pago')
+    expect(Number((await q1<any>(`SELECT count(*)::int AS n FROM tickets WHERE order_id = $1`, [pedidos.pago]))!.n))
+      .toBe(1)
     expect(await status(pedidos.analisando)).toBe('em_analise')
     expect(await status(pedidos.falha)).toBe('em_analise')
     expect(await status(pedidos.recente)).toBe('em_analise')
-    expect(await reservado(), 'os dois soltos devolvem o lugar, e só eles').toBe(antes - 2)
+    // os dois soltos devolvem o lugar, e o pago virou venda (a reserva dele também sai)
+    expect(await reservado(), 'os dois soltos devolvem o lugar, e só eles (mais o pago, que vendeu)').toBe(antes - 3)
 
     const trilha = await q<any>(
       `SELECT entity_id, after FROM audit_log WHERE action = 'em_analise_consulta' AND entity_id = ANY($1::text[])`,

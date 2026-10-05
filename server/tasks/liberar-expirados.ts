@@ -26,7 +26,7 @@
  * vira linha de erro no log e no resultado, e as outras seguem.
  */
 import { liberarExpirados } from '../utils/estoque'
-import { cancelarCobrancasDeExpirados, varrerEmAnalise } from '../utils/asaas'
+import { cancelarCobrancasDeExpirados, varrerCobrancasDoAsaas, varrerEmAnalise } from '../utils/asaas'
 import { expirarTransferencias } from '../utils/transferencia'
 import { esquecerCadastrosPendentes } from '../utils/cadastro'
 import { db, tx } from '../utils/db'
@@ -81,6 +81,19 @@ export const ETAPAS: Etapa[] = [
     rodar: () => esquecerCadastrosPendentes(db()),
     falar: (n) => `[cadastro] ${n} formulário(s) de pedido não pago apagado(s)`,
   },
+  {
+    // A rede de baixo do webhook do Asaas (05/10). O cartão (e o Pix plano B) só virava ingresso
+    // pelo aviso: aviso perdido, URL errada no painel ou a fila de webhooks PAUSADA pelo Asaas (15
+    // falhas seguidas) e o comprador pago ficava sem ingresso. Pergunta `GET /payments/{id}` pelos
+    // pedidos esperando há mais de 5 min e pelos expirados recentes, e aplica o pago pelo MESMO
+    // caminho do webhook. POR ÚLTIMO e com prazo próprio (25 s): é a única etapa sem pressa, e
+    // a devolução do estoque (a primeira) já aconteceu antes dela. Para na primeira falha
+    // passageira (Asaas fora, 429). Sem organização com chave do Asaas, nenhuma chamada sai.
+    nome: 'cobranças do asaas pagas sem aviso',
+    rodar: async () => (await varrerCobrancasDoAsaas({ ate: Date.now() + 25_000 }))
+      .filter((d) => d.ok && d.aplicado).length,
+    falar: (n) => `[asaas] ${n} pagamento(s) achado(s) pela varredura (o webhook não tinha avisado) e aplicado(s)`,
+  },
 ]
 
 export interface ResultadoDaVarredura {
@@ -109,7 +122,8 @@ export default defineTask({
   meta: {
     name: 'liberar-expirados',
     description: 'Expira pedidos vencidos, devolve estoque, cancela a cobrança, vence transferências paradas, '
-      + 'pergunta ao gateway pelos pedidos em análise de risco e apaga o cadastro de pedido não pago',
+      + 'pergunta ao gateway pelos pedidos em análise de risco, apaga o cadastro de pedido não pago '
+      + 'e pergunta ao Asaas pelo que foi pago sem aviso',
   },
   async run() {
     return { result: await varrer() }

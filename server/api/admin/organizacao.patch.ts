@@ -26,6 +26,8 @@ import { z } from 'zod'
 import { q1, tx } from '../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../utils/auditoria'
 import { recusaDeAmbiente, type AmbienteAsaas } from '../../utils/asaas-ambiente'
+import { testarConexao } from '../../utils/asaas'
+import * as simulado from '../../utils/gateway-simulado'
 import { guardarSegredo } from '../../utils/cofre'
 import { ehDaEquipeDaPlataforma } from '../../utils/equipe-da-plataforma'
 import { ErroMercadoPago, quemEhAConta } from '../../utils/mercadopago-conta'
@@ -150,6 +152,22 @@ export default defineEventHandler(async (event) => {
     if (recusa) throw createError({ statusCode: 422, statusMessage: recusa })
   }
 
+  // A chave do Asaas é conferida NA FONTE antes de gravar, como o token do MP logo abaixo: chave
+  // torta gravada era o primeiro comprador do cartão recebendo "não foi possível gerar a cobrança"
+  // (o Asaas responde 401 `invalid_access_token`), e o dono só sabia pelo telefone. Na máquina com
+  // PAGAMENTO_SIMULADO=1 não confere — a suíte grava chaves de mentira e não pode falar com o Asaas
+  // de verdade (em produção o simulado nunca liga: `gateway-simulado.ts`).
+  if (typeof d.chaveAsaas === 'string' && !simulado.ligado()) {
+    const t = await testarConexao({ apiKey: d.chaveAsaas, environment: d.ambienteAsaas ?? atual.asaas_env })
+    if (!t.ok) {
+      if (t.recusada) {
+        recusar('Chave de API do Asaas: o Asaas não aceitou esta chave. Copie a chave inteira em Minha Conta → '
+          + 'Integrações → Chave de API, do ambiente certo (produção começa com $aact_prod_). Nada foi salvo.')
+      }
+      recusar('Não consegui falar com o Asaas para conferir a chave. Nada foi salvo — tente de novo em instantes.')
+    }
+  }
+
   // O token do MP é conferido NA FONTE antes de gravar: `GET /users/me` com ele. Token torto
   // gravado era Pix que não nasce no primeiro comprador — e de quebra a conta diz se é de TESTE
   // (em produção, conta de teste não liga o Pix do MP: ver `pixPeloMercadoPago`).
@@ -244,6 +262,14 @@ export default defineEventHandler(async (event) => {
   return await tx(async (c) => {
     try {
       await c.query(`UPDATE organizations SET ${set.join(', ')} WHERE id = $1`, par)
+      // Chave (ou ambiente) do Asaas trocada: o `asaas_customer_id` de cada comprador é um id DA
+      // CONTA VELHA. Reaproveitado, o cliente do sandbox ia parar na cobrança de produção e o Asaas
+      // recusava ("cliente inválido") todo comprador que já tinha comprado antes. Zera: o checkout
+      // acha (pelo CPF) ou cria o cliente na conta nova na próxima compra.
+      if (d.chaveAsaas !== undefined || (d.ambienteAsaas !== undefined && d.ambienteAsaas !== atual.asaas_env)) {
+        await c.query(`UPDATE customers SET asaas_customer_id = NULL
+                        WHERE org_id = $1 AND asaas_customer_id IS NOT NULL`, [orgId])
+      }
       // Autor nas colunas, na mesma transação. `registrarAuditoria` não grava
       // quando antes == depois (salvar sem mexer em nada não é ato).
       await registrarAuditoria({

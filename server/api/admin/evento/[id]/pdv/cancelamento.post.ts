@@ -35,7 +35,7 @@ import {
   FORMA_LEGIVEL, SQL_CANCELA_VENDA_PDV, SQL_TRAVA_INGRESSOS_DA_VENDA,
   SQL_TRAVA_TURNO_ABERTO, type FormaPdv,
 } from '../../../../../utils/caixa'
-import { estornar, type ConfigAsaas } from '../../../../../utils/asaas'
+import { estornarPedidoNoAsaas, type ConfigAsaas } from '../../../../../utils/asaas'
 
 const Entrada = z.object({
   pedidoId: z.string().uuid(),
@@ -263,7 +263,8 @@ async function pedirEstorno(
       erro = 'esta loja está sem o Asaas configurado'
     } else {
       try {
-        await estornar(cfg, paymentId, totalCents)
+        // compra parcelada devolve o PARCELAMENTO inteiro, não só a 1ª parcela (041)
+        await estornarPedidoNoAsaas(cfg, { paymentId, valorCents: totalCents })
       } catch (e: any) {
         status = 'falhou'
         erro = e?.message ?? String(e)
