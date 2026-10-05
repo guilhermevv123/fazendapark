@@ -20,7 +20,7 @@
  * | atalho oferecido                  | a rota por trás                    |
  * |-----------------------------------|------------------------------------|
  * | Abrir Equipe → `/admin/equipe`    | `GET /api/admin/equipe` → **403**  |
- * | Abrir Configurações               | `GET /api/admin/organizacao` → **403** |
+ * | Abrir Dados e cobrança            | `GET /api/admin/organizacao` → **403** |
  * | Abrir painel do evento (dashboard)| `GET .../dashboard` → **403**      |
  * | Abrir Financeiro                  | `GET .../financeiro` → **403**     |
  *
@@ -103,9 +103,9 @@ const TODAS_AS_SITUACOES = computed(() => [
   },
   {
     titulo: 'Nenhuma cobrança está saindo',
-    o_que: 'Confira o ambiente e a chave do Asaas. Em "testes", ninguém é cobrado de '
-      + 'verdade; sem chave em produção, o comprador paga e a confirmação nunca chega.',
-    acao: 'Abrir Configurações', para: '/admin/configuracoes',
+    o_que: 'Veja em Dados e cobrança se o cartão (Asaas) e o Pix (Mercado Pago) estão ligados. Se algum '
+      + 'estiver em testes ou aguardando, fale com a equipe da plataforma: somos nós que ligamos o recebimento.',
+    acao: 'Abrir Dados e cobrança', para: '/admin/configuracoes',
   },
 ])
 

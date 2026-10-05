@@ -19,6 +19,8 @@ const ORGANIZACAO = {
   ambienteAsaas: 'sandbox', carteiraAsaas: null,
   temChave: true, chaveFinal: 'TESTE1',
   eventos: 1, pessoas: 4, clientes: 10, criadoEm: '2026-09-01T12:00:00Z',
+  // o selo do ambiente fica na seção do Asaas, que só a equipe da plataforma vê (05/10)
+  podeConfigurarRecebimento: true,
 }
 
 describe('ORG-01 — Configurações e Organização mostram para onde a cobrança VAI', () => {

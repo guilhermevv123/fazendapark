@@ -8,7 +8,8 @@
  *
  * O que este arquivo trava:
  *  - master e financeiro veem o botão; portaria não;
- *  - o clique pergunta antes, e só UMA chamada sai mesmo com dois cliques;
+ *  - o clique pergunta antes, na janela DO SISTEMA (nunca o `confirm` do navegador, 05/10), e só
+ *    UMA chamada sai mesmo com dois cliques;
  *  - a frase da rota aparece na tela — inclusive o recado de gateway não
  *    configurado (503), que é o caso mais comum numa instalação nova;
  *  - o recebido direto no balcão aparece nomeado, fora do saldo.
@@ -53,10 +54,20 @@ async function abrir(papel: string, executar: any = { ok: true, mensagem: '1 tra
       '/api/auth/eu': eu(papel),
       '/api/admin/payout/executar': executar,
     },
+    stubs: { teleport: true },
   })
 }
 
 const execucoes = () => chamadas.filter((c) => c.url === '/api/admin/payout/executar')
+/** responde a janela de confirmação do sistema */
+async function responder(tela: any, sim: boolean) {
+  await tela.vm.$nextTick()
+  const janela = tela.find('[data-parte="janela-confirmar"]')
+  expect(janela.exists(), 'o envio não perguntou antes').toBe(true)
+  await janela.find(`[data-acao="${sim ? 'confirmar' : 'cancelar'}"]`).trigger('click')
+  await new Promise((r) => setTimeout(r, 0))
+  await tela.vm.$nextTick()
+}
 
 describe('financeiro da organização — enviar saques', () => {
   it('master vê o botão com a contagem da fila', async () => {
@@ -72,40 +83,39 @@ describe('financeiro da organização — enviar saques', () => {
     expect((await abrir('portaria')).find('[data-acao="enviar-saques"]').exists()).toBe(false)
   })
 
-  it('pergunta antes; recusou, nada sai', async () => {
-    vi.stubGlobal('confirm', () => false)
+  it('pergunta antes, na janela do sistema; recusou, nada sai', async () => {
+    const nativo = vi.fn(() => true)
+    vi.stubGlobal('confirm', nativo)
     const tela = await abrir('master')
     await tela.find('[data-acao="enviar-saques"]').trigger('click')
+    await responder(tela, false)
     expect(execucoes()).toHaveLength(0)
+    expect(nativo, 'o confirm() do navegador voltou').not.toHaveBeenCalled()
   })
 
   it('dois cliques seguidos mandam UMA execução, e a frase da rota aparece', async () => {
-    const pergunta = vi.fn(() => true)
-    vi.stubGlobal('confirm', pergunta)
     const tela = await abrir('master')
     const btn = tela.find('[data-acao="enviar-saques"]').element as HTMLButtonElement
     btn.click()
     btn.click()
-    await new Promise((r) => setTimeout(r, 0))
     await tela.vm.$nextTick()
+    expect(tela.findAll('[data-parte="janela-confirmar"]'), 'o 2º clique abriu outra pergunta').toHaveLength(1)
+    await responder(tela, true)
 
     expect(execucoes(), 'duplo clique executou a fila duas vezes').toHaveLength(1)
     expect(execucoes()[0].opcoes?.method).toBe('POST')
-    expect(pergunta).toHaveBeenCalledTimes(1)
     expect(tela.find('[data-parte="recado-envio"]').text())
       .toContain('1 transferência enviada (R$ 340,00).')
   })
 
   it('gateway não configurado: o recado da rota vai pra tela, não um erro genérico', async () => {
-    vi.stubGlobal('confirm', () => true)
     const recusa = Object.assign(new Error('503'), {
       statusCode: 503,
       data: { statusMessage: 'Transferência indisponível: esta organização ainda não tem o Asaas configurado.' },
     })
     const tela = await abrir('master', recusa)
     await tela.find('[data-acao="enviar-saques"]').trigger('click')
-    await new Promise((r) => setTimeout(r, 0))
-    await tela.vm.$nextTick()
+    await responder(tela, true)
     const recado = tela.find('[data-parte="recado-envio"]')
     expect(recado.exists()).toBe(true)
     expect(recado.text()).toContain('ainda não tem o Asaas configurado')

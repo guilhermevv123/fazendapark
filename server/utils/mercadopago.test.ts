@@ -688,6 +688,13 @@ describe('fila de devolução · o Pix do MP volta pelo MP', () => {
 
 describe('painel · o token do MP é conferido NA FONTE antes de gravar', () => {
   let painelOrg: string, dono: string
+  // quem salva o token é a equipe da plataforma (05/10): a sessão de mentira, 'dono@zz', entra na lista
+  const equipeAntes = process.env.EQUIPE_DA_PLATAFORMA
+  beforeAll(() => { process.env.EQUIPE_DA_PLATAFORMA = 'dono@zz' })
+  afterAll(() => {
+    if (equipeAntes === undefined) delete process.env.EQUIPE_DA_PLATAFORMA
+    else process.env.EQUIPE_DA_PLATAFORMA = equipeAntes
+  })
   beforeAll(async () => {
     painelOrg = (await q1<any>(`INSERT INTO organizations (name, slug)
       VALUES ('ZZ MP Painel', 'zz-mp-painel-' || gen_random_uuid()) RETURNING id`))!.id
@@ -758,6 +765,12 @@ describe('painel · o token do MP é conferido NA FONTE antes de gravar', () => 
 
 describe('troca de conta · o Pix aberto fecha antes de o token sair', () => {
   let dono: string
+  const equipeAntes = process.env.EQUIPE_DA_PLATAFORMA
+  beforeAll(() => { process.env.EQUIPE_DA_PLATAFORMA = 'dono@zz' })
+  afterAll(() => {
+    if (equipeAntes === undefined) delete process.env.EQUIPE_DA_PLATAFORMA
+    else process.env.EQUIPE_DA_PLATAFORMA = equipeAntes
+  })
   beforeAll(async () => {
     dono = (await q1<any>(`INSERT INTO users (org_id, name, email, password_hash, role, papel)
       VALUES ($1, 'Dono ZZ MP', 'dono.zz.mp.troca.' || gen_random_uuid() || '@teste.invalido', 'x', 'master', 'master')

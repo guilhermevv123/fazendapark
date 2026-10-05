@@ -674,18 +674,23 @@ test.describe('Financeiro — por evento', () => {
 test.describe('Dados e cobrança e o site (PROD-08, CFG-01, CFG-02, ORG-01)', () => {
   test.use({ storageState: sessao('master') })
 
-  test('CNPJ com máscara e dígito conferido; chave pela metade avisa; o selo diz pra onde a cobrança vai', async ({ page }) => {
+  test('CNPJ com máscara e dígito conferido; o master do parque vê o recebimento sem campo de chave', async ({ page }) => {
     await abrir(page, '/admin/configuracoes')
     const org = await api(page, '/api/admin/organizacao')
-    // ORG-01: o selo é o ambiente EFETIVO (o que a chave escolhe), não o do select
-    await expect(page.locator('[data-parte="selo-ambiente"]')).toHaveText(org.ambienteEfetivo === 'production' ? 'PRODUÇÃO' : 'TESTES')
+    // 05/10: o recebimento é da equipe da plataforma — o master do seed vê só o estado (ORG-01 continua
+    // valendo pra equipe: o selo do ambiente efetivo está no caso do variacoes-organizacao)
+    expect(org.podeConfigurarRecebimento).toBe(false)
+    const recebimento = page.locator('[data-parte="recebimento"]')
+    await expect(recebimento).toContainText('Cartão de crédito e débito')
+    await expect(page.locator('[data-parte="estado-cartao"]'))
+      .toHaveText(!org.temChave ? 'AGUARDANDO A EQUIPE' : org.ambienteEfetivo === 'production' ? 'LIGADO' : 'EM TESTES')
+    await expect(page.locator('[data-parte="campo-chave"]')).toHaveCount(0)
+    await expect(page.locator('[data-parte="mercado-pago"]')).toHaveCount(0)
     const doc = page.locator('[data-parte="campo-documento"]')
     await doc.fill('12ABC34501DE36')
     await expect(doc).toHaveValue('12.ABC.345/01DE-36')
     await expect(page.locator('[data-parte="erro-documento"]')).toContainText('dígito verificador')
     await expect(page.locator('[data-acao="salvar"]')).toBeDisabled()
-    await page.locator('[data-parte="campo-chave"]').fill('$aact_hmlg_123')
-    await expect(page.locator('[data-parte="chave-curta"]')).toContainText('não parece a chave inteira')
     // nada foi salvo
     expect((await api(page, '/api/admin/organizacao')).documento).toBe(org.documento)
   })
@@ -737,27 +742,31 @@ test.describe('Dados e cobrança e o site (PROD-08, CFG-01, CFG-02, ORG-01)', ()
 
 test.describe('Dados e cobrança — edição pendente', () => {
   test.use({ storageState: sessao('master') })
-  test('com alteração não salva, o menu do painel pergunta antes de sair (Cancelar fica) e fechar a aba também', async ({ page }) => {
+  test('com alteração não salva, o menu pergunta na janela DO SISTEMA (nunca a caixa do navegador)', async ({ page }) => {
     await abrir(page, '/admin/configuracoes')
     const antes = await api(page, '/api/admin/organizacao')
     await expect(page.locator('[data-parte="barra-salvar"]')).toHaveCount(0)
     await page.locator('#cfg-razao').click()
     await page.locator('#cfg-razao').fill('ZZ E2E edição pendente')
     await expect(page.locator('[data-parte="barra-salvar"]')).toBeVisible()
+    let nativas = 0
+    page.on('dialog', async (d) => { nativas++; await d.dismiss() })
     await abrirGrupos(page)
-    let pergunta = ''
-    page.once('dialog', (d) => { pergunta = `${d.type()}: ${d.message()}`; void d.dismiss() })
     await menu(page).getByRole('link', { name: 'Equipe', exact: true }).click()
-    await expect.poll(() => pergunta).toContain('confirm: Tem alteração não salva')
+    const janela = page.locator('[data-parte="janela-confirmar"]')
+    await expect(janela).toContainText('Sair sem salvar?')
+    // "Continuar editando" fica, com o que foi digitado
+    await janela.getByRole('button', { name: 'Continuar editando' }).click()
+    await expect(janela).toHaveCount(0)
     await expect(page).toHaveURL(/\/admin\/configuracoes$/)
     await expect(page.locator('#cfg-razao')).toHaveValue('ZZ E2E edição pendente')
     expect((await api(page, '/api/admin/organizacao')).razaoSocial, 'gravou sem o Salvar').toBe(antes.razaoSocial)
-    // fechar a aba (e o F5) passa pelo beforeunload: o navegador pergunta
-    const dialogo = page.waitForEvent('dialog')
-    await page.close({ runBeforeUnload: true })
-    const d = await dialogo
-    expect(d.type()).toBe('beforeunload')
-    await d.accept()
+    // "Sair sem salvar" segue pra onde a pessoa clicou
+    await abrirGrupos(page)
+    await menu(page).getByRole('link', { name: 'Equipe', exact: true }).click()
+    await janela.getByRole('button', { name: 'Sair sem salvar' }).click()
+    await expect(page).toHaveURL(/\/admin\/equipe$/)
+    expect(nativas, 'apareceu caixa nativa do navegador').toBe(0)
   })
 })
 
@@ -766,7 +775,8 @@ test.describe('Dados e cobrança no celular (390 px)', () => {
   test('com alteração pendente, o Salvar acompanha no pé da tela — sem voltar ao topo', async ({ page }) => {
     await abrir(page, '/admin/configuracoes')
     await page.locator('#cfg-razao').fill('ZZ E2E celular')
-    await page.locator('#cfg-carteira').scrollIntoViewIfNeeded()
+    // o fim da coluna: no master do parque é o bloco do recebimento (05/10: sem campos de chave)
+    await page.locator('[data-parte="recebimento"]').scrollIntoViewIfNeeded()
     const topo = (await page.locator('[data-acao="salvar"]').boundingBox())!
     expect(topo.y + topo.height, 'o caso não rolou: o Salvar do topo ainda está à vista').toBeLessThan(0)
     const pe = (await page.locator('[data-acao="salvar-rodape"]').boundingBox())!

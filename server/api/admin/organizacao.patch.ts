@@ -19,13 +19,15 @@
  *    conferir o prefixo; não volta na resposta nem entra na auditoria.
  *
  * Só o master mexe (a grade de `utils/papeis.ts` já tranca a área
- * `organizacao`; a linha do handler é o cinto além do suspensório).
+ * `organizacao`; a linha do handler é o cinto além do suspensório). E as credenciais de
+ * recebimento, só o master que é da equipe da plataforma (`utils/equipe-da-plataforma.ts`, 05/10).
  */
 import { z } from 'zod'
 import { q1, tx } from '../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../utils/auditoria'
 import { recusaDeAmbiente, type AmbienteAsaas } from '../../utils/asaas-ambiente'
 import { guardarSegredo } from '../../utils/cofre'
+import { ehDaEquipeDaPlataforma } from '../../utils/equipe-da-plataforma'
 import { ErroMercadoPago, quemEhAConta } from '../../utils/mercadopago-conta'
 import { fecharPixAbertos } from '../../utils/mercadopago'
 import { documentoDaEmpresaValido, somenteDigitos } from '../../../app/composables/dadosDaEmpresa'
@@ -94,6 +96,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS), data: p.error.flatten() })
   }
   const d = p.data
+
+  // O recebimento (Asaas e Mercado Pago) é configurado pela NOSSA equipe, não pelo cliente (ordem do
+  // dono, 05/10): master de organização fora de `EQUIPE_DA_PLATAFORMA` só mexe no cadastro.
+  const RECEBIMENTO = ['ambienteAsaas', 'chaveAsaas', 'carteiraAsaas', 'tokenMercadoPago', 'segredoMercadoPago'] as const
+  if (RECEBIMENTO.some((c) => d[c] !== undefined) && !ehDaEquipeDaPlataforma(sessao?.email)) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: 'O recebimento (cartão pelo Asaas e Pix pelo Mercado Pago) é configurado pela equipe da '
+        + 'plataforma. Fale com a gente pelo suporte para ligar ou trocar.',
+    })
+  }
 
   // Formato conferido aqui, com frase de gente (a máscara da tela é conforto; quem decide é a rota).
   if (d.documento && !documentoDaEmpresaValido(d.documento)) {

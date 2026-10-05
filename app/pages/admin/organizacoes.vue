@@ -29,10 +29,10 @@ const { data, pending, error: falha, refresh } = await useFetch<any[]>('/api/adm
  * cru já pintou "EM TESTES" numa conta cobrando de verdade (ORG-01).
  */
 function situacao(o: any): { t: string; c: string; frase: string } {
-  if (!o.temAsaas) return { t: 'SEM COBRANÇA', c: 'selo-erro', frase: 'Sem chave do Asaas — nenhuma cobrança sai daqui.' }
+  if (!o.temAsaas) return { t: 'SEM COBRANÇA', c: 'selo-erro', frase: 'O recebimento ainda não foi ligado pela equipe da plataforma.' }
   return (o.ambienteEfetivo ?? o.ambienteAsaas) === 'production'
-    ? { t: 'RECEBENDO', c: 'selo-ok', frase: 'A cobrança vai para a conta de produção do Asaas.' }
-    : { t: 'EM TESTES', c: 'selo-alerta', frase: 'Chave de testes (sandbox): ninguém é cobrado de verdade.' }
+    ? { t: 'RECEBENDO', c: 'selo-ok', frase: 'As vendas do site são cobradas de verdade.' }
+    : { t: 'EM TESTES', c: 'selo-alerta', frase: 'Recebimento em testes: ninguém é cobrado de verdade ainda.' }
 }
 
 /** documento como a pessoa lê — o de exemplo da instalação não é documento de ninguém */

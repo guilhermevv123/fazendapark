@@ -22,6 +22,8 @@
  * Os números são os mesmos de antes (`saldoParaSaque`, `liquido.ts`): o saldo não tem período —
  * é o estado de agora; o período vale pro FLUXO (entrada, como entrou, transferências).
  */
+import JanelaConfirmar from '~/components/JanelaConfirmar.vue'
+import { usarConfirmacao } from '~/composables/confirmacao'
 import { baixarCsv } from '~/composables/baixarCsv'
 import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 import { centavosParaPlanilha } from '~/composables/painelPlanilha'
@@ -166,20 +168,24 @@ const saques = computed(() => {
 })
 
 const enviando = ref(false)
+const { pergunta, perguntar, responder } = usarConfirmacao()
 const recadoEnvio = ref<{ tipo: 'ok' | 'aviso' | 'erro'; texto: string } | null>(null)
 
 async function enviarSaques() {
-  // trava de duplo clique ANTES do confirm: o segundo clique não abre outra pergunta
-  if (enviando.value) return
+  // trava de duplo clique ANTES da pergunta: o segundo clique não abre outra
+  if (enviando.value || pergunta.value) return
   const { pedidos: qtd, valorCents } = saques.value.enviaveis
   if (!qtd) return
   const manuais = saques.value.manuais
-  const pergunta = `Enviar ${qtd} ${qtd === 1 ? 'saque PIX pendente' : 'saques PIX pendentes'} (${brl(valorCents)}) agora?\n\n`
-    + 'O dinheiro sai da plataforma para a conta de cada beneficiário. Isso não pode ser desfeito por aqui.'
-    + (manuais.pedidos
-      ? `\n\n${manuais.pedidos} ${manuais.pedidos === 1 ? 'saque' : 'saques'} para conta bancária (${brl(manuais.valorCents)}) não saem por este botão: a transferência é feita à mão no painel do Asaas.`
-      : '')
-  if (!confirm(pergunta)) return
+  const sim = await perguntar({
+    titulo: `Enviar ${qtd} ${qtd === 1 ? 'saque PIX pendente' : 'saques PIX pendentes'} (${brl(valorCents)}) agora?`,
+    texto: 'O dinheiro sai da plataforma para a conta de cada beneficiário. Isso não pode ser desfeito por aqui.',
+    detalhes: manuais.pedidos
+      ? [`${manuais.pedidos} ${manuais.pedidos === 1 ? 'saque' : 'saques'} para conta bancária (${brl(manuais.valorCents)}) não saem por este botão: a transferência é feita à mão no painel do Asaas.`]
+      : [],
+    confirmar: 'Enviar agora', perigo: true,
+  })
+  if (!sim) return
 
   enviando.value = true
   recadoEnvio.value = null
@@ -677,5 +683,6 @@ useHead({ title: 'Financeiro' })
         </div>
       </section>
     </template>
+    <JanelaConfirmar v-if="pergunta" v-bind="pergunta" @responder="responder" />
   </div>
 </template>

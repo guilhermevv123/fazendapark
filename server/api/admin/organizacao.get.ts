@@ -20,6 +20,7 @@ import { ambienteDivergente, ambienteEfetivo } from '../../utils/asaas-ambiente'
 import { CofreFechado, finalDoSegredo } from '../../utils/cofre'
 import { pixPeloMercadoPago, urlDoAviso } from '../../utils/mercadopago-conta'
 import { baseDoSite } from '../../utils/envio'
+import { ehDaEquipeDaPlataforma } from '../../utils/equipe-da-plataforma'
 
 function finalSemCofreFechado(guardado: string | null) {
   try { return finalDoSegredo(guardado) } catch (e) { if (e instanceof CofreFechado) return null; throw e }
@@ -42,6 +43,20 @@ export default defineEventHandler(async (event) => {
        FROM organizations o WHERE o.id = $1`, [orgId])
   if (!o) throw createError({ statusCode: 404, statusMessage: 'Organização não encontrada' })
 
+  // Recebimento é da equipe da plataforma (05/10). O cliente vê só se está ligado — nada de fim de
+  // chave, conta do MP ou endereço de webhook.
+  const daPlataforma = ehDaEquipeDaPlataforma((event.context as any).sessao?.email)
+  const resposta = montar(o)
+  if (daPlataforma) return { ...resposta, podeConfigurarRecebimento: true }
+  return {
+    ...resposta,
+    podeConfigurarRecebimento: false,
+    carteiraAsaas: null, chaveFinal: null,
+    mercadoPago: { ...resposta.mercadoPago, tokenFinal: null, contaId: null, urlDoAviso: null },
+  }
+})
+
+function montar(o: any) {
   return {
     id: o.id, nome: o.name, slug: o.slug, documento: o.document,
     ambienteAsaas: o.asaas_env, carteiraAsaas: o.asaas_wallet,
@@ -80,4 +95,4 @@ export default defineEventHandler(async (event) => {
     telefoneAtendimento: o.support_phone,
     encarregadoDados: o.privacy_contact,
   }
-})
+}

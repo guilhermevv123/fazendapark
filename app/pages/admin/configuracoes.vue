@@ -3,6 +3,16 @@
  * Dados e cobrança — o cadastro da organização, os dados da empresa que o site mostra e a ligação
  * com o Asaas.
  *
+ * ## Recebimento é da equipe da plataforma (05/10)
+ *
+ * Ordem do dono: o cliente não cola chave de API. Cartão (crédito e débito) entra pelo Asaas e o Pix
+ * pelo Mercado Pago, e quem liga as duas pontas somos nós. O master da organização vê só se está
+ * ligado (`data-parte="recebimento"`); os campos de chave e token aparecem pra quem está em
+ * `EQUIPE_DA_PLATAFORMA` (`server/utils/equipe-da-plataforma.ts`), que a rota confere de novo.
+ *
+ * Nenhuma caixa nativa do navegador (`confirm`, `beforeunload`): sair com edição pendente pergunta
+ * na `JanelaConfirmar`, dentro do painel.
+ *
  * A chave do Asaas tem campo de escrita e nenhum de leitura: ela entra, não sai. A tela mostra só o
  * fim dela pra conferência ("…4f9c2a"), que é o que alguém compara com o painel do Asaas pra ter
  * certeza de que é a certa.
@@ -20,7 +30,9 @@ import {
   linhasDoEndereco, mascaraDocumento, somenteDigitos,
 } from '~/composables/dadosDaEmpresa'
 import PainelFalha from '~/components/painel/Falha.vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import JanelaConfirmar from '~/components/JanelaConfirmar.vue'
+import { usarConfirmacao } from '~/composables/confirmacao'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 
 definePageMeta({ layout: 'admin' })
 
@@ -94,6 +106,20 @@ const seloMp = computed(() => {
   return { texto: 'DESLIGADO', classe: 'selo-neutro' }
 })
 
+/** o que o cliente vê do recebimento (05/10): ligado, em testes, ou esperando a equipe */
+const estadoCartao = computed(() => {
+  if (!data.value?.temChave) return { texto: 'AGUARDANDO A EQUIPE', classe: 'selo-neutro' }
+  return ambienteMostrado.value === 'production'
+    ? { texto: 'LIGADO', classe: 'selo-ok' }
+    : { texto: 'EM TESTES', classe: 'selo-alerta' }
+})
+const estadoPix = computed(() => {
+  if (mp.value?.pixPeloMercadoPago) return { texto: 'LIGADO', classe: 'selo-ok' }
+  // sem o MP, o Pix do site sai pelo Asaas (utils/mercadopago-conta.ts)
+  if (data.value?.temChave && ambienteMostrado.value === 'production') return { texto: 'PELO ASAAS POR ENQUANTO', classe: 'selo-alerta' }
+  return { texto: 'AGUARDANDO A EQUIPE', classe: 'selo-neutro' }
+})
+
 /** o que veio do servidor, na forma do formulário (a comparação de "mudou" é com isto) */
 function doServidor(d: any) {
   return {
@@ -143,17 +169,28 @@ const mudou = computed(() => Object.keys(mudancas.value).length > 0)
  */
 const naoSalvo = computed(() => !salvando.value && (mudou.value || chaveNova.value.trim().length > 0
   || tokenMpNovo.value.trim().length > 0 || segredoMpNovo.value.trim().length > 0))
-const PERGUNTA_AO_SAIR = 'Tem alteração não salva em Dados e cobrança. Sair mesmo assim?'
-/** F5, fechar a aba, digitar outro endereço: o navegador pergunta (a frase é a dele) */
-function avisarAntesDeDescarregar(e: BeforeUnloadEvent) {
-  if (!naoSalvo.value) return
-  e.preventDefault()
-  e.returnValue = ''
-}
-onMounted(() => window.addEventListener('beforeunload', avisarAntesDeDescarregar))
-onBeforeUnmount(() => window.removeEventListener('beforeunload', avisarAntesDeDescarregar))
-/** clique no menu do painel com edição pendente: a mesma pergunta, dentro do painel */
-onBeforeRouteLeave(() => (naoSalvo.value && !window.confirm(PERGUNTA_AO_SAIR) ? false : undefined))
+const { pergunta, perguntar, responder } = usarConfirmacao()
+const router = useRouter()
+/** a saída já confirmada na janela: deixa passar sem perguntar de novo */
+let saidaLiberada = false
+/**
+ * Clique no menu do painel com edição pendente: segura a navegação, pergunta na janela do sistema e,
+ * no "Sair sem salvar", refaz a mesma navegação. (F5 e fechar a aba não perguntam mais: a única
+ * pergunta possível ali é a caixa nativa do navegador, e o dono pediu tudo dentro do sistema.)
+ */
+onBeforeRouteLeave((para) => {
+  if (saidaLiberada || !naoSalvo.value) return
+  perguntar({
+    titulo: 'Sair sem salvar?',
+    texto: 'Tem alteração não salva em Dados e cobrança. Se sair agora, ela se perde.',
+    confirmar: 'Sair sem salvar', cancelar: 'Continuar editando', perigo: true,
+  }).then((sim) => {
+    if (!sim) return
+    saidaLiberada = true
+    router.push(para.fullPath)
+  })
+  return false
+})
 
 /**
  * CFG-02 e o resto do formato, conferidos ANTES de mandar (a rota confere de novo e é quem decide —
@@ -278,7 +315,7 @@ useHead({ title: 'Dados e cobrança' })
     <div class="flex flex-wrap items-start justify-between gap-3 py-5">
       <div>
         <h1 class="titulo text-2xl font-semibold text-ink-900 sm:text-[28px]">Dados e cobrança</h1>
-        <p class="mt-1 text-[15px] text-ink-700">O cadastro da organização, os dados que o site mostra e a ligação com o Asaas.</p>
+        <p class="mt-1 text-[15px] text-ink-700">O cadastro da organização, os dados que o site mostra e como o dinheiro das vendas entra.</p>
       </div>
       <button type="button" class="btn-primario min-h-[40px]" :disabled="salvando || !mudou || temProblema" data-acao="salvar" @click="salvar">
         {{ salvando ? 'Salvando…' : 'Salvar' }}
@@ -396,7 +433,36 @@ useHead({ title: 'Dados e cobrança' })
           </div>
         </section>
 
-        <section class="card">
+        <!-- ========================= recebimento, visto pelo cliente (05/10): só o estado -->
+        <section v-if="!data.podeConfigurarRecebimento" class="card" data-parte="recebimento">
+          <h2 class="titulo text-lg font-semibold text-ink-900">Recebimento</h2>
+          <p class="mt-1 text-sm text-ink-700">
+            Como o dinheiro das vendas do site entra. Quem liga e cuida das contas de recebimento é a equipe
+            da plataforma: vocês não precisam colar chave nenhuma.
+          </p>
+          <ul class="mt-3 divide-y divide-ink-100 rounded-xl border border-ink-200">
+            <li class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+              <div>
+                <p class="font-semibold text-ink-900">Cartão de crédito e débito</p>
+                <p class="text-sm text-ink-700">pelo Asaas</p>
+              </div>
+              <span data-parte="estado-cartao" :class="estadoCartao.classe">{{ estadoCartao.texto }}</span>
+            </li>
+            <li class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+              <div>
+                <p class="font-semibold text-ink-900">Pix</p>
+                <p class="text-sm text-ink-700">pelo Mercado Pago</p>
+              </div>
+              <span data-parte="estado-pix" :class="estadoPix.classe">{{ estadoPix.texto }}</span>
+            </li>
+          </ul>
+          <p class="mt-3 text-sm text-ink-700">
+            Precisa mudar algo no recebimento?
+            <NuxtLink to="/admin/suporte" class="font-semibold text-pool-700 hover:underline">Fale com a gente</NuxtLink>.
+          </p>
+        </section>
+
+        <section v-if="data.podeConfigurarRecebimento" class="card" data-parte="asaas">
           <div class="flex items-center justify-between">
             <h2 class="titulo text-lg font-semibold text-ink-900">Recebimento — Asaas</h2>
             <!-- o ambiente EFETIVO: o prefixo da chave é quem escolhe o gateway
@@ -482,7 +548,7 @@ useHead({ title: 'Dados e cobrança' })
         </section>
 
         <!-- ============================================ Pix pelo Mercado Pago (28/09) -->
-        <section v-if="mp" class="card" data-parte="mercado-pago">
+        <section v-if="mp && data.podeConfigurarRecebimento" class="card" data-parte="mercado-pago">
           <div class="flex flex-wrap items-start justify-between gap-2">
             <h2 class="titulo text-lg font-semibold text-ink-900">Pix pelo Mercado Pago</h2>
             <span data-parte="selo-mp" :class="seloMp.classe">{{ seloMp.texto }}</span>
@@ -586,7 +652,7 @@ useHead({ title: 'Dados e cobrança' })
           </NuxtLink>
         </section>
 
-        <section class="card text-sm text-ink-700">
+        <section v-if="data.podeConfigurarRecebimento" class="card text-sm text-ink-700">
           <h2 class="titulo text-lg font-semibold text-ink-900">Por que a chave não aparece</h2>
           <p class="mt-2">
             Chave que uma tela consegue mostrar é chave que fica no cache do navegador,
@@ -624,6 +690,7 @@ useHead({ title: 'Dados e cobrança' })
         {{ salvando ? 'Salvando…' : 'Salvar' }}
       </button>
     </div>
+    <JanelaConfirmar v-if="pergunta" v-bind="pergunta" @responder="responder" />
   </div>
 
   <p v-else-if="pending" class="card mt-6 text-ink-700">Carregando…</p>

@@ -2,11 +2,11 @@
 /**
  * painel-financeiro.test.ts — o Financeiro redesenhado (27/09), olhando o que a TELA mostra.
  *
- * `financeiro-saques.test.ts` segue travando o botão de enviar (quem vê, confirm, duplo clique,
+ * `financeiro-saques.test.ts` segue travando o botão de enviar (quem vê, a pergunta, duplo clique,
  * recado da rota, recebido direto). Aqui, o que o redesenho trouxe:
  *
  *   · FIN-02: o botão conta só o PIX pedido; a conta bancária aparece à parte, com valor, e o
- *     confirm diz que ela não sai por ali;
+ *     pergunta diz que ela não sai por ali;
  *   · FIN-03: saldo devedor em vermelho com o valor; as partes da barra somam o líquido + devedor;
  *   · FIN-07: situação da transferência em português, forma nula "Não informada", páginas;
  *   · FIN-01 (metade do navegador): o eixo lê a chave do parque — setembro é setembro em Manaus;
@@ -71,7 +71,7 @@ async function abrir(opcoes: { papel?: string; dados?: any; entregas?: any; quer
     '/api/admin/payout/executar': { ok: true, mensagem: '1 transferência enviada (R$ 100,00).' },
   }
   return montarTela(await import('../pages/admin/financeiro.vue'), {
-    rota: { path: '/admin/financeiro', query: opcoes.query ?? {} }, respostas,
+    rota: { path: '/admin/financeiro', query: opcoes.query ?? {} }, respostas, stubs: { teleport: true },
   })
 }
 
@@ -86,14 +86,15 @@ describe('Financeiro — saques pelo que o botão faz (FIN-02)', () => {
     expect(tela.find('[data-parte="saques-em-voo"]').text()).toContain('R$ 50,00')
   })
 
-  it('o confirm anuncia o valor que SAI e avisa que a conta bancária não sai por ali', async () => {
-    const pergunta = vi.fn(() => false)
-    vi.stubGlobal('confirm', pergunta)
+  it('a pergunta anuncia o valor que SAI e avisa que a conta bancária não sai por ali', async () => {
     const tela = await abrir()
     await tela.find('[data-acao="enviar-saques"]').trigger('click')
-    const texto = String((pergunta.mock.calls[0] as any)?.[0] ?? '')
+    await tela.vm.$nextTick()
+    const janela = tela.find('[data-parte="janela-confirmar"]')
+    const texto = janela.text().replace(/\u00a0/g, ' ')
     expect(texto).toContain('Enviar 1 saque PIX pendente (R$ 100,00)')
     expect(texto).toContain('para conta bancária (R$ 80,00) não saem por este botão')
+    await janela.find('[data-acao="cancelar"]').trigger('click')
     expect(chamadas.filter((c) => c.url === '/api/admin/payout/executar')).toHaveLength(0)
   })
 

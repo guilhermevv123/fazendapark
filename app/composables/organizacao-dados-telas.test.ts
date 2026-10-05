@@ -5,6 +5,9 @@
  *   · Dados e cobrança: campo vazio mostra "a preencher" (só aqui, pro master); o CNPJ ganha
  *     máscara e conferência de dígito antes de salvar (CFG-02); a chave colada pela metade avisa
  *     (CFG-01); o CNPJ de exemplo do seed pede troca; o Salvar manda só o que mudou, normalizado;
+ *   · recebimento (05/10): o cliente vê só o estado (cartão pelo Asaas, Pix pelo Mercado Pago),
+ *     sem campo de chave nem token; os campos são da equipe da plataforma;
+ *   · sair com edição pendente pergunta na janela DO SISTEMA, nunca no `confirm` do navegador;
  *   · rodapé público: mostra razão social, CNPJ e endereço QUANDO existem, e omite a linha quando
  *     não — nunca "a preencher" pro comprador;
  *   · Cancelamento, Termos e Privacidade: o canal de atendimento vem do banco (ou dos eventos, como
@@ -12,6 +15,14 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chamadas, limparTela, montarTela } from './.vitest-setup-dom'
+
+/** a guarda de saída que a tela registrou, e o push que ela faz depois do "Sair sem salvar" */
+const saida = vi.hoisted(() => ({ guarda: null as null | ((para: any) => any), push: [] as string[] }))
+vi.mock('vue-router', async (original) => ({
+  ...(await original<typeof import('vue-router')>()),
+  onBeforeRouteLeave: (fn: any) => { saida.guarda = fn },
+  useRouter: () => ({ push: (p: string) => { saida.push.push(p) } }),
+}))
 
 vi.setConfig({ testTimeout: 30_000 })
 afterEach(() => limparTela())
@@ -22,12 +33,19 @@ const ORG_VAZIA = {
   criadoEm: '2026-09-01T12:00:00Z', razaoSocial: null,
   endereco: { linha: null, bairro: null, cidade: null, uf: null, cep: null },
   emailAtendimento: null, telefoneAtendimento: null, encarregadoDados: null,
+  // a visão da equipe da plataforma (os campos de chave aparecem); a do cliente tem o caso dela
+  podeConfigurarRecebimento: true,
+  mercadoPago: { temToken: false, tokenFinal: null, contaDeTeste: false, contaId: null, temSegredo: false,
+    pixPeloMercadoPago: false, motivo: 'sem_token', urlDoAviso: null },
 }
+/** o mesmo cadastro, visto pelo master do parque: sem fim de chave, sem conta do MP */
+const ORG_DO_CLIENTE = { ...ORG_VAZIA, podeConfigurarRecebimento: false }
 
 async function configuracoes(org: any = ORG_VAZIA) {
   return montarTela(await import('../pages/admin/configuracoes.vue'), {
     rota: { path: '/admin/configuracoes' },
     respostas: { '/api/admin/organizacao': org },
+    stubs: { teleport: true },
   })
 }
 
@@ -74,39 +92,92 @@ describe('Dados e cobrança — os dados da empresa (PROD-08)', () => {
   })
 })
 
-describe('Dados e cobrança — edição pendente (matriz: "F5 perde calado" e "Salvar só no topo")', () => {
-  /**
-   * O harness não desmonta a tela entre um caso e outro, então o `beforeunload` do window acumula
-   * a escuta de cada tela montada no arquivo. O caso pega a escuta QUE ESTA TELA registrou e
-   * pergunta só a ela.
-   */
-  async function montarComEscuta(org: any = ORG_VAZIA) {
-    const pos = vi.spyOn(window, 'addEventListener')
-    const tira = vi.spyOn(window, 'removeEventListener')
-    const tela = await configuracoes(org)
-    const escuta = pos.mock.calls.filter((c) => c[0] === 'beforeunload').at(-1)?.[1] as ((e: Event) => void) | undefined
-    pos.mockRestore()
-    const descarregar = () => {
-      const ev = new Event('beforeunload', { cancelable: true })
-      escuta?.(ev)
-      return ev.defaultPrevented
+describe('Dados e cobrança — recebimento é da equipe da plataforma (05/10)', () => {
+  it('o master do parque vê o estado do cartão e do Pix, e nenhum campo de chave ou token', async () => {
+    const tela = await configuracoes({ ...ORG_DO_CLIENTE, temChave: true, ambienteEfetivo: 'production',
+      mercadoPago: { ...ORG_VAZIA.mercadoPago, temToken: true, pixPeloMercadoPago: true, motivo: null } })
+    const bloco = tela.find('[data-parte="recebimento"]')
+    expect(bloco.exists()).toBe(true)
+    expect(bloco.text()).toContain('Cartão de crédito e débito')
+    expect(bloco.text()).toContain('pelo Asaas')
+    expect(bloco.text()).toContain('pelo Mercado Pago')
+    expect(tela.find('[data-parte="estado-cartao"]').text()).toBe('LIGADO')
+    expect(tela.find('[data-parte="estado-pix"]').text()).toBe('LIGADO')
+    for (const parte of ['asaas', 'mercado-pago', 'campo-chave', 'campo-token-mp', 'campo-segredo-mp']) {
+      expect(tela.find(`[data-parte="${parte}"]`).exists(), `o cliente viu ${parte}`).toBe(false)
     }
-    return { tela, escuta, descarregar, tira }
-  }
+    expect(tela.text()).not.toContain('Chave de API')
+    expect(tela.text()).not.toContain('Access Token')
+  })
 
-  it('sem mexer: o F5 não pergunta nada e não há barra de salvar no pé', async () => {
-    const { tela, escuta, descarregar, tira } = await montarComEscuta()
-    tira.mockRestore()
-    expect(escuta, 'a tela não escuta o F5').toBeTypeOf('function')
-    expect(descarregar()).toBe(false)
+  it('sem recebimento ligado, o cliente vê "aguardando a equipe" — e o Pix sem MP sai pelo Asaas', async () => {
+    const nada = await configuracoes(ORG_DO_CLIENTE)
+    expect(nada.find('[data-parte="estado-cartao"]').text()).toBe('AGUARDANDO A EQUIPE')
+    expect(nada.find('[data-parte="estado-pix"]').text()).toBe('AGUARDANDO A EQUIPE')
+    limparTela()
+    const soAsaas = await configuracoes({ ...ORG_DO_CLIENTE, temChave: true, ambienteEfetivo: 'production' })
+    expect(soAsaas.find('[data-parte="estado-cartao"]').text()).toBe('LIGADO')
+    expect(soAsaas.find('[data-parte="estado-pix"]').text()).toBe('PELO ASAAS POR ENQUANTO')
+  })
+
+  it('a equipe da plataforma vê os campos de chave e de token', async () => {
+    const tela = await configuracoes()
+    expect(tela.find('[data-parte="recebimento"]').exists()).toBe(false)
+    expect(tela.find('[data-parte="campo-chave"]').exists()).toBe(true)
+    expect(tela.find('[data-parte="mercado-pago"]').exists()).toBe(true)
+  })
+})
+
+describe('Dados e cobrança — edição pendente, sem caixa do navegador', () => {
+  it('a tela não usa confirm() nem beforeunload', async () => {
+    const pos = vi.spyOn(window, 'addEventListener')
+    const confirmar = vi.spyOn(window, 'confirm')
+    const tela = await configuracoes()
+    await tela.find('#cfg-razao').setValue('ZZ Parque Aquático LTDA')
+    saida.guarda?.({ fullPath: '/admin' })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(pos.mock.calls.some((c) => c[0] === 'beforeunload'), 'voltou a caixa nativa do F5').toBe(false)
+    expect(confirmar).not.toHaveBeenCalled()
+    pos.mockRestore()
+    confirmar.mockRestore()
+  })
+
+  it('sem mexer: sair não pergunta e não há barra de salvar no pé', async () => {
+    const tela = await configuracoes()
+    expect(saida.guarda?.({ fullPath: '/admin' })).toBeUndefined()
+    await tela.vm.$nextTick()
+    expect(tela.find('[data-parte="janela-confirmar"]').exists()).toBe(false)
     expect(tela.find('[data-parte="barra-salvar"]').exists()).toBe(false)
   })
 
-  it('com edição pendente: o F5 pergunta, e o Salvar do pé grava o mesmo que o do topo', async () => {
-    const { tela, descarregar, tira } = await montarComEscuta()
-    tira.mockRestore()
+  it('com edição pendente: sair pergunta na janela do sistema; "Continuar editando" fica', async () => {
+    saida.push.length = 0
+    const tela = await configuracoes()
     await tela.find('#cfg-razao').setValue('ZZ Parque Aquático LTDA')
-    expect(descarregar(), 'o F5 jogou fora a edição sem perguntar').toBe(true)
+    expect(saida.guarda?.({ fullPath: '/admin' }), 'a navegação passou sem perguntar').toBe(false)
+    await tela.vm.$nextTick()
+    const janela = tela.find('[data-parte="janela-confirmar"]')
+    expect(janela.text()).toContain('Sair sem salvar?')
+    await janela.find('[data-acao="cancelar"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(tela.find('[data-parte="janela-confirmar"]').exists()).toBe(false)
+    expect(saida.push).toEqual([])
+  })
+
+  it('"Sair sem salvar" refaz a navegação que foi segurada', async () => {
+    saida.push.length = 0
+    const tela = await configuracoes()
+    await tela.find('#cfg-razao').setValue('ZZ Parque Aquático LTDA')
+    saida.guarda?.({ fullPath: '/admin/equipe' })
+    await tela.vm.$nextTick()
+    await tela.find('[data-parte="janela-confirmar"] [data-acao="confirmar"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(saida.push).toEqual(['/admin/equipe'])
+  })
+
+  it('com edição pendente, o Salvar do pé grava o mesmo que o do topo', async () => {
+    const tela = await configuracoes()
+    await tela.find('#cfg-razao').setValue('ZZ Parque Aquático LTDA')
     const barra = tela.find('[data-parte="barra-salvar"]')
     expect(barra.exists(), 'no celular o único Salvar ficava lá no topo').toBe(true)
     expect(barra.text()).toContain('Alteração não salva')
@@ -115,21 +186,12 @@ describe('Dados e cobrança — edição pendente (matriz: "F5 perde calado" e "
     expect(patch?.opcoes.body).toEqual({ razaoSocial: 'ZZ Parque Aquático LTDA' })
   })
 
-  it('a chave colada pela metade também conta como o que se perde no F5', async () => {
-    const { tela, descarregar, tira } = await montarComEscuta()
-    tira.mockRestore()
+  it('a chave colada pela metade também segura a saída e o Salvar do pé', async () => {
+    const tela = await configuracoes()
     await tela.find('[data-parte="campo-chave"]').setValue('$aact_hmlg_123')
-    expect(descarregar()).toBe(true)
+    expect(saida.guarda?.({ fullPath: '/admin' })).toBe(false)
     expect(tela.find('[data-parte="barra-salvar"]').text()).toContain('A chave colada ainda não está inteira')
     expect((tela.find('[data-acao="salvar-rodape"]').element as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('fechar a tela solta a escuta (o F5 de outra tela não pergunta desta)', async () => {
-    const { tela, escuta, tira } = await montarComEscuta()
-    await tela.find('#cfg-razao').setValue('ZZ Parque Aquático LTDA')
-    tela.unmount()
-    expect(tira.mock.calls.some((c) => c[0] === 'beforeunload' && c[1] === escuta)).toBe(true)
-    tira.mockRestore()
   })
 })
 
