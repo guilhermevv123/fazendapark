@@ -14,8 +14,10 @@
  *   · o aviso do MP (`api/webhooks/mercadopago/[org].post.ts`) — rápido, mas é só um aviso;
  *   · a varredura de minuto em minuto dos Pix esperando (`varrerPixEsperando`) — é ela que garante
  *     o ingresso mesmo com o webhook mal configurado ou o aviso perdido;
- *   · o cancelamento do Pix de reserva vencida (`cancelarPixVencidos`) — o MP NÃO expira o Pix no
- *     vencimento (só marca 30 dias depois), então quem fecha a porta somos nós;
+ *   · o cancelamento do Pix de reserva vencida (`cancelarPixVencidos`) — o Pix vive no mínimo 30 min
+ *     no MP (o piso dele) e a reserva pode ser mais curta: entre a reserva cair e o `date_of_expiration`
+ *     (quando o MP cancela sozinho, `cancelled`/`expired`, segundo a doc) o QR ainda é pagável, então
+ *     quem fecha a porta na hora somos nós;
  *   · o reprocesso das entregas penduradas (`reprocessarFatosMp`).
  *
  * Todas perguntam ao MP com o token da organização DONA do pedido e aplicam a resposta. Nenhuma
@@ -57,13 +59,20 @@ export async function gerarPixDoPedido(a: {
   descricao: string
   expiraEm: Date
   comprador: { email: string; nome: string; cpf: string }
-}): Promise<PixDoPedido> {
+}, env: Record<string, string | undefined> = process.env): Promise<PixDoPedido> {
   const token = tokenDaOrg(a.org)
   const corpo = corpoDoPix({
     valorCents: a.valorCents, descricao: a.descricao, pedidoId: a.pedido.id, expiraEm: a.expiraEm,
     urlDeAviso: urlDoAviso(baseDoSite(), a.org.id), comprador: a.comprador,
   })
   const pix = await criarPix(token, corpo, `pix-${a.pedido.id}`)
+  // Conta de teste em produção: o token `APP_USR-` de conta de teste passa pela conferência do
+  // "Salvar" quando o /users/me não traz a etiqueta. O próprio Pix diz (`live_mode: false`): banco
+  // nenhum paga esse QR — cancela e quem chama cai no plano B (Asaas), com o motivo na trilha.
+  if (pix.id && pix.aoVivo === false && env.NODE_ENV === 'production') {
+    await cancelarPagamento(token, pix.id).catch(() => {})
+    throw new ErroMercadoPago(0, pix, 'a conta do Mercado Pago é de TESTE (live_mode=false): banco nenhum paga este Pix')
+  }
   if (!pix.id || !pix.copiaECola) {
     if (pix.id) await cancelarPagamento(token, pix.id).catch(() => {})
     throw new ErroMercadoPago(0, pix, 'o Mercado Pago não devolveu o QR do Pix')
@@ -350,6 +359,54 @@ export async function varrerPixEsperando(r: RodadaMp = {}): Promise<DesfechoMp[]
       const d = await processarPagamentoMp({ orgId: o.org_id, paymentId: o.mp_payment_id })
       feitos.push(d)
       if (!d.ok && d.passageira) break
+    }
+    return feitos
+  })
+}
+
+/**
+ * Os Pix JÁ PAGOS a conferir (039). O que acontece depois do pago — estorno feito direto no painel do
+ * MP, devolução por MED (contestação do Pix), chargeback — só chegava pelo aviso, e a doc não garante
+ * entrega. Com o aviso perdido o pedido seguia `pago` e o ingresso valia com o dinheiro devolvido.
+ *
+ * Quem tem evento pela frente (ou acabou de passar) é conferido a cada 30 min — é aí que um ingresso
+ * de dinheiro devolvido entra no parque; o resto, a cada 12 h, até 180 dias do pagamento (o prazo de
+ * devolução da doc). A fila anda pela última conferência (`mp_checked_at`, nunca conferido primeiro).
+ */
+export const SQL_PIX_PAGOS_A_CONFERIR = `
+  SELECT o.id, o.org_id, o.mp_payment_id
+    FROM orders o
+    JOIN events e ON e.id = o.event_id
+    -- sem token não há a quem perguntar — e "sem token" é falha passageira, que pararia a fila inteira
+    JOIN organizations org ON org.id = o.org_id AND org.mp_access_token IS NOT NULL
+   WHERE o.mp_payment_id IS NOT NULL
+     AND o.status IN ('pago', 'estornado_parcial')
+     AND o.paid_at > now() - interval '180 days'
+     AND o.paid_at < now() - interval '2 minutes'
+     AND (o.mp_checked_at IS NULL
+          OR o.mp_checked_at < now() - CASE WHEN e.ends_at > now() - interval '1 day'
+                                            THEN interval '30 minutes' ELSE interval '12 hours' END)
+   ORDER BY o.mp_checked_at NULLS FIRST, o.paid_at DESC
+   LIMIT $1`
+
+/**
+ * Pergunta ao MP por cada Pix já pago da vez e aplica o que mudou (estorno, MED, chargeback) pelo
+ * MESMO `processarPagamentoMp` do aviso — fato repetido não vira efeito duas vezes. Marca a
+ * conferência mesmo sem novidade (é o que faz a fila andar) e também na recusa de regra; na falha
+ * passageira não marca e para (o próximo minuto tenta de novo).
+ */
+export async function conferirPixPagos(r: RodadaMp = {}): Promise<DesfechoMp[]> {
+  const { limite = 20, ate = Date.now() + PRAZO_PADRAO_MS } = r
+  return umaPorVez('dt:mp-pix-pagos', [] as DesfechoMp[], async () => {
+    const feitos: DesfechoMp[] = []
+    for (const o of await q<any>(SQL_PIX_PAGOS_A_CONFERIR, [limite])) {
+      if (Date.now() >= ate) break
+      const d = await processarPagamentoMp({ orgId: o.org_id, paymentId: o.mp_payment_id })
+      feitos.push(d)
+      if (!d.ok && d.passageira) break
+      // recusa de regra (pagamento de outra conta do MP, 404): não trava a fila, mas não some calada
+      if (!d.ok) console.warn(`[mercadopago] conferência do Pix pago ${o.mp_payment_id}: ${d.erro}`)
+      await q(`UPDATE orders SET mp_checked_at = now() WHERE id = $1`, [o.id])
     }
     return feitos
   })

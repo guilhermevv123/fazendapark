@@ -11,11 +11,11 @@
  * primeira falha passageira: com o MP fora, os Pix seguintes ouviriam o mesmo não. Cada etapa por
  * si, como na de minuto (`varrer`): a que cai não leva as outras.
  *
- * Sem Mercado Pago ligado em organização nenhuma, as três consultas voltam vazias e a tarefa não
+ * Sem Mercado Pago ligado em organização nenhuma, as quatro consultas voltam vazias e a tarefa não
  * faz uma chamada de rede sequer.
  */
 import { varrer, type Etapa } from './liberar-expirados'
-import { cancelarPixVencidos, reprocessarFatosMp, varrerPixEsperando } from '../utils/mercadopago'
+import { cancelarPixVencidos, conferirPixPagos, reprocessarFatosMp, varrerPixEsperando } from '../utils/mercadopago'
 
 /** O teto da rodada inteira. Fica abaixo do minuto com folga pra a última pergunta terminar. */
 export const PRAZO_DA_RODADA_MS = 40_000
@@ -32,8 +32,8 @@ export function etapasDoMp(inicio = Date.now()): Etapa[] {
       falar: (n) => `[mercadopago] ${n} Pix com novidade aplicada (pago, cancelado ou estornado)`,
     },
     {
-      // O MP NÃO expira o Pix no vencimento (só marca 30 dias depois): o QR do pedido que caiu
-      // continuaria pagável. Cancelar aqui fecha a porta; o pago no vão é aplicado na hora.
+      // O Pix vive no mínimo 30 min no MP e a reserva pode cair antes: até o vencimento dele o QR do
+      // pedido que caiu continuaria pagável. Cancelar aqui fecha a porta; o pago no vão é aplicado na hora.
       nome: 'pix do mercado pago vencido',
       rodar: async () => {
         const r = await cancelarPixVencidos({ ate: inicio + 32_000 })
@@ -50,6 +50,15 @@ export function etapasDoMp(inicio = Date.now()): Etapa[] {
       rodar: async () => (await reprocessarFatosMp({ ate: inicio + PRAZO_DA_RODADA_MS }))
         .filter((d) => d.ok && !d.pendurado && (d.fatos ?? 0) > 0).length,
       falar: (n) => `[mercadopago] ${n} Pix pendurado(s) resolvido(s)`,
+    },
+    {
+      // Depois do pago, só o aviso contava o estorno feito no painel do MP, a MED e o chargeback
+      // (039). Aviso perdido = ingresso valendo com o dinheiro devolvido. Fica por último: é a
+      // etapa sem pressa, e usa só o que sobrou do prazo da rodada.
+      nome: 'pix do mercado pago já pago (conferência)',
+      rodar: async () => (await conferirPixPagos({ ate: inicio + PRAZO_DA_RODADA_MS }))
+        .filter((d) => d.ok && (d.fatos ?? 0) > 0).length,
+      falar: (n) => `[mercadopago] ${n} Pix já pago(s) com novidade (estorno, MED ou chargeback) aplicada`,
     },
   ]
 }

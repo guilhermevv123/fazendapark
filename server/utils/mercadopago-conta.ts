@@ -138,9 +138,12 @@ export function tokenDaOrg(org: OrgMercadoPago): string {
 export async function quemEhAConta(token: string): Promise<{ id: string; teste: boolean; apelido: string | null }> {
   const u: any = await chamar(token, 'GET', '/users/me', { prazoMs: 10_000 })
   const etiquetas: string[] = Array.isArray(u?.tags) ? u.tags.map(String) : []
+  // a doc diz que o token de conta de teste também começa com APP_USR: a etiqueta pode não vir,
+  // e o e-mail do usuário de teste do MP é sempre @testuser.com — os dois sinais contam
+  const emailDeTeste = /@testuser\.com$/i.test(String(u?.email ?? '').trim())
   return {
     id: String(u?.id ?? ''),
-    teste: ehTokenDeTeste(token) || etiquetas.includes('test_user'),
+    teste: ehTokenDeTeste(token) || etiquetas.includes('test_user') || emailDeTeste,
     apelido: u?.nickname ? String(u.nickname) : null,
   }
 }
@@ -231,6 +234,8 @@ export interface PixCriado {
   copiaECola: string | null
   qrBase64: string | null
   linkDoMp: string | null
+  /** `live_mode` do pagamento: `false` = criado numa conta/credencial de teste; `null` = não veio */
+  aoVivo: boolean | null
 }
 
 export async function criarPix(token: string, corpo: ReturnType<typeof corpoDoPix>, idempotencia: string): Promise<PixCriado> {
@@ -243,6 +248,7 @@ export async function criarPix(token: string, corpo: ReturnType<typeof corpoDoPi
     // no sandbox ele pode vir "" — quem chama gera a imagem a partir do copia-e-cola
     qrBase64: dados.qr_code_base64 ? String(dados.qr_code_base64) : null,
     linkDoMp: dados.ticket_url ? String(dados.ticket_url) : null,
+    aoVivo: typeof r?.live_mode === 'boolean' ? r.live_mode : null,
   }
 }
 

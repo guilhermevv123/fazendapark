@@ -11,9 +11,10 @@ const { PRAZO_DA_RODADA_MS, etapasDoMp } = await import('./mercadopago-pix')
 const { ETAPAS } = await import('./liberar-expirados')
 
 describe('tarefa mercadopago-pix', () => {
-  it('as três portas do MP, na ordem: esperando, vencido, pendurado', () => {
+  it('as quatro portas do MP, na ordem: esperando, vencido, pendurado, já pago (conferência, por último)', () => {
     expect(etapasDoMp().map((e) => e.nome)).toEqual([
       'pix do mercado pago esperando', 'pix do mercado pago vencido', 'pix do mercado pago pendurado',
+      'pix do mercado pago já pago (conferência)',
     ])
   })
 

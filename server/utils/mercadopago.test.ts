@@ -50,6 +50,8 @@ let chamadas: Chamada[] = []
 const pagamentos = new Map<string, any>()
 let proximoId = 8_100_000_000
 let mpFora = false
+/** a conta do token é de TESTE: o Pix nasce com live_mode false e o /users/me tem e-mail @testuser.com */
+let contaDeTeste = false
 /** como o MP responde o próximo estorno: devolvido na hora, em processamento, ou recusado */
 let estornoResponde: 'approved' | 'in_process' | 'rejected' = 'approved'
 const idsCriados: string[] = []
@@ -75,14 +77,17 @@ function responderMp(c: Chamada): { status: number; json: any } {
   if (mpFora) return { status: 503, json: { message: 'service unavailable' } }
   if (c.cabecalhos.Authorization !== `Bearer ${TOKEN}`) return { status: 401, json: { message: 'invalid_token' } }
   const m = c.caminho.match(/^\/v1\/payments\/(\d+)(\/refunds)?$/)
-  if (c.metodo === 'GET' && c.caminho === '/users/me') return { status: 200, json: { id: 777, nickname: 'ZZPARK', tags: [] } }
+  if (c.metodo === 'GET' && c.caminho === '/users/me') {
+    return { status: 200, json: { id: 777, nickname: 'ZZPARK', tags: [],
+      email: contaDeTeste ? 'test_user_123456@testuser.com' : 'financeiro@zzpark.com.br' } }
+  }
   if (c.metodo === 'POST' && c.caminho === '/v1/payments') {
     const id = String(++proximoId)
     idsCriados.push(id)
     const p = novoPagamento(id, c.corpo.transaction_amount, c.corpo.external_reference)
     pagamentos.set(id, p)
     // no sandbox a imagem vem vazia: quem chama desenha o QR a partir do copia-e-cola
-    return { status: 201, json: { ...p, point_of_interaction: { transaction_data: {
+    return { status: 201, json: { ...p, live_mode: !contaDeTeste, point_of_interaction: { transaction_data: {
       qr_code: `00020126580014br.gov.bcb.pix0136zz-${id}5204000053039865406${c.corpo.transaction_amount}`,
       qr_code_base64: '', ticket_url: `https://www.mercadopago.com.br/payments/${id}/ticket` } } } }
   }
@@ -425,6 +430,63 @@ describe('varreduras · o ingresso sai mesmo sem aviso, e o Pix vencido fecha', 
     expect(await ingressos(p.id)).toBe(1)
   })
 
+  /** um Pix pago de verdade (pelo caminho do aviso), com o pagamento recuado no tempo */
+  async function pixPago() {
+    const p = await pedidoMp({ minutosAtras: 15 })
+    aprovar(p.pid)
+    expect((await MP.processarPagamentoMp({ orgId, paymentId: p.pid })).ok).toBe(true)
+    await q(`UPDATE orders SET paid_at = now() - interval '10 minutes' WHERE id = $1`, [p.id])
+    return p
+  }
+  /** o comprador recebeu o dinheiro de volta por fora do sistema (painel do MP, MED) */
+  function devolvidoNoPainelDoMp(pid: string) {
+    const pg = pagamentos.get(pid)!
+    pg.refunds.push({ id: 9_990_001, payment_id: pg.id, amount: pg.transaction_amount, status: 'approved' })
+    Object.assign(pg, { status: 'refunded', status_detail: 'refunded', transaction_amount_refunded: pg.transaction_amount })
+  }
+
+  it('Pix JÁ PAGO devolvido pelo painel do MP, sem aviso: a conferência cancela o ingresso (039)', async () => {
+    const p = await pixPago()
+    expect(await ingressos(p.id)).toBe(1)
+    devolvidoNoPainelDoMp(p.pid)
+    const r = await MP.conferirPixPagos({ limite: 500 })
+    expect(r.find((x) => x.pedidoId === p.id)).toMatchObject({ ok: true })
+    expect((await pedido(p.id)).status).toBe('estornado')
+    expect(await ingressos(p.id), 'ingresso seguiu valendo com o dinheiro devolvido').toBe(0)
+    // conferido agora: a volta seguinte não pergunta pelo mesmo de novo
+    chamadas = []
+    await MP.conferirPixPagos({ limite: 500 })
+    expect(chamadas.filter((c) => c.caminho === `/v1/payments/${p.pid}`)).toEqual([])
+  })
+
+  it('conferência sem novidade: nada muda, mas a fila anda (mp_checked_at)', async () => {
+    const p = await pixPago()
+    await MP.conferirPixPagos({ limite: 500 })
+    expect((await pedido(p.id)).status).toBe('pago')
+    expect((await q1<any>(`SELECT mp_checked_at FROM orders WHERE id = $1`, [p.id]))!.mp_checked_at).not.toBeNull()
+  })
+
+  it('organização sem token: o pago dela não entra na fila (e "sem token" não trava a varredura)', async () => {
+    const p = await pixPago()
+    await q(`UPDATE organizations SET mp_access_token = NULL WHERE id = $1`, [orgId])
+    try {
+      chamadas = []
+      const r = await MP.conferirPixPagos({ limite: 500 })
+      expect(r.find((x) => x.pedidoId === p.id)).toBeUndefined()
+      expect(r.filter((x) => !x.ok && x.passageira)).toEqual([])
+    } finally {
+      await q(`UPDATE organizations SET mp_access_token = $2 WHERE id = $1`, [orgId, TOKEN])
+    }
+  })
+
+  it('MP fora na conferência: para na primeira e NÃO marca (o próximo minuto pergunta de novo)', async () => {
+    const p = await pixPago()
+    mpFora = true
+    const r = await MP.conferirPixPagos({ limite: 500 })
+    expect(r).toEqual([expect.objectContaining({ ok: false, passageira: true })])
+    expect((await q1<any>(`SELECT mp_checked_at FROM orders WHERE id = $1`, [p.id]))!.mp_checked_at).toBeNull()
+  })
+
   it('MP fora: a varredura para na PRIMEIRA pergunta (os outros ouviriam o mesmo não)', async () => {
     await pedidoMp({ minutosAtras: 3 })
     await pedidoMp({ minutosAtras: 3 })
@@ -752,6 +814,19 @@ describe('painel · o token do MP é conferido NA FONTE antes de gravar', () => 
     expect(JSON.stringify(tela)).not.toContain(SEGREDO)
   })
 
+  it('conta de TESTE com token APP_USR (sem etiqueta test_user): o e-mail @testuser.com marca teste', async () => {
+    contaDeTeste = true
+    try {
+      const r = await salvar({ tokenMercadoPago: TOKEN })
+      expect(r.status, r.recado).toBe(200)
+      expect((await colunas()).mp_test).toBe(true)
+    } finally {
+      contaDeTeste = false
+      await salvar({ tokenMercadoPago: TOKEN, segredoMercadoPago: SEGREDO })
+    }
+    expect((await colunas()).mp_test).toBe(false)
+  })
+
   it('desligar: token e assinatura somem, e o Pix volta pro Asaas', async () => {
     const r = await salvar({ tokenMercadoPago: null, segredoMercadoPago: null })
     expect(r.status, r.recado).toBe(200)
@@ -849,5 +924,33 @@ describe('troca de conta · o Pix aberto fecha antes de o token sair', () => {
     // todo esperando saiu da reserva (os deste caso e os que os de cima deixaram abertos):
     // cancelado devolve o lugar, pago no vão vira venda
     expect((await lote()).reserved).toBe(antes.reserved - esperandoNaOrg)
+  })
+})
+
+describe('conta de teste em produção · o próprio Pix denuncia (live_mode=false)', () => {
+  const novo = () => ({
+    org: { id: orgId, mp_access_token: TOKEN, mp_test: false },
+    pedido: { id: randomUUID(), code: 'PED-ZZLIVE' },
+    valorCents: 1000, descricao: 'teste live_mode', expiraEm: new Date(Date.now() + 20 * 60_000),
+    comprador: { email: 'comprador@exemplo.com', nome: 'Maria Teste', cpf: cpf() },
+  })
+  afterEach(() => { contaDeTeste = false })
+
+  it('em produção: cancela o Pix no MP e lança (quem chama cai no plano B)', async () => {
+    contaDeTeste = true
+    await expect(MP.gerarPixDoPedido(novo(), { NODE_ENV: 'production' })).rejects.toThrow(/TESTE.*live_mode=false/)
+    const criado = idsCriados[idsCriados.length - 1]!
+    expect(pagamentos.get(criado)!.status).toBe('cancelled')
+  })
+
+  it('fora de produção (sandbox de verdade): segue — é assim que se testa', async () => {
+    contaDeTeste = true
+    const pix = await MP.gerarPixDoPedido(novo(), { NODE_ENV: 'development' })
+    expect(pix.copiaECola).toMatch(/br\.gov\.bcb\.pix/)
+  })
+
+  it('conta de verdade em produção: segue normal', async () => {
+    const pix = await MP.gerarPixDoPedido(novo(), { NODE_ENV: 'production' })
+    expect(pix.paymentId).toMatch(/^\d+$/)
   })
 })
