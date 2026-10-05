@@ -29,11 +29,29 @@ const aba = ref<'ingressos' | 'dados'>(route.query.aba === 'dados' ? 'dados' : '
 /* ------------------------------------------------------------ ingressos */
 const pedidos = ref<any[] | null>(null)
 const falhaDosPedidos = ref('')
+
+/**
+ * A sessão caiu (05/10: o dono saiu numa aba e a OUTRA aba seguiu dizendo "Olá, Guilherme",
+ * com "confira a internet" em vermelho e "Entre na sua conta" solto — a internet estava ótima).
+ * 401 de qualquer pedido desta tela = fora da conta: a tela troca pro estado de fora e abre o
+ * entrar com o motivo certo.
+ */
+function sessaoCaiu(e: any): boolean {
+  if (Number(e?.statusCode ?? e?.status ?? e?.response?.status) !== 401) return false
+  estado.value = { ...estado.value, conta: null }
+  pedidos.value = null
+  fidelidade.value = null
+  reenvio.value = { enviando: false, recado: '', erro: false }
+  abrir('entrar', 'Sua sessão terminou. Entre de novo para ver os seus ingressos.')
+  return true
+}
+
 async function buscarPedidos() {
   falhaDosPedidos.value = ''
   try {
     pedidos.value = (await $fetch<any>('/api/conta/ingressos')).pedidos ?? []
   } catch (e: any) {
+    if (sessaoCaiu(e)) return
     console.error('[conta] não deu pra listar os pedidos', e?.data ?? e)
     falhaDosPedidos.value = 'Não deu pra carregar os seus ingressos agora. Confira a internet e tente de novo.'
   }
@@ -41,7 +59,7 @@ async function buscarPedidos() {
 /** Volte Mais (037): quantos retornos com desconto a conta tem — o aviso some se a promoção está desligada */
 const fidelidade = ref<any | null>(null)
 async function buscarFidelidade() {
-  try { fidelidade.value = await $fetch<any>('/api/conta/fidelidade') } catch { fidelidade.value = null }
+  try { fidelidade.value = await $fetch<any>('/api/conta/fidelidade') } catch (e: any) { if (!sessaoCaiu(e)) fidelidade.value = null }
 }
 const dataCurtaDaFidelidade = (iso?: string | null) => (iso ? iso.split('-').reverse().join('/') : '')
 const proximos = computed(() => (pedidos.value ?? []).filter((p) => !passou(p)))
@@ -63,6 +81,7 @@ async function reenviarConfirmacao() {
       recado: r.jaConfirmado ? 'Seu e-mail já está confirmado.' : `Mandamos o link para ${r.email}. Confira também o spam.`,
     }
   } catch (e: any) {
+    if (sessaoCaiu(e)) return
     reenvio.value = { enviando: false, erro: true, recado: e?.data?.statusMessage || 'Não deu pra mandar agora. Tente de novo.' }
   }
 }
@@ -133,10 +152,20 @@ async function sairDaConta() {
   navigateTo('/')
 }
 
+/** Aba que volta pra frente confere a sessão de novo: saiu em outra aba, esta fica sabendo na hora. */
+async function conferirSessao() {
+  if (document.hidden || !conta.value) return
+  try {
+    const r = await $fetch<any>('/api/conta/eu')
+    if (!r?.conta) sessaoCaiu({ statusCode: 401 })
+  } catch (e: any) { sessaoCaiu(e) }
+}
 onMounted(async () => {
+  document.addEventListener('visibilitychange', conferirSessao)
   const s = await garantir(null)
   if (!s.conta) return void abrir('entrar', 'Entre para ver os seus ingressos.')
 })
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', conferirSessao))
 // a conta entrou (agora, ou pela janela): carrega o que é dela
 watch(conta, (c) => {
   if (!c) return
@@ -236,15 +265,15 @@ useHead({ title: 'Minha conta' })
         <!-- e-mail ainda não confirmado (035): não trava nada, mas é por ele que o ingresso chega -->
         <div v-if="conta.emailConfirmado === false" class="faixa-aviso mt-4" data-parte="confirmar-email">
           <p>
-            <strong>Confirme o seu e-mail.</strong> Mandamos um link para <strong>{{ conta.email }}</strong> —
-            é por esse e-mail que chegam os seus ingressos.
+            <strong>Confirme o seu e-mail.</strong> É por <strong>{{ conta.email }}</strong> que chegam os seus
+            ingressos — toque abaixo e abra o link que vamos mandar.
           </p>
           <p v-if="reenvio.recado" class="mt-1" :class="reenvio.erro ? 'font-semibold text-erro' : ''" role="status">
             {{ reenvio.recado }}
           </p>
           <button v-else type="button" class="mt-1 font-semibold text-acao underline" :disabled="reenvio.enviando"
                   data-parte="reenviar-confirmacao" @click="reenviarConfirmacao">
-            {{ reenvio.enviando ? 'Enviando…' : 'Mandar o link de novo' }}
+            {{ reenvio.enviando ? 'Enviando…' : 'Mandar o link de confirmação' }}
           </button>
         </div>
 
