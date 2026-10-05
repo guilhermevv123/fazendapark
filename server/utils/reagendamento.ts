@@ -34,6 +34,18 @@ import { faceDoTipo, precificar, type ModoTaxa } from './dinheiro'
 import { LOTE_DA_VITRINE, portaDeVenda } from '../api/e/[slug].get'
 
 /** O ingresso como o reagendamento precisa ver. */
+/**
+ * Reagendamento pelo site LIGADO? (dono, 05/10: "quando a pessoa clicar vai aparecer em manutenção").
+ * Desligado por padrão; religa com `REAGENDAR_LIGADO=1` no ambiente, sem mexer em código. A trava é
+ * no SERVIDOR (as duas rotas), não só na tela: o botão escondido não impede quem chama a rota direto.
+ */
+export function reagendamentoLigado(env: Record<string, string | undefined> = process.env): boolean {
+  return env.REAGENDAR_LIGADO === '1'
+}
+
+export const RECADO_REAGENDAMENTO_EM_MANUTENCAO =
+  'O reagendamento pelo site está em manutenção. Seu ingresso continua valendo para o dia da compra.'
+
 export interface IngressoParaReagendar {
   id: string
   codigo: string

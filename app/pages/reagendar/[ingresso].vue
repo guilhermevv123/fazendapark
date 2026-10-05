@@ -19,6 +19,8 @@ const conta = computed(() => estado.value.conta)
 const dados = ref<any | null>(null)
 const carregando = ref(true)
 const falha = ref<string | null>(null)
+/** a rota respondeu "em manutenção" (503, dono 05/10): a tela diz isso e mais nada */
+const manutencao = ref<string | null>(null)
 
 async function carregar() {
   carregando.value = true
@@ -26,7 +28,9 @@ async function carregar() {
   try {
     dados.value = await $fetch(`/api/reagendamento/${encodeURIComponent(ingressoId)}`)
   } catch (e: any) {
-    if (e?.statusCode === 401) {
+    if (e?.statusCode === 503 && e?.data?.data?.tipo === 'manutencao') {
+      manutencao.value = e?.data?.statusMessage || 'O reagendamento pelo site está em manutenção.'
+    } else if (e?.statusCode === 401) {
       dados.value = null
       abrir('entrar', 'Entre na sua conta para reagendar o ingresso.')
     } else {
@@ -40,6 +44,9 @@ async function carregar() {
 onMounted(async () => {
   const s = await garantir()
   if (!s.conta) {
+    // em manutenção a rota responde antes de olhar o login: não pede pra entrar à toa
+    await carregar()
+    if (manutencao.value) return
     carregando.value = false
     abrir('entrar', 'Entre na sua conta para reagendar o ingresso.')
     return
@@ -108,9 +115,21 @@ useHead({ title: 'Reagendar ingresso' })
         ← Voltar para o ingresso
       </NuxtLink>
       <h1 class="titulo mt-2 text-2xl font-semibold text-tinta sm:text-3xl">Reagendar ingresso</h1>
-      <p class="mt-1 text-tinta-suave">Escolha outro dia. O ingresso atual é trocado pelo novo, sem custo.</p>
+      <p v-if="!manutencao" class="mt-1 text-tinta-suave">Escolha outro dia. O ingresso atual é trocado pelo novo, sem custo.</p>
 
       <p v-if="carregando" class="mt-8 text-tinta-suave" role="status">Carregando os dias disponíveis…</p>
+
+      <section v-else-if="manutencao" class="card mt-6 text-center" data-parte="reagendar-manutencao">
+        <span class="mx-auto grid size-14 place-items-center rounded-2xl bg-sun-100 text-sun-800" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+          </svg>
+        </span>
+        <h2 class="titulo mt-4 text-xl font-semibold text-tinta">Reagendamento em manutenção</h2>
+        <p class="mt-2 text-tinta-corpo">{{ manutencao }}</p>
+        <button type="button" class="btn-secundario mt-6 justify-center py-3" @click="$router.back()">Voltar</button>
+      </section>
 
       <div v-else-if="!conta" class="card mt-6 text-center">
         <p class="font-semibold text-tinta">Entre na sua conta para reagendar.</p>

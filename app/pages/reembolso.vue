@@ -1,8 +1,7 @@
 <script setup lang="ts">
 /**
- * "Pedir reembolso" (dono, 30/09): por enquanto a página diz que o reembolso pelo site está em
- * manutenção e oferece o que funciona — reagendar pra outro dia. Chega aqui pelo botão do
- * bilhete (`/ingressos/<pedido>`), com `?pedido=` pra voltar pro mesmo lugar.
+ * Reembolso (dono, 05/10): o parque não faz reembolso pelo site e o botão "Pedir reembolso" saiu do
+ * bilhete. A página fica só pra quem chegar por um link antigo: diz isso e leva de volta.
  */
 const route = useRoute()
 const pedido = computed(() => {
@@ -24,24 +23,16 @@ useHead({ title: 'Reembolso' })
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
           </svg>
         </span>
-        <h1 class="titulo mt-4 text-2xl font-semibold text-tinta">Reembolso em manutenção</h1>
+        <h1 class="titulo mt-4 text-2xl font-semibold text-tinta">Reembolso pelo site indisponível</h1>
         <p class="mt-2 text-tinta-corpo">
-          O pedido de reembolso pelo site está passando por manutenção e volta em breve.
-        </p>
-        <p class="mt-1 text-tinta-suave">
-          Enquanto isso, você pode <strong class="text-tinta">reagendar</strong> o seu ingresso para outro dia, sem custo.
+          O pedido de reembolso não é feito pelo site. Em caso de dúvida sobre o seu ingresso, fale com o parque.
         </p>
 
         <div class="mt-6 grid gap-2 sm:grid-cols-2">
-          <NuxtLink v-if="pedido" :to="`/ingressos/${pedido}`" class="btn-primario justify-center py-3">
-            Reagendar meu ingresso
+          <NuxtLink :to="pedido ? `/ingressos/${pedido}` : '/conta'" class="btn-primario justify-center py-3">
+            {{ pedido ? 'Voltar para o ingresso' : 'Ver meus ingressos' }}
           </NuxtLink>
-          <NuxtLink v-else to="/conta" class="btn-primario justify-center py-3">
-            Ver meus ingressos
-          </NuxtLink>
-          <NuxtLink :to="pedido ? `/ingressos/${pedido}` : '/'" class="btn-secundario justify-center py-3">
-            Voltar
-          </NuxtLink>
+          <NuxtLink to="/" class="btn-secundario justify-center py-3">Página inicial</NuxtLink>
         </div>
       </section>
     </div>

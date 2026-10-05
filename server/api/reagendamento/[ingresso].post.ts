@@ -4,11 +4,17 @@
  * resposta traz o código dele (`/ingressos/<pedido>`). Regras em `server/utils/reagendamento.ts`.
  */
 import { contaDaSessaoDoCliente } from '../../utils/conta-do-cliente'
-import { reagendarIngressoDoCliente, RecusaDoReagendamento } from '../../utils/reagendamento'
+import {
+  RECADO_REAGENDAMENTO_EM_MANUTENCAO, reagendamentoLigado, reagendarIngressoDoCliente, RecusaDoReagendamento,
+} from '../../utils/reagendamento'
 
 const UUID = /^[0-9a-f-]{36}$/i
 
 export default defineEventHandler(async (event) => {
+  // em manutenção (dono, 05/10): antes até do login — não há o que pedir pra entrar
+  if (!reagendamentoLigado()) {
+    throw createError({ statusCode: 503, statusMessage: RECADO_REAGENDAMENTO_EM_MANUTENCAO, data: { tipo: 'manutencao' } })
+  }
   const conta = await contaDaSessaoDoCliente(event)
   if (!conta) {
     throw createError({ statusCode: 401, statusMessage: 'Entre na sua conta para reagendar.', data: { tipo: 'conta' } })

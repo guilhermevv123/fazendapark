@@ -48,15 +48,14 @@ const links = () => tela!.findAll('[data-parte="acoes-do-ingresso"] a').map((a) 
   texto: a.text().trim(), para: a.attributes('href') ?? a.attributes('to'),
 }))
 
-describe('/ingressos · botões de reagendar e reembolso', () => {
-  it('ingresso vivo: "Pedir reembolso" (→ /reembolso) ao lado de "Reagendar" (→ /reagendar/<id>)', async () => {
+describe('/ingressos · botão de reagendar (o de reembolso saiu, 05/10)', () => {
+  it('ingresso vivo: só "Reagendar" (→ /reagendar/<id>); nenhum "Pedir reembolso"', async () => {
     await abrirPedido(pedido([INGRESSO(1)]))
-    expect(links()).toEqual([
-      { texto: 'Pedir reembolso', para: '/reembolso?pedido=PED-ZZRG-0001' },
-      { texto: 'Reagendar', para: '/reagendar/t-1' },
-    ])
+    expect(links()).toEqual([{ texto: 'Reagendar', para: '/reagendar/t-1' }])
+    expect(tela!.text()).not.toContain('reembolso')
+    expect(tela!.find('a[href^="/reembolso"]').exists()).toBe(false)
   })
-  it('um par de botões POR ingresso', async () => {
+  it('um botão POR ingresso', async () => {
     await abrirPedido(pedido([INGRESSO(1), INGRESSO(2)]))
     expect(tela!.findAll('[data-parte="acoes-do-ingresso"]')).toHaveLength(2)
     expect(tela!.find('a[href="/reagendar/t-2"]').exists()).toBe(true)
@@ -95,6 +94,10 @@ const DADOS = (extra: Record<string, any> = {}) => ({
   opcoes: [OPCAO('domingo', DOMINGO, 1), OPCAO('outro-sabado', SABADO, 1)],
   ...extra,
 })
+/** o erro do $fetch como o ofetch entrega: status + corpo do createError em `data` */
+const erroDaRota = (statusCode: number, statusMessage: string, tipo: string) =>
+  Object.assign(new Error(statusMessage), { statusCode, data: { statusCode, statusMessage, data: { tipo } } })
+
 async function abrirReagendar(respostas: Record<string, any>) {
   tela = await montarTela(await import('../pages/reagendar/[ingresso].vue'), {
     rota: { params: { ingresso: 't-1' }, path: '/reagendar/t-1' },
@@ -145,10 +148,25 @@ describe('/reagendar/<ingresso>', () => {
     expect(tela!.text()).toContain('Nenhum outro dia disponível para troca agora')
     expect(tela!.text()).toContain('Seu ingresso atual continua valendo')
   })
-  it('sem conta: não busca o ingresso e pede pra entrar', async () => {
-    await abrirReagendar({ '/api/conta/eu': { conta: null, exigeConta: false, social: {} } })
-    expect(chamadas.some((c) => c.url.startsWith('/api/reagendamento'))).toBe(false)
+  it('sem conta: a rota diz 401 e a tela pede pra entrar', async () => {
+    await abrirReagendar({ '/api/conta/eu': { conta: null, exigeConta: false, social: {} },
+      '/api/reagendamento/t-1': erroDaRota(401, 'Entre na sua conta para reagendar.', 'conta') })
     expect(tela!.text()).toContain('Entre na sua conta para reagendar')
+    expect(tela!.find('[data-parte="reagendar-manutencao"]').exists()).toBe(false)
+  })
+  it('em manutenção (rota 503): mostra o aviso, sem dias, sem pedir login — com ou sem conta', async () => {
+    for (const eu of [CONTA, { conta: null, exigeConta: false, social: {} }]) {
+      await abrirReagendar({ '/api/conta/eu': eu,
+        '/api/reagendamento/t-1': erroDaRota(503, 'O reagendamento pelo site está em manutenção. Seu ingresso continua valendo para o dia da compra.', 'manutencao') })
+      await new Promise((r) => setTimeout(r, 0)); await nextTick()
+      const aviso = tela!.find('[data-parte="reagendar-manutencao"]')
+      expect(aviso.exists()).toBe(true)
+      expect(aviso.text()).toContain('Reagendamento em manutenção')
+      expect(aviso.text()).toContain('continua valendo')
+      expect(tela!.findAll('[data-parte="dia-de-troca"]')).toHaveLength(0)
+      expect(tela!.text()).not.toContain('Entre na sua conta')
+      tela!.unmount(); tela = null
+    }
   })
 })
 
@@ -169,12 +187,13 @@ describe('/reagendar · a navegação depois da troca', () => {
 
 /* ============================================================ /reembolso */
 describe('/reembolso', () => {
-  it('diz que está em manutenção e leva de volta pro ingresso pra reagendar', async () => {
+  it('link antigo: diz que o reembolso não é pelo site e leva de volta pro ingresso (não oferece reagendar)', async () => {
     tela = await montarTela(await import('../pages/reembolso.vue'), {
       rota: { path: '/reembolso', query: { pedido: 'PED-ZZRG-0001' } }, stubs: STUBS,
     })
-    expect(tela.text()).toContain('Reembolso em manutenção')
-    expect(tela.find('a[href="/ingressos/PED-ZZRG-0001"]').text()).toContain('Reagendar meu ingresso')
+    expect(tela.text()).toContain('Reembolso pelo site indisponível')
+    expect(tela.find('a[href="/ingressos/PED-ZZRG-0001"]').text()).toContain('Voltar para o ingresso')
+    expect(tela.text()).not.toMatch(/reagendar/i)
   })
   it('pedido torto na URL não vira link: cai em "Ver meus ingressos"', async () => {
     tela = await montarTela(await import('../pages/reembolso.vue'), {

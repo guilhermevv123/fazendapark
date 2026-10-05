@@ -62,7 +62,7 @@ const estado: Record<string, { t: string; c: string }> = {
  * remetente e o destinatário entrarem os dois).
  */
 /*
- * Reagendar / pedir reembolso (dono, 30/09): só no ingresso que ainda ENTRA,
+ * Reagendar (dono, 30/09): só no ingresso que ainda ENTRA,
  * antes de o dia começar, e fora do convite da casa. Quem decide de verdade é
  * a rota (`server/utils/reagendamento.ts`); aqui é só não oferecer botão que
  * vai dar "não pode".
@@ -434,13 +434,10 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               </div>
             </dl>
 
-            <!-- Reembolso e reagendamento (dono, 30/09): lado a lado no pé do bilhete. -->
-            <div v-if="podeTrocar(t)" data-parte="acoes-do-ingresso"
-                 class="mx-6 mb-6 grid grid-cols-2 gap-2 print:hidden">
-              <NuxtLink :to="`/reembolso?pedido=${encodeURIComponent(data.pedido)}`"
-                        class="btn-secundario justify-center text-sm">
-                Pedir reembolso
-              </NuxtLink>
+            <!-- Reagendar no pé do bilhete (dono, 30/09). "Pedir reembolso" saiu (dono, 05/10: o
+                 parque não faz reembolso pelo site); o reagendar abre "em manutenção" enquanto a
+                 rota estiver desligada (REAGENDAR_LIGADO, server/utils/reagendamento.ts). -->
+            <div v-if="podeTrocar(t)" data-parte="acoes-do-ingresso" class="mx-6 mb-6 grid print:hidden">
               <NuxtLink :to="`/reagendar/${t.id}`" class="btn-primario justify-center text-sm">
                 Reagendar
               </NuxtLink>

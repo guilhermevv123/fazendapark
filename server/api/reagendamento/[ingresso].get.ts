@@ -5,10 +5,14 @@
  */
 import { contaDaSessaoDoCliente } from '../../utils/conta-do-cliente'
 import {
-  ingressoDaContaParaReagendar, motivoSemReagendamento, opcoesDeReagendamento,
+  RECADO_REAGENDAMENTO_EM_MANUTENCAO, reagendamentoLigado, ingressoDaContaParaReagendar, motivoSemReagendamento, opcoesDeReagendamento,
 } from '../../utils/reagendamento'
 
 export default defineEventHandler(async (event) => {
+  // em manutenção (dono, 05/10): antes até do login — não há o que pedir pra entrar
+  if (!reagendamentoLigado()) {
+    throw createError({ statusCode: 503, statusMessage: RECADO_REAGENDAMENTO_EM_MANUTENCAO, data: { tipo: 'manutencao' } })
+  }
   setHeader(event, 'Cache-Control', 'no-store')
   const conta = await contaDaSessaoDoCliente(event)
   if (!conta) {

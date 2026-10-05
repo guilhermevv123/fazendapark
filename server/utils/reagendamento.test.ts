@@ -23,6 +23,7 @@ const { db, q, q1 } = await import('./db')
 const {
   ingressoDaContaParaReagendar, motivoSemReagendamento, opcoesDeReagendamento,
   reagendarIngressoDoCliente, RecusaDoReagendamento,
+  reagendamentoLigado,
 } = await import('./reagendamento')
 
 const MARCA = `zzreag${Date.now().toString(36)}`
@@ -261,5 +262,14 @@ describe('reagendamento · a troca', () => {
     expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1)
     const novos = await q<any>(`SELECT id FROM orders WHERE rescheduled_from_ticket_id = $1`, [id])
     expect(novos).toHaveLength(1)
+  })
+})
+
+describe('reagendamento · interruptor (dono, 05/10: "em manutenção")', () => {
+  it('desligado por padrão; só REAGENDAR_LIGADO=1 liga', () => {
+    expect(reagendamentoLigado({})).toBe(false)
+    expect(reagendamentoLigado({ REAGENDAR_LIGADO: '0' })).toBe(false)
+    expect(reagendamentoLigado({ REAGENDAR_LIGADO: 'true' })).toBe(false)
+    expect(reagendamentoLigado({ REAGENDAR_LIGADO: '1' })).toBe(true)
   })
 })
