@@ -84,7 +84,10 @@ export default defineEventHandler(async (event) => {
             (${PEDIDO_VIVO('o.')}) AS vivo,
             c.name AS comprador, c.email,
             e.id AS event_id, e.name AS evento, e.slug, e.starts_at, e.ticket_noun,
-            e.venue_name, e.city, e.state, e.banner_url, e.timezone
+            e.venue_name, e.city, e.state, e.banner_url, e.timezone,
+            -- Volte Mais (037): o retorno com desconto leva o selo da consumação no ingresso
+            (SELECT json_build_object('nome', lp.nome, 'consumacao_bps', lp.consumacao_bps)
+               FROM loyalty_programs lp WHERE lp.id = o.loyalty_program_id) AS fidelidade
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
        JOIN events e ON e.id = o.event_id
@@ -188,6 +191,8 @@ export default defineEventHandler(async (event) => {
      * chamar de cortesia a compra que a pessoa fez com o cupom dela.
      */
     cortesia: o.channel === CANAL_CORTESIA,
+    /** Volte Mais (037): pedido de retorno com desconto — o ingresso mostra o selo da consumação */
+    fidelidade: o.fidelidade ? { nome: o.fidelidade.nome, consumacaoPct: Number(o.fidelidade.consumacao_bps) / 100 } : null,
     gratuito: Number(o.total_cents) === 0 && o.channel !== CANAL_CORTESIA,
     // Sem comprador é ausência, não string vazia: `null` deixa a tela escolher
     // o que escrever (no convite, o nome de quem recebe está no INGRESSO).

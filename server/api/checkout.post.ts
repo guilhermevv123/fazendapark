@@ -24,12 +24,13 @@
  */
 import type { PoolClient } from 'pg'
 import { z } from 'zod'
-import { q, q1, tx } from '../utils/db'
+import { db, q, q1, tx } from '../utils/db'
 import { CadastroInvalido, prepararCadastro, type Cadastro } from '../utils/cadastro'
 import {
   EstoqueInsuficiente, liberar, LoteIndisponivel, prazoDeReserva, reservar,
 } from '../utils/estoque'
-import { faceDoTipo, type ModoTaxa } from '../utils/dinheiro'
+import { faceDoTipo, somarPedido, type ModoTaxa } from '../utils/dinheiro'
+import { beneficioDeFidelidade, travarCpfNaFidelidade, type BeneficioNoPedido } from '../utils/fidelidade'
 import {
   aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
@@ -327,7 +328,11 @@ export default defineEventHandler(async (event) => {
   const online = pagamentoOnline(ev, dados.forma)
   if (!online.ok) {
     const face = linhas.reduce((soma, l) => soma + l.faceUnitCents * l.quantidade, 0)
-    if (face > 0 && !dados.cupom) {
+    // Volte Mais (037) configurado como "retorno grátis" (100%) zera o pedido sem gateway nenhum —
+    // a mesma exceção do cupom. A conta aqui é só a PRÉVIA (sem trava); quem decide é a transação.
+    const zeraPelaFidelidade = face > 0 && !dados.cupom && !!conta
+      && await fidelidadeZeraOPedido(ev, documento, dados.itens, linhas, porTipo, face)
+    if (face > 0 && !dados.cupom && !zeraPelaFidelidade) {
       console.warn(`[checkout] pagamento online indisponível em ${ev.slug}: ${online.motivo}`)
       throw createError({ statusCode: 503, statusMessage: online.recado,
         data: { tipo: 'pagamento_indisponivel', motivo: online.motivo } })
@@ -370,6 +375,25 @@ export default defineEventHandler(async (event) => {
   const pedido = await tx(async (c) => {
     await conferirTetoPorDocumento(c, ev, dados.itens, documento, porLote, porTipo, linhas)
 
+    // Volte Mais (037): o desconto de fidelidade é decidido AQUI, com a trava do CPF no programa
+    // na mão — duas abas do mesmo cliente não gastam o mesmo retorno. Só com a CONTA na sessão (o
+    // CPF é o dela, não o do corpo) e sem cupom (não acumulam). A regra inteira mora em
+    // utils/fidelidade.ts; aqui só entram as linhas com a face JÁ do tipo (meia não recebe).
+    let fidelidade: BeneficioNoPedido | null = null
+    if (conta) {
+      await travarCpfNaFidelidade(c, ev.org_id, documento)
+      fidelidade = await beneficioDeFidelidade(c, {
+        orgId: ev.org_id, evento: { id: ev.id, inicio: ev.starts_at, fuso: ev.timezone }, documento,
+        linhas: dados.itens.map((it, i) => {
+          const t = it.ticketTypeId ? porTipo.get(it.ticketTypeId) : null
+          return { faceUnitCents: linhas[i]!.faceUnitCents, quantidade: it.quantidade,
+                   tipoComDesconto: !!t && (Number(t.discount_bps) > 0 || !!t.requires_document) }
+        }),
+        temCupom: !!dados.cupom,
+      })
+    }
+    const comFidelidade = fidelidade?.aplica ? fidelidade : null
+
     // O que a vitrine mostra fechado, a porta recusa — e com a frase dela.
     // Vem antes de `reservar` porque é uma pergunta de outra natureza ("este
     // lote está à venda?") e porque o recado dela é mais útil que "Lote não
@@ -408,7 +432,10 @@ export default defineEventHandler(async (event) => {
         })
       : null
 
-    const total = aplicarCupom(linhas, Number(ev.fee_bps), modo, cupom)
+    // Fidelidade e cupom não acumulam (o benefício nem é calculado com cupom): um OU outro.
+    const total = comFidelidade
+      ? somarPedido(linhas, Number(ev.fee_bps), modo, { kind: 'fixo', value: comFidelidade.cents })
+      : aplicarCupom(linhas, Number(ev.fee_bps), modo, cupom)
     // Sobre o total JÁ com cupom: é ele que o gateway parcela.
     const parcelas = parcelasDoPedido(dados.forma, dados.parcelas, total.totalCents)
 
@@ -421,9 +448,10 @@ export default defineEventHandler(async (event) => {
       `INSERT INTO orders (org_id, event_id, customer_id, code, status, channel,
                            face_cents, fee_cents, platform_cents, discount_cents, total_cents,
                            payment_method, installments, promo_code_id, promoter_id, expires_at,
-                           cadastro_pendente, customer_account_id)
+                           cadastro_pendente, customer_account_id,
+                           loyalty_program_id, loyalty_discount_cents)
        VALUES ($1,$2,$3,$4,'aguardando_pagamento','online',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-               $15::jsonb, $16)
+               $15::jsonb, $16, $17, $18)
        RETURNING id, code`,
       [ev.org_id, ev.id, cliente.id, codigo,
        total.faceCents, total.feeCents, total.platformCents, total.discountCents, total.totalCents,
@@ -431,7 +459,8 @@ export default defineEventHandler(async (event) => {
        cupom?.id ?? null, promoter?.id ?? null, expiraEm,
        JSON.stringify(cadastroPendente({
          documento, nome: dados.comprador.nome, telefone: dados.comprador.telefone ?? null, cadastro,
-       })), conta?.id ?? null])
+       })), conta?.id ?? null,
+       comFidelidade?.programa.id ?? null, comFidelidade ? total.discountCents : 0])
 
     for (let i = 0; i < dados.itens.length; i++) {
       const it = dados.itens[i]
@@ -456,7 +485,12 @@ export default defineEventHandler(async (event) => {
     if (cupom) await c.query(`UPDATE promo_codes SET uses = uses + 1 WHERE id = $1`, [cupom.id])
 
     return { id: ord.rows[0].id, code: ord.rows[0].code, customerId: cliente.id,
-             asaasCustomerId: cliente.asaas_customer_id, total, parcelas }
+             asaasCustomerId: cliente.asaas_customer_id, total, parcelas,
+             fidelidade: comFidelidade
+               ? { nome: comFidelidade.programa.nome, descontoCents: total.discountCents,
+                   ingressos: comFidelidade.ingressos, restantesDepois: comFidelidade.restantesDepois,
+                   consumacaoBps: comFidelidade.programa.consumacao_bps }
+               : null }
   }).catch((e) => {
     if (e instanceof CupomRecusado) {
       // código que não existe é o sinal de dicionário (B04)
@@ -512,7 +546,8 @@ export default defineEventHandler(async (event) => {
   // Pedido gratuito (cortesia/100% off) não passa por gateway.
   if (total.totalCents === 0) {
     await confirmarGratuito(pedido.id)
-    return { ok: true, pedido: pedido.code, pedidoId: pedido.id, status: 'pago', totalCents: 0 }
+    return { ok: true, pedido: pedido.code, pedidoId: pedido.id, status: 'pago', totalCents: 0,
+             fidelidade: pedido.fidelidade }
   }
 
   // ----------------------------------- 6. gateway, FORA da transação ------
@@ -603,6 +638,7 @@ export default defineEventHandler(async (event) => {
     faceCents: total.faceCents,
     feeCents: total.feeCents,
     descontoCents: total.discountCents,
+    fidelidade: pedido.fidelidade,
     pagamento: {
       forma: dados.forma,
       pixPayload: pix?.payload ?? null,
@@ -668,6 +704,7 @@ async function cobrarPixNoMercadoPago(
     faceCents: total.faceCents,
     feeCents: total.feeCents,
     descontoCents: total.discountCents,
+    fidelidade: pedido.fidelidade,
     pagamento: {
       forma: 'pix',
       pixPayload: pix.copiaECola,
@@ -713,6 +750,7 @@ async function cobrarSimulado(
     faceCents: total.faceCents,
     feeCents: total.feeCents,
     descontoCents: total.discountCents,
+    fidelidade: pedido.fidelidade,
     simulado: true,
     pagamento: {
       forma: dados.forma,
@@ -1272,3 +1310,22 @@ async function conferirTetoPorDocumento(
 // Re-exportado porque o balcão e os testes já importavam daqui. A regra em si
 // mora em utils/documento.ts, uma cópia só pros dois caixas.
 export { cpfValido }
+
+/**
+ * A fidelidade (037) zera ESTE pedido? Só pra pré-checagem de "dá pra cobrar online" — sem trava;
+ * a decisão de verdade é tomada de novo dentro da transação, com o CPF travado.
+ */
+async function fidelidadeZeraOPedido(
+  ev: any, documento: string, itens: { ticketTypeId?: string | null; quantidade: number }[],
+  linhas: { faceUnitCents: number; quantidade: number }[], porTipo: Map<string, any>, face: number,
+): Promise<boolean> {
+  const b = await beneficioDeFidelidade(db(), {
+    orgId: ev.org_id, evento: { id: ev.id, inicio: ev.starts_at, fuso: ev.timezone }, documento, temCupom: false,
+    linhas: itens.map((it, i) => {
+      const t = it.ticketTypeId ? porTipo.get(it.ticketTypeId) : null
+      return { faceUnitCents: linhas[i]!.faceUnitCents, quantidade: it.quantidade,
+               tipoComDesconto: !!t && (Number(t.discount_bps) > 0 || !!t.requires_document) }
+    }),
+  })
+  return b.aplica && b.cents >= face
+}

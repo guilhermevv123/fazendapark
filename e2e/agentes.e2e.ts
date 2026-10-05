@@ -30,43 +30,45 @@ test.describe('master', () => {
     await page.goto('/admin/agentes')
     await hidratada(page)
     if (await page.getByText(/painel ainda não ligado|não consegui ler/i).count()) test.skip(true, 'automação fora do ar')
-    await page.getByRole('combobox', { name: 'Canal' }).selectOption('instagram')
-    await page.getByRole('button', { name: /querem comprar/i }).click()
+    // desde o painel em formato chat (a42dbe1) o canal é um grupo de botões, não um select
+    const canal = page.getByRole('group', { name: 'Canal' })
+    const lista = page.locator('[data-parte="chat-conversas"]')
+    await canal.getByRole('button', { name: 'Instagram' }).click()
+    await lista.getByRole('button', { name: /querem comprar/i }).click()
     await page.getByRole('searchbox', { name: /buscar conversa/i }).fill('ingresso')
     await expect(page).toHaveURL(/canal=instagram/)
     await expect(page).toHaveURL(/recorte=compra/)
     await expect(page).toHaveURL(/q=ingresso/)
     await page.reload()
     await hidratada(page)
-    await expect(page.getByRole('combobox', { name: 'Canal' })).toHaveValue('instagram')
+    await expect(canal.getByRole('button', { name: 'Instagram' })).toHaveAttribute('aria-pressed', 'true')
+    await expect(lista.getByRole('button', { name: /querem comprar/i })).toHaveClass(/chip-ativo/)
     await expect(page.getByRole('searchbox', { name: /buscar conversa/i })).toHaveValue('ingresso')
-    // opção B: volta pro WhatsApp e limpa — a lista tem que mudar junto
-    await page.getByRole('combobox', { name: 'Canal' }).selectOption('whatsapp')
+    // opção B: volta pro WhatsApp e limpa — a URL tem que mudar junto
+    await canal.getByRole('button', { name: 'WhatsApp' }).click()
     await expect(page).toHaveURL(/canal=whatsapp/)
-    await page.getByRole('combobox', { name: 'Canal' }).selectOption('')
+    await canal.getByRole('button', { name: 'Todas' }).click()
     await page.getByRole('searchbox', { name: /buscar conversa/i }).fill('')
-    await page.getByRole('button', { name: /^todas/i }).click()
+    // o "Todas" do recorte (chip), não o do canal (botão com aria-pressed)
+    await lista.locator('button.chip, button.chip-ativo').filter({ hasText: /^\s*Todas/ }).click()
     await expect(page).not.toHaveURL(/canal=|recorte=|q=/)
   })
 
-  test('abrir uma conversa: linha do tempo, resumo e F5 com ela aberta', async ({ page }) => {
+  test('abrir uma conversa: bolhas, resumo e F5 com ela aberta', async ({ page }) => {
     await page.goto('/admin/agentes')
     await hidratada(page)
     if (await page.getByText(/painel ainda não ligado|não consegui ler/i).count()) test.skip(true, 'automação fora do ar')
     const primeira = page.getByRole('button', { name: /^abrir conversa com/i }).first()
     if (!(await primeira.count())) test.skip(true, 'nenhuma conversa nos últimos 7 dias')
     await primeira.click()
-    const gaveta = page.getByRole('dialog')
-    await expect(gaveta).toBeVisible()
+    const aberta = page.locator('[data-parte="conversa-aberta"]')
+    await expect(aberta.locator('[data-parte="nome-aberto"]')).toBeVisible()
     await expect(page).toHaveURL(/contato=/)
-    await expect(gaveta.getByText(/respostas/).first()).toBeVisible()
+    await expect(aberta.locator('[data-parte="bolha-cliente"], [data-parte="bolha-sofia"]').first()).toBeVisible()
+    await expect(aberta.locator('[data-parte="so-leitura"]')).toBeVisible()
     await page.reload()
     await hidratada(page)
-    await expect(page.getByRole('dialog')).toBeVisible()
-    // Esc fecha e tira da URL
-    await page.keyboard.press('Escape')
-    await expect(page.getByRole('dialog')).toHaveCount(0)
-    await expect(page).not.toHaveURL(/contato=/)
+    await expect(page.locator('[data-parte="conversa-aberta"] [data-parte="nome-aberto"]')).toBeVisible()
   })
 
   test('aba Casos com filtro por tipo na URL', async ({ page }) => {
@@ -84,14 +86,65 @@ test.describe('master', () => {
   })
 })
 
+/**
+ * Inteligência (05/10): Base de conhecimento e Promoções. A Base fala com a MESMA automação do
+ * Atendimento IA (a de produção, no .env.e2e) — aqui só se LÊ; salvar mudaria o que os robôs dizem
+ * pros clientes de verdade. Promoções grava no banco de teste e volta ao que era.
+ */
+test.describe('Inteligência · master', () => {
+  test.use({ storageState: sessao('master') })
+
+  test('Base de conhecimento abre: formulário, lista (ou vazia) e o "Assim a Sofia lê agora"', async ({ page }) => {
+    await page.goto('/admin/inteligencia/base')
+    await hidratada(page)
+    await expect(page.getByRole('heading', { name: 'Base de conhecimento', level: 1 })).toBeVisible()
+    if (await page.getByText(/não consegui ler|não está ligad/i).count()) test.skip(true, 'automação fora do ar')
+    await expect(page.locator('[data-parte="itens-base"], [data-parte="base-vazia"]').first()).toBeVisible()
+    await expect(page.locator('[data-parte="robos-veem"]')).toBeVisible()
+    await page.locator('[data-parte="nova-informacao"]').click()
+    await expect(page.locator('[data-parte="form-base"]')).toBeVisible()
+  })
+
+  test('Promoções: ligar sem vigência é recusado; com vigência grava, mostra o regulamento e sobrevive ao F5', async ({ page }) => {
+    const antes = await (await page.request.get('/api/admin/inteligencia/promocoes')).json()
+    try {
+      await page.goto('/admin/inteligencia/promocoes')
+      await hidratada(page)
+      await expect(page.getByRole('heading', { name: 'Promoções', level: 1 })).toBeVisible()
+      await page.locator('[data-parte="ligar-promocao"]').check()
+      await page.locator('#p-inicio').fill('')
+      await page.locator('#p-fim').fill('')
+      await page.locator('[data-parte="salvar-promocao"]').click()
+      await expect(page.getByText(/vigência/i).first()).toBeVisible()
+      await page.locator('#p-inicio').fill('2026-10-01')
+      await page.locator('#p-fim').fill('2026-12-31')
+      await page.locator('#p-ret').fill('3')
+      await expect(page.locator('[data-parte="regulamento"]')).toContainText('3 retornos')
+      await page.locator('[data-parte="salvar-promocao"]').click()
+      await expect(page.locator('[data-parte="recado-promocao"]')).toBeVisible()
+      await page.reload()
+      await hidratada(page)
+      await expect(page.locator('[data-parte="ligar-promocao"]')).toBeChecked()
+      await expect(page.locator('#p-ret')).toHaveValue('3')
+      await expect(page.locator('[data-parte="situacao-promocao"]')).toHaveClass(/selo-ok/)
+    } finally {
+      const p = antes.programa
+      await page.request.post('/api/admin/inteligencia/promocoes', { data: { ...p, ativo: false } })
+    }
+  })
+})
+
 for (const papel of ['financeiro', 'operacao', 'portaria'] as const) {
   test.describe(`${papel} não vê as conversas`, () => {
     test.use({ storageState: sessao(papel) })
     test(`${papel}: rota 403 e item fora do menu`, async ({ page }) => {
-      const r = await page.request.get('/api/admin/agentes')
-      expect(r.status()).toBe(403)
+      for (const rota of ['/api/admin/agentes', '/api/admin/inteligencia/base', '/api/admin/inteligencia/promocoes']) {
+        expect((await page.request.get(rota)).status(), rota).toBe(403)
+      }
       await page.goto('/admin')
-      await expect(page.locator('#menu-lateral a[href="/admin/agentes"]')).toHaveCount(0)
+      for (const href of ['/admin/agentes', '/admin/inteligencia/base', '/admin/inteligencia/promocoes']) {
+        await expect(page.locator(`#menu-lateral a[href="${href}"]`), href).toHaveCount(0)
+      }
     })
   })
 }

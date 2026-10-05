@@ -172,7 +172,11 @@ async function decidir(event: H3Event) {
             t.half_reason, t.half_document, t.half_document_required,
             s.name AS setor, l.name AS lote, tt.name AS tipo, tt.kind AS especie,
             s.sessions_covered,
-            es.starts_at AS sessao_inicio, es.ends_at AS sessao_fim
+            es.starts_at AS sessao_inicio, es.ends_at AS sessao_fim,
+            -- Volte Mais (037): a portaria avisa "retorno com desconto na consumação"
+            (SELECT json_build_object('nome', lp.nome, 'consumacao_bps', lp.consumacao_bps)
+               FROM orders o JOIN loyalty_programs lp ON lp.id = o.loyalty_program_id
+              WHERE o.id = t.order_id) AS fidelidade
        FROM tickets t
        JOIN sectors s ON s.id = t.sector_id
        JOIN lots l    ON l.id = t.lot_id
@@ -301,6 +305,10 @@ function dadosDoIngresso(i: any) {
     // null quando o ingresso é inteira — a tela só mostra o bloco quando há
     // algo a pedir. Ver `meiaDoIngresso` em utils/catraca.ts.
     meia: meiaDoIngresso(i),
+    // Volte Mais (037): retorno com desconto — a portaria pode avisar do desconto na consumação
+    fidelidade: i.fidelidade && Number(i.fidelidade.consumacao_bps) > 0
+      ? { nome: String(i.fidelidade.nome), consumacaoPct: Number(i.fidelidade.consumacao_bps) / 100 }
+      : null,
   }
 }
 

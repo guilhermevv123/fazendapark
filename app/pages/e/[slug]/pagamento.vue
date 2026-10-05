@@ -154,9 +154,35 @@ const parcelas = ref(1)
  * teste `checkout-parcelas.test.ts` compara o piso daqui com o de lá.
  */
 const PARCELA_MINIMA_CENTS = 500
+/**
+ * Volte Mais (037): o desconto de fidelidade da conta NESTE carrinho, mostrado ANTES de pagar (o
+ * cliente vê o desconto, o que sobra e o regulamento). A decisão de verdade é do checkout, com a
+ * trava do CPF — esta é a mesma conta, só que sem gravar (`/api/fidelidade/previa`).
+ */
+type PreviaDaFidelidade = {
+  disponivel: boolean; nome?: string; descontoCents?: number; ingressos?: number; descontoPct?: number
+  restantesDepois?: number; validoAte?: string | null; consumacaoPct?: number; regulamento?: string; motivo?: string
+}
+const fidelidade = ref<PreviaDaFidelidade | null>(null)
+async function conferirFidelidade() {
+  fidelidade.value = null
+  if (!conta.value || !carrinho.value?.linhas?.length) return
+  try {
+    fidelidade.value = await $fetch<PreviaDaFidelidade>('/api/fidelidade/previa', {
+      method: 'POST', body: { eventSlug: slug, itens: itensDoCheckout(carrinho.value.linhas) },
+    })
+  } catch {
+    fidelidade.value = null   // sem prévia, o checkout decide sozinho — só não há o aviso antes
+  }
+}
+/** cupom e fidelidade não acumulam: com cupom valendo, vale o cupom */
+const fidelidadeVale = computed(() => !!fidelidade.value?.disponivel && cupom.estado !== 'vale')
+const dataCurta = (iso?: string | null) => (iso ? iso.split('-').reverse().join('/') : '')
+
 const totalACobrar = computed(() => {
   const total = carrinho.value?.totais.total ?? 0
-  const desconto = cupom.estado === 'vale' ? Number(cupom.descontoCents ?? 0) : 0
+  const desconto = cupom.estado === 'vale' ? Number(cupom.descontoCents ?? 0)
+    : fidelidadeVale.value ? Number(fidelidade.value?.descontoCents ?? 0) : 0
   return Math.max(0, total - desconto)
 })
 const opcoesDeParcela = computed(() => parcelasPossiveis(totalACobrar.value, PARCELA_MINIMA_CENTS))
@@ -338,6 +364,7 @@ async function avancar() {
   if (cupom.estado === 'nao_vale' || cupom.estado === 'conferindo') return
   if (gratis.value) return void pagar()
   etapa.value = 'pagamento'
+  conferirFidelidade()
   if (import.meta.client) window.scrollTo({ top: 0 })
 }
 
@@ -879,7 +906,25 @@ useHead({ title: 'Pagamento' })
           {{ nIngressos }} {{ nIngressos === 1 ? 'ingresso' : 'ingressos' }} ·
           <span class="font-semibold tabular-nums text-tinta">{{ reais(totalACobrar) }}</span>
           <span v-if="cupom.estado === 'vale' && cupom.descontoCents" class="text-ok"> · com o cupom</span>
+          <span v-else-if="fidelidadeVale" class="text-ok"> · com o {{ fidelidade?.nome }}</span>
         </p>
+        <div v-if="fidelidadeVale && fidelidade" class="mt-3 rounded-card border border-ok/40 bg-ok-claro p-3 text-sm text-ok"
+             data-parte="fidelidade-previa">
+          <p>
+            <strong>{{ fidelidade.nome }}</strong>: {{ fidelidade.descontoPct }}% em
+            {{ fidelidade.ingressos }} {{ fidelidade.ingressos === 1 ? 'ingresso' : 'ingressos' }} —
+            <span class="font-semibold tabular-nums">−{{ reais(fidelidade.descontoCents ?? 0) }}</span>.
+          </p>
+          <p class="mt-1 text-tinta-corpo">
+            Depois desta compra {{ fidelidade.restantesDepois === 1 ? 'sobra 1 retorno' : `sobram ${fidelidade.restantesDepois} retornos` }}
+            com desconto<template v-if="fidelidade.validoAte"> (visitas até {{ dataCurta(fidelidade.validoAte) }})</template>.
+            <template v-if="fidelidade.consumacaoPct">No dia, {{ fidelidade.consumacaoPct }}% na consumação: mostre o ingresso e um documento no caixa.</template>
+          </p>
+          <details v-if="fidelidade.regulamento" class="mt-1 text-tinta-corpo">
+            <summary class="cursor-pointer underline">Regulamento</summary>
+            <pre class="mt-1 whitespace-pre-wrap font-sans text-xs leading-5">{{ fidelidade.regulamento }}</pre>
+          </details>
+        </div>
 
         <form class="mt-5 space-y-4" novalidate @submit.prevent="pagar()">
           <fieldset>
@@ -955,7 +1000,7 @@ useHead({ title: 'Pagamento' })
           <span class="font-medium tabular-nums text-tinta">{{ reais(pedido.totalCents) }}</span>
         </p>
         <p v-if="pedido.descontoCents" class="mt-0.5 text-sm text-ok">
-          Cupom aplicado: −{{ reais(pedido.descontoCents) }}
+          {{ pedido.fidelidade ? pedido.fidelidade.nome : 'Cupom aplicado' }}: −{{ reais(pedido.descontoCents) }}
         </p>
         <!-- o que está sendo pago (a cobrança mostrava só código e total — B13) -->
         <ul v-if="linhasDoPedido.length" class="mt-2 space-y-0.5 text-sm text-tinta-corpo">

@@ -73,11 +73,11 @@ test.describe('menu por papel (layout)', () => {
       const problemas = vigiar(page)
       await abrir(page, '/admin')
       const nomes = await nomesDoMenu(page)
-      for (const n of ['Eventos', 'Clientes', 'Relatórios', 'Visão geral', 'Financeiro', 'Configurações', 'Dados e cobrança', 'Organização', 'Equipe']) {
+      for (const n of ['Eventos', 'Clientes', 'Relatórios', 'Visão geral', 'Financeiro', 'Inteligência', 'Atendimento IA', 'Base de conhecimento', 'Promoções', 'Configurações', 'Dados e cobrança', 'Organização', 'Equipe']) {
         expect(nomes, n).toContain(n)
       }
       expect(nomes).not.toContain('Geral e cobrança')
-      for (const [link, h1] of [['Visão geral', 'Visão geral'], ['Financeiro', 'Financeiro'], ['Dados e cobrança', 'Dados e cobrança'], ['Organização', 'Organização'], ['Equipe', 'Equipe'], ['Clientes', 'Clientes']]) {
+      for (const [link, h1] of [['Visão geral', 'Visão geral'], ['Financeiro', 'Financeiro'], ['Dados e cobrança', 'Dados e cobrança'], ['Organização', 'Organização'], ['Equipe', 'Equipe'], ['Clientes', 'Clientes'], ['Base de conhecimento', 'Base de conhecimento'], ['Promoções', 'Promoções']]) {
         await abrirGrupos(page)
         await menu(page).getByRole('link', { name: link, exact: true }).click()
         await hidratada(page)
@@ -191,7 +191,7 @@ test.describe('menu por papel (layout)', () => {
       await abrir(page, '/admin/relatorios')
       const nomes = await nomesDoMenu(page)
       expect(nomes).toEqual(expect.arrayContaining(['Eventos', 'Relatórios', 'Visão geral', 'Financeiro']))
-      for (const fora of ['Clientes', 'Configurações', 'Equipe', 'Dados e cobrança']) expect(nomes, fora).not.toContain(fora)
+      for (const fora of ['Clientes', 'Configurações', 'Equipe', 'Dados e cobrança', 'Inteligência', 'Promoções']) expect(nomes, fora).not.toContain(fora)
       // trilha: o assunto é link pra quem abre
       await expect(trilha(page).getByRole('link')).toHaveCount(0) // na Visão geral, o próprio assunto é a tela
       await abrir(page, '/admin/financeiro')
@@ -226,7 +226,7 @@ test.describe('menu por papel (layout)', () => {
       await abrir(page, '/admin')
       const nomes = await nomesDoMenu(page)
       expect(nomes).toContain('Eventos')
-      for (const fora of ['Clientes', 'Relatórios', 'Financeiro', 'Configurações']) expect(nomes, fora).not.toContain(fora)
+      for (const fora of ['Clientes', 'Relatórios', 'Financeiro', 'Configurações', 'Inteligência']) expect(nomes, fora).not.toContain(fora)
       // a faixa de números saiu da lista (28/09: "vai ser tudo em relatórios") — e dinheiro nenhum
       await expect(page.locator('[data-parte="faixa-do-dia"]')).toHaveCount(0)
       await expect(kpi(page, 'liquido-30')).toHaveCount(0)

@@ -1448,6 +1448,9 @@ useHead({
         <strong>{{ ultima.ingresso.titular || 'sem nome' }}</strong>
         · {{ ultima.ingresso.setor }} · {{ ultima.ingresso.lote }}
         <template v-if="ultima.ingresso.tipo"> · {{ ultima.ingresso.tipo }}</template>
+        <span v-if="ultima.ingresso.fidelidade" class="selo-ok ml-1 align-middle" data-parte="fidelidade-portaria">
+          {{ ultima.ingresso.fidelidade.nome }} · {{ ultima.ingresso.fidelidade.consumacaoPct }}% na consumação
+        </span>
       </p>
       <p v-else-if="ultima.titular" class="mt-3 text-lg"><strong>{{ ultima.titular }}</strong></p>
       <p v-if="ultima.pessoas && ultima.pessoas > 1" class="mt-1 text-lg">

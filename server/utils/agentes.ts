@@ -74,3 +74,52 @@ export function erroDoPainel(e: unknown) {
   }
   return e
 }
+
+/* ------------------------------------------------- base de conhecimento (05/10) */
+
+/**
+ * A BASE DE CONHECIMENTO dos robôs (Inteligência → Base de conhecimento): o que a equipe escreve aqui
+ * vale na próxima mensagem de todo robô (WhatsApp, Instagram, comentários) — cada um lê a tabela
+ * `fp_conhecimento` no nó "Base do painel". Diferente da API acima, esta GRAVA: é outro webhook do n8n
+ * (`FAZENDA PARK · Base de conhecimento (API do painel)`, fonte `conquista-park/scripts/build_base_api.py`),
+ * com o MESMO token. O endereço sai de `AGENTES_BASE_URL` ou, sem ele, do `AGENTES_API_URL` trocando o
+ * caminho — não precisa de variável nova no servidor.
+ */
+export type AcaoDaBase = 'listar' | 'salvar' | 'arquivar' | 'revisar' | 'testar' | 'resultado'
+
+const PACIENCIA_BASE_MS: Record<AcaoDaBase, number> = {
+  listar: 20_000, salvar: 20_000, arquivar: 20_000, testar: 25_000, resultado: 45_000,
+  // a revisão chama a OpenAI
+  revisar: 60_000,
+}
+
+export function urlDaBase(env: Record<string, string | undefined> = process.env): string | null {
+  if (env.AGENTES_BASE_URL) return env.AGENTES_BASE_URL
+  const api = env.AGENTES_API_URL
+  if (!api) return null
+  return api.replace(/fazenda-park-painel-agentes\/?$/, 'fazenda-park-painel-base')
+}
+
+export async function perguntarABase<T = any>(acao: AcaoDaBase, corpo: Record<string, unknown> = {}): Promise<T> {
+  const url = urlDaBase()
+  const token = process.env.AGENTES_API_TOKEN
+  if (!url || !token || url === process.env.AGENTES_API_URL) {
+    throw new PainelNaoConfigurado('AGENTES_API_URL/AGENTES_API_TOKEN ausentes')
+  }
+  try {
+    return await $fetch<T>(url, {
+      method: 'POST',
+      body: { acao, ...corpo },
+      headers: { 'x-painel-token': token },
+      timeout: PACIENCIA_BASE_MS[acao],
+      retry: 0,
+    })
+  } catch (e: any) {
+    const status = e?.response?.status ?? e?.statusCode
+    // 400 é recusa de CONTEÚDO (falta o título, data inválida): o recado da automação vai pra tela
+    if (status === 400) {
+      throw createError({ statusCode: 400, statusMessage: String(e?.data?.erro || 'pedido inválido') })
+    }
+    throw new PainelForaDoAr(status ? `a automação respondeu ${status}` : 'a automação não respondeu a tempo', status)
+  }
+}

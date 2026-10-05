@@ -391,6 +391,11 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                       title="Convite da casa: você não paga nada por esta entrada.">
                   CORTESIA
                 </span>
+                <!-- Volte Mais (037): o retorno com desconto — o caixa do bar confere o selo e um documento -->
+                <span v-if="data.fidelidade && !t.reagendadoPara" class="selo-ok" data-parte="selo-fidelidade"
+                      :title="`Retorno ${data.fidelidade.nome}: mostre este ingresso e um documento com foto no caixa.`">
+                  {{ data.fidelidade.nome.toUpperCase() }}<template v-if="data.fidelidade.consumacaoPct"> · {{ data.fidelidade.consumacaoPct }}% NA CONSUMAÇÃO</template>
+                </span>
                 <span v-if="t.reagendadoPara" class="selo-neutro">REAGENDADO</span>
                 <span v-else :class="estado[t.status]?.c ?? 'selo-neutro'">
                   {{ estado[t.status]?.t ?? t.status.toUpperCase() }}

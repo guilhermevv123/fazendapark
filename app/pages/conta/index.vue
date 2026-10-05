@@ -38,6 +38,12 @@ async function buscarPedidos() {
     falhaDosPedidos.value = 'Não deu pra carregar os seus ingressos agora. Confira a internet e tente de novo.'
   }
 }
+/** Volte Mais (037): quantos retornos com desconto a conta tem — o aviso some se a promoção está desligada */
+const fidelidade = ref<any | null>(null)
+async function buscarFidelidade() {
+  try { fidelidade.value = await $fetch<any>('/api/conta/fidelidade') } catch { fidelidade.value = null }
+}
+const dataCurtaDaFidelidade = (iso?: string | null) => (iso ? iso.split('-').reverse().join('/') : '')
 const proximos = computed(() => (pedidos.value ?? []).filter((p) => !passou(p)))
 const anteriores = computed(() => (pedidos.value ?? []).filter((p) => passou(p)))
 function passou(p: any) {
@@ -136,6 +142,7 @@ watch(conta, (c) => {
   if (!c) return
   copiarDaConta(c)
   if (pedidos.value === null) void buscarPedidos()
+  if (fidelidade.value === null) void buscarFidelidade()
 }, { immediate: true })
 
 // pedido cujos ingressos foram TODOS trocados de dia (036): não é "pago com 0 ingressos"
@@ -203,6 +210,27 @@ useHead({ title: 'Minha conta' })
                   data-parte="sair-da-conta" @click="sairDaConta">
             Sair
           </button>
+        </div>
+
+        <!-- Volte Mais (037): o que a conta tem de retorno com desconto (ou como ganhar) -->
+        <div v-if="fidelidade?.ativo" class="mt-4 rounded-card border border-ok/40 bg-ok-claro p-3 text-sm text-ok" data-parte="fidelidade-conta">
+          <p v-if="fidelidade.qualificado && fidelidade.restantes > 0">
+            <strong>{{ fidelidade.nome }}:</strong> você tem {{ fidelidade.restantes === 1 ? '1 retorno' : `${fidelidade.restantes} retornos` }}
+            com {{ fidelidade.descontoPct }}% de desconto<template v-if="fidelidade.validoAte"> pra visitas até {{ dataCurtaDaFidelidade(fidelidade.validoAte) }}</template>.
+            O desconto já aparece no pagamento.
+          </p>
+          <p v-else-if="fidelidade.qualificado">
+            <strong>{{ fidelidade.nome }}:</strong> você já usou os seus retornos com desconto. Obrigado por voltar!
+          </p>
+          <p v-else>
+            <strong>{{ fidelidade.nome }}:</strong> depois da sua primeira visita, você ganha {{ fidelidade.retornos }}
+            {{ fidelidade.retornos === 1 ? 'retorno' : 'retornos' }} com {{ fidelidade.descontoPct }}% de desconto no ingresso<template v-if="fidelidade.consumacaoPct">
+            e {{ fidelidade.consumacaoPct }}% na consumação</template>.
+          </p>
+          <details v-if="fidelidade.regulamento" class="mt-1 text-tinta-corpo">
+            <summary class="cursor-pointer underline">Regulamento</summary>
+            <pre class="mt-1 whitespace-pre-wrap font-sans text-xs leading-5">{{ fidelidade.regulamento }}</pre>
+          </details>
         </div>
 
         <!-- e-mail ainda não confirmado (035): não trava nada, mas é por ele que o ingresso chega -->

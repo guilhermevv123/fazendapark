@@ -140,14 +140,15 @@ test.describe('Atendimento IA', () => {
 
   test('canal e busca a 5 ms um do outro — os dois na URL e no F5', async ({ page }) => {
     await emSequencia(page, [
-      { seletor: 'select[aria-label="Canal"]', valor: 'instagram' },
+      // desde o painel em formato chat (a42dbe1) o canal é um grupo de botões, não um select
+      { seletor: '[role="group"][aria-label="Canal"] button', texto: 'Instagram', clique: true },
       { seletor: 'input[aria-label="Buscar conversa"]', valor: 'ingresso' },
     ], 5)
     await expect(page).toHaveURL(/canal=instagram/)
     await expect(page).toHaveURL(/q=ingresso/)
     await page.reload()
     await hidratada(page)
-    await expect(page.getByRole('combobox', { name: 'Canal' })).toHaveValue('instagram')
+    await expect(page.getByRole('group', { name: 'Canal' }).getByRole('button', { name: 'Instagram' })).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByRole('searchbox', { name: /buscar conversa/i })).toHaveValue('ingresso')
   })
 
@@ -169,6 +170,6 @@ test.describe('Atendimento IA', () => {
     await page.locator('nav[aria-label="Menu do painel"]').getByRole('link', { name: 'Atendimento IA', exact: true }).click()
     await expect(page).toHaveURL(/\/admin\/agentes$/)
     await expect(page.getByRole('searchbox', { name: /buscar conversa/i })).toHaveValue('')
-    await expect(page.getByRole('combobox', { name: 'Canal' })).toHaveValue('')
+    await expect(page.getByRole('group', { name: 'Canal' }).getByRole('button', { name: 'Todas' })).toHaveAttribute('aria-pressed', 'true')
   })
 })

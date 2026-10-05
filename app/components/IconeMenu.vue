@@ -32,6 +32,8 @@ const caminhos: Record<string, string> = {
   voltar: 'M19 12H5 M12 19l-7-7 7-7',
   sair: 'M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4 M16 17l5-5-5-5 M21 12H9',
   sino: 'M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9 M13.7 21a2 2 0 01-3.4 0',
+  // brilho de IA (duas estrelas): o assunto Inteligência — os robôs e o que eles sabem
+  inteligencia: 'M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9L11 3z M18.5 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z',
   chat: 'M21 11.5a8.4 8.4 0 01-9 8.5 8.6 8.6 0 01-4-1L3 21l2-4.3A8.4 8.4 0 0112 3a8.4 8.4 0 019 8.5z',
   seta: 'M9 18l6-6-6-6',
   calendario: 'M8 3v4 M16 3v4 M4 9h16 M5 5h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z',

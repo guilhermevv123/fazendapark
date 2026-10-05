@@ -259,19 +259,25 @@ const itensDoPainel = computed<Item[]>(() => eventoId.value
   ? menuDoEvento(eventoId.value)
   : [
       // O menu de ANTES de entrar num evento: a organização inteira. As telas de
-      // cada evento moram em `menuDoEvento`. Pedido do dono (22/09): só QUATRO
+      // cada evento moram em `menuDoEvento`. Pedido do dono (22/09): poucos
       // assuntos de primeiro nível — o resto mora dentro de um deles, no MESMO
-      // padrão de grupo com `filhos` que `menuDoEvento` já usa (ver ali).
+      // padrão de grupo com `filhos` que `menuDoEvento` já usa (ver ali). Em 05/10
+      // o dono pediu o quinto, Inteligência (os robôs e as promoções).
       { nome: 'Eventos', icone: 'calendario', para: '/admin' },
       { nome: 'Clientes', icone: 'pessoas', para: '/admin/clientes' },
 
       { nome: 'Relatórios', icone: 'relatorio', para: '/admin/relatorios', filhos: [
         { nome: 'Visão geral', para: '/admin/relatorios' },
         { nome: 'Financeiro', para: '/admin/financeiro' },
-        // O que a Sofia (WhatsApp/Instagram) está conversando — mora aqui dentro
-        // pra manter os QUATRO assuntos de primeiro nível (pedido do dono, 22/09).
-        // Área `agentes`: só o master vê o item (e a rota).
+      ] },
+
+      // Inteligência (pedido do dono, 05/10): tudo da IA num lugar só — o que a Sofia conversa
+      // (Atendimento IA saiu de Relatórios), o que ela sabe (Base de conhecimento: escreveu aqui,
+      // vale na próxima mensagem de todo robô) e as promoções. Área `agentes`: só o master.
+      { nome: 'Inteligência', icone: 'inteligencia', para: '/admin/agentes', filhos: [
         { nome: 'Atendimento IA', para: '/admin/agentes' },
+        { nome: 'Base de conhecimento', para: '/admin/inteligencia/base' },
+        { nome: 'Promoções', para: '/admin/inteligencia/promocoes' },
       ] },
 
       // Organização e Equipe entram aqui — a chave do Asaas (quando existir)
@@ -398,7 +404,7 @@ const NOME_DA_TELA: Record<string, string> = {
   relatorios: 'Visão geral', organizacoes: 'Organização', configuracoes: 'Dados e cobrança',
   reconciliacao: 'Reconciliação', sessoes: 'Sessões', transferencias: 'Transferências',
   validacao: 'Validação', historico: 'Histórico', promocionais: 'Promocionais',
-  agentes: 'Atendimento IA',
+  agentes: 'Atendimento IA', inteligencia: 'Inteligência', base: 'Base de conhecimento', promocoes: 'Promoções',
   // ADM-56: a trilha do borderô saía "BORDERO", sem acento
   bordero: 'Borderô', pdv: 'Pontos de venda', vender: 'Balcão', caixa: 'Conferência de caixa',
   auditoria: 'Auditoria', suporte: 'Suporte', filas: 'Filas', clientes: 'Clientes',
