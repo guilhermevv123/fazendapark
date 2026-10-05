@@ -31,6 +31,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import net from 'node:net'
 import tls from 'node:tls'
+import { botaoDoEmail, COR, escaparNoEmail, FONTE, moldeDoEmail } from './email-visual'
 
 export interface ImagemEmbutida {
   cid: string
@@ -462,8 +463,6 @@ export function diaDaSessao(d: Date | string, fuso?: string | null): string {
   return `${dia} às ${hora}`
 }
 
-const escapar = (v: any) => String(v ?? '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 /**
  * O e-mail que o comprador recebe. HTML de e-mail é feito de tabela e estilo
@@ -481,13 +480,15 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
   })
 
   const texto = [
-    `${d.compradorNome ? `${d.compradorNome}, s` : 'S'}eu pagamento foi confirmado.`,
+    d.totalCents === 0
+      ? `${d.compradorNome ? `${d.compradorNome}, s` : 'S'}eu ingresso está garantido.`
+      : `${d.compradorNome ? `${d.compradorNome}, s` : 'S'}eu pagamento foi confirmado.`,
     '',
     d.eventoNome,
     d.eventoInicio ? quando(d.eventoInicio, d.fuso) : '',
     d.local ?? '',
     '',
-    `Pedido ${d.pedido} · ${reais(d.totalCents)}`,
+    `Pedido ${d.pedido} · ${d.totalCents === 0 ? 'Grátis' : reais(d.totalCents)}`,
     `${d.ingressos.length} ${d.ingressos.length === 1 ? 'ingresso' : 'ingressos'}:`,
     ...linhasTexto,
     '',
@@ -497,85 +498,87 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
     'Na portaria, apresente o QR. Se a leitura falhar, informe o código do ingresso.',
   ].filter((l) => l !== null).join('\n')
 
+  const gratis = d.totalCents === 0
+  const varios = d.ingressos.length !== 1
+  const e = escaparNoEmail
+  const dataDoEvento = d.eventoInicio ? quando(d.eventoInicio, d.fuso) : ''
+
   const blocos = d.ingressos.map((t, i) => {
     let qr = ''
     if (t.qrPng) {
       const cid = `qr-${t.codigo.replace(/[^a-zA-Z0-9]/g, '')}@diamond-tickets`
       imagens.push({ cid, nome: `${t.codigo}.png`, conteudo: t.qrPng, tipo: 'image/png' })
-      qr = `<img src="cid:${cid}" alt="QR do ingresso ${escapar(t.codigo)}" width="180" height="180"
-              style="display:block;border:1px solid #E3E1EB;border-radius:12px;background:#fff">`
+      qr = `<img src="cid:${cid}" alt="QR do ingresso ${e(t.codigo)}" width="200" height="200"
+              style="display:block;margin:0 auto;width:200px;height:200px;border:0;background:#fff">`
     }
-    const onde = [t.setor, t.lote, t.tipo].filter(Boolean).map(escapar).join(' · ')
+    const onde = [t.setor, t.lote].filter(Boolean).map(e).join(' · ')
     return `
-    <tr>
-      <td style="padding:12px 0;border-top:1px solid #E3E1EB">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-          <tr>
-            <td width="192" valign="top" style="padding-right:12px">${qr}</td>
-            <td valign="top" style="font-family:Arial,Helvetica,sans-serif;color:#1E1A2E">
-              <div style="font-size:13px;color:#5B5570">
-                ${escapar(t.tipo || 'Ingresso')} ${i + 1} de ${d.ingressos.length}
-              </div>
-              <div style="font-size:22px;font-weight:bold;letter-spacing:2px;margin:4px 0">
-                ${escapar(t.codigo)}
-              </div>
-              ${onde ? `<div style="font-size:13px;color:#5B5570">${onde}</div>` : ''}
-              ${t.sessao ? `<div style="font-size:13px;color:#5B5570">${escapar(t.sessao)}</div>` : ''}
-              ${t.titular ? `<div style="font-size:13px;color:#5B5570">Titular: ${escapar(t.titular)}</div>` : ''}
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>`
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+               style="margin-top:16px;border:2px solid ${COR.uvaLinha};border-radius:8px;border-collapse:separate">
+          <tr><td bgcolor="${COR.uva}" style="background:${COR.uva};padding:12px 16px;border-radius:6px 6px 0 0;
+                     font-family:${FONTE};font-size:12px;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;color:#ffffff">
+            ${e(t.tipo || 'Ingresso')} &nbsp;·&nbsp; ${i + 1} de ${d.ingressos.length}
+          </td></tr>
+          <tr><td align="center" style="padding:22px 16px 8px">${qr}</td></tr>
+          <tr><td align="center" style="padding:6px 16px 18px;font-family:${FONTE}">
+            <div style="font-family:'Courier New',Courier,monospace;font-size:24px;font-weight:bold;letter-spacing:3px;color:${COR.tinta}">${e(t.codigo)}</div>
+            ${onde ? `<div style="font-size:13px;color:${COR.suave};margin-top:6px">${onde}</div>` : ''}
+            ${t.sessao ? `<div style="font-size:13px;color:${COR.suave};margin-top:2px">${e(t.sessao)}</div>` : ''}
+          </td></tr>
+          ${t.titular ? `<tr><td style="border-top:2px dashed ${COR.uvaLinha};padding:12px 16px;font-family:${FONTE};font-size:13px;color:${COR.suave}">
+            Titular: <strong style="color:${COR.tinta}">${e(t.titular)}</strong>
+          </td></tr>` : ''}
+        </table>`
   }).join('')
 
-  const html = `<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapar(assunto)}</title></head>
-<body style="margin:0;padding:0;background:#F4F7FA">
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#F4F7FA">
-  <tr><td align="center" style="padding:24px 12px">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600"
-           style="max-width:600px;width:100%;background:#FFFFFF;border:1px solid #E3E1EB;border-radius:16px">
-      <tr><td style="padding:28px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;
-                     font-weight:bold;letter-spacing:.04em;text-transform:uppercase;color:#583C8D">
-        Conquista Park
-      </td></tr>
-      <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;color:#1E1A2E">
-        <div style="font-size:20px;font-weight:bold">${escapar(d.eventoNome)}</div>
-        ${d.eventoInicio ? `<div style="font-size:14px;color:#5B5570;margin-top:4px">${escapar(quando(d.eventoInicio, d.fuso))}</div>` : ''}
-        ${d.local ? `<div style="font-size:14px;color:#5B5570">${escapar(d.local)}</div>` : ''}
-
-        <div style="font-size:15px;margin-top:16px">
-          ${d.compradorNome ? `${escapar(d.compradorNome)}, seu` : 'Seu'} pagamento foi confirmado
-          e ${d.ingressos.length === 1 ? 'seu ingresso está' : 'seus ingressos estão'} abaixo.
-        </div>
-
-        <div style="font-size:14px;color:#5B5570;margin-top:12px">
-          Pedido <strong style="color:#1E1A2E">${escapar(d.pedido)}</strong>
-          · ${escapar(reais(d.totalCents))}
-        </div>
-
+  const resumo = `
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
-               style="margin-top:12px">${blocos}</table>
+               style="margin-top:22px;border-radius:8px;border-collapse:separate">
+          <tr><td bgcolor="${COR.uvaClara}" style="background:${COR.uvaClara};padding:18px 18px 16px;border-radius:8px 8px 0 0;font-family:${FONTE}">
+            <div style="font-size:19px;font-weight:bold;line-height:1.3;color:${COR.tinta}">${e(d.eventoNome)}</div>
+            ${dataDoEvento ? `<div style="font-size:14px;color:${COR.corpo};margin-top:6px">${e(dataDoEvento)}</div>` : ''}
+            ${d.local ? `<div style="font-size:14px;color:${COR.suave};margin-top:2px">${e(d.local)}</div>` : ''}
+          </td></tr>
+          <tr><td bgcolor="${COR.uvaClara}" style="background:${COR.uvaClara};border-top:1px solid ${COR.uvaLinha};padding:12px 18px;border-radius:0 0 8px 8px;font-family:${FONTE}">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+              <td style="font-size:13px;color:${COR.suave}">Pedido <strong style="color:${COR.tinta}">${e(d.pedido)}</strong></td>
+              <td align="right" style="font-size:15px;font-weight:bold;color:${COR.tinta}">${gratis ? 'Grátis' : e(reais(d.totalCents))}</td>
+            </tr></table>
+          </td></tr>
+        </table>`
 
-        ${d.linkIngressos ? `<div style="margin:24px 0 8px">
-          <a href="${escapar(d.linkIngressos)}"
-             style="display:inline-block;background:#583C8D;color:#FFFFFF;text-decoration:none;
-                    font-weight:bold;font-size:16px;padding:14px 28px;border-radius:10px">
-            Ver ${escapar(substantivo.toLowerCase())} no celular
-          </a>
-        </div>` : '<div style="margin:24px 0 8px"></div>'}
-        <div style="font-size:13px;color:#5B5570">
-          Na portaria, apresente o QR. Se a leitura falhar, informe o código do ingresso —
-          ele funciona digitado. Guarde este e-mail: ele é a sua entrada.
+  const corpo = `
+        <div style="display:inline-block;background:${COR.okClaro};color:${COR.ok};font-size:12px;font-weight:bold;
+                    letter-spacing:.06em;text-transform:uppercase;padding:6px 10px;border-radius:6px">
+          ${gratis ? 'Ingresso garantido' : 'Pagamento confirmado'}
         </div>
-      </td></tr>
-    </table>
-  </td></tr>
-</table>
-</body></html>`
+        <h1 style="margin:14px 0 0;font-family:${FONTE};font-size:26px;line-height:1.25;color:${COR.tinta}">
+          ${varios ? `Seus ${e(substantivo.toLowerCase())} estão aqui!` : 'Seu ingresso está aqui!'}
+        </h1>
+        <p style="margin:16px 0 0;font-size:16px;color:${COR.corpo}">
+          ${d.compradorNome ? `Olá, <strong style="color:${COR.tinta}">${e(d.compradorNome)}</strong>! ` : ''}${gratis
+            ? `${varios ? 'Seus ingressos estão garantidos' : 'Seu ingresso está garantido'}.`
+            : 'Seu pagamento foi confirmado.'} Mostre o QR abaixo na portaria e é só curtir.
+        </p>
+${resumo}
+        ${d.linkIngressos ? `<div style="margin:24px 0 4px">${botaoDoEmail(`Ver ${substantivo.toLowerCase()} no celular`, d.linkIngressos)}</div>` : ''}
+${blocos}
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px">
+          <tr><td bgcolor="${COR.piscinaClara}" style="background:${COR.piscinaClara};border-left:4px solid ${COR.piscina};
+                     border-radius:6px;padding:14px 16px;font-family:${FONTE};font-size:14px;color:${COR.corpo}">
+            <strong style="color:${COR.tinta}">Na portaria:</strong> apresente o QR, no celular ou impresso.
+            Se a leitura falhar, informe o código do ingresso — ele funciona digitado.
+            Guarde este e-mail: ele é a sua entrada.
+          </td></tr>
+        </table>`
+
+  const molde = moldeDoEmail({
+    assunto,
+    previa: `Pedido ${d.pedido} · ${d.eventoNome}${dataDoEvento ? ` · ${dataDoEvento}` : ''}`,
+    corpo,
+  })
+  imagens.unshift(...molde.imagens)
+  const html = molde.html
 
   return {
     de: remetente(),

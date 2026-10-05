@@ -17,6 +17,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { q, q1 } from './db'
 import { entregar, remetente, type Mensagem } from './email'
 import { baseDoSite } from './envio'
+import { botaoDoEmail, COR, escaparNoEmail, FONTE, moldeDoEmail } from './email-visual'
 
 export type FinalidadeDoLink = 'redefinir_senha' | 'confirmar_email'
 
@@ -76,52 +77,33 @@ export async function consumirLinkDaConta(token: unknown, finalidade: Finalidade
 
 /* ------------------------------------------------------------------ os e-mails */
 
-const escaparHtml = (v: unknown) => String(v ?? '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-/** A moldura do e-mail da conta: a mesma do ingresso (tabela + estilo embutido, abre em todo cliente). */
+/** A moldura do e-mail da conta: o molde da marca (`email-visual.ts`), igual ao do ingresso. */
 function mensagemDaConta(d: {
   para: string; nome: string; assunto: string; titulo: string; frase: string
-  botao: string; link: string; rodape: string
+  botao: string; link: string; rodape: string; selo: string
 }): Mensagem {
   const primeiro = d.nome.split(' ')[0] || d.nome
   const texto = [
     `Olá, ${primeiro}.`, '', d.frase, '', `${d.botao}: ${d.link}`, '', d.rodape, '', 'Conquista Park',
   ].join('\n')
-  const html = `<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escaparHtml(d.assunto)}</title></head>
-<body style="margin:0;padding:0;background:#F4F7FA">
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#F4F7FA">
-  <tr><td align="center" style="padding:24px 12px">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600"
-           style="max-width:600px;width:100%;background:#FFFFFF;border:1px solid #E3E1EB;border-radius:16px">
-      <tr><td style="padding:28px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;
-                     font-weight:bold;letter-spacing:.04em;text-transform:uppercase;color:#583C8D">
-        Conquista Park
-      </td></tr>
-      <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;color:#1E1A2E">
-        <div style="font-size:20px;font-weight:bold">${escaparHtml(d.titulo)}</div>
-        <div style="font-size:15px;margin-top:16px">Olá, ${escaparHtml(primeiro)}.</div>
-        <div style="font-size:15px;margin-top:8px">${escaparHtml(d.frase)}</div>
-        <div style="margin:24px 0 16px">
-          <a href="${escaparHtml(d.link)}"
-             style="display:inline-block;background:#583C8D;color:#FFFFFF;text-decoration:none;
-                    font-weight:bold;font-size:16px;padding:14px 28px;border-radius:10px">
-            ${escaparHtml(d.botao)}
-          </a>
-        </div>
-        <div style="font-size:13px;color:#5B5570">${escaparHtml(d.rodape)}</div>
-        <div style="font-size:12px;color:#8A849C;margin-top:16px;word-break:break-all">
-          Se o botão não abrir, copie este endereço no navegador: ${escaparHtml(d.link)}
-        </div>
-      </td></tr>
-    </table>
-  </td></tr>
-</table>
-</body></html>`
-  return { de: remetente(), para: d.para, paraNome: d.nome, assunto: d.assunto, texto, html }
+  const e = escaparNoEmail
+  const corpo = `
+        <div style="display:inline-block;background:${COR.uvaClara};color:${COR.uva};font-size:12px;font-weight:bold;
+                    letter-spacing:.06em;text-transform:uppercase;padding:6px 10px;border-radius:6px">${e(d.selo)}</div>
+        <h1 style="margin:14px 0 0;font-family:${FONTE};font-size:26px;line-height:1.25;color:${COR.tinta}">${e(d.titulo)}</h1>
+        <p style="margin:18px 0 0;font-size:16px;color:${COR.tinta}">Olá, <strong>${e(primeiro)}</strong>!</p>
+        <p style="margin:8px 0 0;font-size:16px;color:${COR.corpo}">${e(d.frase)}</p>
+        <div style="margin:28px 0 24px">${botaoDoEmail(d.botao, d.link)}</div>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr><td bgcolor="${COR.solClaro}" style="background:${COR.solClaro};border-left:4px solid ${COR.sol};
+                     border-radius:6px;padding:14px 16px;font-size:14px;color:${COR.corpo}">${e(d.rodape)}</td></tr>
+        </table>
+        <p style="margin:22px 0 0;font-size:12px;line-height:1.5;color:${COR.fraca};word-break:break-all">
+          O botão não abriu? Copie este endereço no navegador:<br>
+          <a href="${e(d.link)}" style="color:${COR.uva}">${e(d.link)}</a>
+        </p>`
+  const { html, imagens } = moldeDoEmail({ assunto: d.assunto, previa: d.frase, corpo })
+  return { de: remetente(), para: d.para, paraNome: d.nome, assunto: d.assunto, texto, html, imagens }
 }
 
 export function montarEmailDeNovaSenha(para: string, nome: string, link: string): Mensagem {
@@ -131,6 +113,7 @@ export function montarEmailDeNovaSenha(para: string, nome: string, link: string)
     titulo: 'Redefinir a sua senha',
     frase: 'Recebemos um pedido para criar uma senha nova na sua conta do site do Conquista Park.',
     botao: 'Criar senha nova',
+    selo: 'Sua conta',
     rodape: `O link vale por ${PRAZO_DO_LINK_MIN.redefinir_senha} minutos e funciona uma vez só. `
       + 'Se não foi você, ignore este e-mail: a sua senha continua a mesma.',
   })
@@ -143,6 +126,7 @@ export function montarEmailDeConfirmacao(para: string, nome: string, link: strin
     titulo: 'Confirme o seu e-mail',
     frase: 'Falta só confirmar que este e-mail é seu. É por ele que chegam os seus ingressos.',
     botao: 'Confirmar meu e-mail',
+    selo: 'Boas-vindas',
     rodape: 'O link vale por 3 dias. Se você não criou conta no site do Conquista Park, ignore este e-mail.',
   })
 }

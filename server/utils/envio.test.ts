@@ -212,6 +212,9 @@ function semRota(): boolean {
 
 /* ===================================================== 1. o gatilho */
 
+/** Os QR do e-mail (a logo da marca também vai embutida, e não conta como ingresso). */
+const qrs = (m: { imagens?: { cid: string }[] }) => (m.imagens ?? []).filter((i) => i.cid.startsWith('qr-'))
+
 describe('o pagamento enfileira o e-mail sozinho', () => {
   it('pedido pago vira linha na fila, sem handler nenhum chamar envio', async () => {
     const p = await pedidoPendente(2)
@@ -377,8 +380,9 @@ describe('o e-mail de confirmação', () => {
       ingressos: [{ id: 't-37', codigo: 'ZZ-0037', titular: nome, tipo: 'Inteira' }] })
     expect(m.html, 'o nome virou tag no HTML do e-mail').not.toContain('<script>')
     expect(m.html).not.toContain('<b>Festa</b>')
-    expect(m.html).toContain('Zé Ñandú &lt;script&gt;alert(1)&lt;/script&gt; 😀, seu')
-    expect(m.html).toContain('Titular: Zé Ñandú &lt;script&gt;alert(1)&lt;/script&gt; 😀')
+    // aparece escapado duas vezes: no "Olá, …" e no titular do ingresso
+    expect(m.html.split('Zé Ñandú &lt;script&gt;alert(1)&lt;/script&gt; 😀').length - 1).toBe(2)
+    expect(m.html).toMatch(/Titular: <strong[^>]*>Zé Ñandú &lt;script&gt;alert\(1\)&lt;\/script&gt; 😀<\/strong>/)
     // o texto puro leva o nome como a pessoa escreveu (texto puro não interpreta tag)
     expect(m.texto).toContain(nome)
   })
@@ -389,18 +393,20 @@ describe('o e-mail de confirmação', () => {
 
     const m = await montarMensagemDoPedido(p.id, 'joao.envio@teste.invalido', 'João Coração')
 
-    expect(m.imagens?.length, 'o e-mail saiu sem QR nenhum').toBe(2)
-    expect(m.imagens![0].conteudo.subarray(0, 4).toString('hex'),
+    expect(qrs(m).length, 'o e-mail saiu sem QR nenhum').toBe(2)
+    expect(m.imagens?.find((i) => i.cid.startsWith('logo-'))?.tipo, 'o e-mail saiu sem a logo do parque').toBe('image/png')
+    expect(m.html).toContain('cid:logo-conquista-park@diamond-tickets')
+    expect(qrs(m)[0].conteudo.subarray(0, 4).toString('hex'),
       'o anexo não é um PNG').toBe('89504e47')
-    expect(m.html).toContain(`cid:${m.imagens![0].cid}`)
+    expect(m.html).toContain(`cid:${qrs(m)[0].cid}`)
     expect(m.html, 'o QR virou imagem remota — chega como retângulo vazio')
       .not.toMatch(/<img[^>]+src="https?:/i)
 
     const { bruto } = montarMime(m)
-    expect(bruto).toContain(`Content-ID: <${m.imagens![0].cid}>`)
+    expect(bruto).toContain(`Content-ID: <${qrs(m)[0].cid}>`)
     expect(bruto).toContain('Content-Type: multipart/related')
     expect(bruto, 'o PNG não foi pro corpo da mensagem')
-      .toContain(m.imagens![0].conteudo.toString('base64').slice(0, 60))
+      .toContain(qrs(m)[0].conteudo.toString('base64').slice(0, 60))
   })
 
   it('traz o código do ingresso, o valor e o link — inclusive em texto puro', async () => {
@@ -459,7 +465,7 @@ describe('o e-mail de confirmação', () => {
                     refunded_at = now() WHERE id = $1`, [p.id])
 
     const m = await montarMensagemDoPedido(p.id, 'joao.envio@teste.invalido')
-    expect(m.imagens?.length, 'sumiu com o ingresso de quem teve estorno de R$ 10').toBe(1)
+    expect(qrs(m).length, 'sumiu com o ingresso de quem teve estorno de R$ 10').toBe(1)
   })
 
   /**
@@ -483,7 +489,7 @@ describe('o e-mail de confirmação', () => {
                      'tr_zz_' || gen_random_uuid(), now())`, [orgId, eventId, dado.id])
 
     const m = await montarMensagemDoPedido(p.id, 'joao.envio@teste.invalido')
-    expect(m.imagens?.length, 'o e-mail de quem comprou levou o QR de quem recebeu').toBe(1)
+    expect(qrs(m).length, 'o e-mail de quem comprou levou o QR de quem recebeu').toBe(1)
     expect(m.texto).toContain(meu.code)
     expect(m.texto, 'o código novo do destinatário foi pro remetente').not.toContain(novoCodigo)
     expect(m.html).not.toContain(novoCodigo)
@@ -552,7 +558,7 @@ describe('o e-mail de confirmação', () => {
         expect(m.texto).not.toMatch(/localhost|\/ingressos\//)
         expect(m.html).not.toMatch(/localhost|\/ingressos\//)
         expect(m.texto).toContain('anexado')
-        expect(m.imagens?.length, 'sem o link, o QR anexado é a entrada — não pode faltar').toBe(1)
+        expect(qrs(m).length, 'sem o link, o QR anexado é a entrada — não pode faltar').toBe(1)
       }
       process.env.PUBLIC_BASE_URL = 'https://ingressos.conquistapark.com.br/'
       expect(baseDoSite()).toBe('https://ingressos.conquistapark.com.br')
