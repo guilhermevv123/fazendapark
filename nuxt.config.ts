@@ -61,9 +61,11 @@ export default defineNuxtConfig({
   // ESCRITO no pacote gerado (.output) se a variável existir na hora de compilar — e o banco e o
   // token do webhook estavam aqui sem ninguém ler (o servidor lê direto de process.env; achado da
   // frota F1, 28/09). Só o que é público fica.
-  runtimeConfig: {
-    public: { baseUrl: process.env.PUBLIC_BASE_URL || 'http://localhost:3000' },
-  },
+  // Público também: nada. Havia `public.baseUrl` com `PUBLIC_BASE_URL || 'http://localhost:3000'` —
+  // ninguém lia, e em produção ia escrito `localhost:3000` no HTML de toda página (o Nuxt só troca
+  // runtimeConfig por `NUXT_PUBLIC_*`; o ambiente tem `PUBLIC_BASE_URL`). O endereço do site, pros
+  // links de e-mail e WhatsApp, é `baseDoSite()` (server/utils/envio.ts), que recusa localhost.
+  runtimeConfig: { public: {} },
   app: {
     head: {
       htmlAttrs: { lang: 'pt-BR' },

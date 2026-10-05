@@ -32,7 +32,7 @@ import { db, q, q1, tx } from './db'
 import { emitirNaTransacao } from './emissao'
 import { reservar } from './estoque'
 import {
-  assuntoCodificado, enderecoValido, entregar, entregarPorSmtp, montarConfirmacao, montarMime,
+  assuntoCodificado, dominioDoRemetente, enderecoValido, entregar, entregarPorSmtp, montarConfirmacao, montarMime,
   pendenciaDoEmail, remetente,
 } from './email'
 import {
@@ -642,7 +642,7 @@ describe('a entrega', () => {
     expect(depois.sent_at).toBeTruthy()
     expect(depois.subject, 'não guardou o que foi enviado').toContain(p.code)
     expect(depois.body_html).toContain('cid:')
-    expect(depois.message_id).toMatch(/^<.+@diamond-tickets>$/)
+    expect(depois.message_id).toMatch(/^<[0-9a-f-]+@[a-z0-9.-]+\.[a-z]{2,}>$/)
 
     const eml = await readFile(depois.file_path, 'utf8')
     expect(eml, 'o arquivo simulado não é a mesma mensagem').toContain('Content-ID:')
@@ -2231,4 +2231,19 @@ describe('GET /api/admin/filas · "sem o e-mail na mão" é só quem ainda tem i
       'o pago com ingresso a entregar sumiu da conta').toBe(1)
     expect(quatro.ok, 'com um comprador que pagou e nunca vai receber, `ok` não pode ser true').toBe(false)
   }, 60_000)
+})
+
+describe('cabeçalho do e-mail · o domínio é o do remetente (spam, 05/10)', () => {
+  it('Message-ID com o domínio de quem assina — nunca nome solto nem localhost', () => {
+    const { messageId } = montarMime({
+      de: 'Conquista Park <ingressos@conquistapark.com.br>', para: 'a@b.com', assunto: 'x', texto: 'x', html: '<p>x</p>',
+    } as any)
+    expect(messageId).toMatch(/^<[0-9a-f-]+@conquistapark\.com\.br>$/)
+  })
+  it('dominioDoRemetente: com nome, sem nome, e sem domínio de verdade', () => {
+    expect(dominioDoRemetente('Conquista Park <ingressos@ConquistaPark.com.br>')).toBe('conquistapark.com.br')
+    expect(dominioDoRemetente('ingressos@conquistapark.com.br')).toBe('conquistapark.com.br')
+    expect(dominioDoRemetente('x@localhost')).toBeNull()
+    expect(dominioDoRemetente('')).toBeNull()
+  })
 })

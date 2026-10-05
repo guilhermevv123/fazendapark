@@ -113,8 +113,18 @@ function fronteira(prefixo: string): string {
  * gravado como .eml — os dois EXATAMENTE iguais, pra que abrir o arquivo
  * simulado mostre o que o servidor receberia.
  */
+/**
+ * O domínio de quem assina (`"Conquista Park <ingressos@conquistapark.com.br>"` → `conquistapark.com.br`).
+ * Message-ID e EHLO com nome solto ("diamond-tickets", sem ponto) são sinal de máquina mal
+ * configurada pros filtros de spam; com o domínio do remetente, batem com o SPF/DKIM dele.
+ */
+export function dominioDoRemetente(de: string | null | undefined): string | null {
+  const m = String(de ?? '').match(/@([a-z0-9.-]+\.[a-z]{2,})>?\s*$/i)
+  return m ? m[1]!.toLowerCase() : null
+}
+
 export function montarMime(m: Mensagem): { bruto: string; messageId: string } {
-  const messageId = m.messageId ?? `<${randomUUID()}@diamond-tickets>`
+  const messageId = m.messageId ?? `<${randomUUID()}@${dominioDoRemetente(m.de) ?? 'diamond-tickets.invalid'}>`
   const imagens = m.imagens ?? []
   const alt = fronteira('alt')
   const rel = fronteira('rel')
@@ -280,7 +290,7 @@ export async function entregarPorSmtp(m: Mensagem, urlBruta?: string): Promise<E
 }
 
 async function ehlo(c: Conversa): Promise<string> {
-  c.escrever(`EHLO ${process.env.SMTP_EHLO || 'diamond-tickets'}`)
+  c.escrever(`EHLO ${process.env.SMTP_EHLO || dominioDoRemetente(remetente()) || 'diamond-tickets'}`)
   const r = await esperar(c, 250)
   return r.texto
 }
