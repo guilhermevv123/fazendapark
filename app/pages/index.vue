@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import VideoDoParque from '~/components/VideoDoParque.vue'
 /**
  * A home do site de vendas — o que o comprador vê primeiro.
  *
@@ -331,6 +332,9 @@ useSeoMeta({
         </template>
       </div>
     </div>
+
+    <!-- o vídeo de destaque (dono, 05/10) -->
+    <VideoDoParque :ir-comprar="irComprar" />
 
     <!-- o parque -->
     <section aria-labelledby="o-parque" class="bg-canvas">
