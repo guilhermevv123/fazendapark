@@ -322,6 +322,9 @@ async function umaPorVez<T>(nome: string, vazio: T, f: () => Promise<T>): Promis
 export const SQL_PIX_ESPERANDO = `
   SELECT o.id, o.org_id, o.mp_payment_id
     FROM orders o
+    -- sem token não há a quem perguntar — e "sem token" é falha passageira, que pararia a rodada
+    -- inteira na primeira linha (o Pix de outra organização ficaria sem pergunta)
+    JOIN organizations org ON org.id = o.org_id AND org.mp_access_token IS NOT NULL
    WHERE o.mp_payment_id IS NOT NULL
      AND o.status = 'aguardando_pagamento'
      AND o.created_at < now() - interval '20 seconds'

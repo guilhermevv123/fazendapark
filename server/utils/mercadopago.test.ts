@@ -487,6 +487,26 @@ describe('varreduras · o ingresso sai mesmo sem aviso, e o Pix vencido fecha', 
     expect((await q1<any>(`SELECT mp_checked_at FROM orders WHERE id = $1`, [p.id]))!.mp_checked_at).toBeNull()
   })
 
+  it('Pix esperando de organização SEM token não trava a rodada dos outros', async () => {
+    const p = await pedidoMp({ minutosAtras: 3 })
+    aprovar(p.pid)
+    const semToken = (await q1<any>(`INSERT INTO organizations (name, slug)
+      VALUES ('ZZ MP Sem Token', 'zz-mp-sem-token-' || gen_random_uuid()) RETURNING id`))!.id
+    try {
+      const outro = (await q1<any>(`INSERT INTO orders (org_id, event_id, code, status, channel, face_cents, fee_cents,
+          platform_cents, discount_cents, total_cents, payment_method, installments, mp_payment_id, created_at, expires_at)
+        VALUES ($1, $2, 'PED-ZZMPST-' || upper(substr(md5(random()::text), 1, 6)), 'aguardando_pagamento', 'online',
+                100, 0, 0, 0, 100, 'pix', 1, '7999999999', now() - interval '3 minutes', now() + interval '20 minutes')
+        RETURNING id`, [semToken, eventId]))!.id
+      const r = await MP.varrerPixEsperando({ limite: 500 })
+      expect(r.find((x) => x.pedidoId === outro), 'o pedido sem token entrou na rodada').toBeUndefined()
+      expect((await pedido(p.id)).status, 'o Pix pago da organização com token ficou sem pergunta').toBe('pago')
+      await q(`DELETE FROM orders WHERE id = $1`, [outro])
+    } finally {
+      await q(`DELETE FROM organizations WHERE id = $1`, [semToken])
+    }
+  })
+
   it('MP fora: a varredura para na PRIMEIRA pergunta (os outros ouviriam o mesmo não)', async () => {
     await pedidoMp({ minutosAtras: 3 })
     await pedidoMp({ minutosAtras: 3 })
