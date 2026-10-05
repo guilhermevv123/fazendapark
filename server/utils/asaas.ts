@@ -85,7 +85,7 @@ export function falhaPassageiraDoAsaas(e: unknown): boolean {
 }
 
 async function chamar<T = any>(
-  cfg: ConfigAsaas, metodo: string, caminho: string, corpo?: any,
+  cfg: ConfigAsaas, metodo: string, caminho: string, corpo?: any, opcoes: { prazoMs?: number } = {},
 ): Promise<T> {
   if (!cfg.apiKey) throw new Error('Asaas sem api key configurada')
   // quem chama passa a chave como está no banco; texto puro de antes do cofre passa igual
@@ -98,7 +98,7 @@ async function chamar<T = any>(
       'User-Agent': 'diamond-tickets',
     },
     body: corpo ? JSON.stringify(corpo) : undefined,
-    signal: AbortSignal.timeout(prazoDoAsaasMs()),
+    signal: AbortSignal.timeout(opcoes.prazoMs ?? prazoDoAsaasMs()),
   })
 
   // 429: a cota (25.000 chamadas/12h, 50 GETs simultâneos) estourou. Vira erro com o status pra
@@ -364,6 +364,55 @@ export async function criarCobranca(cfg: ConfigAsaas, c: NovaCobranca): Promise<
     corpo.split = undefined // preenchido por quem chama, quando houver
   }
   return chamar(cfg, 'POST', '/payments', corpo)
+}
+
+/* ----------------------------------------- cartão digitado NO SITE (05/10) */
+/**
+ * O cartão digitado na nossa tela, cobrado direto (`POST /payments` com `creditCard` +
+ * `creditCardHolderInfo` + `remoteIp`; docs.asaas.com/reference/criar-cobranca-com-cartao-de-credito).
+ *
+ *   · prazo de 60 s: a doc manda "timeout mínimo de 60 segundos" quando há processamento do cartão;
+ *   · recusado → HTTP 400 e a cobrança NÃO é persistida (doc): é seguro tentar de novo;
+ *   · resposta que não veio (prazo, rede, 5xx) NÃO é recusa: o cartão pode ter sido cobrado. Quem
+ *     chama pergunta ao Asaas pela cobrança do pedido (`cobrancaDoPedidoNoAsaas`) antes de qualquer
+ *     coisa — nunca reenvia às cegas;
+ *   · só CRÉDITO: dado de cartão de DÉBITO não pode ir pela API (doc) — débito é a fatura.
+ *
+ * O corpo carrega o número do cartão: NADA aqui loga, grava ou devolve o corpo. O erro do Asaas
+ * (`ErroAsaas`) traz só a resposta dele, que não ecoa o cartão.
+ */
+export const PRAZO_DO_CARTAO_MS = 60_000
+/** lido a cada chamada (o teste encurta com `ASAAS_PRAZO_CARTAO_MS`) */
+function prazoDoCartaoMs(): number {
+  const n = Number(process.env.ASAAS_PRAZO_CARTAO_MS)
+  return Number.isFinite(n) && n > 0 ? n : PRAZO_DO_CARTAO_MS
+}
+
+export interface CartaoParaOAsaas {
+  creditCard: { holderName: string; number: string; expiryMonth: string; expiryYear: string; ccv: string }
+  creditCardHolderInfo: {
+    name: string; email: string; cpfCnpj: string; postalCode: string; addressNumber: string; phone: string
+    mobilePhone?: string
+  }
+  remoteIp: string
+}
+
+export async function criarCobrancaComCartao(cfg: ConfigAsaas, c: NovaCobranca, cartao: CartaoParaOAsaas): Promise<any> {
+  return chamar(cfg, 'POST', '/payments', { ...c, billingType: 'CREDIT_CARD', ...cartao }, { prazoMs: prazoDoCartaoMs() })
+}
+
+/** A cobrança do pedido no Asaas, pela `externalReference` (o id do pedido). `null` = não existe. */
+export async function cobrancaDoPedidoNoAsaas(cfg: ConfigAsaas, pedidoId: string): Promise<any | null> {
+  const r: any = await chamar(cfg, 'GET', `/payments?externalReference=${encodeURIComponent(pedidoId)}&limit=10`)
+  const lista: any[] = Array.isArray(r?.data) ? r.data : []
+  // parcelado: a 1ª parcela (a de menor número) é a que o pedido guarda
+  return lista.filter((x) => !x?.deleted)
+    .sort((a, b) => Number(a?.installmentNumber ?? 1) - Number(b?.installmentNumber ?? 1))[0] ?? null
+}
+
+/** Ligado por ambiente (`CARTAO_NO_SITE=1`): desligado, o cartão segue pela fatura do Asaas. */
+export function cartaoNoSiteLigado(env: Record<string, string | undefined> = process.env): boolean {
+  return env.CARTAO_NO_SITE === '1'
 }
 
 export async function buscarCobranca(cfg: ConfigAsaas, id: string): Promise<any> {

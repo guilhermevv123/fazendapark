@@ -35,12 +35,15 @@ import {
   aplicarCupom, CupomRecusado, PEDIDO_EM_PE, resgatarCupom, type Cupom,
 } from '../utils/cupom'
 import {
-  acharOuCriarCliente, centavosParaReais, criarCobranca, ErroAsaas, pagamentoOnline, pagamentoPeloAsaas,
+  acharOuCriarCliente, aplicarCobrancaConsultada, cartaoNoSiteLigado, centavosParaReais, cobrancaDoPedidoNoAsaas,
+  criarCobranca, criarCobrancaComCartao, ErroAsaas, falhaPassageiraDoAsaas, pagamentoOnline, pagamentoPeloAsaas,
+  type NovaCobranca,
   qrCodePix, recusaDeDadoDoComprador, telefoneParaAsaas, valorDaCobranca, vencimentoEmDias,
   type ConfigAsaas,
 } from '../utils/asaas'
 import { baseDoSite } from '../utils/envio'
-import { conferirFreio, frearPortaPublica, marcarNoFreio } from '../utils/sessao'
+import { conferirFreio, frearPortaPublica, ipDaRequisicao, marcarNoFreio } from '../utils/sessao'
+import { conferirCartao, soDigitosDoCartao } from '../../app/composables/cartao'
 import {
   conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, MOTIVOS,
   MOTIVOS_EM_TEXTO, motivoValido,
@@ -166,6 +169,22 @@ export const Entrada = z.object({
   // não recebe dado de cartão de débito). Por dentro vira `credito` em 1×.
   forma: z.enum(['pix', 'credito', 'debito']).default('pix'),
   parcelas: z.number().int().min(1).max(12).default(1),
+  /**
+   * Cartão de CRÉDITO digitado no site (05/10), só com `CARTAO_NO_SITE=1` — desligado, é ignorado e
+   * o cartão vai pela fatura do Asaas como sempre. Débito nunca vem aqui (a API não aceita). Sai do
+   * corpo logo depois do parse: não entra em `dados`, não é gravado nem logado.
+   */
+  cartao: z.object({
+    numero: z.string().max(25),
+    titular: z.string().max(40),
+    mes: z.string().max(2),
+    ano: z.string().max(4),
+    cvv: z.string().max(4),
+    cep: z.string().max(9),
+    numeroEndereco: z.string().max(10),
+    /** o cartão é de outra pessoa: o CPF dela (o antifraude do banco confere titular e CPF) */
+    cpfTitular: z.string().max(14).optional(),
+  }).optional(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -186,8 +205,9 @@ export default defineEventHandler(async (event) => {
       data: { tipo: 'conta' } })
   }
   const debito = p.data.forma === 'debito'
+  const { cartao: cartaoDoCorpo, ...semCartao } = p.data
   const dados = {
-    ...p.data, comprador,
+    ...semCartao, comprador,
     forma: (debito ? 'credito' : p.data.forma) as 'pix' | 'credito',
     parcelas: debito ? 1 : p.data.parcelas,
   }
@@ -196,6 +216,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'CPF inválido. Confira os 11 números.',
       data: { tipo: 'cadastro', campo: 'documento' } })
   }
+  // Cartão no site: conferido ANTES de reservar lugar (a mesma conta da tela, composables/cartao.ts).
+  const cartao = !debito && dados.forma === 'credito' && cartaoDoCorpo && cartaoNoSiteLigado()
+    ? conferirCartaoDoCorpo(cartaoDoCorpo, documento)
+    : null
 
   // B04: quem testa dicionário de cupom não usa o checkout de atalho; e o
   // balde de INGRESSOS é o que segura o estoque de verdade (B03) — pedido de
@@ -586,7 +610,7 @@ export default defineEventHandler(async (event) => {
       await q(`UPDATE customers SET asaas_customer_id = $2 WHERE id = $1`, [pedido.customerId, id])
       return id
     }
-    const novaCobranca = (customer: string) => criarCobranca(cfg, {
+    const cobrancaCom = (customer: string) => ({
       customer,
       billingType: dados.forma === 'pix' ? 'PIX' : 'CREDIT_CARD',
       // à vista vai `value`; parcelado vai `installmentCount` + `totalValue` (ver valorDaCobranca)
@@ -600,7 +624,17 @@ export default defineEventHandler(async (event) => {
       description: `${ev.name} — pedido ${pedido.code}`,
       externalReference: pedido.id,       // é isto que liga o webhook ao pedido
       ...retornoDaFatura(pedido.code),
-    })
+    } as NovaCobranca)
+    const novaCobranca = (customer: string) => cartao
+      ? criarCobrancaComCartao(cfg, cobrancaCom(customer), {
+          creditCard: cartao.creditCard,
+          creditCardHolderInfo: {
+            ...cartao.titular, email: dados.comprador.email,
+            phone: String(dados.comprador.telefone ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, ''),
+          },
+          remoteIp: ipDaRequisicao(event) || event.node.req.socket?.remoteAddress || '',
+        })
+      : criarCobranca(cfg, cobrancaCom(customer))
 
     const asaasCustomer = pedido.asaasCustomerId || await clienteNoAsaas()
     try {
@@ -614,9 +648,29 @@ export default defineEventHandler(async (event) => {
       cobranca = await novaCobranca(await clienteNoAsaas())
     }
   } catch (e: any) {
+    // Cartão no site sem resposta (prazo, rede, 5xx): o cartão PODE ter sido cobrado — a doc manda
+    // perguntar antes de qualquer outra coisa. Achou a cobrança: segue com ela, como se tivesse
+    // respondido. Não achou: aí sim desfaz.
+    const achada = cartao && falhaPassageiraDoAsaas(e)
+      ? await cobrancaDoPedidoNoAsaas(cfg, pedido.id).catch(() => null)
+      : null
+    if (achada) {
+      cobranca = achada
+    } else {
     // Gateway caiu: devolve o estoque na hora. Sem isso, cada erro do Asaas
     // queima ingresso que ninguém comprou até a varredura de expirados passar.
     await desfazer(pedido.id, `Asaas: ${e.message}`)
+    // Cartão recusado pelo banco (400, a cobrança nem foi criada): o motivo do Asaas, pra pessoa
+    // conferir os dados ou usar outro cartão. O lugar já voltou.
+    if (cartao && e instanceof ErroAsaas && e.status >= 400 && e.status < 500 && !recusaDeDadoDoComprador(e)) {
+      throw createError({ statusCode: 422, statusMessage: recadoDoCartaoRecusado(e),
+        data: { tipo: 'cartao_recusado' } })
+    }
+    if (cartao && falhaPassageiraDoAsaas(e)) {
+      throw createError({ statusCode: 502, statusMessage: 'O banco não respondeu a tempo. Confira no app do seu '
+        + 'banco se a compra aparece antes de tentar de novo — se aparecer, o ingresso chega por e-mail.',
+        data: { tipo: 'cartao_sem_resposta' } })
+    }
     // B12: recusa de DADO do comprador (celular, e-mail, CPF, nome) diz qual
     // campo e o que o gateway disse — tentar de novo igual daria o mesmo.
     const recusa = recusaDeDadoDoComprador(e)
@@ -625,6 +679,7 @@ export default defineEventHandler(async (event) => {
         data: { tipo: 'cadastro', campo: recusa.campo, origem: 'gateway' } })
     }
     throw createError({ statusCode: 502, statusMessage: 'Não foi possível gerar a cobrança. Tente de novo.' })
+    }
   }
 
   let pix: { encodedImage?: string; payload?: string } | null = null
@@ -645,11 +700,19 @@ export default defineEventHandler(async (event) => {
     [pedido.id, cobranca.id, pix?.payload ?? null, pix?.encodedImage ?? null,
      cobranca.invoiceUrl ?? null, String(cobranca.installment ?? '').trim() || null])
 
+  // Cartão no site aprovado na hora (CONFIRMED): o ingresso sai agora, pelo MESMO caminho do webhook
+  // (chave poll:<cobrança>:<status> — o aviso que chegar depois é repetido e não emite de novo).
+  let statusDoPedido = 'aguardando_pagamento'
+  if (cartao && ['CONFIRMED', 'RECEIVED'].includes(String(cobranca.status ?? '').toUpperCase())) {
+    const d = await aplicarCobrancaConsultada({ pedidoId: pedido.id, cobranca }).catch(() => null)
+    if (d?.ok) statusDoPedido = (await q1<any>(`SELECT status FROM orders WHERE id = $1`, [pedido.id]))?.status ?? statusDoPedido
+  }
+
   return {
     ok: true,
     pedido: pedido.code,
     pedidoId: pedido.id,
-    status: 'aguardando_pagamento',
+    status: statusDoPedido,
     expiraEm: expiraEm.toISOString(),
     totalCents: total.totalCents,
     parcelas: pedido.parcelas,
@@ -662,9 +725,55 @@ export default defineEventHandler(async (event) => {
       pixPayload: pix?.payload ?? null,
       pixQrBase64: pix?.encodedImage ?? null,
       linkFatura: cobranca.invoiceUrl ?? null,
+      // cartão digitado no site: a tela não abre a fatura — espera o banco (análise, 3DS) ou já é pago
+      cartaoNoSite: !!cartao,
     },
   }
 })
+
+/**
+ * O cartão do corpo, conferido pela MESMA conta da tela (`app/composables/cartao.ts`) e no formato
+ * do Asaas. Errado → 422 com o campo e a frase, antes de reservar lugar (ninguém segura ingresso com
+ * cartão que nem passa no dígito verificador). O número não aparece em frase nenhuma.
+ */
+function conferirCartaoDoCorpo(c: NonNullable<z.infer<typeof Entrada>['cartao']>, documentoDoComprador: string) {
+  const recusa = (campo: string, recado: string) =>
+    createError({ statusCode: 422, statusMessage: recado, data: { tipo: 'cartao', campo } })
+  const conf = conferirCartao({ numero: c.numero, titular: c.titular, mes: c.mes, ano: c.ano, cvv: c.cvv })
+  if (conf.numero) throw recusa('numero', conf.numero)
+  if (conf.titular) throw recusa('titular', conf.titular)
+  if (conf.validade) throw recusa('validade', conf.validade)
+  if (conf.cvv) throw recusa('cvv', conf.cvv)
+  const cep = c.cep.replace(/\D/g, '')
+  if (cep.length !== 8) throw recusa('cep', 'CEP com 8 números (o do endereço da fatura do cartão).')
+  const numeroEndereco = c.numeroEndereco.trim()
+  if (!numeroEndereco) throw recusa('numeroEndereco', 'Número do endereço da fatura do cartão (ou "S/N").')
+  const cpfTitular = (c.cpfTitular ?? '').replace(/\D/g, '')
+  if (cpfTitular && !cpfValido(cpfTitular)) throw recusa('cpfTitular', 'CPF do titular do cartão inválido.')
+  return {
+    creditCard: {
+      holderName: c.titular.trim().toUpperCase(),
+      number: soDigitosDoCartao(c.numero),
+      expiryMonth: c.mes.padStart(2, '0'),
+      expiryYear: c.ano,
+      ccv: soDigitosDoCartao(c.cvv, 4),
+    },
+    titular: {
+      name: c.titular.trim(),
+      cpfCnpj: cpfTitular || documentoDoComprador,
+      postalCode: cep,
+      addressNumber: numeroEndereco.slice(0, 10),
+    },
+  }
+}
+
+/** A recusa do banco em português, sem o "Asaas:" da frente e sem nada que pareça dado do cartão. */
+function recadoDoCartaoRecusado(e: ErroAsaas): string {
+  const erros: any[] = Array.isArray(e.detalhes?.errors) ? e.detalhes.errors : []
+  const frase = erros.map((x) => String(x?.description ?? '').trim()).filter(Boolean).join(' ')
+    .replace(/\d{6,}/g, '').slice(0, 240)
+  return `Cartão não aprovado${frase ? `: ${frase}` : '.'} Confira os dados ou use outro cartão — o seu lugar foi liberado, é só tentar de novo.`
+}
 
 /**
  * O Pix pelo Mercado Pago — mesmo retorno do caminho do Asaas, pra tela não saber de onde veio.

@@ -28,6 +28,8 @@ import {
   totaisDoCarrinho, VERSAO_DO_CARRINHO, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
 import { cpfEscondido, telefoneLegivel, useContaDoCliente } from '~/composables/contaDoCliente'
+import { conferirCartao, type ConferenciaDoCartao, type DadosDoCartao } from '~/composables/cartao'
+import CartaoDeCredito from '~/components/CartaoDeCredito.vue'
 import { MOTIVOS } from '~~/server/utils/meia-entrada'
 
 const route = useRoute()
@@ -146,6 +148,35 @@ const invalido = (campo: string) => (campoComErro.value === campo ? 'true' : und
 type Forma = 'pix' | 'credito' | 'debito'
 const forma = ref<Forma>('pix')
 const parcelas = ref(1)
+
+/*
+ * Cartão de crédito digitado NO SITE (dono, 05/10) — só quando o servidor diz que está ligado
+ * (`CARTAO_NO_SITE=1` + Asaas pronto: /api/pagamento/cartao). Desligado, o crédito segue pela
+ * fatura do Asaas como sempre. Débito nunca: a API do Asaas não aceita dado de cartão de débito.
+ * Os dados do cartão moram SÓ nesta memória: não vão pro sessionStorage, e saem dela depois do envio.
+ */
+const cartaoNoSite = ref(false)
+const vazioDoCartao = (): DadosDoCartao => ({ numero: '', titular: '', mes: '', ano: '', cvv: '' })
+const cartao = ref<DadosDoCartao>(vazioDoCartao())
+const enderecoDoCartao = reactive({ cep: '', numero: '' })
+const outroTitular = ref(false)
+const cpfDoTitular = ref('')
+const conferenciaDoCartao = ref<ConferenciaDoCartao | null>(null)
+const formularioDoCartao = ref<InstanceType<typeof CartaoDeCredito> | null>(null)
+const usaCartaoNoSite = computed(() => cartaoNoSite.value && forma.value === 'credito')
+onMounted(async () => {
+  try { cartaoNoSite.value = !!(await $fetch<any>('/api/pagamento/cartao', { query: { evento: slug } }))?.ligado }
+  catch { cartaoNoSite.value = false }
+})
+/** O que falta no cartão, pra frase de cima do botão (o campo diz o resto). `null` = pode pagar. */
+function faltaNoCartao(): string | null {
+  const c = conferirCartao(cartao.value)
+  if (!c.ok) { formularioDoCartao.value?.mostrarErros(); return 'Confira os dados do cartão.' }
+  if (enderecoDoCartao.cep.replace(/\D/g, '').length !== 8) return 'Digite o CEP do endereço da fatura do cartão (8 números).'
+  if (!enderecoDoCartao.numero.trim()) return 'Digite o número do endereço da fatura do cartão (ou S/N).'
+  if (outroTitular.value && cpfDoTitular.value.replace(/\D/g, '').length !== 11) return 'Digite o CPF de quem é o cartão.'
+  return null
+}
 
 /**
  * Quantas parcelas cabem, e de quanto — sobre o total que VAI SER COBRADO, com
@@ -387,6 +418,10 @@ async function pagar(semDeclaracao = false) {
   erroNosDados.value = false
   campoComErro.value = ''
   if (precisaDaConta()) return
+  if (!gratis.value && usaCartaoNoSite.value) {
+    const falta = faltaNoCartao()
+    if (falta) { erro.value = falta; return }
+  }
   enviando.value = true
   try {
     // B13: vai pagar o carrinho novo — o pedido anterior desta aba sai antes
@@ -407,8 +442,18 @@ async function pagar(semDeclaracao = false) {
         promoter: carrinho.value.promoter || undefined,
         forma: f,
         parcelas: f === 'credito' ? parcelas.value : 1,
+        ...(f === 'credito' && usaCartaoNoSite.value ? {
+          cartao: {
+            ...cartao.value,
+            cep: enderecoDoCartao.cep.replace(/\D/g, ''),
+            numeroEndereco: enderecoDoCartao.numero.trim(),
+            cpfTitular: outroTitular.value ? cpfDoTitular.value.replace(/\D/g, '') : undefined,
+          },
+        } : {}),
       },
     })
+    // o cartão foi: some da memória da tela (o número e o código não ficam esperando um F5)
+    cartao.value = vazioDoCartao()
     pedido.value = r
     linhasDoPedido.value = carrinho.value.linhas
     emailDoPedido.value = conta.value?.email ?? ''
@@ -467,6 +512,13 @@ async function pagar(semDeclaracao = false) {
     }
     // Dado da conta recusado (o gateway não aceitou o celular — B12): o conserto é em "Meus dados".
     // O documento da meia não mora na conta: esse recado vem com o caminho de volta pra vitrine.
+    // Cartão recusado pelo banco, ou dado do cartão torto: a frase vem do servidor e o lugar já
+    // voltou. O código de segurança sai da tela (a pessoa digita de novo, ou usa outro cartão).
+    if (tipo === 'cartao_recusado' || tipo === 'cartao' || tipo === 'cartao_sem_resposta') {
+      cartao.value = { ...cartao.value, cvv: '' }
+      erro.value = recado
+      return
+    }
     erroNosDados.value = tipo === 'cadastro' && !String(corpo.data?.campo ?? '').startsWith('meia_')
     erro.value = recado
   } finally {
@@ -974,7 +1026,32 @@ useHead({ title: 'Pagamento' })
               Parcelas sem juros, sobre o total{{ cupom.estado === 'vale' ? ' já com o cupom' : '' }}.
             </p>
           </div>
-          <p v-if="forma !== 'pix'" class="text-xs text-tinta-fraca">
+          <div v-if="usaCartaoNoSite" class="grid gap-4" data-parte="cartao-no-site">
+            <CartaoDeCredito ref="formularioDoCartao" v-model="cartao" :desabilitado="enviando"
+                             @conferencia="conferenciaDoCartao = $event" />
+            <div class="grid grid-cols-[1fr_7rem] gap-3">
+              <div>
+                <label for="cartao-cep" class="rotulo">CEP da fatura do cartão</label>
+                <input id="cartao-cep" v-model="enderecoDoCartao.cep" class="campo tabular-nums" inputmode="numeric"
+                       autocomplete="billing postal-code" placeholder="00000-000" maxlength="9" data-parte="campo-cep">
+              </div>
+              <div>
+                <label for="cartao-numero-endereco" class="rotulo">Número</label>
+                <input id="cartao-numero-endereco" v-model="enderecoDoCartao.numero" class="campo" maxlength="10"
+                       autocomplete="billing address-line2" placeholder="123 ou S/N" data-parte="campo-numero-endereco">
+              </div>
+            </div>
+            <label class="flex items-center gap-2 text-sm text-tinta-corpo">
+              <input v-model="outroTitular" type="checkbox" class="h-5 w-5" data-parte="outro-titular">
+              O cartão é de outra pessoa
+            </label>
+            <div v-if="outroTitular">
+              <label for="cartao-cpf-titular" class="rotulo">CPF de quem é o cartão</label>
+              <input id="cartao-cpf-titular" v-model="cpfDoTitular" class="campo tabular-nums" inputmode="numeric"
+                     placeholder="000.000.000-00" maxlength="14" data-parte="campo-cpf-titular">
+            </div>
+          </div>
+          <p v-if="forma === 'debito' || (forma === 'credito' && !usaCartaoNoSite)" class="text-xs text-tinta-fraca">
             Os dados do cartão são digitados no ambiente seguro do Asaas — eles não passam por aqui.
             <template v-if="forma === 'debito'">Lá, escolha a opção de débito.</template>
           </p>
@@ -1064,6 +1141,13 @@ useHead({ title: 'Pagamento' })
         </div>
 
         <!-- cartão: o pagamento acontece no ambiente do Asaas -->
+        <div v-else-if="!ehPix && !situacao && pedido.pagamento?.cartaoNoSite" class="card mt-4 text-center"
+             data-parte="aguardando-banco">
+          <p class="font-semibold text-tinta">Aguardando a aprovação do banco…</p>
+          <p class="mt-1 text-sm text-tinta-suave">
+            O cartão já foi enviado. Esta tela muda sozinha quando o banco responder — não feche nem pague de novo.
+          </p>
+        </div>
         <div v-else-if="!ehPix && !situacao" class="card mt-4">
           <p class="text-tinta-corpo">
             O cartão é digitado no ambiente seguro do Asaas. Termine o pagamento por lá e
