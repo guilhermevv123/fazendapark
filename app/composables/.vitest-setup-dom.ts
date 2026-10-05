@@ -35,7 +35,7 @@
  * teste precisa segurar pra perguntar "com ESTES dados, o que a tela mostra?".
  */
 import {
-  computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, onUnmounted,
+  computed, defineComponent, h, nextTick, onBeforeMount, onBeforeUnmount, onMounted, onUnmounted,
   provide, inject, reactive, readonly, ref, shallowRef, Suspense, toRef, toRefs, unref,
   watch, watchEffect,
 } from 'vue'
@@ -187,7 +187,7 @@ const GLOBAIS: Record<string, any> = (() => {
   const globais: Record<string, any> = {
     // reatividade e ciclo de vida do Vue
     ref, computed, reactive, watch, watchEffect, nextTick, shallowRef, readonly,
-    toRef, toRefs, unref, provide, inject, onMounted, onUnmounted, onBeforeUnmount,
+    toRef, toRefs, unref, provide, inject, onBeforeMount, onMounted, onUnmounted, onBeforeUnmount,
     h, defineComponent,
     // `resolveComponent('NuxtLink')` — o jeito CERTO de trocar de componente por
     // nome dentro de `<component :is>` (a string crua `'NuxtLink'` não resolve

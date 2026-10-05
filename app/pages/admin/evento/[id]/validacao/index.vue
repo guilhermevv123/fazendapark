@@ -442,6 +442,8 @@ type Passagem = { id: string; qr: string; gate: string | null; em: string; offli
 const CHAVE_LISTA = `dt_portaria_lista_${id}`
 const CHAVE_FILA = `dt_portaria_fila_${id}`
 const CHAVE_APARELHO = 'dt_portaria_aparelho'
+/** lido no setup: depois de um await o Nuxt já não sabe de qual app é o useRuntimeConfig */
+const VERSAO_DO_APP = String(useRuntimeConfig().app?.buildId ?? '')
 
 const lista = ref<IngressoLocal[]>([])
 const listaEm = ref<string | null>(null)
@@ -694,7 +696,9 @@ watch(gate, (v) => {
 async function registrarWorker() {
   if (!('serviceWorker' in navigator)) { swPronto.value = 'indisponivel'; return }
   try {
-    await navigator.serviceWorker.register('/sw-portaria.js')
+    // a versão do build na URL: cada deploy é um worker novo, com cache novo (o velho é apagado)
+    const reg = await navigator.serviceWorker.register(`/sw-portaria.js?v=${VERSAO_DO_APP}`)
+    reg.update?.().catch(() => {})
     swPronto.value = 'sim'
   } catch {
     swPronto.value = 'nao'
@@ -799,6 +803,28 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
            pessoas: t.pessoas, ingresso: dados }
 }
 
+/**
+ * Leitura COM rede também marca a lista do aparelho (dono, 05/10: "estar preparado pra todas as
+ * variáveis"). Antes só a leitura offline marcava: quem entrou às 10h com rede e voltou ao portão
+ * às 10h05, com a internet caída, passava de novo — a lista do aparelho ainda dizia "válido" até a
+ * próxima descida (15 min). Agora o que o servidor decidiu fica escrito aqui na hora.
+ */
+function marcarNaListaDoAparelho(bruto: string, r: Resposta | null) {
+  if (!r || r.consulta || !lista.value.length) return
+  const t = mapa.value.get(chaveLocal(codigoDoQr(bruto).codigo))
+  if (!t) return
+  if (r.ok) {
+    const em = new Date().toISOString()
+    t.usadoAqui = { em, gate: gate.value || null }
+    if (Number(t.diasCobertos ?? 1) > 1) t.diasAqui = [...new Set([...(t.diasAqui ?? []), diaLocal(new Date(em))])]
+  } else if (r.resultado === 'ja_usado' && Number(t.diasCobertos ?? 1) <= 1) {
+    t.status = 'usado'
+  } else if (r.resultado === 'cancelado') {
+    t.status = 'cancelado'
+  } else return
+  guardarLista()
+}
+
 /** aviso debaixo do campo — código curto demais nem sai do aparelho */
 const avisoCodigo = ref('')
 watch(codigo, () => { avisoCodigo.value = '' })
@@ -859,6 +885,7 @@ async function ler() {
         // é justamente o que não dá pra gastar. A consulta ("só conferir") não
         // traz retrato: ela não mexe em nada.
         if (ultima.value?.publico) publico.value = ultima.value.publico
+        marcarNaListaDoAparelho(c, ultima.value)
         // Só repinta os contadores quando alguém realmente entrou — recontar a
         // cada leitura recusada bate no banco no pior momento possível.
         if (ultima.value?.ok && !ultima.value.consulta) refresh()

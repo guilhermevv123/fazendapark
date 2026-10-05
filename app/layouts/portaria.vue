@@ -4,6 +4,9 @@
  * "Portaria", o caminho de volta pra lista de eventos e o botão de sair. A tela do leitor é a MESMA
  * de `/admin/evento/<id>/validacao` (ela tem o apelido `/portaria/<id>`); só a moldura muda.
  */
+import AvisoVersaoNova from '~/components/AvisoVersaoNova.vue'
+import { esquecerLoginDaPortaria } from '~/composables/portariaOffline'
+
 const route = useRoute()
 const noLeitor = computed(() => route.path !== '/portaria' && route.path.startsWith('/portaria/'))
 const { data: eu } = useFetch<any>('/api/auth/eu', { key: 'auth-eu' })
@@ -25,6 +28,8 @@ async function sair() {
       return
     }
   }
+  // o aparelho esquece que estava logado (sem rede ele mostrava os eventos de quem saiu)
+  esquecerLoginDaPortaria()
   // recarrega de verdade: o cache do useFetch ficaria com o usuário antigo
   window.location.href = '/portaria'
 }
@@ -32,6 +37,8 @@ async function sair() {
 
 <template>
   <div class="min-h-dvh bg-fundo-cinza">
+    <!-- app instalado na tela inicial: avisa (e atualiza sozinho parado) quando sai versão nova -->
+    <AvisoVersaoNova />
     <header data-parte="topo-portaria" class="sticky top-0 z-30 border-b border-ink-200/70 bg-white/95 backdrop-blur">
       <div class="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
         <NuxtLink v-if="noLeitor" to="/portaria" data-parte="voltar-eventos"

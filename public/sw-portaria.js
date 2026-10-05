@@ -37,15 +37,59 @@
  * próxima.
  */
 
-const VERSAO = 'portaria-v1'
+/*
+ * ## Versão nova do app (05/10)
+ *
+ * A página registra `/sw-portaria.js?v=<buildId>`: cada deploy é um worker NOVO, com cache novo.
+ * O perigo de trocar o cache é o tablet ficar sem cópia nenhuma: ele atualiza com rede, apaga o
+ * cache velho, e meia hora depois cai a internet antes de ter reaberto as telas. Por isso:
+ *   1. a instalação já guarda `/portaria` e REBAIXA cada tela da portaria que o cache velho
+ *      tinha (com os scripts que a tela pede) — o cache novo nasce completo;
+ *   2. o cache velho só é apagado se essa cópia deu certo; se não deu (instalou sem rede),
+ *      ele fica, e a busca sem rede procura em TODOS os caches.
+ */
+const VERSAO = new URL(self.location.href).searchParams.get('v') || 'portaria-v2'
 const CACHE = `dt-${VERSAO}`
 const ESPERA_MS = 4000
+const CHAVE_COMPLETO = '/__sw-portaria-completo'
+
+/** é tela da portaria (endereço curto ou o leitor do painel) */
+const ehTelaDaPortaria = (caminho) =>
+  caminho === '/portaria' || caminho.startsWith('/portaria/') || /^\/admin\/evento\/[^/]+\/validacao\/?$/.test(caminho)
+
+/** Baixa uma tela e os /_nuxt/ que ela cita (entrada, CSS, pedaços pré-carregados). */
+async function guardarTela(cache, url) {
+  const r = await fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+  if (!r.ok || r.redirected) return false
+  await cache.put(url, r.clone())
+  const html = await r.text()
+  const pedacos = [...new Set(html.match(/\/_nuxt\/[^"'\s)<>]+/g) ?? [])]
+    .filter((p) => !p.startsWith('/_nuxt/builds/'))
+  await Promise.all(pedacos.map(async (p) => {
+    try {
+      const a = await fetch(p)
+      if (a.ok) await cache.put(p, a)
+    } catch { /* um pedaço que falhou vem da rede na próxima vez */ }
+  }))
+  return true
+}
 
 self.addEventListener('install', (evento) => {
-  // Sem precache de lista fixa: os nomes dos bundles do Nuxt mudam a cada
-  // build, e uma lista escrita à mão aqui nasceria errada no primeiro deploy.
-  // O que o tablet usou uma vez com rede fica no cache e é o que ele usa sem.
-  evento.waitUntil(caches.open(CACHE))
+  evento.waitUntil((async () => {
+    const cache = await caches.open(CACHE)
+    try {
+      const telas = new Set([new URL('/portaria', self.location.origin).href])
+      for (const nome of await caches.keys()) {
+        if (!nome.startsWith('dt-') || nome === CACHE) continue
+        for (const req of await (await caches.open(nome)).keys()) {
+          const u = new URL(req.url)
+          if (ehTelaDaPortaria(u.pathname)) telas.add(u.origin + u.pathname)
+        }
+      }
+      const feitas = await Promise.all([...telas].slice(0, 12).map((u) => guardarTela(cache, u).catch(() => false)))
+      if (feitas.some(Boolean)) await cache.put(CHAVE_COMPLETO, new Response('1'))
+    } catch { /* sem rede: o cache velho segura até a próxima vez */ }
+  })())
   // Assume o lugar do worker antigo na hora. Um tablet de portaria fica aberto
   // dias; esperar todas as abas fecharem é esperar o evento acabar.
   self.skipWaiting()
@@ -53,8 +97,12 @@ self.addEventListener('install', (evento) => {
 
 self.addEventListener('activate', (evento) => {
   evento.waitUntil((async () => {
-    for (const nome of await caches.keys()) {
-      if (nome.startsWith('dt-') && nome !== CACHE) await caches.delete(nome)
+    const meu = await caches.open(CACHE)
+    // só apaga o velho se o novo já tem com que abrir sem rede
+    if (await meu.match(CHAVE_COMPLETO)) {
+      for (const nome of await caches.keys()) {
+        if (nome.startsWith('dt-') && nome !== CACHE) await caches.delete(nome)
+      }
     }
     await self.clients.claim()
   })())
@@ -71,13 +119,13 @@ function meInteressa(requisicao) {
   if (url.origin !== self.location.origin) return false
   // A regra que não pode ser afrouxada: resposta de API não vira cache.
   if (url.pathname.startsWith('/api/')) return false
-  // A tela da portaria e o que ela precisa pra abrir.
-  // (30/09: `/portaria` e `/portaria/<id>` são o endereço curto do mesmo leitor)
-  if (requisicao.mode === 'navigate') return url.pathname.includes('/validacao') || url.pathname.startsWith('/portaria')
+  // O número da versão tem que vir do servidor, sempre (é ele que avisa "versão nova").
+  if (url.pathname.startsWith('/_nuxt/builds/')) return false
+  // Navegação: SÓ as telas da portaria. O resto do painel nunca fica guardado no aparelho.
+  if (requisicao.mode === 'navigate') return ehTelaDaPortaria(url.pathname)
   return url.pathname.startsWith('/_nuxt/')
     || url.pathname.startsWith('/brand/')
-    || url.pathname.endsWith('.css')
-    || url.pathname.endsWith('.js')
+    || url.pathname === '/portaria.webmanifest'
 }
 
 self.addEventListener('fetch', (evento) => {
@@ -85,13 +133,33 @@ self.addEventListener('fetch', (evento) => {
   evento.respondWith(redePrimeiro(evento.request))
 })
 
+/** a cópia guardada — no cache desta versão ou, se ele ainda não tem, em qualquer outro */
+async function copiaGuardada(cache, requisicao) {
+  const opcoes = requisicao.mode === 'navigate' ? { ignoreSearch: true } : undefined
+  return (await cache.match(requisicao, opcoes)) || (await caches.match(requisicao, opcoes))
+}
+
+/** Sem cópia desta tela: a lista de eventos (de onde se chega a qualquer leitor) e, sem ela, qualquer leitor. */
+async function telaReserva() {
+  const lista = await caches.match(new URL('/portaria', self.location.origin).href, { ignoreSearch: true })
+  if (lista) return lista
+  for (const nome of await caches.keys()) {
+    if (!nome.startsWith('dt-')) continue
+    const c = await caches.open(nome)
+    const qualquer = (await c.keys()).find((r) => ehTelaDaPortaria(new URL(r.url).pathname))
+    if (qualquer) return c.match(qualquer)
+  }
+  return null
+}
+
 async function redePrimeiro(requisicao) {
   const cache = await caches.open(CACHE)
 
   const daRede = fetch(requisicao).then(async (resposta) => {
     // `resposta.ok` só: guardar um 404 ou um 500 no cache é transformar um
-    // erro de um minuto em erro permanente do tablet.
-    if (resposta && resposta.ok) {
+    // erro de um minuto em erro permanente do tablet. Redirecionada (sessão caiu e o servidor
+    // mandou pro login) também não: a cópia boa da tela continua sendo a de antes.
+    if (resposta && resposta.ok && !resposta.redirected) {
       try { await cache.put(requisicao, resposta.clone()) } catch { /* cota cheia */ }
     }
     return resposta
@@ -99,19 +167,17 @@ async function redePrimeiro(requisicao) {
 
   // A corrida: ou a rede responde em 4s, ou entra o cache. A promessa da rede
   // continua viva de qualquer jeito — é ela que renova a cópia guardada.
-  const guardada = await cache.match(requisicao)
+  const guardada = await copiaGuardada(cache, requisicao)
   if (!guardada) {
     try {
-      return await daRede
+      const r = await daRede
+      // servidor fora (502/503/504 do proxy) numa navegação: a tela reserva vale mais que a página de erro
+      if (r.status >= 500 && requisicao.mode === 'navigate') return (await telaReserva()) || r
+      return r
     } catch {
-      // Sem rede e sem cópia: se era uma navegação, entrega a última tela de
-      // validação que este tablet abriu, seja de qual evento for. Melhor a
-      // tela do evento errado (com o aviso de offline em cima) do que a tela
-      // de dinossauro.
       if (requisicao.mode === 'navigate') {
-        const qualquer = (await cache.keys())
-          .find((r) => { const c = new URL(r.url).pathname; return c.includes('/validacao') || c.startsWith('/portaria/') })
-        if (qualquer) return (await cache.match(qualquer))
+        const reserva = await telaReserva()
+        if (reserva) return reserva
       }
       throw new Error('sem rede e sem cópia guardada')
     }
@@ -120,6 +186,8 @@ async function redePrimeiro(requisicao) {
   const relogio = new Promise((resolve) => setTimeout(() => resolve(null), ESPERA_MS))
   try {
     const resposta = await Promise.race([daRede.catch(() => null), relogio])
+    // 5xx = o servidor está fora (deploy, queda): a cópia boa de antes vale mais que a página de erro
+    if (resposta && resposta.status >= 500) return guardada
     return resposta || guardada
   } catch {
     return guardada
