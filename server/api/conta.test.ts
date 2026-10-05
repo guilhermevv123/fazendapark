@@ -137,6 +137,7 @@ describe('conta · criar, entrar, sair', () => {
     expect(errada.status).toBe(401)
     expect(ninguem.status).toBe(401)
     expect(errada.recado).toBe(ninguem.recado)
+    expect(errada.recado).toBe('CPF ou senha não conferem.')
   })
 
   it('sair derruba a sessão no servidor', async (ctx) => {
@@ -255,5 +256,24 @@ describe('"Meus ingressos" depois de trocar de dia (036)', () => {
     // 2 cancelados, só 1 com pedido novo apontando: 1 trocado; o outro cancelado não vira "trocado"
     expect(velho).toMatchObject({ ingressos: 0, reagendados: 1, reagendamento: false })
     expect(troca).toMatchObject({ ingressos: 1, reagendados: 0, reagendamento: true })
+    // a situação de cada ingresso (05/10): o outro cancelado é "cancelado", não "trocado"
+    expect(velho).toMatchObject({ validos: 0, usados: 0, transferidos: 0, cancelados: 1 })
+    expect(troca).toMatchObject({ validos: 1, cancelados: 0 })
+  })
+
+  it('cada pedido diz quantos ingressos estão válidos, usados, transferidos e cancelados', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const b = navegador()
+    await b.chamar('POST', '/api/conta/criar', { ...novaPessoa(), evento: SLUG })
+    const compra = await b.chamar('POST', '/api/checkout', { eventSlug: SLUG, itens: itens(loteGratis, tipoGratis, 4), forma: 'pix' })
+    expect(compra.status, compra.recado).toBe(200)
+    const ids = (await q<any>(`SELECT t.id FROM tickets t JOIN orders o ON o.id = t.order_id WHERE o.code = $1 ORDER BY t.id`,
+      [compra.corpo.pedido])).map((t) => t.id)
+    expect(ids).toHaveLength(4)
+    await q(`UPDATE tickets SET status = 'usado' WHERE id = $1`, [ids[0]])
+    await q(`UPDATE tickets SET status = 'transferido' WHERE id = $1`, [ids[1]])
+    await q(`UPDATE tickets SET status = 'cancelado' WHERE id = $1`, [ids[2]])
+    const p = (await b.chamar('GET', '/api/conta/ingressos')).corpo.pedidos.find((x: any) => x.codigo === compra.corpo.pedido)
+    expect(p).toMatchObject({ validos: 1, usados: 1, transferidos: 1, cancelados: 1, reagendados: 0 })
   })
 })

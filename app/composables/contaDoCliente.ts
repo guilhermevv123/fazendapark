@@ -124,11 +124,6 @@ export function mascaraTel(v: string) {
 export function mascaraCep(v: string) {
   return String(v ?? '').replace(/\D/g, '').slice(0, 8).replace(/(\d{5})(\d)/, '$1-$2')
 }
-/** No campo "CPF ou e-mail": só mascara quando é número. */
-export function mascaraLogin(v: string) {
-  const t = String(v ?? '')
-  return /[a-z@]/i.test(t) ? t.trim() : mascaraCpf(t)
-}
 export function cpfLegivel(cpf: string | null | undefined) {
   return mascaraCpf(String(cpf ?? ''))
 }

@@ -3,7 +3,8 @@
  *
  * Pedido do dono (28/09): pra comprar, o cliente ENTRA. Cadastro uma vez — nome completo, CPF,
  * e-mail e celular; Instagram e endereço opcionais — e o checkout para de pedir esses dados.
- * Entrar é com CPF (ou e-mail) e senha, ou pelo Google/Apple (`entrar-social.ts`).
+ * Entrar é com CPF e senha (a tela pede só o CPF desde 05/10; o e-mail ainda é aceito por quem já
+ * tinha o costume), ou pelo Google/Apple (`entrar-social.ts`).
  *
  * Três regras que governam este arquivo:
  *
@@ -262,7 +263,7 @@ export function tipoDoLogin(login: string): { cpf: string } | { email: string } 
  */
 export async function entrarNaContaDoCliente(event: H3Event, orgId: string, login: string, senha: string): Promise<ContaDoCliente> {
   const qual = tipoDoLogin(login)
-  if (!qual) throw new RecusaDaConta('login', 'Digite o seu CPF (11 números) ou o e-mail da conta.')
+  if (!qual) throw new RecusaDaConta('login', 'Digite o seu CPF (11 números).')
   const chave = `cliente:${orgId}:${'cpf' in qual ? qual.cpf : qual.email}`
   const { ip, proxySemConfianca } = origemDaRequisicao(event)
   if (await travadoPorTentativas(chave, ip, { ipConfiavel: !proxySemConfianca })) {
@@ -280,7 +281,7 @@ export async function entrarNaContaDoCliente(event: H3Event, orgId: string, logi
       throw new RecusaDaConta('senha',
         `Esta conta entra pelo ${r.tem_google ? 'Google' : 'Apple'}. Use o botão dele.`, 401)
     }
-    throw new RecusaDaConta('senha', 'CPF, e-mail ou senha não conferem.', 401)
+    throw new RecusaDaConta('senha', 'CPF ou senha não conferem.', 401)
   }
   await q(`UPDATE customer_accounts SET last_login_at = now() WHERE id = $1`, [r.id])
   return contaDaLinha(r)

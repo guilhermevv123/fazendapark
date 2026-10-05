@@ -144,6 +144,24 @@ const statusDoPedido = (p: any) => (p.status === 'pago' && !p.ingressos && p.rea
   : situacaoDoPedido(p.status))
 const quando = (p: any) => dataNoFuso(p.evento?.inicio, p.evento?.fuso)
 
+/**
+ * Os ingressos do pedido por situação (05/10): o que ainda entra, o que já entrou e o que não vale
+ * mais — cada um com o seu nome, em vez de um "N ingressos" que somava tudo.
+ */
+function situacaoDosIngressos(p: any) {
+  const n = (x: any) => Number(x) || 0
+  const plural = (q: number, um: string, varios: string) => `${q} ${q === 1 ? um : varios}`
+  const itens: { parte: string; texto: string; classe: string }[] = []
+  if (n(p.validos)) itens.push({ parte: 'validos', texto: plural(n(p.validos), 'válido', 'válidos'), classe: 'text-success-700' })
+  if (n(p.usados)) itens.push({ parte: 'usados', texto: plural(n(p.usados), 'já usado', 'já usados'), classe: 'text-tinta-suave' })
+  if (n(p.transferidos)) itens.push({ parte: 'transferidos', texto: plural(n(p.transferidos), 'transferido', 'transferidos'), classe: 'text-tinta-suave' })
+  if (n(p.reagendados)) {
+    itens.push({ parte: 'reagendados', texto: `${plural(n(p.reagendados), 'trocado', 'trocados')} para outro dia`, classe: 'text-tinta-suave' })
+  }
+  if (n(p.cancelados)) itens.push({ parte: 'cancelados', texto: plural(n(p.cancelados), 'cancelado', 'cancelados'), classe: 'text-danger-700' })
+  return itens
+}
+
 useHead({ title: 'Minha conta' })
 </script>
 
@@ -247,13 +265,8 @@ useHead({ title: 'Minha conta' })
                       <p class="text-sm text-tinta-suave">{{ quando(p) }}</p>
                       <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
                         <span :class="statusDoPedido(p).selo.classe">{{ statusDoPedido(p).selo.texto }}</span>
-                        <span v-if="p.ingressos" class="text-tinta-suave">
-                          {{ p.ingressos }} {{ p.ingressos === 1 ? 'ingresso' : 'ingressos' }}
-                          <template v-if="p.usados"> · {{ p.usados }} já {{ p.usados === 1 ? 'usado' : 'usados' }}</template>
-                        </span>
-                        <span v-if="p.reagendados" class="text-tinta-suave" data-parte="reagendados">
-                          {{ p.ingressos ? '·' : '' }} {{ p.reagendados }} {{ p.reagendados === 1 ? 'trocado' : 'trocados' }} para outro dia
-                        </span>
+                        <span v-for="s in situacaoDosIngressos(p)" :key="s.parte" :data-parte="s.parte"
+                              class="font-semibold" :class="s.classe">{{ s.texto }}</span>
                         <span class="text-tinta-fraca">· {{ p.reagendamento ? 'Troca de data' : p.totalCents ? reais(p.totalCents) : 'Grátis' }}</span>
                       </div>
                     </div>

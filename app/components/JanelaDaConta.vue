@@ -10,7 +10,7 @@
  * Instagram e a cidade ficam num bloco "opcional", fechado.
  */
 import {
-  mascaraCep, mascaraCpf, mascaraLogin, mascaraTel, useContaDoCliente,
+  mascaraCep, mascaraCpf, mascaraTel, useContaDoCliente,
 } from '~/composables/contaDoCliente'
 import { prenderTab, soltarRolagem, travarRolagem } from '~/composables/painelFoco'
 import { UFS } from '~~/server/utils/cadastro'
@@ -81,7 +81,7 @@ async function enviarEntrar() {
   erro.value = ''
   campoComErro.value = ''
   if (!login.usuario.trim() || !login.senha) {
-    erro.value = 'Digite o CPF (ou e-mail) e a senha.'
+    erro.value = 'Digite o CPF e a senha.'
     campoComErro.value = !login.usuario.trim() ? 'login' : 'senha'
     return
   }
@@ -97,7 +97,7 @@ async function enviarEsqueci() {
   erro.value = ''
   campoComErro.value = ''
   if (!login.usuario.trim()) {
-    erro.value = 'Digite o seu CPF ou o e-mail da conta.'
+    erro.value = 'Digite o seu CPF.'
     campoComErro.value = 'login'
     return
   }
@@ -226,15 +226,15 @@ const temSocial = computed(() => estado.value.social.google || estado.value.soci
             <div>
               <p class="titulo text-lg font-semibold text-tinta">Esqueci a senha</p>
               <p class="mt-1 text-sm text-tinta-suave">
-                Digite o CPF ou o e-mail da conta. Mandamos um link para o e-mail cadastrado criar uma senha nova.
+                Digite o seu CPF. Mandamos um link para o e-mail cadastrado criar uma senha nova.
               </p>
             </div>
             <div>
-              <label for="conta-login" class="rotulo">CPF ou e-mail</label>
-              <input id="conta-login" :value="login.usuario" autocomplete="username" autocapitalize="none"
-                     inputmode="email" class="campo" :class="marca('login')" :aria-invalid="invalido('login')"
+              <label for="conta-login" class="rotulo">CPF</label>
+              <input id="conta-login" :value="login.usuario" autocomplete="username" inputmode="numeric"
+                     maxlength="14" class="campo" :class="marca('login')" :aria-invalid="invalido('login')"
                      placeholder="000.000.000-00"
-                     @input="login.usuario = mascaraLogin(($event.target as HTMLInputElement).value)">
+                     @input="login.usuario = mascaraCpf(($event.target as HTMLInputElement).value)">
             </div>
             <p v-if="esqueciEnviado" class="faixa-aviso" role="status" data-parte="esqueci-enviado">{{ esqueciEnviado }}</p>
             <p v-if="erro" class="faixa-erro" role="alert">{{ erro }}</p>
@@ -250,11 +250,11 @@ const temSocial = computed(() => estado.value.social.google || estado.value.soci
 
           <form v-else-if="aba === 'entrar'" class="mt-4 space-y-4" novalidate @submit.prevent="enviarEntrar">
             <div>
-              <label for="conta-login" class="rotulo">CPF ou e-mail</label>
-              <input id="conta-login" :value="login.usuario" autocomplete="username" autocapitalize="none"
-                     inputmode="email" class="campo" :class="marca('login')" :aria-invalid="invalido('login')"
+              <label for="conta-login" class="rotulo">CPF</label>
+              <input id="conta-login" :value="login.usuario" autocomplete="username" inputmode="numeric"
+                     maxlength="14" class="campo" :class="marca('login')" :aria-invalid="invalido('login')"
                      placeholder="000.000.000-00"
-                     @input="login.usuario = mascaraLogin(($event.target as HTMLInputElement).value)">
+                     @input="login.usuario = mascaraCpf(($event.target as HTMLInputElement).value)">
             </div>
             <div>
               <label for="conta-senha" class="rotulo">Senha</label>
