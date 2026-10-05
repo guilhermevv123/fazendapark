@@ -12,6 +12,7 @@
  * idênticas na tela que não são iguais na comparação.
  */
 import { dataNoFuso, falhaDaConsulta, situacaoDoPedido } from '~/composables/carrinhoDaVitrine'
+import { salvarIngressosComoImagem } from '~/composables/ingressoImagem'
 
 const route = useRoute()
 const code = String(route.params.code ?? '')
@@ -69,6 +70,37 @@ const estado: Record<string, { t: string; c: string }> = {
  */
 const podeTrocar = (t: any) => t.status === 'valido' && !t.cortesia
   && !!data.value?.evento?.inicio && new Date(data.value.evento.inicio).getTime() > Date.now()
+
+/* ------------------------------------------- salvar: imagem ou PDF ------- */
+/**
+ * "Baixar foto ou PDF, o cara escolhe" (dono, 05/10). Só os ingressos que ENTRAM (os que têm QR
+ * aqui): o PDF sai do servidor (`/api/pedido/<código>/ingressos.pdf`), a imagem é desenhada no
+ * próprio celular (ver `composables/ingressoImagem.ts`).
+ */
+const comQr = computed(() => (data.value?.ingressos ?? []).filter((t: any) => t.qr))
+const linkDoPdf = computed(() => `/api/pedido/${encodeURIComponent(data.value?.pedido ?? code)}/ingressos.pdf`)
+const salvandoImagem = ref(false)
+const recadoDaImagem = ref('')
+async function salvarImagem() {
+  if (salvandoImagem.value || !data.value) return
+  salvandoImagem.value = true
+  recadoDaImagem.value = ''
+  try {
+    const ev = data.value.evento
+    const r = await salvarIngressosComoImagem(
+      { evento: ev.nome, quando: quando(ev.inicio), local: ev.local ?? null, pedido: data.value.pedido },
+      comQr.value.map((t: any) => ({
+        codigo: t.codigo, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.titular,
+        qrUrl: `/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.value.pedido)}`,
+      })))
+    if (r === 'baixado') recadoDaImagem.value = comQr.value.length > 1 ? 'Imagens baixadas.' : 'Imagem baixada.'
+  } catch (e) {
+    console.error('[ingresso] não deu pra gerar a imagem', e)
+    recadoDaImagem.value = 'Não deu pra gerar a imagem agora. Tente o PDF ou tire um print desta tela.'
+  } finally {
+    salvandoImagem.value = false
+  }
+}
 
 const SEM_QR: Record<string, string> = {
   cancelado: 'Ingresso cancelado',
@@ -324,6 +356,23 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
             precisa ser irmão imediato do `v-if`, e um elemento no meio quebra
             a cadeia inteira — a tela do pedido não pago some sem erro nenhum.
           -->
+          <div v-if="comQr.length" class="rounded-card bg-white p-4 shadow-card ring-1 ring-ink-200/70 print:hidden"
+               data-parte="salvar-ingressos">
+            <p class="font-semibold text-tinta">Salvar {{ comQr.length > 1 ? 'os ingressos' : 'o ingresso' }} no celular</p>
+            <p class="text-sm text-tinta-suave">Escolha o formato. Funciona sem internet depois de salvo.</p>
+            <div class="mt-3 grid grid-cols-2 gap-2">
+              <button type="button" class="btn-primario min-h-[48px] py-3" data-parte="salvar-imagem"
+                      :disabled="salvandoImagem" @click="salvarImagem">
+                {{ salvandoImagem ? 'Gerando…' : 'Imagem' }}
+              </button>
+              <a :href="linkDoPdf" class="btn-secundario min-h-[48px] py-3 text-center" data-parte="salvar-pdf"
+                 download>
+                PDF
+              </a>
+            </div>
+            <p v-if="recadoDaImagem" class="mt-2 text-sm text-tinta-suave" role="status">{{ recadoDaImagem }}</p>
+          </div>
+
           <p v-if="data.comprador.email" class="faixa-aviso print:hidden">
             Guarde este link: ele é o próprio ingresso e vale sozinho, sem depender de e-mail.
             Se a confirmação não chegou em

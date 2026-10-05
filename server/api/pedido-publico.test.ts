@@ -150,3 +150,30 @@ describe('B13 · desistir do pedido que ainda não pagou', () => {
     expect((await desistir(o.code)).status).toBe(404)
   })
 })
+
+describe('ingressos em PDF (05/10: "baixar foto ou PDF")', () => {
+  it('pedido pago: um PDF com uma página por ingresso que entra; cancelado fica de fora', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const { PDFDocument } = await import('pdf-lib')
+    const o = await pedido(3)
+    expect((await emitirIngressos(o.id)).emitiu).toBe(true)
+    const um = await q1<any>(`SELECT id FROM tickets WHERE order_id = $1 ORDER BY code LIMIT 1`, [o.id])
+    await q(`UPDATE tickets SET status = 'cancelado', canceled_at = now() WHERE id = $1`, [um!.id])
+
+    const r = await fetch(`${BASE}/api/pedido/${o.code}/ingressos.pdf`)
+    expect(r.status).toBe(200)
+    expect(r.headers.get('content-type')).toBe('application/pdf')
+    expect(r.headers.get('content-disposition')).toContain(`ingressos-${o.code}.pdf`)
+    const doc = await PDFDocument.load(new Uint8Array(await r.arrayBuffer()))
+    expect(doc.getPageCount(), 'o cancelado entrou no PDF').toBe(2)
+  })
+
+  it('código inexistente: 404; pedido sem ingresso que entra: 410', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    expect((await fetch(`${BASE}/api/pedido/PED-NAOE-XIST/ingressos.pdf`)).status).toBe(404)
+    const o = await pedido(1)
+    await emitirIngressos(o.id)
+    await q(`UPDATE tickets SET status = 'cancelado', canceled_at = now() WHERE order_id = $1`, [o.id])
+    expect((await fetch(`${BASE}/api/pedido/${o.code}/ingressos.pdf`)).status).toBe(410)
+  })
+})

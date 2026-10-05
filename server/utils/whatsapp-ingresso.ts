@@ -52,7 +52,7 @@ export function montarMensagemDoWhatsapp(d: DadosDoWhatsapp): string {
     d.inicio ? `📅 ${quando(d.inicio, d.fuso)}` : '',
     `🎟️ Pedido ${d.pedido}`,
     '',
-    `Toque no link pra ver ${varios ? 'os QR Codes' : 'o QR Code'} de entrada:`,
+    `Toque no link pra ver ${varios ? 'os QR Codes' : 'o QR Code'} e salvar no celular (imagem ou PDF):`,
     d.link,
     '',
     'Na portaria é só mostrar o QR no celular. O ingresso também foi pro seu e-mail.',
