@@ -243,7 +243,12 @@ useHead({ title: 'Minha conta' })
 
         <!-- Volte Mais (037): o que a conta tem de retorno com desconto (ou como ganhar) -->
         <div v-if="fidelidade?.ativo" class="mt-4 rounded-card border border-ok/40 bg-ok-claro p-3 text-sm text-ok" data-parte="fidelidade-conta">
-          <p v-if="fidelidade.qualificado && fidelidade.restantes > 0">
+          <p v-if="fidelidade.qualificado && fidelidade.restantes === null">
+            <strong>{{ fidelidade.nome }}:</strong> você é cliente {{ fidelidade.nome }} — {{ fidelidade.descontoPct }}% de desconto no ingresso
+            em todas as próximas visitas<template v-if="fidelidade.consumacaoPct"> e {{ fidelidade.consumacaoPct }}% na consumação no dia (o cupom vem no ingresso)</template>.
+            O desconto já aparece no pagamento.
+          </p>
+          <p v-else-if="fidelidade.qualificado && fidelidade.restantes > 0">
             <strong>{{ fidelidade.nome }}:</strong> você tem {{ fidelidade.restantes === 1 ? '1 retorno' : `${fidelidade.restantes} retornos` }}
             com {{ fidelidade.descontoPct }}% de desconto<template v-if="fidelidade.validoAte"> pra visitas até {{ dataCurtaDaFidelidade(fidelidade.validoAte) }}</template>.
             O desconto já aparece no pagamento.
@@ -252,8 +257,9 @@ useHead({ title: 'Minha conta' })
             <strong>{{ fidelidade.nome }}:</strong> você já usou os seus retornos com desconto. Obrigado por voltar!
           </p>
           <p v-else>
-            <strong>{{ fidelidade.nome }}:</strong> depois da sua primeira visita, você ganha {{ fidelidade.retornos }}
-            {{ fidelidade.retornos === 1 ? 'retorno' : 'retornos' }} com {{ fidelidade.descontoPct }}% de desconto no ingresso<template v-if="fidelidade.consumacaoPct">
+            <strong>{{ fidelidade.nome }}:</strong> depois da sua primeira visita, você ganha
+            <template v-if="fidelidade.retornos == null">{{ fidelidade.descontoPct }}% de desconto no ingresso em todas as próximas visitas</template>
+            <template v-else>{{ fidelidade.retornos }} {{ fidelidade.retornos === 1 ? 'retorno' : 'retornos' }} com {{ fidelidade.descontoPct }}% de desconto no ingresso</template><template v-if="fidelidade.consumacaoPct">
             e {{ fidelidade.consumacaoPct }}% na consumação</template>.
           </p>
           <details v-if="fidelidade.regulamento" class="mt-1 text-tinta-corpo">

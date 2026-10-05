@@ -290,6 +290,16 @@ const leituras = (n: number) => `${n} ${n === 1 ? 'leitura' : 'leituras'}`
       Nenhum evento aberto agora.
     </p>
 
+    <!-- Caixa do bar (042): o cupom de consumação do Volte Mais — mesmo acesso de portaria -->
+    <NuxtLink to="/admin/consumacao" data-parte="ir-caixa-do-bar"
+              class="card mt-5 flex items-center justify-between gap-3 border-l-4 border-sun-400 p-4 transition active:scale-[0.99]">
+      <span>
+        <span class="titulo block font-semibold text-ink-900">Caixa do bar</span>
+        <span class="block text-sm text-tinta-suave">Conferir e dar baixa no cupom de consumação do Volte Mais</span>
+      </span>
+      <span aria-hidden="true" class="text-xl text-tinta-fraca">›</span>
+    </NuxtLink>
+
     <ul v-if="eventos.length" class="mt-5 grid gap-3" data-parte="eventos-da-portaria">
       <li v-for="e in eventos" :key="e.id">
         <NuxtLink :to="`/portaria/${e.id}`" :data-evento="e.id"

@@ -13,6 +13,7 @@
  */
 import { dataNoFuso, falhaDaConsulta, situacaoDoPedido } from '~/composables/carrinhoDaVitrine'
 import { salvarIngressosComoImagem } from '~/composables/ingressoImagem'
+import CupomDeConsumacao from '~/components/CupomDeConsumacao.vue'
 
 const route = useRoute()
 const code = String(route.params.code ?? '')
@@ -88,7 +89,8 @@ async function salvarImagem() {
   try {
     const ev = data.value.evento
     const r = await salvarIngressosComoImagem(
-      { evento: ev.nome, quando: quando(ev.inicio), local: ev.local ?? null, pedido: data.value.pedido },
+      { evento: ev.nome, quando: quando(ev.inicio), local: ev.local ?? null, pedido: data.value.pedido,
+        volteMais: data.value.fidelidade?.nome ?? null },
       comQr.value.map((t: any) => ({
         codigo: t.codigo, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.titular,
         qrUrl: `/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.value.pedido)}`,
@@ -383,8 +385,16 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
 
           <!-- O ingresso como bilhete (dono, 28/09): a imagem do evento em cima, o QR grande no meio,
                as informações embaixo. Usado/cancelado/transferido: o QR some e o aviso fica no lugar dele. -->
+          <!-- Volte Mais (042): o ingresso do RETORNO tem outra cara — moldura de sol e a faixa
+               "Cliente Volte Mais" — pra portaria e o cliente verem de longe que ele é da casa. -->
           <article v-for="(t, i) in data.ingressos" :key="t.id" data-parte="bilhete"
-                   class="mx-auto w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-card ring-1 ring-ink-200/70 print:break-inside-avoid print:shadow-none">
+                   :data-volte-mais="data.fidelidade ? '' : undefined"
+                   class="mx-auto w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-card print:break-inside-avoid print:shadow-none"
+                   :class="data.fidelidade ? 'ring-4 ring-sun-400' : 'ring-1 ring-ink-200/70'">
+            <div v-if="data.fidelidade" class="flex items-center justify-center gap-2 bg-sun-400 px-4 py-1.5 text-xs font-bold uppercase tracking-[0.14em] text-grape-900"
+                 data-parte="faixa-volte-mais">
+              <span aria-hidden="true">★</span> Cliente {{ data.fidelidade.nome }} <span aria-hidden="true">★</span>
+            </div>
             <div class="relative h-36 bg-gradient-to-br from-pool-600 via-pool-700 to-grape-700 sm:h-44">
               <img v-if="data.evento.banner" :src="data.evento.banner" alt=""
                    class="absolute inset-0 h-full w-full object-cover" :loading="i === 0 ? 'eager' : 'lazy'">
@@ -492,6 +502,25 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               </NuxtLink>
             </div>
           </article>
+
+          <!-- Volte Mais (042): o cupom do bar vem DEPOIS dos ingressos (a portaria vem primeiro) -->
+          <CupomDeConsumacao v-if="data.cupomConsumacao && data.fidelidade"
+                             :token="data.cupomConsumacao.token" :codigo="data.cupomConsumacao.codigo"
+                             :consumacao-pct="data.cupomConsumacao.consumacaoPct" :dia="data.cupomConsumacao.dia"
+                             :programa="data.fidelidade.nome" :evento="data.evento.nome"
+                             :titular="data.ingressos.find((t: any) => t.titular)?.titular ?? data.comprador?.nome ?? null" />
+
+          <!-- 1ª visita com o Volte Mais ligado: o convite pro retorno -->
+          <div v-if="data.conviteVolteMais" data-parte="convite-volte-mais"
+               class="mx-auto w-full max-w-md rounded-card border-l-4 border-sun-400 bg-sun-50 p-4 text-sm text-tinta-corpo print:hidden">
+            <p>
+              <strong class="text-tinta">{{ data.conviteVolteMais.nome }}:</strong> depois desta visita, você ganha
+              <strong class="text-tinta">{{ data.conviteVolteMais.descontoPct }}% no ingresso</strong>
+              {{ data.conviteVolteMais.permanente ? 'em todas as próximas visitas' : 'nas próximas visitas' }}<template v-if="data.conviteVolteMais.consumacaoPct">
+              e <strong class="text-tinta">{{ data.conviteVolteMais.consumacaoPct }}% no bar</strong></template>.
+              É só comprar pelo site com a sua conta.
+            </p>
+          </div>
 
           <p class="text-center text-sm text-tinta-fraca print:hidden">
             Guarde este link. Na portaria, apresente o QR — ou informe o código, se a leitura falhar.

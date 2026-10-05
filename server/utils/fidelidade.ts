@@ -75,9 +75,9 @@ export type RegraDoDia = { vale: true } | { vale: false; motivo: string }
 /** O retorno vale pra ESTE evento? (vigência, dia da semana, feriado, evento fora) — conta pura. */
 export function regraDoDiaDaFidelidade(p: ProgramaDeFidelidade, evento: { id: string; dia: string }, hoje: string): RegraDoDia {
   if (!p.ativo) return { vale: false, motivo: 'programa desligado' }
-  if (!p.vigencia_inicio || !p.vigencia_fim) return { vale: false, motivo: 'programa sem vigência' }
+  if (!p.vigencia_inicio) return { vale: false, motivo: 'programa sem início de vigência' }
   if (hoje < p.vigencia_inicio) return { vale: false, motivo: 'a promoção ainda não começou' }
-  if (hoje > p.vigencia_fim) return { vale: false, motivo: 'a promoção terminou' }
+  if (p.vigencia_fim && hoje > p.vigencia_fim) return { vale: false, motivo: 'a promoção terminou' }
   if (p.eventos_fora.includes(evento.id)) return { vale: false, motivo: 'não vale neste evento' }
   const feriado = feriadoNacionalDoDia(evento.dia)
   if (feriado && !p.vale_feriado) return { vale: false, motivo: `não vale em feriado (${feriado})` }
@@ -116,7 +116,8 @@ export function descontoDaFidelidade(linhas: LinhaDaFidelidade[], p: Pick<Progra
 
 export type SituacaoNaFidelidade =
   | { qualificado: false; motivo: string }
-  | { qualificado: true; primeiraVisita: string; usados: number; restantes: number; validoAte: string | null }
+  /** `restantes` null = sem limite (programa permanente, 042) */
+  | { qualificado: true; primeiraVisita: string; usados: number; restantes: number | null; validoAte: string | null }
 
 const FILTRO_PEDIDO_CHEIO = `o.org_id = $1 AND cu.document = $2 AND o.total_cents > 0
   AND COALESCE(o.loyalty_discount_cents, 0) = 0 AND o.loyalty_program_id IS NULL`
@@ -161,13 +162,14 @@ export async function situacaoNaFidelidade(
   const primeiraVisita = diaNoFusoDaFidelidade(em, fuso)
   const prazo = p.prazo_dias ? somaDias(primeiraVisita, p.prazo_dias) : null
   const validoAte = [prazo, p.vigencia_fim].filter(Boolean).sort()[0] ?? null
-  return { qualificado: true, primeiraVisita, usados, restantes: Math.max(0, p.retornos - usados), validoAte }
+  return { qualificado: true, primeiraVisita, usados, restantes: p.retornos == null ? null : Math.max(0, p.retornos - usados), validoAte }
 }
 
 export async function programaDeFidelidadeDaOrg(c: Pick<PoolClient, 'query'>, orgId: string): Promise<ProgramaDeFidelidade | null> {
   const r = await c.query(
     `SELECT id, org_id, nome, ativo, desconto_bps, retornos, prazo_dias, ingressos_por_compra, conta_visita,
             dias_semana, vale_feriado, eventos_fora::text[] AS eventos_fora, vale_visita_anterior, consumacao_bps,
+            consumacao_usos, consumacao_dia_todo,
             to_char(vigencia_inicio, 'YYYY-MM-DD') AS vigencia_inicio, to_char(vigencia_fim, 'YYYY-MM-DD') AS vigencia_fim,
             regulamento
        FROM loyalty_programs WHERE org_id = $1`, [orgId])
@@ -178,7 +180,7 @@ export async function programaDeFidelidadeDaOrg(c: Pick<PoolClient, 'query'>, or
 
 export type BeneficioNoPedido =
   | { aplica: false; motivo: string; programa: ProgramaDeFidelidade | null }
-  | { aplica: true; programa: ProgramaDeFidelidade; cents: number; ingressos: number; restantesDepois: number; validoAte: string | null }
+  | { aplica: true; programa: ProgramaDeFidelidade; cents: number; ingressos: number; restantesDepois: number | null; validoAte: string | null }
 
 /**
  * O desconto deste pedido, decidido com tudo na mão: programa, regra do dia, situação do CPF e
@@ -199,13 +201,13 @@ export async function beneficioDeFidelidade(
   if (ctx.temCupom) return { aplica: false, motivo: 'pedido com cupom (não acumula)', programa: p }
   const s = await situacaoNaFidelidade(c, p, ctx.documento, fuso)
   if (!s.qualificado) return { aplica: false, motivo: s.motivo, programa: p }
-  if (s.restantes <= 0) return { aplica: false, motivo: `os ${p.retornos} retornos com desconto já foram usados`, programa: p }
+  if (s.restantes !== null && s.restantes <= 0) return { aplica: false, motivo: `os ${p.retornos} retornos com desconto já foram usados`, programa: p }
   if (s.validoAte && diaDoEvento > s.validoAte) {
     return { aplica: false, motivo: `o desconto vale pra visitas até ${s.validoAte.split('-').reverse().join('/')}`, programa: p }
   }
   const d = descontoDaFidelidade(ctx.linhas, p)
   if (d.cents <= 0) return { aplica: false, motivo: 'nenhum ingresso do pedido recebe o desconto (meia e grátis não acumulam)', programa: p }
-  return { aplica: true, programa: p, cents: d.cents, ingressos: d.ingressos, restantesDepois: s.restantes - 1, validoAte: s.validoAte }
+  return { aplica: true, programa: p, cents: d.cents, ingressos: d.ingressos, restantesDepois: s.restantes === null ? null : s.restantes - 1, validoAte: s.validoAte }
 }
 
 /** Trava do CPF no programa (a organização inteira, não só o evento): duas abas não gastam o mesmo retorno. */

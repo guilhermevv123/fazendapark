@@ -14,7 +14,7 @@ export default defineEventHandler(async (event) => {
   if (!conta) throw createError({ statusCode: 401, statusMessage: 'Entre na sua conta.', data: { tipo: 'conta' } })
   const p = await programaDeFidelidadeDaOrg(db(), conta.orgId)
   const hoje = diaNoFusoDaFidelidade(new Date())
-  if (!p || !p.ativo || !p.vigencia_inicio || !p.vigencia_fim || hoje < p.vigencia_inicio || hoje > p.vigencia_fim) {
+  if (!p || !p.ativo || !p.vigencia_inicio || hoje < p.vigencia_inicio || (p.vigencia_fim && hoje > p.vigencia_fim)) {
     return { ativo: false }
   }
   const s = await situacaoNaFidelidade(db(), p, conta.cpf)
@@ -23,7 +23,7 @@ export default defineEventHandler(async (event) => {
     nome: p.nome,
     descontoPct: p.desconto_bps / 100,
     consumacaoPct: p.consumacao_bps / 100,
-    retornos: p.retornos,
+    retornos: p.retornos,               // null = em todas as próximas visitas (042)
     ...(s.qualificado
       ? { qualificado: true, restantes: s.restantes, validoAte: s.validoAte, primeiraVisita: s.primeiraVisita }
       : { qualificado: false, motivo: s.motivo }),

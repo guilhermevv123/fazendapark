@@ -278,6 +278,8 @@ const itensDoPainel = computed<Item[]>(() => eventoId.value
         { nome: 'Atendimento IA', para: '/admin/agentes' },
         { nome: 'Base de conhecimento', para: '/admin/inteligencia/base' },
         { nome: 'Promoções', para: '/admin/inteligencia/promocoes' },
+        // Caixa do bar (042): onde a atendente confere o cupom do Volte Mais (área portaria)
+        { nome: 'Caixa do bar', para: '/admin/consumacao' },
       ] },
 
       // Organização e Equipe entram aqui — a chave do Asaas (quando existir)
@@ -319,7 +321,9 @@ const itens = computed<Item[]>(() => {
   if (!p) return []
   return itensDoPainel.value.flatMap<Item>((i) => {
     if (!i.filhos) return podeAbrirPagina(p, i.para) ? [i] : []
-    const filhos = i.filhos.filter((f) => podeAbrirPagina(p, f.para))
+    // A portaria não usa a lateral do painel: a moldura dela é `/portaria`, que já leva ao
+    // leitor e ao Caixa do bar (042). Aqui ela segue sem tela, ouvindo o porquê.
+    const filhos = p === 'portaria' ? [] : i.filhos.filter((f) => podeAbrirPagina(p, f.para))
     // grupo sem nenhuma tela visível não vira cabeçalho vazio
     if (!filhos.length) return []
     // `para` do grupo fica como está: ele não navega (só abre a lista) e é o
@@ -404,7 +408,7 @@ const NOME_DA_TELA: Record<string, string> = {
   relatorios: 'Visão geral', organizacoes: 'Organização', configuracoes: 'Dados e cobrança',
   reconciliacao: 'Reconciliação', sessoes: 'Sessões', transferencias: 'Transferências',
   validacao: 'Validação', historico: 'Histórico', promocionais: 'Promocionais',
-  agentes: 'Atendimento IA', inteligencia: 'Inteligência', base: 'Base de conhecimento', promocoes: 'Promoções',
+  agentes: 'Atendimento IA', inteligencia: 'Inteligência', base: 'Base de conhecimento', promocoes: 'Promoções', consumacao: 'Caixa do bar',
   // ADM-56: a trilha do borderô saía "BORDERO", sem acento
   bordero: 'Borderô', pdv: 'Pontos de venda', vender: 'Balcão', caixa: 'Conferência de caixa',
   auditoria: 'Auditoria', suporte: 'Suporte', filas: 'Filas', clientes: 'Clientes',

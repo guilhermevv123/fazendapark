@@ -28,9 +28,10 @@ describe('feriado nacional (a mesma tabela dos robôs)', () => {
 
 describe('regra do dia', () => {
   const ev = (dia: string) => ({ id: 'e1', dia })
-  it('desligado, sem vigência, antes e depois da vigência: não vale', () => {
+  it('desligado, sem início, antes e depois da vigência: não vale (sem FIM vale: permanente, 042)', () => {
     expect(regraDoDiaDaFidelidade(prog({ ativo: false }), ev('2026-10-10'), '2026-10-05').vale).toBe(false)
-    expect(regraDoDiaDaFidelidade(prog({ vigencia_fim: null }), ev('2026-10-10'), '2026-10-05').vale).toBe(false)
+    expect(regraDoDiaDaFidelidade(prog({ vigencia_inicio: null }), ev('2026-10-10'), '2026-10-05').vale).toBe(false)
+    expect(regraDoDiaDaFidelidade(prog({ vigencia_fim: null }), ev('2026-10-10'), '2026-10-05').vale).toBe(true)
     expect(regraDoDiaDaFidelidade(prog(), ev('2026-10-10'), '2026-09-30')).toEqual({ vale: false, motivo: 'a promoção ainda não começou' })
     expect(regraDoDiaDaFidelidade(prog(), ev('2027-01-02'), '2027-01-01')).toEqual({ vale: false, motivo: 'a promoção terminou' })
   })

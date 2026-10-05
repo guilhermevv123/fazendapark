@@ -22,6 +22,8 @@ export interface DadosDaImagem {
   quando: string
   local?: string | null
   pedido: string
+  /** Volte Mais (042): o ingresso do retorno sai com a faixa "Cliente <nome>" no topo */
+  volteMais?: string | null
 }
 
 const W = 1080
@@ -74,6 +76,14 @@ export async function desenharIngresso(d: DadosDaImagem, t: IngressoParaImagem, 
   ctx.textBaseline = 'alphabetic'
 
   let y = 18 + 50
+  if (d.volteMais) {
+    ctx.fillStyle = '#fdb92a'
+    ctx.fillRect(0, 18, W, 76)
+    ctx.fillStyle = '#2e2149'
+    ctx.font = `700 38px ${SANS}`
+    ctx.fillText(`★ CLIENTE ${d.volteMais.toUpperCase()} ★`, W / 2, 70)
+    y += 76
+  }
   if (logo) {
     const lw = 420
     const lh = lw * (logo.naturalHeight / logo.naturalWidth)

@@ -255,6 +255,10 @@ const AREA_DA_RAIZ: [string, Area][] = [
   ['/api/admin/agentes', 'agentes'],
   // Inteligência (05/10): base de conhecimento dos robôs e promoções — mesma área do Atendimento IA
   ['/api/admin/inteligencia', 'agentes'],
+  // Caixa do bar (042): conferir e dar baixa no cupom de consumação do Volte Mais. Quem fica no
+  // bar recebe um acesso de PORTARIA — a mesma única porta (ler um código e responder válido ou
+  // não), sem ver venda, cliente ou dinheiro.
+  ['/api/admin/consumacao', 'portaria'],
   ['/api/admin/eventos', 'evento_ver'],
   ['/api/admin/pedido', 'venda'],
   ['/api/admin/evento', 'evento'], // criar evento; o `/evento/<id>/...` é tratado acima
@@ -359,6 +363,7 @@ const AREA_DA_PAGINA_RAIZ: [string, Area | 'livre'][] = [
   ['/admin/clientes', 'clientes'],
   ['/admin/agentes', 'agentes'],
   ['/admin/inteligencia', 'agentes'],
+  ['/admin/consumacao', 'portaria'], // Caixa do bar (042) — a mesma porta da rota
   // Suporte é "o que fazer quando algo dá errado no dia do evento", e ele é
   // uma parede de ATALHOS: Vendas, Histórico de leituras, Participantes,
   // Cortesias, Financeiro, Equipe, Configurações. Pra quem só abre o leitor

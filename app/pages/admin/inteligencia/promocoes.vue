@@ -2,14 +2,14 @@
 /**
  * Inteligência → Promoções: o programa de fidelidade "Volte Mais" (pedido do dono, 05/10).
  *
- * "O cliente compra o primeiro ingresso; os próximos com metade do preço, e 10% na consumação —
- * mas não pra sempre, só nas próximas duas vezes." Cada regra que o dono pode querer mudar depois é
- * um campo aqui (037_fidelidade.sql): desconto, quantos retornos, prazo pra voltar, quantos
- * ingressos por compra, o que conta como visita, dias que valem, eventos fora, vigência.
+ * 05/10 (037): "o cliente compra o primeiro ingresso; os próximos com metade do preço, e 10% na
+ * consumação". Depois (042): "de forma PERMANENTE" — sem limite de retornos e sem data de fim
+ * (o regulamento diz que o parque encerra avisando com 30 dias). Os 10% do bar viram um CUPOM com
+ * QR que o caixa confere e dá baixa (Caixa do bar, /admin/consumacao). Cada regra é um campo aqui.
  *
- * Nasce DESLIGADO. Ligar exige vigência (promoção sem prazo deixa de ser promoção — Senacon). O
- * regulamento que aparece aqui é o MESMO que o cliente lê antes de pagar (utils/fidelidade-texto.ts).
- * A conta do desconto acontece só no servidor, no checkout, com a trava do CPF.
+ * Nasce DESLIGADO. Ligar exige a data de início. O regulamento que aparece aqui é o MESMO que o
+ * cliente lê antes de pagar (utils/fidelidade-texto.ts). A conta do desconto acontece só no
+ * servidor, no checkout, com a trava do CPF.
  */
 import { regulamentoDaFidelidade, type ProgramaDeFidelidade } from '~~/server/utils/fidelidade-texto'
 
@@ -24,14 +24,16 @@ const { data, pending, error: falha, refresh } = await useFetch<{
 
 // o formulário trabalha em % e em números da tela; o banco, em bps
 const f = reactive({
-  nome: 'Volte Mais', ativo: false, desconto: 50, retornos: 2, prazo: 90 as number | null, ingressos: 1,
+  nome: 'Volte Mais', ativo: false, desconto: 50, permanente: true, retornos: 2, prazo: null as number | null, ingressos: 1,
+  consumacaoUsos: 1, consumacaoDiaTodo: false,
   conta_visita: 'entrada' as 'entrada' | 'compra', dias: [0, 1, 2, 3, 4, 5, 6] as number[], vale_feriado: true,
   eventos_fora: [] as string[], vale_visita_anterior: false, consumacao: 10,
   vigencia_inicio: '', vigencia_fim: '', regulamentoProprio: false, regulamento: '',
 })
 function carregar(p: ProgramaDeFidelidade) {
   Object.assign(f, {
-    nome: p.nome, ativo: p.ativo, desconto: p.desconto_bps / 100, retornos: p.retornos, prazo: p.prazo_dias,
+    nome: p.nome, ativo: p.ativo, desconto: p.desconto_bps / 100, permanente: p.retornos == null, retornos: p.retornos ?? 2,
+    prazo: p.prazo_dias, consumacaoUsos: p.consumacao_usos ?? 1, consumacaoDiaTodo: !!p.consumacao_dia_todo,
     ingressos: p.ingressos_por_compra, conta_visita: p.conta_visita, dias: [...p.dias_semana], vale_feriado: p.vale_feriado,
     eventos_fora: [...p.eventos_fora], vale_visita_anterior: p.vale_visita_anterior, consumacao: p.consumacao_bps / 100,
     vigencia_inicio: p.vigencia_inicio ?? '', vigencia_fim: p.vigencia_fim ?? '',
@@ -42,7 +44,8 @@ watch(() => data.value?.programa, (p) => { if (p) carregar(p) }, { immediate: tr
 
 const comoPrograma = computed<ProgramaDeFidelidade>(() => ({
   id: data.value?.programa.id ?? '', org_id: data.value?.programa.org_id ?? '', nome: f.nome.trim() || 'Volte Mais',
-  ativo: f.ativo, desconto_bps: Math.round(Number(f.desconto) * 100), retornos: Number(f.retornos),
+  ativo: f.ativo, desconto_bps: Math.round(Number(f.desconto) * 100), retornos: f.permanente ? null : Number(f.retornos),
+  consumacao_usos: Number(f.consumacaoUsos) || 1, consumacao_dia_todo: f.consumacaoDiaTodo,
   prazo_dias: f.prazo ? Number(f.prazo) : null, ingressos_por_compra: Number(f.ingressos), conta_visita: f.conta_visita,
   dias_semana: [...f.dias].sort(), vale_feriado: f.vale_feriado, eventos_fora: f.eventos_fora,
   vale_visita_anterior: f.vale_visita_anterior, consumacao_bps: Math.round(Number(f.consumacao) * 100),
@@ -59,8 +62,8 @@ const erro = ref('')
 const aviso = ref('')
 async function salvar() {
   erro.value = ''; aviso.value = ''
-  if (f.ativo && (!f.vigencia_inicio || !f.vigencia_fim)) {
-    erro.value = 'Pra ligar, preencha o início e o fim da vigência — promoção precisa ter prazo.'
+  if (f.ativo && !f.vigencia_inicio) {
+    erro.value = 'Pra ligar, preencha a data de início (o fim pode ficar em branco: vale por tempo indeterminado).'
     return
   }
   salvando.value = true
@@ -75,6 +78,8 @@ async function salvar() {
   }
 }
 
+const { data: baixas } = await useFetch<{ baixas: any[] }>('/api/admin/consumacao', { key: 'promo-baixas' })
+
 const reais = (c: number) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const dataBR = (iso: string) => iso.split('-').reverse().join('/')
 </script>
@@ -84,7 +89,7 @@ const dataBR = (iso: string) => iso.split('-').reverse().join('/')
     <header class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 class="titulo text-2xl font-semibold text-tinta">Promoções</h1>
-        <p class="apoio-bloco">Fidelidade: o cliente paga a 1ª visita inteira e volta com desconto — só nas próximas vezes que você escolher.</p>
+        <p class="apoio-bloco">Fidelidade: o cliente paga a 1ª visita inteira e volta com desconto — em todas as próximas visitas (permanente) ou só nas que você escolher.</p>
       </div>
       <span :class="data?.programa.ativo ? 'selo-ok' : 'selo-neutro'" data-parte="situacao-promocao">
         {{ data?.programa.ativo ? 'LIGADA' : 'DESLIGADA' }}
@@ -127,21 +132,28 @@ const dataBR = (iso: string) => iso.split('-').reverse().join('/')
                 <input id="p-inicio" v-model="f.vigencia_inicio" type="date" class="campo">
               </div>
               <div>
-                <label for="p-fim" class="rotulo">Vigência — fim</label>
+                <label for="p-fim" class="rotulo">Vigência — fim (opcional)</label>
                 <input id="p-fim" v-model="f.vigencia_fim" type="date" class="campo" :min="f.vigencia_inicio">
               </div>
             </div>
-            <p class="text-xs text-tinta-suave">Promoção precisa ter prazo (regra do consumidor): sem início e fim, ela não liga.</p>
+            <p class="text-xs text-tinta-suave">
+              Fim em branco = por tempo indeterminado. O regulamento já avisa que o parque pode encerrar o programa
+              com 30 dias de antecedência, e que compra já feita mantém o desconto.
+            </p>
           </section>
 
           <section class="card grid gap-4">
             <h2 class="titulo text-lg font-semibold text-tinta">O benefício</h2>
+            <label class="flex items-start gap-2 text-sm text-tinta-corpo">
+              <input v-model="f.permanente" type="checkbox" class="mt-1" data-parte="permanente">
+              <span><strong>Permanente</strong> — o desconto vale em TODAS as próximas visitas, sem limite.</span>
+            </label>
             <div class="grid gap-4 sm:grid-cols-3">
               <div>
                 <label for="p-desc" class="rotulo">Desconto no ingresso (%)</label>
                 <input id="p-desc" v-model.number="f.desconto" type="number" min="1" max="100" step="1" class="campo">
               </div>
-              <div>
+              <div v-if="!f.permanente">
                 <label for="p-ret" class="rotulo">Quantos retornos</label>
                 <input id="p-ret" v-model.number="f.retornos" type="number" min="1" max="50" class="campo">
               </div>
@@ -158,12 +170,33 @@ const dataBR = (iso: string) => iso.split('-').reverse().join('/')
               </div>
               <div>
                 <label for="p-prazo" class="rotulo">Prazo pra voltar (dias depois da 1ª visita)</label>
-                <input id="p-prazo" v-model.number="f.prazo" type="number" min="1" max="730" class="campo" placeholder="vazio = até o fim da vigência">
+                <input id="p-prazo" v-model.number="f.prazo" type="number" min="1" max="730" class="campo" placeholder="vazio = sem prazo">
               </div>
             </div>
-            <p class="text-xs text-tinta-suave">
-              Os {{ f.consumacao }}% da consumação viram um selo no ingresso do retorno e na tela da portaria — o caixa do bar confere e lança.
+          </section>
+
+          <section v-if="f.consumacao > 0" class="card grid gap-4" data-parte="cupom-do-bar">
+            <h2 class="titulo text-lg font-semibold text-tinta">Cupom do bar ({{ f.consumacao }}%)</h2>
+            <p class="text-sm text-tinta-corpo">
+              Cada retorno ganha um <strong>cupom com QR</strong> — no ingresso, no e-mail e pra baixar como imagem. No bar,
+              a atendente aponta a câmera do celular pro QR (ou digita o código de 6 letras em
+              <NuxtLink to="/admin/consumacao" class="font-semibold text-acao underline">Caixa do bar</NuxtLink>), vê
+              <strong>VÁLIDO</strong> ou <strong>JÁ USADO</strong>, dá a baixa e aplica os {{ f.consumacao }}% na Zig.
+              Só vale no dia da visita; se a entrada na portaria não aparecer, ela confere o documento antes de liberar.
             </p>
+            <fieldset>
+              <legend class="rotulo">Quantas vezes por visita</legend>
+              <label class="flex items-start gap-2 text-sm text-tinta-corpo">
+                <input v-model="f.consumacaoDiaTodo" type="radio" :value="false" class="mt-1">
+                <span><input v-model.number="f.consumacaoUsos" type="number" min="1" max="20" class="campo inline-block w-20 py-1"
+                             :disabled="f.consumacaoDiaTodo" aria-label="Usos por visita">
+                  {{ f.consumacaoUsos === 1 ? 'vez (recomendado: a atendente dá a baixa numa conta e acabou)' : 'vezes no dia' }}</span>
+              </label>
+              <label class="mt-2 flex items-start gap-2 text-sm text-tinta-corpo">
+                <input v-model="f.consumacaoDiaTodo" type="radio" :value="true" class="mt-1">
+                <span><strong>O dia todo</strong> — a 1ª baixa ativa o cupom; nas outras compras do dia ele aparece ATIVO (verde).</span>
+              </label>
+            </fieldset>
           </section>
 
           <section class="card grid gap-4">
@@ -225,6 +258,24 @@ const dataBR = (iso: string) => iso.split('-').reverse().join('/')
             <button type="submit" class="btn-primario w-full" :disabled="salvando" data-parte="salvar-promocao">
               {{ salvando ? 'Salvando…' : f.ativo ? 'Salvar e deixar ligada' : 'Salvar (desligada)' }}
             </button>
+          </section>
+
+          <section class="card" data-parte="baixas-do-bar">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="titulo text-lg font-semibold text-tinta">Baixas no bar</h2>
+              <NuxtLink to="/admin/consumacao" class="text-sm font-semibold text-acao underline">Abrir Caixa do bar</NuxtLink>
+            </div>
+            <p v-if="!baixas?.baixas?.length" class="mt-2 text-sm text-tinta-suave">Nenhum cupom usado ainda.</p>
+            <ul v-else class="mt-2 divide-y divide-linha text-sm">
+              <li v-for="b in baixas.baixas" :key="b.id" class="flex items-center justify-between gap-3 py-2">
+                <span class="min-w-0">
+                  <span class="block truncate font-medium text-tinta">{{ b.titular ?? '—' }}</span>
+                  <span class="block text-xs text-tinta-fraca">{{ b.em }} · {{ b.codigo }} · {{ String(b.por || 'caixa').replace(/\s*<[^>]*>\s*$/, '') }}<template v-if="b.semEntrada"> · <strong class="text-alerta">sem entrada</strong></template></span>
+                </span>
+                <span class="shrink-0 font-semibold text-ok">{{ Number(b.consumacaoBps) / 100 }}%</span>
+              </li>
+            </ul>
+            <p class="mt-2 text-xs text-tinta-suave">Confira com o relatório de descontos da Zig no fim do dia.</p>
           </section>
         </aside>
       </form>

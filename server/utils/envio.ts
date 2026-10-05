@@ -46,8 +46,10 @@ import type { PoolClient, Pool } from 'pg'
 import { db, q, q1 } from './db'
 import { montarQr } from './ingresso'
 import { PEDIDO_VIVO } from './liquido'
+import { garantirCupomDeConsumacao } from './cupom-consumacao'
+import { diaNoFusoDaFidelidade, programaDeFidelidadeDaOrg } from './fidelidade'
 import {
-  diaDaSessao, entregar, montarConfirmacao, type Entrega, type IngressoNoEmail, type Mensagem,
+  diaDaSessao, entregar, montarConfirmacao, type DadosConfirmacao, type Entrega, type IngressoNoEmail, type Mensagem,
   type Transporte, transporteEscolhido,
 } from './email'
 
@@ -183,7 +185,7 @@ export async function montarMensagemDoPedido(
   orderId: string, paraEmail: string, paraNome?: string | null,
 ): Promise<Mensagem> {
   const o = await q1<any>(
-    `SELECT o.id, o.code, o.status, o.total_cents, o.event_id,
+    `SELECT o.id, o.code, o.status, o.total_cents, o.event_id, o.org_id, o.channel, o.loyalty_program_id,
             (${PEDIDO_VIVO('o.')}) AS vale_ingresso,
             c.name AS comprador, c.email AS comprador_email,
             e.name AS evento, e.starts_at, e.venue_name, e.city, e.state, e.ticket_noun,
@@ -255,6 +257,33 @@ export async function montarMensagemDoPedido(
   const local = [o.venue_name, [o.city, o.state].filter(Boolean).join('/')]
     .filter(Boolean).join(' · ')
 
+  // Volte Mais (042): o retorno leva o cupom de consumação (o caixa do bar escaneia); a 1ª visita
+  // paga leva o convite. Falha aqui não segura o ingresso: o e-mail sai sem o bloco.
+  let cupomConsumacao: DadosConfirmacao['cupomConsumacao'] = null
+  let conviteVolteMais: DadosConfirmacao['conviteVolteMais'] = null
+  try {
+    if (o.loyalty_program_id) {
+      const cupom = await garantirCupomDeConsumacao(o.id)
+      if (cupom) {
+        const link = baseDoSite() ? `${baseDoSite()}/consumo/${cupom.token}` : null
+        cupomConsumacao = {
+          codigo: cupom.codigo, consumacaoPct: cupom.consumacao_bps / 100, link,
+          dia: cupom.dia.split('-').reverse().join('/'),
+          qrPng: link ? await QRCode.toBuffer(link, { margin: 1, width: 300, errorCorrectionLevel: 'M' }) : null,
+        }
+      }
+    } else if (Number(o.total_cents) > 0 && o.channel !== 'cortesia') {
+      const pr = await programaDeFidelidadeDaOrg(db(), o.org_id)
+      const hoje = diaNoFusoDaFidelidade(new Date(), o.timezone || 'America/Bahia')
+      if (pr?.ativo && pr.vigencia_inicio && pr.vigencia_inicio <= hoje && (!pr.vigencia_fim || pr.vigencia_fim >= hoje)) {
+        conviteVolteMais = { nome: pr.nome, descontoPct: pr.desconto_bps / 100, consumacaoPct: pr.consumacao_bps / 100,
+                             permanente: pr.retornos == null }
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[envio] Volte Mais fora do e-mail do pedido ${o.code}: ${e?.message ?? e}`)
+  }
+
   return montarConfirmacao({
     pedido: o.code,
     compradorNome: paraNome ?? o.comprador,
@@ -271,6 +300,8 @@ export async function montarMensagemDoPedido(
     // grita no boot e em `/api/saude`.
     linkIngressos: baseDoSite() ? `${baseDoSite()}/ingressos/${o.code}` : null,
     fuso: o.timezone,
+    cupomConsumacao,
+    conviteVolteMais,
   })
 }
 

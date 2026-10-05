@@ -38,12 +38,14 @@
  * código na mão, enquanto um pedido igualzinho COM comprador abria em 200. O
  * convidado do patrocinador caía nisso sempre, por construção.
  */
-import { q, q1 } from '../../utils/db'
+import { db, q, q1 } from '../../utils/db'
 import { montarQr } from '../../utils/ingresso'
 import { CANAL_CORTESIA, eCortesia } from '../../utils/emissao'
 import { PEDIDO_VIVO } from '../../utils/liquido'
 import { conferirFreio, marcarNoFreio } from '../../utils/sessao'
 import { qrCodePix } from '../../utils/asaas'
+import { garantirCupomDeConsumacao } from '../../utils/cupom-consumacao'
+import { diaNoFusoDaFidelidade, programaDeFidelidadeDaOrg } from '../../utils/fidelidade'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -180,6 +182,19 @@ export default defineEventHandler(async (event) => {
       WHERE entity = 'order' AND entity_id = $1::text AND action = 'pago_sem_lugar'
       LIMIT 1`, [o.id]))
 
+  // Volte Mais (042): o retorno ganha o cupom de consumação (QR que o caixa do bar confere); a 1ª
+  // visita paga ganha o CONVITE ("na próxima, 50%") — só com o programa ligado e valendo hoje.
+  const cupom = o.fidelidade && o.vivo ? await garantirCupomDeConsumacao(o.id) : null
+  let convite: { nome: string; descontoPct: number; consumacaoPct: number; permanente: boolean } | null = null
+  if (!o.fidelidade && o.vivo && Number(o.total_cents) > 0 && o.channel !== CANAL_CORTESIA) {
+    const pr = await programaDeFidelidadeDaOrg(db(), o.org_id)
+    const hoje = diaNoFusoDaFidelidade(new Date(), o.timezone ?? 'America/Bahia')
+    if (pr?.ativo && pr.vigencia_inicio && pr.vigencia_inicio <= hoje && (!pr.vigencia_fim || pr.vigencia_fim >= hoje)) {
+      convite = { nome: pr.nome, descontoPct: pr.desconto_bps / 100, consumacaoPct: pr.consumacao_bps / 100,
+                  permanente: pr.retornos == null }
+    }
+  }
+
   return {
     pedido: o.code,
     pedidoId: o.id,
@@ -204,6 +219,10 @@ export default defineEventHandler(async (event) => {
     cortesia: o.channel === CANAL_CORTESIA,
     /** Volte Mais (037): pedido de retorno com desconto — o ingresso mostra o selo da consumação */
     fidelidade: o.fidelidade ? { nome: o.fidelidade.nome, consumacaoPct: Number(o.fidelidade.consumacao_bps) / 100 } : null,
+    /** o cupom de consumação do retorno (042): `/consumo/<token>` + código pra digitar no caixa */
+    cupomConsumacao: cupom ? { token: cupom.token, codigo: cupom.codigo, consumacaoPct: cupom.consumacao_bps / 100, dia: cupom.dia } : null,
+    /** 1ª visita com o Volte Mais ligado: o convite pro retorno */
+    conviteVolteMais: convite,
     gratuito: Number(o.total_cents) === 0 && o.channel !== CANAL_CORTESIA,
     // Sem comprador é ausência, não string vazia: `null` deixa a tela escolher
     // o que escrever (no convite, o nome de quem recebe está no INGRESSO).

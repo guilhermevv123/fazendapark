@@ -444,6 +444,10 @@ export interface DadosConfirmacao {
   substantivo?: string | null
   /** fuso do EVENTO (events.timezone); sem ele, o do parque */
   fuso?: string | null
+  /** Volte Mais (042): o cupom de consumação do retorno — o caixa do bar escaneia o QR */
+  cupomConsumacao?: { codigo: string; consumacaoPct: number; dia: string; link: string | null; qrPng: Buffer | null } | null
+  /** Volte Mais (042): a 1ª visita paga ganha o convite pro retorno com desconto */
+  conviteVolteMais?: { nome: string; descontoPct: number; consumacaoPct: number; permanente: boolean } | null
 }
 
 const reais = (c: number) =>
@@ -506,6 +510,14 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
       ? ['Abra o link abaixo para ver o QR de cada ingresso:', d.linkIngressos, '']
       : ['O QR de cada ingresso está anexado a este e-mail.', '']),
     'Na portaria, apresente o QR. Se a leitura falhar, informe o código do ingresso.',
+    ...(d.cupomConsumacao
+      ? ['', `CLIENTE VOLTE MAIS — ${d.cupomConsumacao.consumacaoPct}% de desconto na consumação em ${d.cupomConsumacao.dia}.`,
+         `Cupom ${d.cupomConsumacao.codigo}: mostre no caixa do bar com um documento com foto.`,
+         ...(d.cupomConsumacao.link ? [d.cupomConsumacao.link] : [])]
+      : []),
+    ...(d.conviteVolteMais
+      ? ['', `${d.conviteVolteMais.nome}: depois desta visita, ${d.conviteVolteMais.descontoPct}% de desconto no ingresso ${d.conviteVolteMais.permanente ? 'em todas as próximas visitas' : 'nas próximas visitas'}${d.conviteVolteMais.consumacaoPct ? ` e ${d.conviteVolteMais.consumacaoPct}% na consumação` : ''}. Compre pelo site com a sua conta.`]
+      : []),
   ].filter((l) => l !== null).join('\n')
 
   const gratis = d.totalCents === 0
@@ -541,6 +553,44 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
         </table>`
   }).join('')
 
+  // Volte Mais (042): o cupom de consumação, com cara de cupom (borda tracejada, sol) — o caixa do bar
+  // escaneia o QR com a câmera do celular e dá a baixa; sem câmera, digita o código.
+  let cupomHtml = ''
+  if (d.cupomConsumacao) {
+    const cc = d.cupomConsumacao
+    let qrCupom = ''
+    if (cc.qrPng) {
+      const cid = `cupom-${cc.codigo}@diamond-tickets`
+      imagens.push({ cid, nome: `cupom-${cc.codigo}.png`, conteudo: cc.qrPng, tipo: 'image/png' })
+      qrCupom = `<img src="cid:${cid}" alt="QR do cupom de consumação ${e(cc.codigo)}" width="150" height="150"
+              style="display:block;margin:0 auto;width:150px;height:150px;border:0;background:#fff">`
+    }
+    cupomHtml = `
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+               style="margin-top:20px;border:3px dashed ${COR.sol};border-radius:10px;border-collapse:separate" data-parte="cupom-consumacao-email">
+          <tr><td bgcolor="${COR.solClaro}" style="background:${COR.solClaro};padding:16px 18px 6px;border-radius:8px 8px 0 0;font-family:${FONTE};text-align:center">
+            <div style="font-size:12px;font-weight:bold;letter-spacing:.1em;text-transform:uppercase;color:${COR.uva}">Cliente Volte Mais</div>
+            <div style="font-size:34px;font-weight:bold;line-height:1.1;color:${COR.tinta};margin-top:4px">${cc.consumacaoPct}% no bar</div>
+            <div style="font-size:14px;color:${COR.corpo};margin-top:4px">Desconto na consumação em ${e(cc.dia)}</div>
+          </td></tr>
+          <tr><td bgcolor="${COR.solClaro}" align="center" style="background:${COR.solClaro};padding:10px 16px 6px">${qrCupom}</td></tr>
+          <tr><td bgcolor="${COR.solClaro}" align="center" style="background:${COR.solClaro};padding:4px 16px 16px;border-radius:0 0 8px 8px;font-family:${FONTE}">
+            <div style="font-family:'Courier New',Courier,monospace;font-size:22px;font-weight:bold;letter-spacing:4px;color:${COR.tinta}">${e(cc.codigo)}</div>
+            <div style="font-size:13px;color:${COR.suave};margin-top:6px">Mostre este cupom e um documento com foto no caixa do bar. Vale no dia da visita, depois da entrada.</div>
+            ${cc.link ? `<div style="margin-top:12px">${botaoDoEmail('Abrir meu cupom', cc.link)}</div>` : ''}
+          </td></tr>
+        </table>`
+  }
+  const conviteHtml = d.conviteVolteMais ? `
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:20px" data-parte="convite-volte-mais-email">
+          <tr><td bgcolor="${COR.solClaro}" style="background:${COR.solClaro};border-left:4px solid ${COR.sol};border-radius:6px;padding:14px 16px;font-family:${FONTE};font-size:14px;color:${COR.corpo}">
+            <strong style="color:${COR.tinta}">${e(d.conviteVolteMais.nome)}:</strong> depois desta visita, você ganha
+            <strong style="color:${COR.tinta}">${d.conviteVolteMais.descontoPct}% de desconto no ingresso</strong>
+            ${d.conviteVolteMais.permanente ? 'em todas as próximas visitas' : 'nas próximas visitas'}${d.conviteVolteMais.consumacaoPct ? ` e ${d.conviteVolteMais.consumacaoPct}% na consumação` : ''}.
+            É só comprar pelo site com a sua conta.
+          </td></tr>
+        </table>` : ''
+
   const resumo = `
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
                style="margin-top:22px;border-radius:8px;border-collapse:separate">
@@ -573,6 +623,8 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
 ${resumo}
         ${d.linkIngressos ? `<div style="margin:24px 0 4px">${botaoDoEmail(`Ver ${substantivo.toLowerCase()} no celular`, d.linkIngressos)}</div>` : ''}
 ${blocos}
+${cupomHtml}
+${conviteHtml}
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px">
           <tr><td bgcolor="${COR.piscinaClara}" style="background:${COR.piscinaClara};border-left:4px solid ${COR.piscina};
                      border-radius:6px;padding:14px 16px;font-family:${FONTE};font-size:14px;color:${COR.corpo}">

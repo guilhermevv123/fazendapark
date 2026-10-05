@@ -192,7 +192,7 @@ const PARCELA_MINIMA_CENTS = 500
  */
 type PreviaDaFidelidade = {
   disponivel: boolean; nome?: string; descontoCents?: number; ingressos?: number; descontoPct?: number
-  restantesDepois?: number; validoAte?: string | null; consumacaoPct?: number; regulamento?: string; motivo?: string
+  restantesDepois?: number | null; validoAte?: string | null; consumacaoPct?: number; regulamento?: string; motivo?: string
 }
 const fidelidade = ref<PreviaDaFidelidade | null>(null)
 async function conferirFidelidade() {
@@ -975,9 +975,10 @@ useHead({ title: 'Pagamento' })
             <span class="font-semibold tabular-nums">−{{ reais(fidelidade.descontoCents ?? 0) }}</span>.
           </p>
           <p class="mt-1 text-tinta-corpo">
-            Depois desta compra {{ fidelidade.restantesDepois === 1 ? 'sobra 1 retorno' : `sobram ${fidelidade.restantesDepois} retornos` }}
-            com desconto<template v-if="fidelidade.validoAte"> (visitas até {{ dataCurta(fidelidade.validoAte) }})</template>.
-            <template v-if="fidelidade.consumacaoPct">No dia, {{ fidelidade.consumacaoPct }}% na consumação: mostre o ingresso e um documento no caixa.</template>
+            <template v-if="fidelidade.restantesDepois == null">O desconto vale em todas as suas próximas visitas<template v-if="fidelidade.validoAte"> (até {{ dataCurta(fidelidade.validoAte) }})</template>.</template>
+            <template v-else>Depois desta compra {{ fidelidade.restantesDepois === 1 ? 'sobra 1 retorno' : `sobram ${fidelidade.restantesDepois} retornos` }}
+            com desconto<template v-if="fidelidade.validoAte"> (visitas até {{ dataCurta(fidelidade.validoAte) }})</template>.</template>
+            <template v-if="fidelidade.consumacaoPct">No dia, {{ fidelidade.consumacaoPct }}% na consumação: o cupom vem junto com o ingresso — mostre no caixa do bar com um documento.</template>
           </p>
           <details v-if="fidelidade.regulamento" class="mt-1 text-tinta-corpo">
             <summary class="cursor-pointer underline">Regulamento</summary>
