@@ -476,7 +476,7 @@ export function origemDaRequisicao(event: H3Event): { ip: string | null; proxySe
  * conta o seu — freio de abuso, não trava de dinheiro):
  *
  *   checkout            pedidos tentados      20 a cada 10 min
- *   checkout_ingressos  ingressos reservados  60 a cada 20 min  (o que segura estoque)
+ *   checkout_ingressos  ingressos reservados  1500 a cada 20 min (o que segura estoque)
  *   cupom               conferências de cupom 30 a cada 10 min
  *   cupom_errado        código que não existe 10 a cada 15 min  (dicionário)
  *   pedido_404          pedido que não existe 20 a cada 10 min  (enumeração)
@@ -497,7 +497,8 @@ export type NomeDoFreio = 'checkout' | 'checkout_ingressos' | 'cupom' | 'cupom_e
 
 export const FREIO_PUBLICO_PADRAO: Record<NomeDoFreio, { limite: number; janelaSeg: number }> = {
   checkout: { limite: 20, janelaSeg: 600 },
-  checkout_ingressos: { limite: 60, janelaSeg: 1200 },
+  // 3 compras do tamanho máximo (05/10: quem limita a compra é o estoque — `limite-de-compra.ts`)
+  checkout_ingressos: { limite: 1500, janelaSeg: 1200 },
   cupom: { limite: 30, janelaSeg: 600 },
   cupom_errado: { limite: 10, janelaSeg: 900 },
   pedido_404: { limite: 20, janelaSeg: 600 },

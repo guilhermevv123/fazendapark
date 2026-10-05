@@ -111,7 +111,7 @@ const SLUG_RASCUNHO = 'zz-rascunho-teste'
  * ponto — mexer no padrão do produto acende luz vermelha aqui em vez de passar
  * sozinho.
  */
-const TETO_PADRAO_POR_PEDIDO = 20
+const TETO_PADRAO_POR_PEDIDO = 500 // dono, 05/10: quem limita é o estoque; 500 é o teto técnico
 
 /**
  * A cota legal de meia-entrada do lote da fixture: 40% de 10 lugares

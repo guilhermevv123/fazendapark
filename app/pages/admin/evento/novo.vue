@@ -20,6 +20,7 @@
  * cada uma". Misturar os dois numa tela só é o que faz alguém errar preço de
  * lote inteiro sem perceber.
  */
+import { TETO_POR_COMPRA } from '~~/server/utils/limite-de-compra'
 import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
@@ -241,7 +242,7 @@ function montarSetores() {
 
 function loteNovo(nome: string): Lote {
   return {
-    nome, faceCents: 0, quantidade: 100, minPorCompra: 1, maxPorCompra: 6,
+    nome, faceCents: 0, quantidade: 100, minPorCompra: 1, maxPorCompra: TETO_POR_COMPRA,
     gratuito: false, canais: ['online', 'bilheteria'], tipos: [], expiraEm: '',
   }
 }

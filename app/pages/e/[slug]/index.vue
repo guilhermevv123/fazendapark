@@ -112,6 +112,18 @@ function ajustar(lote: any, v: any, delta: number) {
 }
 
 /**
+ * A quantidade digitada no número da linha. Passa pela MESMA conta do "+"/"−" (`ajustarQuantidade`:
+ * estoque, teto por compra, mínimo do lote) e o campo mostra o que ficou valendo — digitou 900 com
+ * 120 no estoque, aparece 120.
+ */
+function definirQuantidade(lote: any, v: any, ev: Event) {
+  const campo = ev.target as HTMLInputElement
+  const pedida = Math.max(0, Math.floor(Number(String(campo.value).replace(/\D/g, '')) || 0))
+  ajustar(lote, v, pedida - quantidade(lote, v))
+  campo.value = String(quantidade(lote, v))
+}
+
+/**
  * A declaração desta linha. É um GETTER PURO: quem cria o objeto é `ajustar`,
  * quando a linha entra no carrinho. Criar aqui dentro seria escrever num `ref`
  * durante o render — o caminho curto pro laço de renderização.
@@ -553,10 +565,15 @@ useHead(() => ({
                             :disabled="quantidade(lote, v) <= 0"
                             :aria-label="`Remover um ${v.nome ?? lote.nome}`"
                             @click="ajustar(lote, v, -1)">−</button>
-                    <span class="titulo w-7 text-center text-lg font-semibold tabular-nums text-ink-900"
-                          aria-live="polite">
-                      {{ quantidade(lote, v) }}
-                    </span>
+                    <!-- digitável (05/10): sem teto de 6, ninguém aperta "+" cem vezes -->
+                    <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4"
+                           class="titulo w-14 rounded-lg border-0 bg-transparent p-0 text-center text-lg font-semibold
+                                  tabular-nums text-ink-900 focus:bg-white focus:ring-2 focus:ring-pool-600"
+                           :value="quantidade(lote, v)" data-parte="quantidade"
+                           :aria-label="`Quantidade de ${v.nome ?? lote.nome}`"
+                           @focus="($event.target as HTMLInputElement).select()"
+                           @change="definirQuantidade(lote, v, $event)"
+                           @keydown.enter.prevent="($event.target as HTMLInputElement).blur()">
                     <button type="button"
                             class="grid size-10 place-items-center rounded-full bg-pool-700 text-lg leading-none
                                    text-white ring-1 ring-inset ring-pool-700 transition-colors hover:bg-pool-800

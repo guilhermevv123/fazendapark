@@ -32,6 +32,7 @@ import { emData } from '../../utils/cupom'
 import { faceDoTipo, precificar, type ModoTaxa } from '../../utils/dinheiro'
 import { cotaDeMeias } from '../../utils/meia-entrada'
 import { pagamentoOnline } from '../../utils/asaas'
+import { TETO_POR_COMPRA } from '../../utils/limite-de-compra'
 
 /** Abaixo disto a vitrine avisa "últimas unidades" — faixa, nunca o número. */
 export const LIMIAR_ULTIMAS = 10
@@ -40,17 +41,15 @@ export const LIMIAR_ULTIMAS = 10
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa
  * (`events.max_per_order`).
  *
- * Sem um teto assim, o único freio é o `max_per_order` de CADA lote — e vinte
- * linhas de seis ingressos são cento e vinte ingressos num clique só. Não é
- * hipótese de cambista: é o jeito mais barato de esvaziar um lote e revender
- * no portão.
+ * Desde 05/10 é o teto TÉCNICO (`utils/limite-de-compra.ts`, 500): o dono quer que a pessoa compre
+ * quantos quiser, até acabar o estoque. Antes era 20 (e 6 por lote), pensado contra cambista.
  *
  * Mora AQUI, e não no checkout, porque a vitrine precisa do mesmo número: é
  * ela que anuncia o teto de cada linha e trava o botão de pagar. O checkout
  * reexporta daqui — duas constantes iguais é como a tela passa a deixar
  * montar 20 no dia em que a porta começar a recusar acima de 10.
  */
-export const TETO_PADRAO_POR_PEDIDO = 20
+export const TETO_PADRAO_POR_PEDIDO = TETO_POR_COMPRA
 
 /**
  * Lote que a vitrine ONLINE pode mostrar. Fragmento único, usado pelas duas

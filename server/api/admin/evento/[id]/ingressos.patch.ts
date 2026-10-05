@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { tx } from '../../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { explicarErro } from '../index.post'
+import { TETO_POR_COMPRA } from '../../../../utils/limite-de-compra'
 
 const Entrada = z.object({
   // 'evento' entra aqui porque as chaves que a tela de ingressos liga e
@@ -30,7 +31,7 @@ const Entrada = z.object({
     gratuito: z.boolean().optional(),
     quantidade: z.number().int().min(0).max(1_000_000).optional(),
     minPorCompra: z.number().int().min(1).max(50).optional(),
-    maxPorCompra: z.number().int().min(1).max(50).optional(),
+    maxPorCompra: z.number().int().min(1).max(TETO_POR_COMPRA).optional(),
     visivel: z.boolean().optional(),
     canais: z.array(z.enum(['online', 'bilheteria', 'cortesia'])).min(1).optional(),
     abreEm: z.string().datetime({ offset: true }).nullish(),

@@ -16,6 +16,7 @@ import { z } from 'zod'
 import { q1, tx } from '../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 import { fusoValido } from '../../../../app/composables/fusoHorario'
+import { TETO_POR_COMPRA } from '../../../utils/limite-de-compra'
 
 /**
  * Prefixos que já são rota do site. Um evento com slug "admin" ou "api"
@@ -135,7 +136,7 @@ const Entrada = z.object({
       /** o lote para de vender nesta hora (a vitrine e o checkout já leem `expires_at`) */
       expiraEm: z.string().datetime({ offset: true }).nullish(),
       minPorCompra: z.number().int().min(1).max(50).default(1),
-      maxPorCompra: z.number().int().min(1).max(50).default(10),
+      maxPorCompra: z.number().int().min(1).max(TETO_POR_COMPRA).default(TETO_POR_COMPRA),
       tipos: z.array(z.object({
         nome: z.string().min(1).max(80),
         quantidade: z.number().int().min(1).max(1_000_000),

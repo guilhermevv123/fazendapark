@@ -31,6 +31,7 @@ definePageMeta({ layout: 'admin' })
 // verdades sobre o que a portaria pede — e a da tela é a que o produtor lê
 // antes de configurar. O módulo é regra pura: não importa `pg` em valor, não
 // toca banco, não tem efeito colateral nenhum ao ser carregado.
+import { TETO_POR_COMPRA } from '~~/server/utils/limite-de-compra'
 import { COTA_LEGAL_BPS, cotaDeMeias, MOTIVOS } from '~~/server/utils/meia-entrada'
 // A conta do preço é a do SERVIDOR (ADM-23): `precificar` é a que o checkout cobra e
 // `faceParaTotal` é a inversa dela. A cópia daqui arredondava diferente e a face "redonda"
@@ -180,7 +181,7 @@ async function salvarSetor() {
  */
 const loteForm = reactive({
   aberto: false, id: '', setorId: '', nome: '', faceCents: 0,
-  quantidade: 100, minPorCompra: 1, maxPorCompra: 10,
+  quantidade: 100, minPorCompra: 1, maxPorCompra: TETO_POR_COMPRA,
   abreEm: '', expiraEm: '', visivel: true,
   gratuito: false, canais: ['online', 'bilheteria'] as string[],
 })
@@ -210,7 +211,7 @@ function abrirLote(setorId: string, l?: any) {
     faceCents: l?.faceCents ?? 0,
     quantidade: l?.quantidade ?? 100,
     minPorCompra: l?.minPorCompra ?? 1,
-    maxPorCompra: l?.maxPorCompra ?? 10,
+    maxPorCompra: l?.maxPorCompra ?? TETO_POR_COMPRA,
     abreEm: paraCampo(l?.abreEm ?? null),
     expiraEm: paraCampo(l?.expiraEm ?? null),
     visivel: l?.visivel ?? true,
@@ -884,7 +885,8 @@ useHead({ title: 'Ingressos' })
         </div>
         <div>
           <label class="rotulo">Máx. por compra</label>
-          <input v-model.number="loteForm.maxPorCompra" type="number" min="1" max="50" class="campo tabular-nums">
+          <input v-model.number="loteForm.maxPorCompra" type="number" min="1" :max="TETO_POR_COMPRA" class="campo tabular-nums">
+          <p class="mt-1 text-xs text-ink-600">{{ TETO_POR_COMPRA }} = sem limite: quem segura é a quantidade do lote.</p>
         </div>
         <div>
           <label class="rotulo">Abre em (opcional)</label>

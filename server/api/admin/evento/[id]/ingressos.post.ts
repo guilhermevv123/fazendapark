@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { q1, tx } from '../../../../utils/db'
 import { CANAIS_PADRAO, explicarErro } from '../index.post'
 import { ROTULOS_INGRESSOS } from './ingressos.patch'
+import { TETO_POR_COMPRA } from '../../../../utils/limite-de-compra'
 
 const Setor = z.object({
   o: z.literal('setor'),
@@ -32,7 +33,7 @@ const Lote = z.object({
   gratuito: z.boolean().default(false),
   quantidade: z.number().int().min(1).max(1_000_000),
   minPorCompra: z.number().int().min(1).max(50).default(1),
-  maxPorCompra: z.number().int().min(1).max(50).default(10),
+  maxPorCompra: z.number().int().min(1).max(TETO_POR_COMPRA).default(TETO_POR_COMPRA),
   // Sem `canais`, site E balcão. O padrão antigo aqui (e o do banco) era só
   // `online`, e nenhum lote criado pelo painel vendia na bilheteria.
   canais: z.array(z.enum(['online', 'bilheteria', 'cortesia'])).min(1)

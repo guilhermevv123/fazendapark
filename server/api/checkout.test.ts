@@ -31,7 +31,7 @@ import {
  * impedir. Se alguém mexer no número lá, este teste fica vermelho e a mudança
  * vira uma escolha.
  */
-const TETO_PADRAO_POR_PEDIDO = 20
+const TETO_PADRAO_POR_PEDIDO = 500 // dono, 05/10: quem limita é o estoque; 500 é o teto técnico
 
 const BASE = process.env.BASE_TESTE ?? 'http://localhost:3100'
 const SLUG = 'zz-checkout-limites'
@@ -420,7 +420,7 @@ describe('checkout pela HTTP — o que ele recusa', () => {
     return !noAr
   }
 
-  it('não deixa um pedido só levar o lote inteiro', async () => {
+  it('sem teto de 6 ou de 20: um pedido leva 30, quem limita é o estoque (dono, 05/10)', async () => {
     if (pular()) return
     const r = await comprar({
       itens: [
@@ -428,9 +428,20 @@ describe('checkout pela HTTP — o que ele recusa', () => {
         { lotId, ticketTypeId: tipoId, quantidade: 15 },
       ],
     })
+    expect(r.status, r.recado).toBe(200)
+  })
+
+  it('o teto técnico do pedido (500) recusa com a frase e diz quanto a pessoa pediu', async () => {
+    if (pular()) return
+    const r = await comprar({
+      itens: [
+        { lotId, ticketTypeId: tipoId, quantidade: 300 },
+        { lotId, ticketTypeId: tipoId, quantidade: 300 },
+      ],
+    })
     expect(r.status).toBe(409)
     expect(r.recado).toMatch(new RegExp(`no máximo ${TETO_PADRAO_POR_PEDIDO} ingressos`))
-    expect(r.recado).toMatch(/30/)               // diz quanto a pessoa pediu
+    expect(r.recado).toMatch(/600/)               // diz quanto a pessoa pediu
     expect(r.corpo.data?.tipo).toBe('teto_por_pedido')
   })
 

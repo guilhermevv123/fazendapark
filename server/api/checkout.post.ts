@@ -55,6 +55,7 @@ import * as simulado from '../utils/gateway-simulado'
 import { pixPeloMercadoPago } from '../utils/mercadopago-conta'
 import { gerarPixDoPedido, type PixDoPedido } from '../utils/mercadopago'
 import { compradorDaConta, contaDaSessaoDoCliente } from '../utils/conta-do-cliente'
+import { TETO_POR_COMPRA } from '../utils/limite-de-compra'
 
 /**
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa.
@@ -102,7 +103,7 @@ export const Entrada = z.object({
   itens: z.array(z.object({
     lotId: z.string().uuid(),
     ticketTypeId: z.string().uuid().nullish(),
-    quantidade: z.number().int().positive().max(50),
+    quantidade: z.number().int().positive().max(TETO_POR_COMPRA),
     /**
      * Declaração de meia-entrada da LINHA.
      *
