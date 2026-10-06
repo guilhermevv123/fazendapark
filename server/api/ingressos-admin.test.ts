@@ -198,3 +198,46 @@ describe('preço próprio do tipo (043)', () => {
     expect(z.status).toBe(400)
   })
 })
+
+describe('ordem de exibição (dono, 06/10)', () => {
+  const mover = (o: string, alvo: string, direcao: string) =>
+    http(`/api/admin/evento/${eventoId}/ingressos/ordem`, { method: 'POST', body: JSON.stringify({ o, id: alvo, direcao }) })
+      .then(async (r) => ({ status: r.status, corpo: await r.json() }))
+
+  it('sobe e desce o tipo dentro do lote — lendo de volta a ordem do painel', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar em ' + BASE + ')')
+    const { loteId } = await cenario('TESTE ordem ' + Date.now())
+    const ids: string[] = []
+    for (const nome of ['Sexta', 'Sábado', 'Domingo']) {
+      const t = await chamar('POST', { o: 'tipo', loteId, nome, quantidade: 5 })
+      expect(t.status, JSON.stringify(t.corpo)).toBe(200)
+      ids.push(t.corpo.id)
+    }
+    const nomes = async () => (await acharLote(loteId)).tipos.map((t: any) => t.nome).filter((n: string) => ['Sexta', 'Sábado', 'Domingo'].includes(n))
+
+    expect((await mover('tipo', ids[2]!, 'subir')).status).toBe(200)
+    expect(await nomes()).toEqual(['Sexta', 'Domingo', 'Sábado'])
+    expect((await mover('tipo', ids[2]!, 'subir')).status).toBe(200)
+    expect(await nomes()).toEqual(['Domingo', 'Sexta', 'Sábado'])
+    // já é o primeiro: nada muda, sem erro
+    expect((await mover('tipo', ids[2]!, 'subir')).status).toBe(200)
+    expect(await nomes()).toEqual(['Domingo', 'Sexta', 'Sábado'])
+    expect((await mover('tipo', ids[0]!, 'descer')).status).toBe(200)
+    expect(await nomes()).toEqual(['Domingo', 'Sábado', 'Sexta'])
+  })
+
+  it('setor sobe na lista do evento; item de fora do evento é 404', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar em ' + BASE + ')')
+    const a = await cenario('TESTE ordem A ' + Date.now())
+    const b = await cenario('TESTE ordem B ' + Date.now())
+    const pos = async () => (await arvore()).setores.map((s: any) => s.id)
+    const antes = await pos()
+    expect(antes.indexOf(b.setorId)).toBe(antes.indexOf(a.setorId) + 1)
+    expect((await mover('setor', b.setorId, 'subir')).status).toBe(200)
+    const depois = await pos()
+    expect(depois.indexOf(b.setorId)).toBe(depois.indexOf(a.setorId) - 1)
+
+    expect((await mover('tipo', '00000000-0000-4000-8000-000000000000', 'subir')).status).toBe(404)
+    expect((await mover('lote', a.loteId, 'subir')).status, 'lote não se reordena por aqui').toBe(400)
+  })
+})

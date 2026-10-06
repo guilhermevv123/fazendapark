@@ -87,6 +87,26 @@ async function chamar(metodo: 'POST' | 'PATCH' | 'DELETE', body: any) {
   return true
 }
 
+/**
+ * Ordem de exibição (dono, 06/10): sobe/desce o TIPO dentro do lote e o SETOR no evento. É a ordem
+ * do site, do balcão e daqui. Lote não tem botão: a ordem dele é a da virada automática.
+ */
+const movendo = ref('')
+async function mover(o: 'tipo' | 'setor', alvoId: string, direcao: 'subir' | 'descer') {
+  if (movendo.value) return
+  erro.value = ''
+  movendo.value = `${o}:${alvoId}:${direcao}`
+  try {
+    await $fetch(`/api/admin/evento/${id}/ingressos/ordem`, { method: 'POST', body: { o, id: alvoId, direcao } })
+    await refresh()
+    if (falha.value) erro.value = 'A ordem mudou, mas a lista não recarregou. Atualize a página para ver como ficou.'
+  } catch (e: any) {
+    erro.value = e?.data?.statusMessage || 'Não foi possível mudar a ordem.'
+  } finally {
+    movendo.value = ''
+  }
+}
+
 /* --------------------------------------------------------------- totais --- */
 /**
  * O rodapé soma o estoque de TODOS os lotes do evento, não a capacidade dos
@@ -540,8 +560,22 @@ useHead({ title: 'Ingressos' })
     </p>
 
     <!-- ======================================================== setores -->
-    <section v-for="setor in data.setores" :key="setor.id" class="card mt-4 p-0">
+    <section v-for="(setor, si) in data.setores" :key="setor.id" class="card mt-4 p-0">
       <header class="flex flex-wrap items-center gap-2 px-4 py-3">
+        <span v-if="data.setores.length > 1" class="flex flex-col">
+        <button type="button" class="p-1 text-tinta-fraca hover:text-acao disabled:opacity-25 disabled:hover:text-tinta-fraca"
+                :disabled="si === 0 || !!movendo" :title="'Subir na ordem do site'"
+                :aria-label="`Subir ${setor.nome} na ordem`" data-parte="subir-setor"
+                @click="mover('setor', setor.id, 'subir')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6" /></svg>
+        </button>
+        <button type="button" class="p-1 text-tinta-fraca hover:text-acao disabled:opacity-25 disabled:hover:text-tinta-fraca"
+                :disabled="si === data.setores.length - 1 || !!movendo" :title="'Descer na ordem do site'"
+                :aria-label="`Descer ${setor.nome} na ordem`" data-parte="descer-setor"
+                @click="mover('setor', setor.id, 'descer')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        </button>
+        </span>
         <h2 class="titulo text-base font-semibold uppercase tracking-wide text-acao">{{ setor.nome }}</h2>
         <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
                 :aria-label="`Editar ${setor.nome}`" @click="abrirSetor(setor)">
@@ -748,17 +782,19 @@ useHead({ title: 'Ingressos' })
                   </td>
                 </tr>
 
-                <tr v-for="t in lote.tipos" :key="t.id" class="border-b border-linha bg-fundo-cinza/40">
+                <tr v-for="(t, ti) in lote.tipos" :key="t.id" class="border-b border-linha bg-fundo-cinza/40">
                   <td />
                   <td class="px-3 py-2 pl-6">
                     <span class="font-medium text-tinta">{{ t.nome }}</span>
-                    <span v-if="t.precoCents != null" class="selo-neutro ml-2">preço próprio</span>
-                    <span v-else-if="t.descontoBps" class="selo-neutro ml-2">−{{ (t.descontoBps / 100).toFixed(0) }}%</span>
+                    <!-- select-none: copiar o nome da lista não pode levar o selo junto (06/10, um tipo
+                         nasceu "…PESSOASpreço próprio" assim) -->
+                    <span v-if="t.precoCents != null" class="selo-neutro ml-2 select-none">preço próprio</span>
+                    <span v-else-if="t.descontoBps" class="selo-neutro ml-2 select-none">−{{ (t.descontoBps / 100).toFixed(0) }}%</span>
                     <span v-if="SELO_ESPECIE[especieDoTipo(t)]"
-                          class="ml-2" :class="SELO_ESPECIE[especieDoTipo(t)].classe">
+                          class="ml-2 select-none" :class="SELO_ESPECIE[especieDoTipo(t)].classe">
                       {{ SELO_ESPECIE[especieDoTipo(t)].texto }}
                     </span>
-                    <span v-if="t.exigeDocumento" class="ml-2 text-xs text-tinta-fraca">com documento</span>
+                    <span v-if="t.exigeDocumento" class="ml-2 select-none text-xs text-tinta-fraca">com documento</span>
                   </td>
                   <td class="px-3 py-2 text-right">
                     <span class="tabular-nums text-tinta">{{ reais(t.totalCents) }}</span>
@@ -776,6 +812,20 @@ useHead({ title: 'Ingressos' })
                   </td>
                   <td class="px-3 py-2">
                     <div class="flex items-center justify-end gap-1">
+                      <template v-if="lote.tipos.length > 1">
+                      <button type="button" class="p-1 text-tinta-fraca hover:text-acao disabled:opacity-25 disabled:hover:text-tinta-fraca"
+                :disabled="ti === 0 || !!movendo" :title="'Subir na ordem do site'"
+                :aria-label="`Subir ${t.nome} na ordem`" data-parte="subir-tipo"
+                @click="mover('tipo', t.id, 'subir')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6" /></svg>
+        </button>
+                      <button type="button" class="p-1 text-tinta-fraca hover:text-acao disabled:opacity-25 disabled:hover:text-tinta-fraca"
+                :disabled="ti === lote.tipos.length - 1 || !!movendo" :title="'Descer na ordem do site'"
+                :aria-label="`Descer ${t.nome} na ordem`" data-parte="descer-tipo"
+                @click="mover('tipo', t.id, 'descer')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        </button>
+                      </template>
                       <button type="button" class="p-1 text-tinta-fraca hover:text-acao"
                               title="Editar tipo" @click="abrirTipo(lote.id, t)">
                         <IconeMenu nome="lapis" :tamanho="14" />
