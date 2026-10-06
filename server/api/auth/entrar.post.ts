@@ -68,7 +68,7 @@ const HASH_FALSO = bcrypt.hashSync('nao-existe-' + Math.random(), 10)
 
 type Candidato = {
   id: string; name: string; org_id: string
-  password_hash: string; role: string; active: boolean
+  password_hash: string; role: string; active: boolean; senha_provisoria?: boolean
 }
 
 export default defineEventHandler(async (event) => {
@@ -93,7 +93,7 @@ export default defineEventHandler(async (event) => {
    * diferentes e contar histórias diferentes sobre o mesmo banco.
    */
   const candidatos = await q<Candidato>(
-    `SELECT id, name, org_id, password_hash, role, active
+    `SELECT id, name, org_id, password_hash, role, active, senha_provisoria
        FROM users WHERE lower(email) = $1
       ORDER BY created_at, id`, [email])
 
@@ -152,5 +152,6 @@ export default defineEventHandler(async (event) => {
   await registrarTentativa(email, ip, true)
   await abrirSessao(event, u.id)
 
-  return { ok: true, usuario: { nome: u.name, email, papel: u.role } }
+  // senha provisória da Equipe: a tela pede a senha nova antes de abrir o painel (045)
+  return { ok: true, usuario: { nome: u.name, email, papel: u.role }, trocarSenha: !!u.senha_provisoria }
 })

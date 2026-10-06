@@ -167,11 +167,11 @@ useHead({ title: 'Equipe' })
     <div v-if="senhaNaTela"
          class="mt-4 rounded-card border-2 border-acao bg-acao-fraco px-5 py-4 entra-bloco">
       <p class="titulo text-base font-semibold text-tinta">
-        Senha de {{ senhaNaTela.nome }} — anote agora
+        Senha provisória de {{ senhaNaTela.nome }} — anote agora
       </p>
       <p class="mt-1 text-sm text-tinta-suave">
-        Esta senha não fica guardada em lugar nenhum em texto. Fechando este aviso,
-        só é possível sortear outra.
+        Entregue esta senha. No primeiro acesso a pessoa entra com ela e o sistema pede pra criar
+        a própria — a partir daí, esta deixa de valer. Fechando este aviso, só é possível sortear outra.
       </p>
       <div class="mt-3 flex flex-wrap items-center gap-3">
         <code class="rounded-card border border-linha bg-fundo-card px-4 py-2 font-mono text-lg tracking-wider text-tinta">
@@ -208,6 +208,8 @@ useHead({ title: 'Equipe' })
                   {{ p.nome }}
                   <span v-if="p.id === data.eu" class="selo-neutro ml-1">você</span>
                   <span v-if="!p.ativo" class="selo-erro ml-1">DESATIVADO</span>
+                  <span v-else-if="p.senhaProvisoria" class="selo-alerta ml-1"
+                        title="Ainda não entrou para criar a própria senha">SENHA PROVISÓRIA</span>
                 </p>
                 <p class="text-xs text-tinta-fraca">{{ p.email }}</p>
               </td>
@@ -314,8 +316,8 @@ useHead({ title: 'Equipe' })
             </p>
           </div>
           <p class="rounded-card bg-fundo-cinza px-3 py-2 text-xs text-tinta-suave">
-            A senha é sorteada pelo sistema e aparece uma vez, na tela, depois de criar.
-            Não existe campo de senha aqui de propósito.
+            O sistema sorteia uma senha provisória e mostra uma vez, depois de criar. No primeiro
+            acesso a pessoa entra com ela e cria a própria senha.
           </p>
         </div>
         <template #acoes>

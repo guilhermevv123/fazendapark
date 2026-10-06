@@ -57,6 +57,8 @@ export type Sessao = {
   papelFino: Papel
   /** `users.role` — legado. Só `podeFazer`/`exigir` e o porteiro 01 leem. */
   papel: PapelLegado
+  /** entrou com a senha sorteada na Equipe e ainda não criou a própria (045) */
+  senhaProvisoria?: boolean
 }
 
 /**
@@ -153,7 +155,7 @@ export async function lerSessao(event: H3Event): Promise<Sessao | null> {
 
   const linhas = await q<any>(
     `SELECT s.id, s.token_hash, s.last_seen_at, u.id AS uid, u.org_id, u.name, u.email,
-            u.papel, u.role, u.active
+            u.papel, u.role, u.active, u.senha_provisoria
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ANY($1::text[])
         AND s.revoked_at IS NULL
@@ -193,6 +195,7 @@ export async function lerSessao(event: H3Event): Promise<Sessao | null> {
     // `middleware/03.papel.ts`, pra sessão e porteiro nunca discordarem.
     papelFino: ehPapel(linha.papel) ? linha.papel : papelDoRoleLegado(linha.role),
     papel: linha.role as PapelLegado,
+    senhaProvisoria: !!linha.senha_provisoria,
   }
 }
 

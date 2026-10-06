@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
 
   const [pessoas, org] = await Promise.all([
     q<any>(
-      `SELECT u.id, u.name, u.email, u.papel, u.role, u.active, u.last_login_at, u.created_at,
+      `SELECT u.id, u.name, u.email, u.papel, u.role, u.active, u.last_login_at, u.created_at, u.senha_provisoria,
               (SELECT count(*) FROM sessions s
                 WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > now())::int AS sessoes,
               (SELECT count(*) FROM checkins c WHERE c.operator_id = u.id)::int AS leituras
@@ -60,6 +60,8 @@ export default defineEventHandler(async (event) => {
       id: p.id, nome: p.name, email: p.email,
       papel: ehPapel(p.papel) ? p.papel : papelDoRoleLegado(p.role),
       ativo: p.active,
+      // ainda com a senha sorteada aqui: não entrou pra criar a própria (045)
+      senhaProvisoria: !!p.senha_provisoria,
       ultimaEntrada: p.last_login_at, criadoEm: p.created_at,
       sessoesAbertas: p.sessoes, leituras: p.leituras,
     })),

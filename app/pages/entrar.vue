@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { destinoDoLogin } from '~/composables/destinoDoLogin'
+import CriarSenha from '~/components/CriarSenha.vue'
 /**
  * Tela de login.
  *
@@ -14,6 +15,24 @@ const email = ref('')
 const senha = ref('')
 const erro = ref('')
 const enviando = ref(false)
+/**
+ * 2º passo: entrou com a senha provisória da Equipe → cria a própria antes de abrir o painel.
+ * `provisoria` guarda o que acabou de digitar (não pede de novo); vindo do porteiro do /admin
+ * (`?trocar=1`, F5 ou outro aparelho) ela não está em memória e o componente pede junto.
+ */
+const criandoSenha = ref(route.query.trocar === '1')
+const provisoria = ref('')
+const nome = ref('')
+const destino = () => destinoDoLogin(route.query.de, useRequestURL().origin)
+// `?trocar=1` sem sessão (link copiado, sessão vencida): não há senha a trocar — volta ao login
+onMounted(async () => {
+  if (!criandoSenha.value || provisoria.value) return
+  const eu = await $fetch<any>('/api/auth/eu').catch(() => null)
+  if (!eu?.usuario?.trocarSenha) {
+    if (eu?.usuario) await navigateTo(destino())
+    else criandoSenha.value = false
+  } else nome.value = eu.usuario.nome ?? ''
+})
 
 // Digitou antes de a página terminar de carregar (celular com internet lenta): quando a
 // hidratação do Vue chega, o v-model escreve o valor dele ('') por cima do que está no campo e o
@@ -29,13 +48,20 @@ async function entrar() {
   erro.value = ''
   enviando.value = true
   try {
-    await $fetch('/api/auth/entrar', {
+    const r = await $fetch<{ trocarSenha?: boolean; usuario?: { nome?: string } }>('/api/auth/entrar', {
       method: 'POST',
       body: { email: email.value.trim(), senha: senha.value },
     })
+    if (r?.trocarSenha) {
+      provisoria.value = senha.value
+      nome.value = r.usuario?.nome ?? ''
+      senha.value = ''
+      criandoSenha.value = true
+      return
+    }
     // Só destino desta casa (ver app/composables/destinoDoLogin.ts): o resto vai pro painel,
     // sem erro — a sessão já existe neste ponto e "não foi possível entrar" seria mentira (B27).
-    await navigateTo(destinoDoLogin(route.query.de, useRequestURL().origin))
+    await navigateTo(destino())
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível entrar.'
   } finally {
@@ -81,7 +107,9 @@ useHead({ title: 'Entrar' })
       </NuxtLink>
 
       <div class="mx-auto flex w-full max-w-[400px] flex-1 flex-col justify-center py-10">
-        <form class="grid animate-rise-in gap-5" @submit.prevent="entrar">
+        <CriarSenha v-if="criandoSenha" :provisoria="provisoria || undefined" :nome="nome"
+                    class="animate-rise-in" @pronto="navigateTo(destino())" />
+        <form v-else class="grid animate-rise-in gap-5" @submit.prevent="entrar">
           <div>
             <h1 class="titulo text-[30px] font-semibold tracking-[-0.02em] text-ink-900">Entrar</h1>
             <p class="mt-1 text-[15px] text-ink-500">Use o e-mail e a senha do seu acesso de equipe.</p>

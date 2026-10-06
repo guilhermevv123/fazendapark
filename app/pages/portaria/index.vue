@@ -22,6 +22,7 @@ useHead({
 })
 
 import InstalarPortaria from '~/components/InstalarPortaria.vue'
+import CriarSenha from '~/components/CriarSenha.vue'
 import {
   aparelhoDaPortaria, esquecerLoginDaPortaria, eventosGuardadosDaPortaria, filasPendentesDaPortaria,
   guardarEventosDaPortaria, lembrarLoginDaPortaria, loginLembradoDaPortaria, situacaoOfflineDoEvento,
@@ -186,11 +187,19 @@ onBeforeMount(() => {
   if (!email.value) email.value = campo('email')
   if (!senha.value) senha.value = campo('senha')
 })
+// senha provisória da Equipe: o porteiro cria a própria antes de ver os eventos (ver /entrar)
+const provisoria = ref('')
+const criandoSenha = computed(() => !!eu.value?.usuario?.trocarSenha)
+async function senhaCriada() {
+  provisoria.value = ''
+  await refreshEu()
+}
 async function entrar() {
   erro.value = ''
   enviando.value = true
   try {
-    await $fetch('/api/auth/entrar', { method: 'POST', body: { email: email.value.trim(), senha: senha.value } })
+    const r = await $fetch<{ trocarSenha?: boolean }>('/api/auth/entrar', { method: 'POST', body: { email: email.value.trim(), senha: senha.value } })
+    if (r?.trocarSenha) provisoria.value = senha.value
     senha.value = ''
     await refreshEu()
   } catch (e: any) {
@@ -213,8 +222,15 @@ const leituras = (n: number) => `${n} ${n === 1 ? 'leitura' : 'leituras'}`
 </script>
 
 <template>
+  <!-- ============================================== 1º acesso: cria a senha -->
+  <div v-if="logado && criandoSenha" class="mx-auto flex min-h-[calc(100dvh-3.5rem)] max-w-[400px] flex-col justify-center py-8">
+    <div class="card p-6">
+      <CriarSenha :provisoria="provisoria || undefined" :nome="eu?.usuario?.nome" @pronto="senhaCriada" />
+    </div>
+  </div>
+
   <!-- ============================================================ login -->
-  <div v-if="!logado" class="mx-auto flex min-h-[calc(100dvh-3.5rem)] max-w-[400px] flex-col justify-center py-8">
+  <div v-else-if="!logado" class="mx-auto flex min-h-[calc(100dvh-3.5rem)] max-w-[400px] flex-col justify-center py-8">
     <p v-if="pendentesTotal" class="faixa-aviso mb-4" role="status" data-parte="fila-sem-sessao">
       Há {{ leituras(pendentesTotal) }} guardadas neste aparelho. Entre para enviá-las — nada se perde.
     </p>

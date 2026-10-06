@@ -156,6 +156,39 @@ describe('Nova senha na equipe', () => {
     expect(linha?.after).not.toContain(ok.json.senhaProvisoria)
   }, PRAZO)
 
+  it('1º acesso (06/10): a senha sorteada é provisória — o login avisa, trocar desmarca', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const master = await entrar(PESSOAS.master.email)
+    const criado = await q1<any>(`SELECT id FROM users WHERE email = $1`, [EMAIL_CRIADO])
+    expect(criado, 'o caso de criar acesso não rodou antes').toBeTruthy()
+    const sorteio = await bater(master, '/api/admin/equipe', 'PATCH', { id: criado.id, novaSenha: true })
+    expect(sorteio.status, sorteio.msg).toBe(200)
+    const provisoria = sorteio.json.senhaProvisoria as string
+
+    // o login devolve trocarSenha, e o /eu também (o porteiro do /admin manda criar a senha)
+    const login = await fetch(`${BASE}/api/auth/entrar`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: EMAIL_CRIADO, senha: provisoria }),
+    })
+    expect(login.status).toBe(200)
+    expect((await login.json()).trocarSenha).toBe(true)
+    const cookie = (login.headers.getSetCookie?.() ?? [])
+      .map((c) => c.split(';')[0]).find((c) => c.startsWith('dt_sessao=')) ?? ''
+    expect((await bater(cookie, '/api/auth/eu')).json.usuario.trocarSenha).toBe(true)
+    const lista = await bater(master, '/api/admin/equipe')
+    expect(lista.json.pessoas.find((x: any) => x.id === criado.id)?.senhaProvisoria).toBe(true)
+
+    const NOVA = `zzqa-propria-${marca}`
+    const troca = await bater(cookie, '/api/auth/senha', 'POST', { atual: provisoria, nova: NOVA })
+    expect(troca.status, troca.msg).toBe(200)
+    expect((await bater(cookie, '/api/auth/eu')).json.usuario.trocarSenha).toBe(false)
+    const deNovo = await fetch(`${BASE}/api/auth/entrar`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: EMAIL_CRIADO, senha: NOVA }),
+    })
+    expect((await deNovo.json()).trocarSenha).toBe(false)
+  }, PRAZO)
+
   it('renomear alguém com espaços é recusado', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const cookie = await entrar(PESSOAS.master.email)

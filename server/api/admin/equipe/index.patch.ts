@@ -161,6 +161,8 @@ export default defineEventHandler(async (event) => {
       senha = sortearSenha()
       par.push(await bcrypt.hash(senha, 10))
       set.push(`password_hash = $${par.length}`)
+      // a sorteada é provisória: no próximo login a pessoa escolhe a dela (045)
+      set.push('senha_provisoria = true')
       depois.senhaTrocada = true
     }
 

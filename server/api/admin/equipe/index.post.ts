@@ -123,8 +123,9 @@ export default defineEventHandler(async (event) => {
 
   const novo = await tx(async (c) => {
     const { rows } = await c.query(
-      `INSERT INTO users (org_id, name, email, password_hash, papel, role)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, name, email, papel`,
+      // nasce provisória: no 1º login a pessoa cria a própria (045)
+      `INSERT INTO users (org_id, name, email, password_hash, papel, role, senha_provisoria)
+       VALUES ($1,$2,$3,$4,$5,$6, true) RETURNING id, name, email, papel`,
       [orgId, d.nome, email, hash, papel, roleLegado(papel)])
     // Autor nas colunas (user_id, e-mail, IP), na mesma transação do INSERT.
     // A senha NÃO entra no registro.

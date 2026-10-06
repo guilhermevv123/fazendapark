@@ -29,6 +29,8 @@ export default defineEventHandler(async (event) => {
       // como se escreve esse papel pra gente ler — a tela não monta a frase
       papelRotulo: ROTULO[s.papelFino] ?? s.papelFino,
       orgId: s.orgId,
+      // senha da Equipe ainda provisória: o painel pede a nova antes de qualquer tela
+      trocarSenha: !!s.senhaProvisoria,
     },
   }
 })

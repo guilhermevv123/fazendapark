@@ -33,4 +33,8 @@ export default defineNuxtRouteMiddleware(async (para, de) => {
   if (!data.value?.usuario) {
     return navigateTo(`/entrar?de=${encodeURIComponent(para.fullPath)}`)
   }
+  // senha provisória da Equipe ainda não trocada: cria a própria antes de qualquer tela
+  if (data.value.usuario.trocarSenha) {
+    return navigateTo(`/entrar?trocar=1&de=${encodeURIComponent(para.fullPath)}`)
+  }
 })

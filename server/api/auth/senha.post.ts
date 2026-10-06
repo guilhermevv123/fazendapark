@@ -78,7 +78,9 @@ export default defineEventHandler(async (event) => {
   event.context.sessao = sessao
 
   const encerradas = await tx(async (c) => {
-    await c.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [sessao.usuarioId, hash])
+    // a senha escolhida pela própria pessoa deixa de ser a provisória da Equipe (045)
+    await c.query(`UPDATE users SET password_hash = $2, senha_provisoria = false WHERE id = $1`,
+      [sessao.usuarioId, hash])
     const { rowCount } = await c.query(
       `UPDATE sessions SET revoked_at = now()
         WHERE user_id = $1 AND revoked_at IS NULL AND id <> $2`,
