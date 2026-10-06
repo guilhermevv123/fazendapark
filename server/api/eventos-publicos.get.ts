@@ -54,6 +54,7 @@
  *   ("em breve", "esgotado", "encerrado") em vez de sumir com o evento.
  *   Quem procurou pelo nome tem que achar a página.
  */
+import { comCacheDaVitrine } from '../utils/cache-da-vitrine'
 import { q } from '../utils/db'
 import type { ModoTaxa } from '../utils/dinheiro'
 import {
@@ -99,7 +100,11 @@ export function situacaoDoEvento(situacoes: SituacaoDoLote[]): SituacaoNaVitrine
   return 'em_breve'
 }
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(() =>
+  // cache curto, só em produção: o banco fica em outro continente (ver utils/cache-da-vitrine.ts)
+  comCacheDaVitrine('eventos-publicos', listarEventosPublicos))
+
+async function listarEventosPublicos() {
   const agora = new Date()
 
   // `ends_at` e `timezone` entram porque `portaDeVenda()` precisa deles pra
@@ -209,4 +214,4 @@ export default defineEventHandler(async () => {
   })
 
   return { eventos }
-})
+}

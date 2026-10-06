@@ -4,7 +4,8 @@
  *
  * O checkout aceita a cobrança sem QR (o Asaas às vezes ainda não gerou no segundo da compra) e a
  * tela ficava em "O QR está sendo gerado" pra sempre — sem copia e cola, sem saída. Agora:
- *   · enquanto não há QR nem código, a fatura do Asaas (que mostra o PIX) é a saída na tela;
+ *   · enquanto não há QR nem código, a tela diz "Gerando o código Pix…" e pergunta a cada 1,5 s —
+ *     sem link pra fatura do Asaas (dono, 06/10: tudo no nosso site);
  *   · quando a consulta do pedido trouxer o código (o servidor pergunta de novo ao gateway), a
  *     tela mostra — em vez de seguir com o que veio no checkout.
  */
@@ -66,12 +67,13 @@ afterEach(() => {
 })
 
 describe('P1-4 · PIX sem QR', () => {
-  it('sem QR e sem copia e cola: a fatura do Asaas é a saída, na própria tela', async () => {
+  it('sem QR e sem copia e cola: "Gerando o código Pix…", e NADA de fatura do Asaas (dono, 06/10)', async () => {
     await reabrir({ status: 'aguardando_pagamento', pagamento: PEDIDO.pagamento })
     expect(tela!.text()).toContain('Pague com PIX')
+    expect(tela!.find('[data-parte="gerando-pix"]').text()).toContain('Gerando o código Pix')
     const fatura = tela!.findAll('a').find((a) => a.attributes('href') === PEDIDO.pagamento.linkFatura)
-    expect(fatura, 'o comprador ficou sem como pagar enquanto o QR não vinha').toBeTruthy()
-    expect(fatura!.text()).toMatch(/fatura/i)
+    expect(fatura, 'a tela mandou o comprador pra página do Asaas').toBeUndefined()
+    expect(tela!.text()).not.toMatch(/Abrir a fatura/i)
   })
 
   it('a consulta trouxe o código: a tela mostra o copia e cola', async () => {

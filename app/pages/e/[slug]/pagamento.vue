@@ -585,7 +585,7 @@ function conferirOPrecoCobrado(r: any) {
     + 'Se não quiser seguir, é só não pagar — a reserva cai sozinha.'
 }
 
-let timerContagem: any, timerVigia: any
+let timerContagem: any, timerVigia: any, timerQr: any
 function comecarContagem(expiraEm: string) {
   clearInterval(timerContagem)
   const fim = new Date(expiraEm).getTime()
@@ -610,6 +610,7 @@ const relogio = computed(() => {
  */
 function vigiarPagamento(id: string) {
   clearInterval(timerVigia)
+  buscarQrLogo(id)
   let seguidas = 0
   timerVigia = setInterval(async () => {
     try {
@@ -624,6 +625,22 @@ function vigiarPagamento(id: string) {
       }
     }
   }, 4000)
+}
+
+/**
+ * O QR do Pix que não veio no checkout (o Asaas às vezes gera um segundo depois): pergunta a cada
+ * 1,5 s até ele chegar (no máximo ~30 s; depois segue o vigia de 4 s). Antes a tela oferecia "Abrir
+ * a fatura" — a página do Asaas, que o dono não quer (06/10).
+ */
+function buscarQrLogo(id: string) {
+  clearTimeout(timerQr)
+  let tentativas = 0
+  const passo = async () => {
+    if (etapa.value !== 'cobranca' || !ehPix.value || pedido.value?.pagamento?.pixPayload || ++tentativas > 20) return
+    await conferirAgora(id)
+    timerQr = setTimeout(passo, 1500)
+  }
+  timerQr = setTimeout(passo, 1200)
 }
 
 /** Uma consulta avulsa — usada quando a tela é recuperada depois do F5. */
@@ -702,7 +719,7 @@ function aplicarEstado(r: any) {
 }
 let expiradoDesde = 0
 
-function pararRelogios() { clearInterval(timerVigia); clearInterval(timerContagem) }
+function pararRelogios() { clearInterval(timerVigia); clearInterval(timerContagem); clearTimeout(timerQr) }
 onUnmounted(pararRelogios)
 
 /**
@@ -1158,15 +1175,12 @@ useHead({ title: 'Pagamento' })
             O QR está sendo gerado. Use o código copia e cola abaixo.
           </p>
           <!-- Nem QR nem copia e cola ainda (o gateway não gerou no segundo da compra): a página
-               pergunta de novo sozinha, e enquanto isso a fatura do Asaas já mostra o PIX. -->
-          <div v-else class="py-6">
-            <p class="text-sm text-tinta-suave">
-              O código PIX está sendo gerado e aparece aqui em instantes.
-            </p>
-            <a v-if="pedido.pagamento?.linkFatura" :href="pedido.pagamento.linkFatura"
-               target="_blank" rel="noopener" class="btn-cta mt-4 w-full py-3">
-              Abrir a fatura e pagar com PIX
-            </a>
+               pergunta de novo a cada 1,5 s (buscarQrLogo). Sem link pra fatura do Asaas: o
+               pagamento é todo no nosso site (dono, 06/10). -->
+          <div v-else class="flex flex-col items-center gap-3 py-10" role="status" data-parte="gerando-pix">
+            <span class="h-10 w-10 animate-spin rounded-full border-4 border-pool-200 border-t-pool-700" aria-hidden="true" />
+            <p class="text-sm font-semibold text-tinta">Gerando o código Pix…</p>
+            <p class="text-xs text-tinta-suave">Leva só alguns segundos. Não feche esta tela.</p>
           </div>
 
           <div v-if="pedido.pagamento?.pixPayload" class="mt-4">

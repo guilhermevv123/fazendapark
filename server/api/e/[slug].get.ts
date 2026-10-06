@@ -26,6 +26,7 @@
  * discordarem sobre o "a partir de" já aconteceu e é o tipo de divergência que
  * ninguém vê, porque cada tela, sozinha, parece certa.
  */
+import { comCacheDaVitrine } from '../../utils/cache-da-vitrine'
 import { q, q1 } from '../../utils/db'
 import { disponivel } from '../../utils/estoque'
 import { emData } from '../../utils/cupom'
@@ -564,6 +565,11 @@ const avisoDeVendaFechada = (ev: any, agora: Date): string | null =>
 export default defineEventHandler(async (event) => {
   const slug = getRouterParam(event, 'slug')
   if (!slug) throw createError({ statusCode: 400, statusMessage: 'Link de evento incompleto' })
+  // cache curto, só em produção: o banco fica em outro continente (ver utils/cache-da-vitrine.ts)
+  return comCacheDaVitrine(`e:${slug.toLowerCase()}`, () => montarVitrine(slug))
+})
+
+async function montarVitrine(slug: string) {
 
   const ev = await q1<any>(
     `SELECT e.id, e.name, e.slug, e.description, e.status, e.starts_at, e.ends_at,
@@ -790,4 +796,4 @@ export default defineEventHandler(async (event) => {
     },
     setores: saida,
   }
-})
+}
