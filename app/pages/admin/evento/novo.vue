@@ -24,7 +24,10 @@ import { TETO_POR_COMPRA } from '~~/server/utils/limite-de-compra'
 import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
-import { LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe } from '~/composables/eventoDoParque'
+import {
+  CONTATO_DO_PARQUE, LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe, telefoneValido,
+} from '~/composables/eventoDoParque'
+import { mascaraTel } from '~/composables/contaDoCliente'
 import PainelFalha from '~/components/painel/Falha.vue'
 definePageMeta({ layout: false })
 
@@ -80,8 +83,9 @@ const f = reactive({
   linkTransmissao: '',
   // o endereço é fixo, o do parque (dono, 05/10) — ver `composables/eventoDoParque.ts`
   local: { ...LOCAL_DO_PARQUE } as { nome: string; cep: string; endereco: string; numero: string; bairro: string; cidade: string; estado: string; complemento: string },
-  suporteTipo: 'whatsapp' as 'whatsapp' | 'telefone' | 'email',
-  suporteValor: '',
+  // telefone, e já nasce com o WhatsApp oficial do parque (dono, 05/10)
+  suporteTipo: CONTATO_DO_PARQUE.tipo as 'whatsapp' | 'telefone',
+  suporteValor: CONTATO_DO_PARQUE.valor,
 
   setores: [] as Setor[],
 
@@ -267,7 +271,7 @@ function validar(p: number): string[] {
   if (p === 1) {
     if (f.nome.trim().length < 3) e.push('O nome do evento precisa de pelo menos 3 letras.')
     // local: fixo, o do parque (ver `publicar`) — não tem o que conferir aqui
-    if (f.suporteValor.trim().length < 5) e.push('Informe um contato de suporte ao cliente.')
+    if (!telefoneValido(f.suporteValor)) e.push('Informe o telefone de suporte com DDD, ex.: (73) 99842-1010.')
   }
   if (p === 3) {
     if (!estrutura.setores.length) e.push('Adicione pelo menos um setor.')
@@ -739,13 +743,14 @@ useHead({ title: 'Criar evento' })
             <select id="stipo" v-model="f.suporteTipo" class="campo">
               <option value="whatsapp">WhatsApp</option>
               <option value="telefone">Telefone</option>
-              <option value="email">E-mail</option>
             </select>
           </div>
           <div class="lg:col-span-2">
-            <label for="sval" class="rotulo">Contato</label>
-            <input id="sval" v-model="f.suporteValor" class="campo"
-                   :placeholder="f.suporteTipo === 'email' ? 'suporte@empresa.com.br' : '(00) 00000-0000'">
+            <label for="sval" class="rotulo">Telefone</label>
+            <input id="sval" :value="f.suporteValor" class="campo" type="tel" inputmode="tel" autocomplete="off"
+                   placeholder="(73) 99842-1010"
+                   @input="f.suporteValor = mascaraTel(($event.target as HTMLInputElement).value)">
+            <p class="mt-1 text-xs text-tinta-fraca">Com DDD. Já vem o WhatsApp do parque; troque só se o evento tiver outro.</p>
           </div>
         </div>
       </section>

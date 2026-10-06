@@ -40,3 +40,13 @@ export const LOCAL_DO_PARQUE = {
 } as const
 
 export const MAPA_DO_PARQUE = 'https://maps.app.goo.gl/AWbncf9LsfSvzaT7A'
+
+/**
+ * O contato de suporte do evento é um TELEFONE (dono, 05/10: "aqui é o número de telefone"), e
+ * nasce com o WhatsApp oficial do parque — o mesmo número da atendente (instância `guilherme`).
+ * Antes o campo aceitava qualquer texto: um evento foi ao ar com "73999056Q3123".
+ */
+export const CONTATO_DO_PARQUE = { tipo: 'whatsapp' as const, valor: '(73) 99842-1010' }
+
+/** DDD + número: 10 dígitos (fixo) ou 11 (celular). */
+export const telefoneValido = (v: string | null | undefined) => /^\d{10,11}$/.test(String(v ?? '').replace(/\D/g, ''))

@@ -200,3 +200,23 @@ describe('quem não cria evento ouve isso NA ENTRADA (matriz: "Financeiro pela U
     }
   })
 })
+
+// 05/10 (dono): "aqui é o número de telefone" — o contato de suporte é telefone, com máscara
+describe('contato de suporte é telefone', () => {
+  it('nasce com o WhatsApp do parque; letra não entra; e-mail não é opção', async () => {
+    const tela = await abrir()
+    const campo = tela.find('#sval')
+    expect((campo.element as HTMLInputElement).value).toBe('(73) 99842-1010')
+    expect(tela.findAll('#stipo option').map((o: any) => o.attributes('value'))).toEqual(['whatsapp', 'telefone'])
+    await campo.setValue('73999056Q3123')
+    expect((campo.element as HTMLInputElement).value).toBe('(73) 99905-6312')
+  })
+
+  it('número sem DDD não passa do passo 1', async () => {
+    const tela = await abrir()
+    await tela.find('#nome').setValue('ZZ Evento')
+    await tela.find('#sval').setValue('99842')
+    await avancar(tela)
+    expect(tela.text()).toContain('Informe o telefone de suporte com DDD')
+  })
+})
