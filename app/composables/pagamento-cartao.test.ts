@@ -83,9 +83,9 @@ describe('cartão no site · a tela de pagamento', () => {
     await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
     expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(true)
     expect(tela!.text()).not.toContain('ambiente seguro do Asaas')
-    await tela!.get('[data-forma="debito"] input').setValue(true); await espera()
-    expect(tela!.find('[data-parte="cartao-no-site"]').exists(), 'débito com formulário de cartão').toBe(false)
-    expect(tela!.text()).toContain('ambiente seguro do Asaas')
+    // débito só existia pela fatura do Asaas: com o cartão no site, a opção some (dono, 06/10)
+    expect(tela!.find('[data-forma="debito"]').exists(), 'débito ainda na lista — levaria pra fatura do Asaas').toBe(false)
+    expect(tela!.find('[data-forma="pix"]').exists()).toBe(true)
   })
 
   it('desligado: crédito segue pela fatura do Asaas, sem formulário', async () => {
@@ -93,6 +93,7 @@ describe('cartão no site · a tela de pagamento', () => {
     await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
     expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(false)
     expect(tela!.text()).toContain('ambiente seguro do Asaas')
+    expect(tela!.find('[data-forma="debito"]').exists(), 'desligado, o débito segue na lista').toBe(true)
   })
 
   it('faltando dado: o Pagar não chama o checkout e diz o que falta', async () => {

@@ -230,6 +230,13 @@ const FORMAS: { id: Forma; titulo: string; frase: string }[] = [
   { id: 'credito', titulo: 'Cartão de crédito', frase: 'Em até 12× sem juros, conforme o valor.' },
   { id: 'debito', titulo: 'Cartão de débito', frase: 'À vista, direto da sua conta.' },
 ]
+/*
+ * Com o cartão no site ligado, o débito SAI da lista (dono, 06/10: "não vamos usar o checkout do
+ * Asaas nunca, tudo nosso"). A API do Asaas não aceita cartão de débito — ele só existia pela
+ * fatura do Asaas, que é justamente o que o dono não quer. À vista fica o Pix.
+ */
+const formasNaTela = computed(() => (cartaoNoSite.value ? FORMAS.filter((f) => f.id !== 'debito') : FORMAS))
+watch(cartaoNoSite, (ligado) => { if (ligado && forma.value === 'debito') forma.value = 'pix' })
 const rotuloDoBotao = computed(() => {
   if (enviando.value) return 'Gerando a cobrança…'
   const total = reais(totalACobrar.value)
@@ -990,7 +997,7 @@ useHead({ title: 'Pagamento' })
           <fieldset>
             <legend class="sr-only">Forma de pagamento</legend>
             <div class="space-y-3">
-              <label v-for="f in FORMAS" :key="f.id" :data-forma="f.id"
+              <label v-for="f in formasNaTela" :key="f.id" :data-forma="f.id"
                      class="flex cursor-pointer items-center gap-4 rounded-card border bg-white p-4 transition-colors focus-within:ring-2 focus-within:ring-acao"
                      :class="forma === f.id ? 'border-acao bg-acao-fraco' : 'border-ink-200 hover:border-ink-300'">
                 <input v-model="forma" type="radio" name="forma" :value="f.id" class="sr-only">
