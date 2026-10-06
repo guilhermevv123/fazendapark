@@ -77,7 +77,7 @@ beforeEach(() => { tela = null })
 afterEach(() => { tela?.unmount(); limparTela(); sessionStorage.clear() })
 
 describe('cartão no site · a tela de pagamento', () => {
-  it('ligado + crédito: o formulário aparece; Pix e débito não mostram', async () => {
+  it('ligado + crédito: o formulário aparece; Pix e débito não mostram o formulário', async () => {
     await abrir()
     expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(false) // Pix é o padrão
     await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
@@ -96,10 +96,23 @@ describe('cartão no site · a tela de pagamento', () => {
     await pagar()
     expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(true)
     expect(tela!.text()).not.toContain('ambiente seguro do Asaas')
-    // débito só existia pela fatura do Asaas: com o cartão no site, a opção some (dono, 06/10)
+    // débito (dono, 06/10 tarde): continua na lista mesmo com o cartão no site, e vai pela página do
+    // Asaas — sem formulário de cartão aqui (a API do Asaas não aceita dado de débito)
     await tela!.get('[data-parte="trocar-forma"]').trigger('click'); await espera()
-    expect(tela!.find('[data-forma="debito"]').exists(), 'débito ainda na lista — levaria pra fatura do Asaas').toBe(false)
-    expect(tela!.find('[data-forma="pix"]').exists()).toBe(true)
+    expect(tela!.find('[data-forma="debito"]').exists(), 'débito sumiu da lista').toBe(true)
+    await tela!.get('[data-forma="debito"] input').setValue(true); await espera()
+    expect(tela!.get('[data-parte="pagar"]').text()).toMatch(/no débito$/)
+    expect(tela!.find('[data-parte="cartao-no-site"]').exists(), 'débito com formulário de cartão').toBe(false)
+    expect(tela!.text()).toContain('ambiente seguro do Asaas')
+  })
+
+  it('débito com o cartão no site ligado: vai pro checkout como débito, sem dado de cartão', async () => {
+    await abrir({ '/api/checkout': { ...PAGO, status: 'aguardando_pagamento',
+      pagamento: { forma: 'credito', pixPayload: null, pixQrBase64: null, linkFatura: 'https://www.asaas.com/i/teste', cartaoNoSite: false } } })
+    await tela!.get('[data-forma="debito"] input').setValue(true); await espera()
+    await pagar()
+    expect(checkout()!.opcoes.body).toMatchObject({ forma: 'debito' })
+    expect(checkout()!.opcoes.body.cartao, 'débito mandou dado de cartão').toBeUndefined()
   })
 
   it('desligado: crédito segue pela fatura do Asaas, sem formulário', async () => {

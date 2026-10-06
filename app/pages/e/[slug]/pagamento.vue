@@ -152,7 +152,8 @@ const parcelas = ref(1)
 /*
  * Cartão de crédito digitado NO SITE (dono, 05/10) — só quando o servidor diz que está ligado
  * (`CARTAO_NO_SITE=1` + Asaas pronto: /api/pagamento/cartao). Desligado, o crédito segue pela
- * fatura do Asaas como sempre. Débito nunca: a API do Asaas não aceita dado de cartão de débito.
+ * fatura do Asaas como sempre. Débito nunca aqui: a API do Asaas não aceita dado de cartão de débito
+ * (ele vai pela página segura do Asaas — ver `formasNaTela`).
  * Os dados do cartão moram SÓ nesta memória: não vão pro sessionStorage, e saem dela depois do envio.
  */
 const cartaoNoSite = ref(false)
@@ -240,15 +241,15 @@ const nIngressos = computed(() => carrinho.value?.totais.n ?? 0)
 const FORMAS: { id: Forma; titulo: string; frase: string }[] = [
   { id: 'pix', titulo: 'Pix', frase: 'Aprovação na hora. Pague pelo app do seu banco.' },
   { id: 'credito', titulo: 'Cartão de crédito', frase: 'Em até 12× sem juros, conforme o valor.' },
-  { id: 'debito', titulo: 'Cartão de débito', frase: 'À vista, direto da sua conta.' },
+  { id: 'debito', titulo: 'Cartão de débito', frase: 'À vista, na página segura do Asaas.' },
 ]
 /*
- * Com o cartão no site ligado, o débito SAI da lista (dono, 06/10: "não vamos usar o checkout do
- * Asaas nunca, tudo nosso"). A API do Asaas não aceita cartão de débito — ele só existia pela
- * fatura do Asaas, que é justamente o que o dono não quer. À vista fica o Pix.
+ * O débito fica SEMPRE na lista (dono, 06/10 à tarde: "coloca cartão de débito"). A API do Asaas não
+ * aceita dado de cartão de débito (docs: "direcione o cliente para a invoiceUrl"), então ele é a
+ * ÚNICA forma que abre a página segura do Asaas — exceção decidida pelo dono à regra "tudo nosso"
+ * da manhã. Pix segue no Mercado Pago e o crédito segue digitado no site.
  */
-const formasNaTela = computed(() => (cartaoNoSite.value ? FORMAS.filter((f) => f.id !== 'debito') : FORMAS))
-watch(cartaoNoSite, (ligado) => { if (ligado && forma.value === 'debito') forma.value = 'pix' })
+const formasNaTela = computed(() => FORMAS)
 const rotuloDoBotao = computed(() => {
   if (enviando.value) return usaCartaoNoSite.value ? 'Confirmando com o banco…' : 'Gerando a cobrança…'
   const total = reais(totalACobrar.value)
@@ -1209,7 +1210,7 @@ useHead({ title: 'Pagamento' })
           </p>
           <a v-if="pedido.pagamento?.linkFatura" :href="pedido.pagamento.linkFatura"
              target="_blank" rel="noopener" class="btn-cta mt-4 w-full py-3">
-            Abrir pagamento com cartão
+            {{ forma === 'debito' ? 'Abrir pagamento no débito' : 'Abrir pagamento com cartão' }}
           </a>
           <p v-else class="faixa-aviso mt-3">
             O link do cartão não veio do gateway. Guarde o pedido
