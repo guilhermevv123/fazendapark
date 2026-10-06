@@ -302,7 +302,7 @@ export default defineEventHandler(async (event) => {
   // Limite que não recusa é pior que limite nenhum — o produtor configura,
   // vê na tela e acredita.
   const tipos = tipoIds.length
-    ? await q<any>(`SELECT id, lot_id, name, kind, discount_bps, requires_document, max_per_customer
+    ? await q<any>(`SELECT id, lot_id, name, kind, discount_bps, price_cents, requires_document, max_per_customer
                       FROM ticket_types WHERE id = ANY($1::uuid[])`, [tipoIds])
     : []
   const porTipo = new Map(tipos.map((t) => [t.id, t]))
@@ -335,7 +335,9 @@ export default defineEventHandler(async (event) => {
       if (t.lot_id !== it.lotId) {
         throw createError({ statusCode: 400, statusMessage: 'Tipo de ingresso não é deste lote' })
       }
-      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), modo)
+      // preço próprio ABAIXO do lote é desconto ("Criança R$ 20"): não acumula com o Volte Mais, igual à meia
+      t.abaixoDoLote = t.price_cents != null && Number(t.price_cents) < face
+      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), modo, (t.price_cents == null ? null : Number(t.price_cents)))
     }
     return { quantidade: it.quantidade, faceUnitCents: face }
   })
@@ -413,7 +415,7 @@ export default defineEventHandler(async (event) => {
         linhas: dados.itens.map((it, i) => {
           const t = it.ticketTypeId ? porTipo.get(it.ticketTypeId) : null
           return { faceUnitCents: linhas[i]!.faceUnitCents, quantidade: it.quantidade,
-                   tipoComDesconto: !!t && (Number(t.discount_bps) > 0 || !!t.requires_document) }
+                   tipoComDesconto: !!t && (Number(t.discount_bps) > 0 || !!t.requires_document || !!t.abaixoDoLote) }
         }),
         temCupom: !!dados.cupom,
       })
@@ -1451,7 +1453,7 @@ async function fidelidadeZeraOPedido(
     linhas: itens.map((it, i) => {
       const t = it.ticketTypeId ? porTipo.get(it.ticketTypeId) : null
       return { faceUnitCents: linhas[i]!.faceUnitCents, quantidade: it.quantidade,
-               tipoComDesconto: !!t && (Number(t.discount_bps) > 0 || !!t.requires_document) }
+               tipoComDesconto: !!t && (Number(t.discount_bps) > 0 || !!t.requires_document || !!t.abaixoDoLote) }
     }),
   })
   return b.aplica && b.cents >= face

@@ -171,3 +171,30 @@ describe('configuração de ingressos', () => {
     expect(await acharLote(loteId)).toBeUndefined()
   })
 })
+
+describe('preço próprio do tipo (043)', () => {
+  it('cria o VIP com preço, troca o preço, e volta pro desconto — lendo de volta', async () => {
+    if (!noAr) return void console.warn('  (pulado: servidor fora do ar em ' + BASE + ')')
+    const { loteId } = await cenario('TESTE preço do tipo ' + Date.now())
+    const tipoDe = async (id: string) => (await acharLote(loteId)).tipos.find((t: any) => t.id === id)
+
+    // nasce com preço próprio: o desconto que veio junto não vale
+    const c = await chamar('POST', { o: 'tipo', loteId, nome: 'VIP', quantidade: 10, descontoBps: 2000, precoCents: 12000 })
+    expect(c.status, JSON.stringify(c.corpo)).toBe(200)
+    expect(await tipoDe(c.corpo.id)).toMatchObject({ precoCents: 12000, descontoBps: 0 })
+
+    // troca o preço
+    const p = await chamar('PATCH', { o: 'tipo', id: c.corpo.id, campos: { precoCents: 15000 } })
+    expect(p.status, JSON.stringify(p.corpo)).toBe(200)
+    expect((await tipoDe(c.corpo.id)).precoCents).toBe(15000)
+
+    // volta pro desconto: preço some, o % grava
+    const d = await chamar('PATCH', { o: 'tipo', id: c.corpo.id, campos: { precoCents: null, descontoBps: 5000 } })
+    expect(d.status, JSON.stringify(d.corpo)).toBe(200)
+    expect(await tipoDe(c.corpo.id)).toMatchObject({ precoCents: null, descontoBps: 5000 })
+
+    // preço zero não passa
+    const z = await chamar('PATCH', { o: 'tipo', id: c.corpo.id, campos: { precoCents: 0 } })
+    expect(z.status).toBe(400)
+  })
+})

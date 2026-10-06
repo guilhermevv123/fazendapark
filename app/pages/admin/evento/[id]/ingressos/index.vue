@@ -404,6 +404,8 @@ const inteiro = (n: number) => n.toLocaleString('pt-BR')
 const tipoForm = reactive({
   aberto: false, id: '', loteId: '', nome: '', quantidade: 50,
   descontoBps: 0, exigeDocumento: false, maxPorCliente: null as number | null,
+  /** preço próprio (043): VIP/Black com preço deles, em vez do desconto */
+  modo: 'desconto' as 'desconto' | 'preco', precoCents: 0,
 })
 /** Quanto do lote ainda não foi distribuído entre os tipos. */
 function sobraDoLote(loteId: string) {
@@ -425,13 +427,18 @@ function abrirTipo(loteId: string, t?: any) {
     descontoBps: t?.descontoBps ?? 0,
     exigeDocumento: t?.exigeDocumento ?? false,
     maxPorCliente: t?.maxPorCliente ?? null,
+    modo: t?.precoCents != null ? 'preco' : 'desconto',
+    precoCents: t?.precoCents ?? 0,
   })
 }
 async function salvarTipo() {
+  const preco = tipoForm.modo === 'preco'
+  if (preco && !(tipoForm.precoCents > 0)) { erro.value = 'Digite o preço do tipo.'; return }
   const campos = {
     nome: tipoForm.nome || 'Inteira',
     quantidade: tipoForm.quantidade,
-    descontoBps: tipoForm.descontoBps,
+    descontoBps: preco ? 0 : tipoForm.descontoBps,
+    precoCents: preco ? tipoForm.precoCents : null,
     exigeDocumento: tipoForm.exigeDocumento,
     maxPorCliente: tipoForm.maxPorCliente || null,
   }
@@ -443,7 +450,7 @@ async function salvarTipo() {
 
 /** Que espécie este tipo VAI ser quando salvar, com o que está no formulário. */
 const especieDoForm = computed(() => especieDoTipo({
-  descontoBps: tipoForm.descontoBps, exigeDocumento: tipoForm.exigeDocumento,
+  descontoBps: tipoForm.modo === 'preco' ? 0 : tipoForm.descontoBps, exigeDocumento: tipoForm.exigeDocumento,
 }))
 
 /** O lote que o formulário está editando — é a cota DELE que a janela mostra. */
@@ -745,7 +752,8 @@ useHead({ title: 'Ingressos' })
                   <td />
                   <td class="px-3 py-2 pl-6">
                     <span class="font-medium text-tinta">{{ t.nome }}</span>
-                    <span v-if="t.descontoBps" class="selo-neutro ml-2">−{{ (t.descontoBps / 100).toFixed(0) }}%</span>
+                    <span v-if="t.precoCents != null" class="selo-neutro ml-2">preço próprio</span>
+                    <span v-else-if="t.descontoBps" class="selo-neutro ml-2">−{{ (t.descontoBps / 100).toFixed(0) }}%</span>
                     <span v-if="SELO_ESPECIE[especieDoTipo(t)]"
                           class="ml-2" :class="SELO_ESPECIE[especieDoTipo(t)].classe">
                       {{ SELO_ESPECIE[especieDoTipo(t)].texto }}
@@ -950,10 +958,22 @@ useHead({ title: 'Ingressos' })
           <input v-model.number="tipoForm.quantidade" type="number" min="0" class="campo tabular-nums">
         </div>
         <div>
+          <label class="rotulo" for="modo-tipo">Como cobra</label>
+          <select id="modo-tipo" v-model="tipoForm.modo" class="campo" data-parte="modo-do-tipo">
+            <option value="desconto">% de desconto sobre o lote</option>
+            <option value="preco">Preço próprio (R$)</option>
+          </select>
+        </div>
+        <div v-if="tipoForm.modo === 'desconto'">
           <label class="rotulo">Desconto (%)</label>
           <input :value="tipoForm.descontoBps / 100" type="number" min="0" max="100" step="1"
                  class="campo tabular-nums"
                  @input="tipoForm.descontoBps = Math.round(Number(($event.target as HTMLInputElement).value) * 100)">
+        </div>
+        <div v-else data-parte="preco-do-tipo">
+          <label class="rotulo">Preço (valor de face)</label>
+          <CampoMoeda v-model="tipoForm.precoCents" :maximo="100_000_00" />
+          <p class="mt-1 text-xs text-tinta-fraca">Pode ser mais caro que o lote (VIP, Black…). A taxa entra como no lote.</p>
         </div>
         <div>
           <label class="rotulo">Máx. por cliente (opcional)</label>
@@ -985,7 +1005,7 @@ useHead({ title: 'Ingressos' })
         </ul>
       </div>
 
-      <div v-else-if="tipoForm.descontoBps > 0 && tipoForm.descontoBps < 10000"
+      <div v-else-if="tipoForm.modo !== 'preco' && tipoForm.descontoBps > 0 && tipoForm.descontoBps < 10000"
            class="faixa-aviso mt-3">
         <p class="font-semibold text-tinta">Isto é uma promoção, não meia-entrada.</p>
         <p class="mt-1">

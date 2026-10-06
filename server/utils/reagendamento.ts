@@ -65,6 +65,8 @@ export interface IngressoParaReagendar {
   especie: string
   /** desconto do tipo (bps): a troca é pro MESMO tipo — inteira↔inteira, meia↔meia, criança↔criança */
   descontoBps: number
+  /** o tipo tem preço próprio (043): troca só pelo tipo de MESMO nome no outro dia */
+  precoProprio: boolean
   pedidoId: string
   pedido: string
   pedidoStatus: string
@@ -88,7 +90,8 @@ const SQL_INGRESSO = `
          COALESCE(oi.unit_total_cents, 0) AS pago_cents,
          e.name AS evento, e.starts_at, e.timezone,
          l.name AS lote, s.name AS setor, s.kind AS setor_kind,
-         tt.name AS tipo, COALESCE(tt.kind, 'inteira') AS especie, COALESCE(tt.discount_bps, 0) AS desconto
+         tt.name AS tipo, COALESCE(tt.kind, 'inteira') AS especie, COALESCE(tt.discount_bps, 0) AS desconto,
+         tt.price_cents IS NOT NULL AS preco_proprio
     FROM tickets t
     JOIN orders o ON o.id = t.order_id
     JOIN events e ON e.id = t.event_id
@@ -104,7 +107,7 @@ function paraIngresso(r: any): IngressoParaReagendar {
     transferido: Boolean(r.transferido),
     eventoId: r.event_id, evento: r.evento, eventoInicio: r.starts_at, fuso: r.timezone,
     loteId: r.lot_id, lote: r.lote, setor: r.setor, setorTipo: r.setor_kind,
-    tipoId: r.ticket_type_id, tipo: r.tipo, especie: r.especie, descontoBps: Number(r.desconto),
+    tipoId: r.ticket_type_id, tipo: r.tipo, especie: r.especie, descontoBps: Number(r.desconto), precoProprio: r.preco_proprio === true,
     pedidoId: r.order_id, pedido: r.order_code, pedidoStatus: r.order_status, canal: r.channel,
     orgId: r.org_id, contaId: r.customer_account_id, clienteId: r.customer_id,
     pagoCents: Number(r.pago_cents),
@@ -166,7 +169,7 @@ const SQL_OPCOES = `
          e.banner_url, e.max_per_customer,
          s.name AS setor, s.session_id, s.id AS setor_id, s.sort_order,
          l.id AS lote_id, l.name AS lote, l.price_cents,
-         tt.id AS tipo_id, tt.name AS tipo, tt.discount_bps
+         tt.id AS tipo_id, tt.name AS tipo, tt.discount_bps, tt.price_cents AS tipo_price_cents
     FROM events e
     JOIN sectors s ON s.event_id = e.id AND s.kind = 'ingresso'
     JOIN lots l ON l.sector_id = s.id AND ${LOTE_DA_VITRINE}
@@ -174,6 +177,8 @@ const SQL_OPCOES = `
    WHERE e.org_id = $1 AND e.id <> $2
      AND e.status = 'ativo' AND NOT e.is_private AND e.starts_at > now()
      AND tt.kind = $3 AND tt.discount_bps = $4
+     -- preço próprio (043): VIP só troca por VIP — sem isto ele 'virava' a Inteira do outro dia
+     AND (($5::text IS NULL AND tt.price_cents IS NULL) OR ($5::text IS NOT NULL AND tt.price_cents IS NOT NULL AND lower(tt.name) = lower($5::text)))
      AND (l.starts_at IS NULL OR l.starts_at <= now())
      AND (l.expires_at IS NULL OR l.expires_at > now())
      AND l.min_per_order <= 1 AND l.max_per_order >= 1
@@ -183,7 +188,8 @@ const SQL_OPCOES = `
 function totalDaOpcao(r: any): number {
   const modo = (r.fee_mode_online ?? 'repassar') as ModoTaxa
   const fee = Number(r.fee_bps ?? 0)
-  return precificar(faceDoTipo(Number(r.price_cents), Number(r.discount_bps ?? 0), fee, modo), fee, modo)
+  return precificar(faceDoTipo(Number(r.price_cents), Number(r.discount_bps ?? 0), fee, modo,
+    r.tipo_price_cents == null ? null : Number(r.tipo_price_cents)), fee, modo)
     .totalCents
 }
 
@@ -197,7 +203,7 @@ function paraOpcao(r: any): OpcaoDeReagendamento {
 
 async function linhasDeOpcoes(i: IngressoParaReagendar, filtro = '', extra: unknown[] = [], c?: PoolClient) {
   const sql = `${SQL_OPCOES} ${filtro} ORDER BY e.starts_at, s.sort_order, l.price_cents, tt.name`
-  const params = [i.orgId, i.eventoId, i.especie, i.descontoBps, ...extra]
+  const params = [i.orgId, i.eventoId, i.especie, i.descontoBps, i.precoProprio ? i.tipo : null, ...extra]
   const rows = c ? (await c.query(sql, params)).rows : await q<any>(sql, params)
   // A porta do EVENTO (status, fim, prazo de venda) é a mesma função da vitrine e do checkout.
   return rows.filter((r) => portaDeVenda(r).aberta && totalDaOpcao(r) <= i.pagoCents)
@@ -226,7 +232,7 @@ export async function reagendarIngressoDoCliente(
     const motivo = motivoSemReagendamento(i)
     if (motivo) throw new RecusaDoReagendamento(409, motivo)
 
-    const [d] = await linhasDeOpcoes(i, 'AND l.id = $5 AND tt.id = $6', [destino.loteId, destino.tipoId], c)
+    const [d] = await linhasDeOpcoes(i, 'AND l.id = $6 AND tt.id = $7', [destino.loteId, destino.tipoId], c)
     if (!d) {
       throw new RecusaDoReagendamento(409,
         'Essa opção não está mais disponível para troca. Escolha outro dia ou ingresso.')

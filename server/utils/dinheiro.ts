@@ -131,7 +131,17 @@ export function faceDoTipo(
   descontoBps: number,
   feeBps: number,
   modo: ModoTaxa,
+  /**
+   * Preço PRÓPRIO do tipo (`ticket_types.price_cents`, 043): o dono quer "1º lote com Normal, VIP e
+   * Black, cada um com um preço" — VIP mais caro que o lote não cabe em desconto. Quando existe, é a
+   * face do tipo, ponto (mesma natureza do preço do lote: a taxa entra por cima no modo repassar).
+   */
+  precoProprioCents?: number | null,
 ): number {
+  if (precoProprioCents != null) {
+    inteiro(precoProprioCents, 'precoProprioCents')
+    return precoProprioCents
+  }
   inteiro(faceLoteCents, 'faceLoteCents')
   inteiro(descontoBps, 'descontoBps')
   if (modo === 'absorver') return faceComDesconto(faceLoteCents, descontoBps)

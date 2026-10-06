@@ -132,7 +132,7 @@ export default defineEventHandler(async () => {
       ORDER BY s.sort_order, l.sort_order`, [ids])
 
   const tipos = await q<any>(
-    `SELECT s.event_id, tt.id, tt.lot_id, tt.kind, tt.quantity, tt.sold, tt.discount_bps
+    `SELECT s.event_id, tt.id, tt.lot_id, tt.kind, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents
        FROM ticket_types tt
        JOIN lots l ON l.id = tt.lot_id AND ${LOTE_DA_VITRINE}
        JOIN sectors s ON s.id = l.sector_id

@@ -141,6 +141,8 @@ const Entrada = z.object({
         nome: z.string().min(1).max(80),
         quantidade: z.number().int().min(1).max(1_000_000),
         descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').default(0),
+        /** preço próprio do tipo (043) — em vez do desconto; o VIP mais caro que o lote */
+        precoCents: z.number().int().min(1, 'preço do tipo precisa ser maior que zero').max(10_000_000).nullish(),
         exigeDocumento: z.boolean().default(false),
       })).max(20).default([]),
     })).max(40).default([]),
@@ -172,7 +174,7 @@ const ROTULOS: Record<string, string> = {
   subcategorias: 'Subcategorias', tags: 'Tags', substantivo: 'Nomenclatura do bilhete',
   encerraVendasEm: 'Data de encerramento das vendas', encerraVendasMinutosApos: 'Minutos após o início',
   modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão', orgId: 'Organização',
-  lotes: 'Lotes', tipos: 'Tipos de ingresso', descontoBps: 'Desconto', expiraEm: 'Fim das vendas do lote',
+  lotes: 'Lotes', tipos: 'Tipos de ingresso', descontoBps: 'Desconto', precoCents: 'Preço do tipo', expiraEm: 'Fim das vendas do lote',
   exigeDocumento: 'Exige documento', indiceSessao: 'Sessão', gratuito: 'Ingresso gratuito',
   cep: 'CEP', endereco: 'Rua / avenida / logradouro', numero: 'Número', bairro: 'Bairro',
   cidade: 'Cidade', complemento: 'Complemento',
@@ -441,10 +443,11 @@ export default defineEventHandler(async (event) => {
           for (const [it, t] of l.tipos.entries()) {
             await c.query(
               `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps,
-                                         requires_document, sort_order)
-               VALUES ($1,$2,$3,$4,$5,$6)`,
-              [rl.rows[0].id, t.nome.trim(), t.quantidade, t.descontoBps,
-               t.exigeDocumento, it + 1])
+                                         requires_document, sort_order, price_cents)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+              // preço próprio e desconto não convivem: com preço, o desconto é 0
+              [rl.rows[0].id, t.nome.trim(), t.quantidade, t.precoCents != null ? 0 : t.descontoBps,
+               t.exigeDocumento, it + 1, t.precoCents ?? null])
           }
         }
       }

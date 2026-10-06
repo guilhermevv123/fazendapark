@@ -37,6 +37,8 @@ const Entrada = z.object({
     abreEm: z.string().datetime({ offset: true }).nullish(),
     expiraEm: z.string().datetime({ offset: true }).nullish(),
     descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').optional(),
+    /** preço próprio do tipo (043); `null` volta pro desconto */
+    precoCents: z.number().int().min(1, 'o preço do tipo precisa ser maior que zero').max(10_000_000).nullish(),
     exigeDocumento: z.boolean().optional(),
     maxPorCliente: z.number().int().min(1).max(200).nullish(),
     capacidade: z.number().int().min(1).max(1_000_000).nullish(),
@@ -59,7 +61,7 @@ export const ROTULOS_INGRESSOS: Record<string, string> = {
   nome: 'Nome', descricao: 'Descrição', faceCents: 'Valor de face', gratuito: 'Ingresso gratuito',
   quantidade: 'Quantidade', minPorCompra: 'Mínimo por compra', maxPorCompra: 'Máximo por compra',
   visivel: 'Visível no site', canais: 'Onde vende', abreEm: 'Abre em', expiraEm: 'Expira em',
-  descontoBps: 'Desconto', exigeDocumento: 'Exige documento', maxPorCliente: 'Máximo por cliente',
+  descontoBps: 'Desconto', precoCents: 'Preço do tipo', exigeDocumento: 'Exige documento', maxPorCliente: 'Máximo por cliente',
   capacidade: 'Capacidade', admite: 'Pessoas por unidade', sessoesCobertas: 'Sessões cobertas',
   giroAutomatico: 'Giro automático de lote', taxaBps: 'Taxa de serviço',
   modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão',
@@ -78,7 +80,7 @@ const COLUNAS: Record<string, Record<string, string>> = {
     visivel: 'visible', canais: 'channels', abreEm: 'starts_at', expiraEm: 'expires_at',
   },
   tipo: {
-    nome: 'name', quantidade: 'quantity', descontoBps: 'discount_bps',
+    nome: 'name', quantidade: 'quantity', descontoBps: 'discount_bps', precoCents: 'price_cents',
     exigeDocumento: 'requires_document', maxPorCliente: 'max_per_customer',
   },
   evento: {
@@ -111,6 +113,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const mapa = COLUNAS[o]
+  // preço próprio e desconto não convivem: com preço, o desconto zera
+  if (o === 'tipo' && campos.precoCents != null) campos.descontoBps = 0
   const pares = Object.entries(campos).filter(([k, v]) => k in mapa && v !== undefined)
   if (!pares.length) throw createError({ statusCode: 400, statusMessage: 'Nada para alterar' })
 

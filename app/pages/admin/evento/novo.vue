@@ -113,7 +113,11 @@ const f = reactive({
   encerraData: '', encerraHora: '',
 })
 
-type Tipo = { nome: string; quantidade: number; descontoBps: number; exigeDocumento: boolean }
+type Tipo = {
+  nome: string; quantidade: number; descontoBps: number; exigeDocumento: boolean
+  /** preço próprio (043): VIP/Black com o preço deles, digitado no passo 4 por lote */
+  precoProprio: boolean; precoCents: number | null
+}
 /**
  * `gratuito` e `canais` são escolhas que o assistente não pedia, e as duas
  * custavam caro: o lote nascia a R$ 0,00 e, sem ninguém digitar o preço, saía
@@ -155,13 +159,14 @@ type Setor = { nome: string; tipo: string; descricao: string; capacidade: number
  * mandou) GUARDANDO o que o passo 4 já tinha preenchido — voltar pro 3 e
  * acrescentar um lote não apaga preço nem quantidade dos outros.
  */
-type TipoDoEvento = { nome: string; descontoBps: number; exigeDocumento: boolean }
+/** `modo`: o tipo sai com desconto sobre o lote (meia) ou com preço próprio (VIP, Black…) */
+type TipoDoEvento = { nome: string; descontoBps: number; exigeDocumento: boolean; modo?: 'desconto' | 'preco' }
 const estrutura = reactive({
   setores: ['Geral'] as string[],
   lotes: ['1º lote'] as string[],
   tipos: [
-    { nome: 'Inteira', descontoBps: 0, exigeDocumento: false },
-    { nome: 'Meia-entrada', descontoBps: 5000, exigeDocumento: true },
+    { nome: 'Inteira', descontoBps: 0, exigeDocumento: false, modo: 'desconto' },
+    { nome: 'Meia-entrada', descontoBps: 5000, exigeDocumento: true, modo: 'desconto' },
   ] as TipoDoEvento[],
 })
 const novoNomeSetor = ref('')
@@ -195,7 +200,7 @@ function adicionarLote() {
 const exigeDocumento = (nome: string) => /\bmeia\b/i.test(nome)
 
 function adicionarTipo() {
-  estrutura.tipos.push({ nome: '', descontoBps: 0, exigeDocumento: false })
+  estrutura.tipos.push({ nome: '', descontoBps: 0, exigeDocumento: false, modo: 'desconto' })
 }
 /** o que ficou digitado sem clicar em "Adicionar" entra ao prosseguir */
 function acrescentarPendentes() {
@@ -206,7 +211,7 @@ function acrescentarPendentes() {
 function montarSetores() {
   const antes = f.setores
   // só Inteira sem desconto = lote vendido direto, sem escolha de tipo
-  const semTipos = estrutura.tipos.length === 1 && !estrutura.tipos[0]!.descontoBps
+  const semTipos = estrutura.tipos.length === 1 && !estrutura.tipos[0]!.descontoBps && estrutura.tipos[0]!.modo !== 'preco'
   f.setores = estrutura.setores.map((nome) => {
     const s0 = antes.find((x) => x.nome === nome)
     const setor: Setor = s0
@@ -219,9 +224,12 @@ function montarSetores() {
         const t0 = l0?.tipos.find((x) => x.nome === t.nome.trim())
         // os tipos COMPARTILHAM o estoque do lote (a quantidade de cada um
         // acompanha a do lote no envio — ver `publicar()`)
+        const precoProprio = t.modo === 'preco'
         return {
-          nome: t.nome.trim(), descontoBps: t.descontoBps, exigeDocumento: exigeDocumento(t.nome),
+          nome: t.nome.trim(), descontoBps: precoProprio ? 0 : t.descontoBps, exigeDocumento: exigeDocumento(t.nome),
           quantidade: t0?.quantidade ?? lote.quantidade,
+          // o preço digitado no passo 4 fica, mesmo voltando pro 3
+          precoProprio, precoCents: precoProprio ? (t0?.precoCents ?? null) : null,
         }
       })
       return lote
@@ -298,6 +306,13 @@ function validar(p: number): string[] {
         e.push(`"${s.nome} · ${l.nome}": o mínimo por compra passou do máximo.`)
       }
       if (l.expiraEm && !paraData(l.expiraEm)) e.push(`"${s.nome} · ${l.nome}": a data de expiração está incompleta.`)
+      if (!l.gratuito) {
+        for (const t of l.tipos) {
+          if (t.precoProprio && !(Number(t.precoCents) > 0)) {
+            e.push(`"${s.nome} · ${l.nome}": digite o preço do ${t.nome}.`)
+          }
+        }
+      }
     }))
   }
   if (p === 5) {
@@ -413,7 +428,9 @@ async function publicar() {
           // cada tipo vai até o lote inteiro: é o lote que segura o total
           tipos: l.tipos.map((t) => ({
             nome: t.nome.trim(), quantidade: l.quantidade,
-            descontoBps: t.descontoBps, exigeDocumento: t.exigeDocumento,
+            descontoBps: t.precoProprio ? 0 : t.descontoBps, exigeDocumento: t.exigeDocumento,
+            // preço próprio (043) só em lote pago — o gratuito é gratuito pra todos os tipos
+            precoCents: t.precoProprio && !l.gratuito ? t.precoCents : null,
           })),
         })),
       })),
@@ -849,7 +866,7 @@ useHead({ title: 'Criar evento' })
         </div>
         <ul class="mt-3 grid gap-2">
           <li v-for="(t, i) in estrutura.tipos" :key="i"
-              class="grid animate-encaixa grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)_150px]">
+              class="grid animate-encaixa grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,300px)]">
             <!-- a Inteira é a base do desconto dos outros: não sai, e não tem desconto -->
             <button type="button" class="grid size-11 place-items-center rounded-xl ring-1 ring-inset ring-ink-200 transition-colors"
                     :class="i === 0 ? 'cursor-not-allowed text-ink-300' : 'text-danger-600 hover:bg-danger-50'"
@@ -861,15 +878,24 @@ useHead({ title: 'Criar evento' })
             </button>
             <input v-model="t.nome" class="campo" :placeholder="i === 0 ? 'Inteira' : 'Ex.: Meia-entrada, Criança'"
                    :aria-label="`Nome do tipo ${i + 1}`">
-            <label class="col-span-2 flex items-center overflow-hidden rounded-xl ring-1 ring-inset ring-ink-200 sm:col-span-1"
-                   :class="i === 0 && 'bg-ink-50'">
-              <span class="px-3 text-sm font-semibold text-tinta-suave">%</span>
-              <input :value="t.descontoBps ? t.descontoBps / 100 : ''" type="number" min="0" max="100"
-                     class="w-full border-0 bg-transparent py-2.5 pr-3 text-[16px] tabular-nums focus:outline-none focus:ring-0 sm:text-[15px]"
-                     :placeholder="i === 0 ? '0' : 'ex.: 50'" :disabled="i === 0"
-                     :aria-label="`Desconto do tipo ${t.nome || i + 1}`"
-                     @input="t.descontoBps = Math.round(Number(($event.target as HTMLInputElement).value) * 100)">
-            </label>
+            <!-- o 1º tipo é o preço do lote; os outros: desconto (meia) OU preço próprio (VIP, Black…) -->
+            <div class="col-span-2 flex items-center gap-2 sm:col-span-1">
+              <select v-if="i > 0" v-model="t.modo" class="campo w-auto shrink-0 py-2.5 text-[14px]"
+                      :aria-label="`Como cobra o tipo ${t.nome || i + 1}`" data-parte="modo-do-tipo">
+                <option value="desconto">% desconto</option>
+                <option value="preco">Preço próprio</option>
+              </select>
+              <label v-if="i === 0 || t.modo !== 'preco'" class="flex min-w-0 flex-1 items-center overflow-hidden rounded-xl ring-1 ring-inset ring-ink-200"
+                     :class="i === 0 && 'bg-ink-50'">
+                <span class="px-3 text-sm font-semibold text-tinta-suave">%</span>
+                <input :value="t.descontoBps ? t.descontoBps / 100 : ''" type="number" min="0" max="100"
+                       class="w-full border-0 bg-transparent py-2.5 pr-3 text-[16px] tabular-nums focus:outline-none focus:ring-0 sm:text-[15px]"
+                       :placeholder="i === 0 ? '0' : 'ex.: 50'" :disabled="i === 0"
+                       :aria-label="`Desconto do tipo ${t.nome || i + 1}`"
+                       @input="t.descontoBps = Math.round(Number(($event.target as HTMLInputElement).value) * 100)">
+              </label>
+              <p v-else class="flex-1 text-[12.5px] leading-snug text-tinta-suave">O valor de cada lote você digita no próximo passo.</p>
+            </div>
           </li>
         </ul>
       </section>
@@ -916,6 +942,16 @@ useHead({ title: 'Criar evento' })
                   <template v-if="k">· </template>{{ t.nome }}: <strong class="text-tinta">{{ reais(precoDoTipo(l.faceCents, t.descontoBps).totalCents) }}</strong>
                 </template>
               </p>
+              <!-- tipos com preço próprio (043): um valor por tipo, neste lote -->
+              <div v-if="!l.gratuito && l.tipos.some((x) => x.precoProprio)" class="mt-2 grid gap-1.5" data-parte="precos-dos-tipos">
+                <p v-if="l.tipos[0]" class="text-[12px] text-tinta-suave">O valor acima é o do <strong class="text-tinta">{{ l.tipos[0].nome }}</strong>.</p>
+                <div v-for="t in l.tipos.filter((x) => x.precoProprio)" :key="t.nome">
+                  <label class="text-[12px] font-semibold text-tinta">{{ t.nome }}</label>
+                  <CampoMoeda :model-value="t.precoCents ?? 0" @update:model-value="t.precoCents = $event || null"
+                              :conferir-abaixo="CONFERIR_ABAIXO_CENTS" :maximo="100_000_00"
+                              :aria-label="`Preço do ${t.nome} no ${l.nome}`" />
+                </div>
+              </div>
               <label class="mt-1.5 flex items-center gap-1.5 text-[12.5px] text-tinta-suave">
                 <input type="checkbox" :checked="l.gratuito" class="size-4 accent-pool-600"
                        @change="marcarGratuito(l, ($event.target as HTMLInputElement).checked)">

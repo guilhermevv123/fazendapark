@@ -402,6 +402,8 @@ export interface LotePrecificavel {
 export interface TipoPrecificavel {
   lot_id: string
   discount_bps: number
+  /** preço próprio do tipo (043) — quando existe, vale ele */
+  price_cents?: number | null
   quantity: number
   sold: number
   /** teto menor que a prateleira, quando existe (cota de meia) */
@@ -469,7 +471,7 @@ export function menorTotalCents(args: {
     const faces = tiposDoLote.length
       ? tiposDoLote
           .filter((t) => (t.restam != null ? Number(t.restam) : Number(t.quantity) - Number(t.sold)) > 0)
-          .map((t) => faceDoTipo(Number(l.price_cents), Number(t.discount_bps), args.feeBps, args.modo))
+          .map((t) => faceDoTipo(Number(l.price_cents), Number(t.discount_bps), args.feeBps, args.modo, (t.price_cents == null ? null : Number(t.price_cents))))
       : [Number(l.price_cents)]
     for (const face of faces) {
       const total = precificar(face, args.feeBps, args.modo).totalCents
@@ -618,7 +620,7 @@ export default defineEventHandler(async (event) => {
       ORDER BY s.sort_order, l.sort_order`, [ev.id])
 
   const tipos = await q<any>(
-    `SELECT tt.id, tt.lot_id, tt.name, tt.quantity, tt.sold, tt.discount_bps,
+    `SELECT tt.id, tt.lot_id, tt.name, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents,
             tt.kind, tt.requires_document, tt.sort_order, tt.max_per_customer
        FROM ticket_types tt
        JOIN lots l ON l.id = tt.lot_id AND ${LOTE_DA_VITRINE}
@@ -685,7 +687,7 @@ export default defineEventHandler(async (event) => {
         const tiposDoLote = tipos.filter((t) => t.lot_id === l.lote_id)
         const variacoes = (tiposDoLote.length ? tiposDoLote : [null]).map((t: any) => {
           const face = t
-            ? faceDoTipo(Number(l.price_cents), Number(t.discount_bps), bps, modo)
+            ? faceDoTipo(Number(l.price_cents), Number(t.discount_bps), bps, modo, (t.price_cents == null ? null : Number(t.price_cents)))
             : Number(l.price_cents)
           const p = precificar(face, bps, modo)
           // Estoque do tipo é um segundo teto: a meia acaba antes do lote, e

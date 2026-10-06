@@ -186,7 +186,7 @@ export default defineEventHandler(async (event) => {
 
   const tipoIds = d.itens.map((i) => i.ticketTypeId).filter(Boolean) as string[]
   const tipos = tipoIds.length
-    ? await q<any>(`SELECT id, lot_id, name, kind, discount_bps, requires_document
+    ? await q<any>(`SELECT id, lot_id, name, kind, discount_bps, price_cents, requires_document
                       FROM ticket_types WHERE id = ANY($1::uuid[])`, [tipoIds])
     : []
   const porTipo = new Map(tipos.map((t) => [t.id, t]))
@@ -210,7 +210,7 @@ export default defineEventHandler(async (event) => {
           statusMessage: `${t.name} exige o documento do beneficiário. Peça o documento antes de vender.`,
         })
       }
-      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), ev.fee_mode_pos as ModoTaxa)
+      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), ev.fee_mode_pos as ModoTaxa, (t.price_cents == null ? null : Number(t.price_cents)))
     }
     return { quantidade: it.quantidade, faceUnitCents: face }
   })

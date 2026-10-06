@@ -49,6 +49,8 @@ const Tipo = z.object({
   nome: z.string().min(1).max(80),
   quantidade: z.number().int().min(1).max(1_000_000),
   descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').default(0),
+  /** preço próprio do tipo (043) — em vez do desconto */
+  precoCents: z.number().int().min(1, 'o preço do tipo precisa ser maior que zero').max(10_000_000).nullish(),
   exigeDocumento: z.boolean().default(false),
   maxPorCliente: z.number().int().min(1).max(200).nullish(),
 })
@@ -156,11 +158,11 @@ export default defineEventHandler(async (event) => {
 
   const r = await q1<any>(
     `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps, requires_document,
-                               max_per_customer, sort_order)
+                               max_per_customer, sort_order, price_cents)
      VALUES ($1,$2,$3,$4,$5,$6,
-             COALESCE((SELECT MAX(sort_order) + 1 FROM ticket_types WHERE lot_id = $1), 1))
+             COALESCE((SELECT MAX(sort_order) + 1 FROM ticket_types WHERE lot_id = $1), 1), $7)
      RETURNING id`,
-    [d.loteId, d.nome.trim(), d.quantidade, d.descontoBps, d.exigeDocumento,
-     d.maxPorCliente ?? null])
+    [d.loteId, d.nome.trim(), d.quantidade, d.precoCents != null ? 0 : d.descontoBps, d.exigeDocumento,
+     d.maxPorCliente ?? null, d.precoCents ?? null])
   return { ok: true, tipo: 'tipo', id: r.id }
 })

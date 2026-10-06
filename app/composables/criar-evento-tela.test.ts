@@ -213,3 +213,35 @@ describe('contato de suporte fixo', () => {
     expect(corpoDoPost().suporte).toEqual({ tipo: 'whatsapp', valor: '(73) 99842-1010' })
   })
 })
+
+// 05/10 (dono): "o 1º lote com Normal, VIP e Black, cada um com preço diferente"
+describe('tipo com preço próprio', () => {
+  it('escolhe "Preço próprio" no passo 3, digita o valor no 4 e ele vai pro servidor', async () => {
+    const tela = await abrir()
+    await tela.find('#nome').setValue('ZZ Noite VIP')
+    await avancar(tela); await avancar(tela) // 1 → 2 → 3
+    // o 2º tipo (Meia) vira VIP com preço próprio
+    await tela.find('input[aria-label="Nome do tipo 2"]').setValue('VIP')
+    const modo = tela.findAll('[data-parte="modo-do-tipo"]')[0]
+    await modo.setValue('preco')
+    expect(tela.find('input[aria-label="Desconto do tipo VIP"]').exists(), 'sobrou o % no tipo de preço próprio').toBe(false)
+    await avancar(tela) // → 4
+    // sem o preço do VIP, não passa
+    const campos = tela.findAll('[data-parte="precos-dos-tipos"] input')
+    expect(campos.length).toBe(1)
+    const valorDoLote = tela.findAll('input[inputmode="numeric"]').find((i: any) => !i.element.closest('[data-parte="precos-dos-tipos"]'))
+    await valorDoLote!.setValue('5000')
+    await avancar(tela)
+    expect(tela.text()).toContain('digite o preço do VIP')
+    await campos[0].setValue('12000')
+    await campos[0].trigger('blur')
+    await tela.find('input[aria-label="Data de expiração do 1º lote"]').setValue('2031-03-09T18:00')
+    await avancar(tela) // → 5
+    await tela.find('#inicio').setValue('2031-03-10T20:00')
+    await tela.find('#fim').setValue('2031-03-10T23:00')
+    await avancar(tela)
+    const tipos = corpoDoPost().setores[0].lotes[0].tipos
+    expect(tipos.find((t: any) => t.nome === 'VIP')).toMatchObject({ precoCents: 12000, descontoBps: 0 })
+    expect(tipos.find((t: any) => t.nome === 'Inteira').precoCents).toBeNull()
+  })
+})

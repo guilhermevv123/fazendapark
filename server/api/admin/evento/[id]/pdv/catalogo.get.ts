@@ -35,7 +35,7 @@ export default defineEventHandler(async (event) => {
       ORDER BY s.sort_order, l.sort_order, l.name`, [eventId])
 
   const tipos = await q<any>(
-    `SELECT t.id, t.lot_id, t.name, t.kind, t.discount_bps, t.quantity, t.sold, t.requires_document
+    `SELECT t.id, t.lot_id, t.name, t.kind, t.discount_bps, t.price_cents, t.quantity, t.sold, t.requires_document
        FROM ticket_types t
        JOIN lots l ON l.id = t.lot_id
        JOIN sectors s ON s.id = l.sector_id
@@ -72,7 +72,7 @@ export default defineEventHandler(async (event) => {
         // desconto: em face ímpar com meia, a tela dizia R$ 12,50 e o
         // servidor cobrava R$ 12,49 — o operador falava um valor e o
         // recibo saía com outro.
-        const face = faceDoTipo(Number(l.price_cents), Number(t.discount_bps), Number(ev.fee_bps), modo)
+        const face = faceDoTipo(Number(l.price_cents), Number(t.discount_bps), Number(ev.fee_bps), modo, (t.price_cents == null ? null : Number(t.price_cents)))
         const pt = precificar(face, Number(ev.fee_bps), modo)
         return {
           id: t.id, nome: t.name, faceCents: face, balcaoCents: pt.totalCents,

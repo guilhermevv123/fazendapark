@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
       WHERE s.event_id = $1 ORDER BY l.sort_order`, [id])
 
   const tipos = await q<any>(
-    `SELECT tt.id, tt.lot_id, tt.name, tt.quantity, tt.sold, tt.discount_bps,
+    `SELECT tt.id, tt.lot_id, tt.name, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents,
             tt.requires_document, tt.max_per_customer, tt.sort_order
        FROM ticket_types tt
        JOIN lots l ON l.id = tt.lot_id JOIN sectors s ON s.id = l.sector_id
@@ -78,11 +78,13 @@ export default defineEventHandler(async (event) => {
           // Vendido > 0 é o que trava exclusão e redução de estoque.
           podeApagar: Number(l.sold) === 0 && Number(l.reserved) === 0,
           tipos: tipos.filter((t) => t.lot_id === l.id).map((t) => {
-            const face = faceDoTipo(Number(l.price_cents), Number(t.discount_bps), bps, modo)
+            const face = faceDoTipo(Number(l.price_cents), Number(t.discount_bps), bps, modo, (t.price_cents == null ? null : Number(t.price_cents)))
             const pp = precificar(face, bps, modo)
             return {
               id: t.id, nome: t.name, quantidade: t.quantity, vendidos: t.sold,
               descontoBps: Number(t.discount_bps),
+              /** preço próprio do tipo (043), em vez do desconto — `null` = vale o desconto */
+              precoCents: t.price_cents == null ? null : Number(t.price_cents),
               exigeDocumento: t.requires_document,
               maxPorCliente: t.max_per_customer,
               faceCents: pp.faceCents, taxaCents: pp.feeCents, totalCents: pp.totalCents,

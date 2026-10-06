@@ -160,7 +160,7 @@ async function facesDoBanco(ev: any, itens: any[]) {
 
   const tipoIds = itens.map((i) => i.ticketTypeId).filter(Boolean) as string[]
   const tipos = tipoIds.length
-    ? await q<any>(`SELECT id, lot_id, discount_bps FROM ticket_types WHERE id = ANY($1::uuid[])`,
+    ? await q<any>(`SELECT id, lot_id, discount_bps, price_cents FROM ticket_types WHERE id = ANY($1::uuid[])`,
         [tipoIds])
     : []
   const porTipo = new Map(tipos.map((t) => [t.id, t]))
@@ -178,7 +178,7 @@ async function facesDoBanco(ev: any, itens: any[]) {
       if (t.lot_id !== it.lotId) {
         throw createError({ statusCode: 400, statusMessage: 'Tipo de ingresso não é deste lote' })
       }
-      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), ev.fee_mode_online as ModoTaxa)
+      face = faceDoTipo(face, Number(t.discount_bps), Number(ev.fee_bps), ev.fee_mode_online as ModoTaxa, (t.price_cents == null ? null : Number(t.price_cents)))
     }
     return { quantidade: it.quantidade, faceUnitCents: face }
   })
