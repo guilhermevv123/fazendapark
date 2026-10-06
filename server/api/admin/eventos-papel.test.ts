@@ -213,3 +213,38 @@ describe('AUD-02 — criar evento aparece na Auditoria, com quem e de onde', () 
     expect(tela.corpo.linhas.map((l: any) => l.entidadeId)).toContain(r.corpo.id)
   })
 })
+
+describe('Excluir evento (06/10) — some da lista e do link, o caixa fica', () => {
+  it('à venda é recusado; cancelado sai da lista, o link dá 404, os pedidos ficam; desfazer traz de volta', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const slug = `${PREFIXO}-ev-${EV.slice(0, 8)}`
+    const naLista = async () => !!(await chamar('master', '/api/admin/eventos')).corpo.find((e: any) => e.id === EV)
+
+    const aVenda = await chamar('master', `/api/admin/evento/${EV}/excluir`, { method: 'POST', body: {} })
+    expect(aVenda.status, 'excluiu evento à venda').toBe(409)
+    expect(await naLista()).toBe(true)
+
+    // a portaria não tem a área `evento`
+    expect((await chamar('portaria', `/api/admin/evento/${EV}/excluir`, { method: 'POST', body: {} })).status).toBe(403)
+
+    await q(`UPDATE events SET status = 'cancelado' WHERE id = $1`, [EV])
+    try {
+      const pedidosAntes = (await q1<any>(`SELECT count(*)::int n FROM orders WHERE event_id = $1`, [EV]))!.n
+      const ok = await chamar('master', `/api/admin/evento/${EV}/excluir`, { method: 'POST', body: {} })
+      expect(ok.status, ok.corpo.statusMessage).toBe(200)
+      expect(await naLista(), 'o evento excluído continua na lista').toBe(false)
+      expect((await fetch(`${BASE}/api/e/${slug}`)).status, 'o link público ainda abre').toBe(404)
+      const pedidosDepois = (await q1<any>(`SELECT count(*)::int n FROM orders WHERE event_id = $1`, [EV]))!.n
+      expect(pedidosDepois, 'excluir apagou pedido').toBe(pedidosAntes)
+      const aud = await q1<any>(
+        `SELECT user_id FROM audit_log WHERE entity_id = $1 AND action = 'excluido' ORDER BY id DESC LIMIT 1`, [EV])
+      expect(aud?.user_id, 'a exclusão não ficou na auditoria').toBeTruthy()
+
+      const volta = await chamar('master', `/api/admin/evento/${EV}/excluir`, { method: 'POST', body: { desfazer: true } })
+      expect(volta.status).toBe(200)
+      expect(await naLista()).toBe(true)
+    } finally {
+      await q(`UPDATE events SET status = 'ativo', excluido_em = NULL, excluido_por = NULL WHERE id = $1`, [EV])
+    }
+  }, 60_000)
+})

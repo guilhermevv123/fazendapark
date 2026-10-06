@@ -174,6 +174,8 @@ const AREA_DA_TELA: Record<string, Area> = {
   // adiar é o caminho em que o dinheiro FICA (ver `remarcar.post.ts`): o que
   // muda é a data do evento e a das sessões, que é configuração de evento.
   remarcar: 'evento',
+  // tirar da lista um evento fora de venda (046) — não mexe em dinheiro nem apaga linha
+  excluir: 'evento',
 
   vendas: 'venda',
   participantes: 'venda',

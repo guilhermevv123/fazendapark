@@ -17,6 +17,8 @@ import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { decidirAcesso, ehPapel, papelPode, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
 import { primeiraTelaDoEvento } from '~/composables/menuDoEvento'
 import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
+import JanelaConfirmar from '~/components/JanelaConfirmar.vue'
+import { usarConfirmacao } from '~/composables/confirmacao'
 
 definePageMeta({ layout: 'admin' })
 
@@ -212,6 +214,40 @@ async function publicarEvento(id: string) {
     erroPublicar.value = { ...erroPublicar.value, [id]: e?.data?.statusMessage || 'Não foi possível publicar. Tente de novo.' }
   } finally {
     publicando.value = null
+  }
+}
+
+/*
+ * Excluir (dono, 06/10, no menu ⋮): tira da lista e mata o link público; pedidos e caixa ficam
+ * (046). Só fora de venda — o servidor recusa `ativo`/`adiado` com a frase do que fazer antes.
+ * Quem pode: o mesmo de Publicar (quem abre as Configurações do evento).
+ */
+const { pergunta, perguntar, responder } = usarConfirmacao()
+const EM_VENDA = new Set(['ativo', 'adiado'])
+const podeExcluir = (e: any) => podePublicar(e.id) && !EM_VENDA.has(e.status)
+const excluindo = ref<string | null>(null)
+async function excluirEvento(e: any) {
+  abertoId.value = null
+  const sim = await perguntar({
+    titulo: `Excluir “${e.nome}”?`,
+    texto: 'O evento sai desta lista e o link de venda para de abrir.',
+    detalhes: [
+      'Pedidos, ingressos, estornos e o dinheiro do evento continuam guardados — nada some do financeiro.',
+      'Mudou de ideia depois? Peça para trazer de volta: a exclusão fica registrada na auditoria.',
+    ],
+    confirmar: 'Excluir evento',
+    perigo: true,
+  })
+  if (!sim) return
+  excluindo.value = e.id
+  erroPublicar.value = { ...erroPublicar.value, [e.id]: '' }
+  try {
+    await $fetch(`/api/admin/evento/${e.id}/excluir`, { method: 'POST', body: {} })
+    await refresh()
+  } catch (err: any) {
+    erroPublicar.value = { ...erroPublicar.value, [e.id]: err?.data?.statusMessage || 'Não foi possível excluir. Tente de novo.' }
+  } finally {
+    excluindo.value = null
   }
 }
 
@@ -413,6 +449,14 @@ useHead({ title: 'Eventos' })
                         @click="abertoId = null">
                 <IconeMenu :nome="a.icone" :tamanho="16" /> {{ a.nome }}
               </NuxtLink>
+              <template v-if="podeExcluir(e)">
+                <div class="my-1 border-t border-ink-100" role="separator" />
+                <button type="button" role="menuitem" data-acao="excluir-evento" :disabled="excluindo === e.id"
+                        class="flex min-h-[40px] w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13.5px] font-medium text-erro transition-colors hover:bg-erro-claro"
+                        @click="excluirEvento(e)">
+                  <IconeMenu nome="lixo" :tamanho="16" /> {{ excluindo === e.id ? 'Excluindo…' : 'Excluir evento' }}
+                </button>
+              </template>
             </div>
           </div>
         </div>
@@ -422,5 +466,6 @@ useHead({ title: 'Eventos' })
         </p>
       </li>
     </ul>
+    <JanelaConfirmar v-if="pergunta" v-bind="pergunta" @responder="responder" />
   </div>
 </template>

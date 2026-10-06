@@ -63,6 +63,8 @@ export default defineEventHandler(async (event) => {
           WHERE oc.event_id = e.id AND oc.channel = '${CANAL_CORTESIA}' AND t.status <> 'cancelado'
        ) cor ON true
       WHERE e.org_id = $1
+        -- excluído pelo menu ⋮ (046): some da lista; pedidos e caixa ficam
+        AND e.excluido_em IS NULL
       ORDER BY e.starts_at DESC NULLS LAST, e.created_at DESC`, [orgId])
 
   return linhas.map((e) => {

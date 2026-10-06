@@ -590,7 +590,8 @@ async function montarVitrine(slug: string) {
             -- sai desta rota. O Mercado Pago entra na conta do Pix (28/09).
             o.asaas_api_key, o.asaas_env, o.mp_access_token, o.mp_test
        FROM events e JOIN organizations o ON o.id = e.org_id
-      WHERE e.slug = $1`, [slug])
+      -- excluído pelo dono (046): o link morre junto, com o mesmo 404 do slug que não existe
+      WHERE e.slug = $1 AND e.excluido_em IS NULL`, [slug])
 
   // Rascunho e oculto não existem pro comprador — nem por link direto. O 404 é
   // o mesmo do slug inexistente de propósito: resposta diferente confirmaria
