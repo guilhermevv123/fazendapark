@@ -260,6 +260,9 @@ const AREA_DA_RAIZ: [string, Area][] = [
   // não), sem ver venda, cliente ou dinheiro.
   ['/api/admin/consumacao', 'portaria'],
   ['/api/admin/eventos', 'evento_ver'],
+  // Imagens já enviadas em outros eventos (05/10): a galeria do "Capa"/"Miniatura" — quem cria e
+  // edita evento é quem escolhe a imagem dele.
+  ['/api/admin/imagens-de-eventos', 'evento'],
   ['/api/admin/pedido', 'venda'],
   ['/api/admin/evento', 'evento'], // criar evento; o `/evento/<id>/...` é tratado acima
 ]

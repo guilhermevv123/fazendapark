@@ -42,6 +42,7 @@ export function podeCancelarEvento(papel: unknown, eventoId: string): boolean {
 </script>
 
 <script setup lang="ts">
+import { LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe } from '~/composables/eventoDoParque'
 /**
  * Configurações do evento — o cadastro que o assistente de criação preencheu,
  * agora editável.
@@ -108,6 +109,14 @@ function carregar() {
   d.tags = (d.tags ?? []).join(', ')
   Object.assign(f, d)
   original.value = { ...d }
+  // endereço fixo, o do parque (dono, 05/10): evento antigo com outro endereço passa a gravar o do
+  // parque no próximo "Salvar"
+  Object.assign(f, {
+    online: false, urlTransmissao: null, local: LOCAL_DO_PARQUE.nome, cep: LOCAL_DO_PARQUE.cep,
+    endereco: LOCAL_DO_PARQUE.endereco, numero: LOCAL_DO_PARQUE.numero, bairro: LOCAL_DO_PARQUE.bairro,
+    cidade: LOCAL_DO_PARQUE.cidade, uf: LOCAL_DO_PARQUE.estado, complemento: LOCAL_DO_PARQUE.complemento || null,
+  })
+  f.subcategorias = [...(d.subcategorias ?? [])]
   taxaTexto.value = percentualDosBps(d.taxaBps)
   taxaInvalida.value = false
 }
@@ -116,7 +125,7 @@ watch(data, carregar, { immediate: true })
 const CAMPOS_DATA = ['comecaEm', 'terminaEm', 'vendaAte']
 const SO_LEITURA = ['id', 'organizacao', 'fuso', 'moeda', 'criadoEm', 'atualizadoEm',
                     'jaVendeu', 'pedidosPagos', 'ingressos', 'lat', 'lng',
-                    'subcategorias', 'giroAutomatico']
+                    'giroAutomatico']
 
 const mudou = computed(() => {
   for (const k of Object.keys(f)) {
@@ -540,47 +549,19 @@ async function adiarEvento() {
 
         <section class="card">
           <h2 class="titulo text-base font-semibold text-tinta">Local</h2>
-          <label class="mt-3 flex items-center gap-2 text-sm text-tinta-suave">
-            <input v-model="f.online" type="checkbox" class="h-4 w-4 accent-acao">
-            Evento online
-          </label>
-          <div v-if="f.online" class="mt-3">
-            <label class="rotulo">Link da transmissão</label>
-            <input v-model="f.urlTransmissao" class="campo" placeholder="https://…">
-          </div>
-          <div v-else class="mt-3 grid gap-3 sm:grid-cols-6">
-            <div class="sm:col-span-6">
-              <label class="rotulo">Nome do local</label>
-              <input v-model="f.local" class="campo" placeholder="Fazenda Park Hotel">
+          <!-- fixo, o do parque (dono, 05/10) -->
+          <div class="mt-3 flex flex-wrap items-start justify-between gap-3 rounded-xl bg-fundo-cinza p-4 ring-1 ring-ink-200"
+               data-parte="local-fixo">
+            <div class="min-w-0">
+              <p class="font-semibold text-tinta">{{ LOCAL_DO_PARQUE.nome }}</p>
+              <p class="text-sm text-tinta-suave">{{ LOCAL_DO_PARQUE.endereco }}</p>
+              <p class="text-sm text-tinta-suave">
+                {{ LOCAL_DO_PARQUE.cidade }}/{{ LOCAL_DO_PARQUE.estado }} · CEP {{ LOCAL_DO_PARQUE.cep }}
+              </p>
             </div>
-            <div class="sm:col-span-2">
-              <label class="rotulo">CEP</label>
-              <input v-model="f.cep" class="campo">
-            </div>
-            <div class="sm:col-span-3">
-              <label class="rotulo">Endereço</label>
-              <input v-model="f.endereco" class="campo">
-            </div>
-            <div class="sm:col-span-1">
-              <label class="rotulo">Número</label>
-              <input v-model="f.numero" class="campo">
-            </div>
-            <div class="sm:col-span-2">
-              <label class="rotulo">Bairro</label>
-              <input v-model="f.bairro" class="campo">
-            </div>
-            <div class="sm:col-span-3">
-              <label class="rotulo">Cidade</label>
-              <input v-model="f.cidade" class="campo">
-            </div>
-            <div class="sm:col-span-1">
-              <label class="rotulo">UF</label>
-              <input v-model="f.uf" maxlength="2" class="campo uppercase">
-            </div>
-            <div class="sm:col-span-6">
-              <label class="rotulo">Complemento</label>
-              <input v-model="f.complemento" class="campo">
-            </div>
+            <a :href="MAPA_DO_PARQUE" target="_blank" rel="noopener" class="btn-secundario px-3 py-2 text-sm">
+              Ver no mapa
+            </a>
           </div>
         </section>
 
@@ -590,13 +571,13 @@ async function adiarEvento() {
                público. Enviar e remover gravam na hora (não esperam "Salvar"). -->
           <div class="mt-3 grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
             <div>
-              <EnvioDeImagem rotulo="Capa" medida="1600 × 900, horizontal" proporcao="16 / 9"
+              <EnvioDeImagem rotulo="Capa" medida="1600 × 900, horizontal" proporcao="16 / 9" campo="banner" :evento-id="id"
                              :url="f.banner || null" :enviando="enviandoImagem.banner"
                              @escolher="enviarImagem('banner', $event)" @remover="removerImagem('banner')" />
               <p class="mt-1.5 text-xs text-tinta-fraca">A faixa do topo da página de vendas.</p>
             </div>
             <div class="max-w-[260px]">
-              <EnvioDeImagem rotulo="Miniatura" medida="500 × 500, quadrada" proporcao="1 / 1"
+              <EnvioDeImagem rotulo="Miniatura" medida="500 × 500, quadrada" proporcao="1 / 1" campo="thumb" :evento-id="id"
                              :url="f.thumb || null" :enviando="enviandoImagem.thumb"
                              @escolher="enviarImagem('thumb', $event)" @remover="removerImagem('thumb')" />
               <p class="mt-1.5 text-xs text-tinta-fraca">O quadrado do evento na lista do painel.</p>
@@ -604,8 +585,24 @@ async function adiarEvento() {
           </div>
           <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <div>
-              <label class="rotulo">Categoria</label>
-              <input v-model="f.categoria" class="campo" placeholder="Festa, Show, Esporte…">
+              <label class="rotulo" for="cat-conf">Categoria</label>
+              <select id="cat-conf" v-model="f.categoria" class="campo"
+                      @change="f.subcategorias = (f.subcategorias ?? []).filter((x: string) => subcategoriasDe(f.categoria).includes(x))">
+                <option value="">Escolha a categoria</option>
+                <option v-for="c in NOMES_DAS_CATEGORIAS" :key="c" :value="c">{{ c }}</option>
+                <!-- categoria antiga, de antes da lista: continua aparecendo até trocarem -->
+                <option v-if="f.categoria && !NOMES_DAS_CATEGORIAS.includes(f.categoria)" :value="f.categoria">{{ f.categoria }}</option>
+              </select>
+              <div v-if="subcategoriasDe(f.categoria).length" class="mt-2 flex flex-wrap gap-1.5" data-parte="subcategorias">
+                <button v-for="sub in subcategoriasDe(f.categoria)" :key="sub" type="button"
+                        :class="(f.subcategorias ?? []).includes(sub) ? 'chip-ativo' : 'chip'"
+                        :aria-pressed="(f.subcategorias ?? []).includes(sub)"
+                        @click="f.subcategorias = (f.subcategorias ?? []).includes(sub)
+                          ? f.subcategorias.filter((x: string) => x !== sub)
+                          : [...(f.subcategorias ?? []), sub]">
+                  {{ sub }}
+                </button>
+              </div>
             </div>
             <div>
               <label class="rotulo">Tags</label>

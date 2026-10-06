@@ -24,6 +24,10 @@ const props = defineProps<{
   /** arquivo escolhido e ainda não enviado (criação) */
   arquivo?: File | null
   enviando?: boolean
+  /** com isto, aparece "Escolher uma já enviada" (as imagens desse campo nos outros eventos) */
+  campo?: 'banner' | 'thumb'
+  /** o evento desta tela, pra não oferecer a imagem dele mesmo */
+  eventoId?: string | null
 }>()
 const emit = defineEmits<{ escolher: [File]; remover: [] }>()
 
@@ -64,6 +68,55 @@ function aoSoltar(ev: DragEvent) {
   conferir(ev.dataTransfer?.files?.[0])
 }
 const abrir = () => { if (!props.enviando) entrada.value?.click() }
+
+/* ------------------------------------------- uma imagem já enviada (05/10) */
+/**
+ * "Antes de clicar posso escolher um upload antigo" (dono, 05/10). A galeria mostra as imagens
+ * deste campo nos outros eventos da organização. Escolher uma BAIXA o arquivo e passa pelo
+ * mesmo caminho do arquivo do computador (`conferir` → `escolher`): o evento ganha a cópia DELE
+ * no bucket — apontar pro arquivo do outro evento faria esta capa sumir quando aquele trocasse.
+ */
+const galeriaAberta = ref(false)
+const galeria = ref<{ url: string; evento: string }[] | null>(null)
+const carregandoGaleria = ref(false)
+const pegando = ref<string | null>(null)
+
+async function abrirGaleria() {
+  galeriaAberta.value = !galeriaAberta.value
+  if (!galeriaAberta.value || galeria.value || !props.campo) return
+  carregandoGaleria.value = true
+  try {
+    const r = await $fetch<any>('/api/admin/imagens-de-eventos', {
+      query: { campo: props.campo, ...(props.eventoId ? { exceto: props.eventoId } : {}) },
+    })
+    galeria.value = r?.imagens ?? []
+  } catch {
+    galeria.value = null
+    aviso.value = 'Não deu pra carregar as imagens já enviadas. Tente de novo.'
+    galeriaAberta.value = false
+  } finally {
+    carregandoGaleria.value = false
+  }
+}
+
+async function usarDaGaleria(item: { url: string; evento: string }) {
+  if (pegando.value || props.enviando) return
+  pegando.value = item.url
+  aviso.value = ''
+  try {
+    const r = await fetch(item.url, { credentials: 'same-origin' })
+    if (!r.ok) throw new Error(String(r.status))
+    const blob = await r.blob()
+    const tipo = TIPOS.includes(blob.type) ? blob.type : 'image/webp'
+    const extensao = tipo.split('/')[1]
+    conferir(new File([blob], `${props.campo ?? 'imagem'}-reaproveitada.${extensao}`, { type: tipo }))
+    galeriaAberta.value = false
+  } catch {
+    aviso.value = 'Não deu pra usar essa imagem agora. Tente outra ou envie do computador.'
+  } finally {
+    pegando.value = null
+  }
+}
 </script>
 
 <template>
@@ -115,6 +168,29 @@ const abrir = () => { if (!props.enviando) entrada.value?.click() }
       </template>
 
       <input ref="entrada" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" @change="aoEscolher">
+    </div>
+    <button v-if="campo" type="button" data-parte="abrir-galeria"
+            class="mt-2 inline-flex items-center gap-1.5 text-[13px] font-semibold text-pool-700 hover:text-pool-800"
+            :aria-expanded="galeriaAberta" :disabled="enviando" @click="abrirGaleria">
+      <IconeMenu nome="mais" :tamanho="14" />
+      {{ galeriaAberta ? 'Fechar imagens já enviadas' : 'Escolher uma já enviada' }}
+    </button>
+    <div v-if="galeriaAberta" class="mt-2 rounded-xl bg-fundo-cinza p-3 ring-1 ring-ink-200" data-parte="galeria">
+      <p v-if="carregandoGaleria" class="text-[13px] text-tinta-suave" role="status">Carregando…</p>
+      <p v-else-if="!galeria?.length" class="text-[13px] text-tinta-suave">
+        Nenhum outro evento tem {{ campo === 'thumb' ? 'miniatura' : 'capa' }} ainda.
+      </p>
+      <ul v-else class="grid gap-2" :class="campo === 'thumb' ? 'grid-cols-3 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-3'">
+        <li v-for="g in galeria" :key="g.url">
+          <button type="button" class="group relative block w-full overflow-hidden rounded-lg ring-1 ring-ink-200 hover:ring-2 hover:ring-pool-600 focus-visible:ring-2 focus-visible:ring-pool-600"
+                  :style="{ aspectRatio: proporcao }" :title="`Usar a imagem de ${g.evento}`"
+                  data-parte="item-galeria" :disabled="!!pegando" @click="usarDaGaleria(g)">
+            <img :src="g.url" :alt="`Imagem de ${g.evento}`" class="size-full object-cover" loading="lazy">
+            <span class="absolute inset-x-0 bottom-0 truncate bg-ink-950/60 px-1.5 py-0.5 text-left text-[11px] text-white">{{ g.evento }}</span>
+            <span v-if="pegando === g.url" class="absolute inset-0 grid place-items-center bg-white/70 text-[12px] font-semibold text-pool-800">Usando…</span>
+          </button>
+        </li>
+      </ul>
     </div>
     <p v-if="aviso" class="mt-1.5 text-[13px] font-medium text-erro" role="alert">{{ aviso }}</p>
   </div>

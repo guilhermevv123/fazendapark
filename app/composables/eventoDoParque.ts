@@ -1,0 +1,42 @@
+/**
+ * O que todo evento do Conquista Park tem de igual (dono, 05/10: "categorias já predefinidas, sem
+ * ficar em aberto"; "endereço é fixo, o do Fazenda Park").
+ *
+ * Um lugar só, usado pela criação (`/admin/evento/novo`) e pelas Configurações do evento: as duas
+ * telas oferecem as MESMAS categorias e gravam o MESMO endereço — duas listas divergiriam no
+ * primeiro dia em que alguém mexesse numa.
+ */
+
+/** Categoria → subcategorias que ela oferece. A ordem é a da tela. */
+export const CATEGORIAS_DO_PARQUE: Record<string, string[]> = {
+  'Parque aquático': ['Dia de parque', 'Fim de semana', 'Feriado', 'Férias', 'Passaporte', 'Promoção'],
+  'Festa': ['Pool party', 'São João', 'Carnaval', 'Réveillon', 'Aniversário do parque', 'Festa à fantasia'],
+  'Show': ['Forró', 'Pagode', 'Sertanejo', 'Arrocha', 'Axé', 'Piseiro', 'Gospel', 'Banda local'],
+  'Festival': ['Música', 'Gastronomia', 'Cultural'],
+  'Infantil': ['Dia das Crianças', 'Recreação', 'Personagens', 'Colônia de férias'],
+  'Grupos e excursões': ['Escola', 'Empresa', 'Igreja', 'Excursão'],
+  'Esporte': ['Corrida', 'Natação', 'Torneio', 'Campeonato'],
+}
+export const NOMES_DAS_CATEGORIAS = Object.keys(CATEGORIAS_DO_PARQUE)
+
+/** As subcategorias da categoria (vazio pra categoria antiga que saiu da lista). */
+export const subcategoriasDe = (categoria: string | null | undefined) =>
+  (categoria && CATEGORIAS_DO_PARQUE[categoria]) || []
+
+/**
+ * Fazenda Park Nova Conquista — o ponto do Google Maps que o dono mandou
+ * (https://maps.app.goo.gl/AWbncf9LsfSvzaT7A → -13.937816, -39.4888029). Zona rural entre Itamari e
+ * Gandu, a 2 km da BR-101; o endereço postal é Ubatã-BA, CEP 45550-000.
+ */
+export const LOCAL_DO_PARQUE = {
+  nome: 'Fazenda Park Nova Conquista',
+  cep: '45550-000',
+  endereco: 'Zona rural, a 2 km da BR-101 (entre Itamari e Gandu)',
+  numero: 's/n',
+  bairro: 'Zona rural',
+  cidade: 'Ubatã',
+  estado: 'BA',
+  complemento: '',
+} as const
+
+export const MAPA_DO_PARQUE = 'https://maps.app.goo.gl/AWbncf9LsfSvzaT7A'

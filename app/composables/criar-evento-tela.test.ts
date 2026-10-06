@@ -5,7 +5,7 @@
  *   · EVT-03: os horários valem no FUSO ESCOLHIDO no passo 5 — 20:00 em Manaus é 00:00 UTC do dia
  *     seguinte, qualquer que seja o relógio de quem cria (a expiração do lote também);
  *   · EVT-14: a faixa etária nasce "Livre" (0), como o servidor e o banco;
- *   · EVT-06: "ba" no Estado vira "BA" no que vai pro servidor;
+ *   · EVT-06 → 05/10: o endereço é fixo, o do parque (Ubatã/BA), sem campo pra digitar;
  *   · EVT-09: toda criação leva uma chave; resposta "repetido" diz que nada nasceu em dobro;
  *   · EVT-10: o rascunho é da PESSOA — quem entra depois no mesmo navegador não herda o do outro,
  *     e o de chave antiga (sem dono) é apagado;
@@ -61,7 +61,6 @@ function porRotulo(tela: any, texto: string) {
 /** passo 1 → 5 com o mínimo; devolve no passo 5 */
 async function ateOPasso5(tela: any, passo1: (t: any) => Promise<void> = async () => {}) {
   await tela.find('#nome').setValue('ZZ Noite em Manaus')
-  await tela.find('#cid').setValue('Manaus')
   await tela.find('#sval').setValue('(92) 99999-0000')
   await passo1(tela)
   await avancar(tela); await avancar(tela); await avancar(tela) // 1 → 2 → 3 → 4
@@ -89,19 +88,20 @@ describe('EVT-03 — os horários valem no fuso escolhido', () => {
 })
 
 describe('EVT-14, EVT-06 e EVT-09 — o que o assistente manda', () => {
-  it('faixa etária nasce Livre; "ba" vai "BA"; a criação leva uma chave', async () => {
+  it('faixa etária nasce Livre; o endereço é o do parque, fixo; a criação leva uma chave', async () => {
     const tela = await abrir()
     expect((tela.find('#idade').element as HTMLSelectElement).value).toBe('0')
-    await ateOPasso5(tela, async (t) => {
-      await t.find('#uf').setValue('ba')
-      expect((t.find('#uf').element as HTMLInputElement).value).toBe('BA')
-    })
+    // 05/10: endereço fixo — nenhum campo pra digitar, o card mostra o do parque
+    expect(tela.find('#cid').exists()).toBe(false)
+    expect(tela.find('[data-parte="local-fixo"]').text()).toContain('Ubatã/BA')
+    await ateOPasso5(tela)
     await tela.find('#inicio').setValue('2031-03-10T20:00')
     await tela.find('#fim').setValue('2031-03-10T23:00')
     await avancar(tela)
     const corpo = corpoDoPost()
     expect(corpo.faixaEtaria).toBe(0)
-    expect(corpo.local.estado).toBe('BA')
+    expect(corpo.online).toBe(false)
+    expect(corpo.local).toMatchObject({ nome: 'Fazenda Park Nova Conquista', cidade: 'Ubatã', estado: 'BA', cep: '45550-000' })
     expect(corpo.chaveDeCriacao).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   })
 

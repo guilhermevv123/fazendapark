@@ -24,6 +24,7 @@ import { TETO_POR_COMPRA } from '~~/server/utils/limite-de-compra'
 import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
+import { LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe } from '~/composables/eventoDoParque'
 import PainelFalha from '~/components/painel/Falha.vue'
 definePageMeta({ layout: false })
 
@@ -77,7 +78,8 @@ const f = reactive({
   descricao: '',
   online: false,
   linkTransmissao: '',
-  local: { nome: '', cep: '', endereco: '', numero: '', bairro: '', cidade: '', estado: '', complemento: '' },
+  // o endereço é fixo, o do parque (dono, 05/10) — ver `composables/eventoDoParque.ts`
+  local: { ...LOCAL_DO_PARQUE } as { nome: string; cep: string; endereco: string; numero: string; bairro: string; cidade: string; estado: string; complemento: string },
   suporteTipo: 'whatsapp' as 'whatsapp' | 'telefone' | 'email',
   suporteValor: '',
 
@@ -134,24 +136,9 @@ type Setor = { nome: string; tipo: string; descricao: string; capacidade: number
  * oficial"): o servidor tira o endereço do NOME (`paraSlug` + `slugLivre` em
  * `index.post.ts` — sem acento, "-2" se já existir, nunca rota reservada). */
 
-/* ----------------------------------------------------------- endereço --- */
-const buscandoCep = ref(false)
-async function buscarCep() {
-  const cep = f.local.cep.replace(/\D/g, '')
-  if (cep.length !== 8) return
-  buscandoCep.value = true
-  try {
-    const r: any = await $fetch(`https://viacep.com.br/ws/${cep}/json/`)
-    if (r.erro) return
-    f.local.endereco = r.logradouro || f.local.endereco
-    f.local.bairro = r.bairro || f.local.bairro
-    f.local.cidade = r.localidade || f.local.cidade
-    f.local.estado = r.uf || f.local.estado
-  } catch {
-    // CEP é conveniência: se o serviço cair, a pessoa digita. Bloquear o
-    // cadastro por causa de um serviço de terceiro seria pior que o problema.
-  } finally { buscandoCep.value = false }
-}
+/* ----------------------------------------------------------- endereço ---
+ * Fixo, o do parque (dono, 05/10): `LOCAL_DO_PARQUE` em `composables/eventoDoParque.ts`. A busca de
+ * CEP saiu junto com os campos. */
 
 /* ------------------------------------------------------------- setores -- */
 /* ----------------------------------------- estrutura (passo 3) ------------
@@ -279,10 +266,7 @@ function validar(p: number): string[] {
   const e: string[] = []
   if (p === 1) {
     if (f.nome.trim().length < 3) e.push('O nome do evento precisa de pelo menos 3 letras.')
-    if (f.online && !/^https?:\/\//.test(f.linkTransmissao)) {
-      e.push('Evento online precisa do link de transmissão.')
-    }
-    if (!f.online && !f.local.cidade.trim()) e.push('Evento presencial precisa da cidade.')
+    // local: fixo, o do parque (ver `publicar`) — não tem o que conferir aqui
     if (f.suporteValor.trim().length < 5) e.push('Informe um contato de suporte ao cliente.')
   }
   if (p === 3) {
@@ -379,8 +363,6 @@ const encerraCampo = computed({
  */
 const iso = (data: string, hora: string) =>
   instanteNoFuso(`${data}T${hora || '00:00'}`, f.fuso)
-/** EVT-06: UF é maiúscula de verdade (o `uppercase` do campo era só visual e gravava "ba") */
-const soUf = (v: string) => (v || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2)
 
 async function publicar() {
   salvando.value = true
@@ -400,9 +382,10 @@ async function publicar() {
       substantivo: f.substantivo.trim() || 'Ingressos',
       categoria: f.categoria || undefined,
       subcategorias: f.subcategorias,
-      online: f.online,
-      linkTransmissao: f.online ? f.linkTransmissao : undefined,
-      local: f.online ? {} : { ...f.local, estado: soUf(f.local.estado) || undefined },
+      // presencial, no parque, sempre — mesmo que um rascunho antigo traga outro endereço
+      online: false,
+      linkTransmissao: undefined,
+      local: { ...LOCAL_DO_PARQUE },
       suporte: f.suporteValor ? { tipo: f.suporteTipo, valor: f.suporteValor.trim() } : null,
       taxaBps: f.taxaBps,
       modoTaxaOnline: f.modoTaxaOnline,
@@ -672,26 +655,24 @@ useHead({ title: 'Criar evento' })
         <div class="grid gap-4 lg:grid-cols-2">
           <div>
             <label for="cat" class="rotulo">Categoria</label>
-            <select id="cat" v-model="f.categoria" class="campo">
-              <option value="">Categorias</option>
-              <option v-for="c in ['Show', 'Festa', 'Festival', 'Teatro', 'Esporte', 'Curso', 'Corporativo', 'Parque']"
-                      :key="c" :value="c">{{ c }}</option>
+            <select id="cat" v-model="f.categoria" class="campo"
+                    @change="f.subcategorias = f.subcategorias.filter((x) => subcategoriasDe(f.categoria).includes(x))">
+              <option value="">Escolha a categoria</option>
+              <option v-for="c in NOMES_DAS_CATEGORIAS" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
           <div>
-            <label for="sub" class="rotulo">Subcategoria</label>
-            <input id="sub" class="campo" placeholder="Digite e pressione Enter"
-                   :disabled="!f.categoria"
-                   @keydown.enter.prevent="(e) => {
-                     const v = (e.target as HTMLInputElement).value.trim()
-                     if (v && !f.subcategorias.includes(v)) f.subcategorias.push(v)
-                     ;(e.target as HTMLInputElement).value = ''
-                   }">
-            <div v-if="f.subcategorias.length" class="mt-2 flex flex-wrap gap-1.5">
-              <span v-for="(s, i) in f.subcategorias" :key="s" class="selo-neutro">
-                {{ s }}
-                <button type="button" class="ml-1" @click="f.subcategorias.splice(i, 1)">×</button>
-              </span>
+            <p class="rotulo">Subcategoria</p>
+            <p v-if="!f.categoria" class="text-sm text-tinta-fraca">Escolha a categoria primeiro.</p>
+            <div v-else class="flex flex-wrap gap-1.5" data-parte="subcategorias">
+              <button v-for="sub in subcategoriasDe(f.categoria)" :key="sub" type="button"
+                      :class="f.subcategorias.includes(sub) ? 'chip-ativo' : 'chip'"
+                      :aria-pressed="f.subcategorias.includes(sub)"
+                      @click="f.subcategorias.includes(sub)
+                        ? f.subcategorias.splice(f.subcategorias.indexOf(sub), 1)
+                        : f.subcategorias.push(sub)">
+                {{ sub }}
+              </button>
             </div>
           </div>
         </div>
@@ -708,13 +689,13 @@ useHead({ title: 'Criar evento' })
              depois de gravar o evento — ver `publicar()`. -->
         <div class="grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div>
-            <EnvioDeImagem rotulo="Capa" medida="1600 × 900, horizontal" proporcao="16 / 9"
+            <EnvioDeImagem rotulo="Capa" medida="1600 × 900, horizontal" proporcao="16 / 9" campo="banner"
                            :arquivo="imagens.banner"
                            @escolher="imagens.banner = $event" @remover="imagens.banner = null" />
             <p class="mt-1.5 text-xs text-tinta-fraca">A faixa do topo da página de vendas. Sem capa, entra a foto do parque.</p>
           </div>
           <div class="max-w-[260px]">
-            <EnvioDeImagem rotulo="Miniatura" medida="500 × 500, quadrada" proporcao="1 / 1"
+            <EnvioDeImagem rotulo="Miniatura" medida="500 × 500, quadrada" proporcao="1 / 1" campo="thumb"
                            :arquivo="imagens.thumb"
                            @escolher="imagens.thumb = $event" @remover="imagens.thumb = null" />
             <p class="mt-1.5 text-xs text-tinta-fraca">O quadrado do evento na lista do painel.</p>
@@ -729,59 +710,21 @@ useHead({ title: 'Criar evento' })
         </p>
         <hr class="my-4 border-linha">
 
-        <p class="rotulo">Modalidade do evento</p>
-        <div class="mb-4 flex gap-2">
-          <button type="button" :class="!f.online ? 'chip-ativo' : 'chip'" @click="f.online = false">
-            Presencial
-          </button>
-          <button type="button" :class="f.online ? 'chip-ativo' : 'chip'" @click="f.online = true">
-            Online
-          </button>
+        <!-- fixo, o do parque (dono, 05/10): não tem o que digitar aqui -->
+        <div class="flex flex-wrap items-start justify-between gap-3 rounded-xl bg-fundo-cinza p-4 ring-1 ring-ink-200"
+             data-parte="local-fixo">
+          <div class="min-w-0">
+            <p class="font-semibold text-tinta">{{ LOCAL_DO_PARQUE.nome }}</p>
+            <p class="text-sm text-tinta-suave">{{ LOCAL_DO_PARQUE.endereco }}</p>
+            <p class="text-sm text-tinta-suave">
+              {{ LOCAL_DO_PARQUE.cidade }}/{{ LOCAL_DO_PARQUE.estado }} · CEP {{ LOCAL_DO_PARQUE.cep }}
+            </p>
+          </div>
+          <a :href="MAPA_DO_PARQUE" target="_blank" rel="noopener" class="btn-secundario px-3 py-2 text-sm">
+            Ver no mapa
+          </a>
         </div>
-
-        <div v-if="f.online">
-          <label for="link" class="rotulo">Link de transmissão</label>
-          <input id="link" v-model="f.linkTransmissao" class="campo" placeholder="https://…">
-        </div>
-
-        <div v-else class="grid gap-4 lg:grid-cols-3">
-          <div class="lg:col-span-2">
-            <label for="ln" class="rotulo">Nome Fantasia (opcional)</label>
-            <input id="ln" v-model="f.local.nome" class="campo" placeholder="Ex: Casa A">
-          </div>
-          <div>
-            <label for="cep" class="rotulo">CEP</label>
-            <input id="cep" v-model="f.local.cep" class="campo" placeholder="00000-000"
-                   inputmode="numeric" @blur="buscarCep">
-            <p v-if="buscandoCep" class="mt-1 text-xs text-tinta-fraca">Buscando CEP…</p>
-          </div>
-          <div class="lg:col-span-2">
-            <label for="rua" class="rotulo">Rua / avenida / logradouro</label>
-            <input id="rua" v-model="f.local.endereco" class="campo">
-          </div>
-          <div>
-            <label for="num" class="rotulo">Número</label>
-            <input id="num" v-model="f.local.numero" class="campo">
-          </div>
-          <div>
-            <label for="bai" class="rotulo">Bairro</label>
-            <input id="bai" v-model="f.local.bairro" class="campo">
-          </div>
-          <div>
-            <label for="cid" class="rotulo">Cidade</label>
-            <input id="cid" v-model="f.local.cidade" class="campo">
-          </div>
-          <div>
-            <label for="uf" class="rotulo">Estado</label>
-            <!-- EVT-06: maiúscula de verdade no que é gravado, não só no que aparece -->
-            <input id="uf" :value="f.local.estado" maxlength="2" class="campo uppercase" autocapitalize="characters"
-                   placeholder="BA" @input="f.local.estado = soUf(($event.target as HTMLInputElement).value)">
-          </div>
-          <div class="lg:col-span-3">
-            <label for="comp" class="rotulo">Complemento (opcional)</label>
-            <input id="comp" v-model="f.local.complemento" class="campo">
-          </div>
-        </div>
+        <p class="mt-2 text-xs text-tinta-fraca">Todo evento acontece no parque: o endereço entra sozinho.</p>
       </section>
 
       <section class="card">

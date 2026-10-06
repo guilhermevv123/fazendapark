@@ -338,3 +338,39 @@ describe('remover capa ou miniatura (DELETE, grava na hora)', () => {
     expect(ev.thumb_url).toBe('/photos/zz-mini.webp')
   })
 })
+
+// 05/10: "antes de clicar posso escolher um upload antigo" — a galeria das imagens já enviadas
+describe('imagens já enviadas (galeria do Capa/Miniatura)', () => {
+  async function galeria(papel: Papel, query: string) {
+    const r = await fetch(`${BASE}/api/admin/imagens-de-eventos?${query}`, { headers: { cookie: cookies[papel] ?? '' } })
+    return { status: r.status, corpo: await r.json().catch(() => ({})) as any }
+  }
+
+  it('lista só as da organização da sessão, sem o próprio evento; a outra org não aparece', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const EV2 = randomUUID()
+    await q(`INSERT INTO events (id, org_id, name, slug, starts_at, ends_at, fee_bps, status, banner_url, thumb_url)
+             VALUES ($1,$2,'ZZ Evento Antigo',$3, now() + interval '5 days', now() + interval '6 days', 1000, 'ativo',
+                     '/api/midia/zz/antigo-banner.webp', '/api/midia/zz/antigo-thumb.webp')`,
+      [EV2, ORG, `zz-imgapi-ev2-${EV2.slice(0, 8)}`])
+    await q(`UPDATE events SET banner_url = '/api/midia/zz/fora-banner.webp' WHERE id = $1`, [EV_FORA])
+    await q(`UPDATE events SET banner_url = '/api/midia/zz/proprio-banner.webp' WHERE id = $1`, [EV])
+
+    const r = await galeria('master', `campo=banner&exceto=${EV}`)
+    expect(r.status).toBe(200)
+    const urls = r.corpo.imagens.map((i: any) => i.url)
+    expect(urls).toContain('/api/midia/zz/antigo-banner.webp')
+    expect(urls, 'mostrou a capa de OUTRA organização').not.toContain('/api/midia/zz/fora-banner.webp')
+    expect(urls, 'ofereceu a capa do próprio evento').not.toContain('/api/midia/zz/proprio-banner.webp')
+    expect(r.corpo.imagens.find((i: any) => i.url.endsWith('antigo-banner.webp')).evento).toBe('ZZ Evento Antigo')
+
+    const thumbs = await galeria('master', 'campo=thumb')
+    expect(thumbs.corpo.imagens.map((i: any) => i.url)).toContain('/api/midia/zz/antigo-thumb.webp')
+  })
+
+  it('campo inválido: 400; portaria (sem área de evento): 403', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    expect((await galeria('master', 'campo=constructor')).status).toBe(400)
+    expect((await galeria('portaria', 'campo=banner')).status).toBe(403)
+  })
+})
