@@ -43,9 +43,8 @@ export function podeCancelarEvento(papel: unknown, eventoId: string): boolean {
 
 <script setup lang="ts">
 import {
-  CONTATO_DO_PARQUE, LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe, telefoneValido,
+  CONTATO_DO_PARQUE, LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe,
 } from '~/composables/eventoDoParque'
-import { mascaraTel } from '~/composables/contaDoCliente'
 /**
  * Configurações do evento — o cadastro que o assistente de criação preencheu,
  * agora editável.
@@ -118,6 +117,8 @@ function carregar() {
     online: false, urlTransmissao: null, local: LOCAL_DO_PARQUE.nome, cep: LOCAL_DO_PARQUE.cep,
     endereco: LOCAL_DO_PARQUE.endereco, numero: LOCAL_DO_PARQUE.numero, bairro: LOCAL_DO_PARQUE.bairro,
     cidade: LOCAL_DO_PARQUE.cidade, uf: LOCAL_DO_PARQUE.estado, complemento: LOCAL_DO_PARQUE.complemento || null,
+    // suporte fixo também: o WhatsApp oficial do parque
+    suporteTipo: CONTATO_DO_PARQUE.tipo, suporteValor: CONTATO_DO_PARQUE.valor,
   })
   f.subcategorias = [...(d.subcategorias ?? [])]
   taxaTexto.value = percentualDosBps(d.taxaBps)
@@ -156,10 +157,6 @@ async function salvar() {
   aviso.value = ''
   if (taxaInvalida.value) {
     erro.value = 'Confira o percentual da "Taxa de serviço": número com até duas casas (ex.: 2,5).'
-    return
-  }
-  if ((f.suporteTipo === 'whatsapp' || f.suporteTipo === 'telefone') && !telefoneValido(f.suporteValor)) {
-    erro.value = 'Confira o telefone de suporte: com DDD, ex.: (73) 99842-1010.'
     return
   }
   const corpo: any = {}
@@ -684,32 +681,10 @@ async function adiarEvento() {
 
         <section class="card">
           <h2 class="titulo text-base font-semibold text-tinta">Suporte ao comprador</h2>
-          <div class="mt-3 grid gap-3">
-            <div>
-              <label class="rotulo">Canal</label>
-              <select v-model="f.suporteTipo" class="campo">
-                <option :value="null">Nenhum</option>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="telefone">Telefone</option>
-                <!-- e-mail saiu (05/10: é telefone); evento antigo com e-mail continua mostrando -->
-                <option v-if="original.suporteTipo === 'email'" value="email">E-mail</option>
-              </select>
-            </div>
-            <div v-if="f.suporteTipo && f.suporteTipo !== 'email'">
-              <label class="rotulo" for="sval-conf">Telefone</label>
-              <input id="sval-conf" :value="f.suporteValor" class="campo" type="tel" inputmode="tel" autocomplete="off"
-                     placeholder="(73) 99842-1010"
-                     @input="f.suporteValor = mascaraTel(($event.target as HTMLInputElement).value)">
-              <button v-if="f.suporteValor !== CONTATO_DO_PARQUE.valor" type="button"
-                      class="mt-1 text-xs font-semibold text-pool-700 hover:text-pool-800" data-parte="usar-numero-do-parque"
-                      @click="f.suporteValor = CONTATO_DO_PARQUE.valor">
-                Usar o WhatsApp do parque, {{ CONTATO_DO_PARQUE.valor }}
-              </button>
-            </div>
-            <div v-else-if="f.suporteTipo === 'email'">
-              <label class="rotulo">E-mail</label>
-              <input v-model="f.suporteValor" class="campo">
-            </div>
+          <!-- fixo, o WhatsApp oficial do parque (dono, 05/10) -->
+          <div class="mt-3 rounded-xl bg-fundo-cinza p-4 ring-1 ring-ink-200" data-parte="suporte-fixo">
+            <p class="font-semibold text-tinta">WhatsApp {{ CONTATO_DO_PARQUE.valor }}</p>
+            <p class="text-sm text-tinta-suave">O número oficial do Conquista Park, em todo evento.</p>
           </div>
         </section>
 

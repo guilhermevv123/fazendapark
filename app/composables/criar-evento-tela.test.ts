@@ -61,7 +61,6 @@ function porRotulo(tela: any, texto: string) {
 /** passo 1 → 5 com o mínimo; devolve no passo 5 */
 async function ateOPasso5(tela: any, passo1: (t: any) => Promise<void> = async () => {}) {
   await tela.find('#nome').setValue('ZZ Noite em Manaus')
-  await tela.find('#sval').setValue('(92) 99999-0000')
   await passo1(tela)
   await avancar(tela); await avancar(tela); await avancar(tela) // 1 → 2 → 3 → 4
   await tela.find('input[aria-label="Data de expiração do 1º lote"]').setValue('2031-03-09T18:00')
@@ -201,22 +200,16 @@ describe('quem não cria evento ouve isso NA ENTRADA (matriz: "Financeiro pela U
   })
 })
 
-// 05/10 (dono): "aqui é o número de telefone" — o contato de suporte é telefone, com máscara
-describe('contato de suporte é telefone', () => {
-  it('nasce com o WhatsApp do parque; letra não entra; e-mail não é opção', async () => {
+// 05/10 (dono): "tem que ficar fixo" — o suporte é o WhatsApp do parque, sem campo
+describe('contato de suporte fixo', () => {
+  it('sem campo pra digitar; o que vai pro servidor é o WhatsApp do parque', async () => {
     const tela = await abrir()
-    const campo = tela.find('#sval')
-    expect((campo.element as HTMLInputElement).value).toBe('(73) 99842-1010')
-    expect(tela.findAll('#stipo option').map((o: any) => o.attributes('value'))).toEqual(['whatsapp', 'telefone'])
-    await campo.setValue('73999056Q3123')
-    expect((campo.element as HTMLInputElement).value).toBe('(73) 99905-6312')
-  })
-
-  it('número sem DDD não passa do passo 1', async () => {
-    const tela = await abrir()
-    await tela.find('#nome').setValue('ZZ Evento')
-    await tela.find('#sval').setValue('99842')
+    expect(tela.find('#sval').exists()).toBe(false)
+    expect(tela.find('[data-parte="suporte-fixo"]').text()).toContain('(73) 99842-1010')
+    await ateOPasso5(tela)
+    await tela.find('#inicio').setValue('2031-03-10T20:00')
+    await tela.find('#fim').setValue('2031-03-10T23:00')
     await avancar(tela)
-    expect(tela.text()).toContain('Informe o telefone de suporte com DDD')
+    expect(corpoDoPost().suporte).toEqual({ tipo: 'whatsapp', valor: '(73) 99842-1010' })
   })
 })

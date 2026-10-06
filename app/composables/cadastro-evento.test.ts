@@ -88,7 +88,6 @@ describe('assistente de criação', () => {
 
     await tela.find('#nome').setValue('ZZ Noite')
     expect(tela.find('#slug').exists(), 'o endereço sai do nome, no servidor').toBe(false)
-    await tela.find('#sval').setValue('(73) 99999-0000')
     await avancar(tela)
     await avancar(tela) // passo 2 (descrição) → 3
 
@@ -253,7 +252,6 @@ describe('passo 3 no modelo da Zig', () => {
       respostas: { '/api/admin/organizacoes': [{ id: 'org-1', nome: 'Fazenda Park' }] },
     })
     await tela.find('#nome').setValue('ZZ Parque')
-    await tela.find('#sval').setValue('(73) 99999-0000')
     await avancar(tela)
     await avancar(tela)
     await avancar(tela) // passo 3 com o padrão → 4
@@ -294,7 +292,6 @@ describe('rascunho: sair no meio não perde nada', () => {
   it('preenche, sai, volta: continua no mesmo passo com o que tinha, e "Começar do zero" apaga', async () => {
     let tela = await montar()
     await tela.find('#nome').setValue('ZZ Rascunho')
-    await tela.find('#sval').setValue('(73) 99999-0000')
     await avancar(tela)
     await avancar(tela) // → passo 3
     await tela.find('input[aria-label="Nome do setor"]').setValue('Camarote')

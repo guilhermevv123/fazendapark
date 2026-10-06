@@ -25,9 +25,8 @@ import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
 import {
-  CONTATO_DO_PARQUE, LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe, telefoneValido,
+  CONTATO_DO_PARQUE, LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe,
 } from '~/composables/eventoDoParque'
-import { mascaraTel } from '~/composables/contaDoCliente'
 import PainelFalha from '~/components/painel/Falha.vue'
 definePageMeta({ layout: false })
 
@@ -271,7 +270,7 @@ function validar(p: number): string[] {
   if (p === 1) {
     if (f.nome.trim().length < 3) e.push('O nome do evento precisa de pelo menos 3 letras.')
     // local: fixo, o do parque (ver `publicar`) — não tem o que conferir aqui
-    if (!telefoneValido(f.suporteValor)) e.push('Informe o telefone de suporte com DDD, ex.: (73) 99842-1010.')
+    // suporte: fixo, o WhatsApp do parque (ver `publicar`) — não tem o que conferir aqui
   }
   if (p === 3) {
     if (!estrutura.setores.length) e.push('Adicione pelo menos um setor.')
@@ -390,7 +389,8 @@ async function publicar() {
       online: false,
       linkTransmissao: undefined,
       local: { ...LOCAL_DO_PARQUE },
-      suporte: f.suporteValor ? { tipo: f.suporteTipo, valor: f.suporteValor.trim() } : null,
+      // fixo, o WhatsApp do parque — mesmo que um rascunho antigo traga outro (dono, 05/10)
+      suporte: { tipo: CONTATO_DO_PARQUE.tipo, valor: CONTATO_DO_PARQUE.valor },
       taxaBps: f.taxaBps,
       modoTaxaOnline: f.modoTaxaOnline,
       modoTaxaPdv: f.modoTaxaPdv,
@@ -737,20 +737,12 @@ useHead({ title: 'Criar evento' })
           Este contato é para quem comprou o ingresso e precisa de suporte em relação ao evento.
         </p>
         <hr class="my-4 border-linha">
-        <div class="grid gap-4 lg:grid-cols-3">
+        <!-- fixo, o WhatsApp oficial do parque (dono, 05/10: "tem que ficar fixo") -->
+        <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-fundo-cinza p-4 ring-1 ring-ink-200"
+             data-parte="suporte-fixo">
           <div>
-            <label for="stipo" class="rotulo">Tipo de contato</label>
-            <select id="stipo" v-model="f.suporteTipo" class="campo">
-              <option value="whatsapp">WhatsApp</option>
-              <option value="telefone">Telefone</option>
-            </select>
-          </div>
-          <div class="lg:col-span-2">
-            <label for="sval" class="rotulo">Telefone</label>
-            <input id="sval" :value="f.suporteValor" class="campo" type="tel" inputmode="tel" autocomplete="off"
-                   placeholder="(73) 99842-1010"
-                   @input="f.suporteValor = mascaraTel(($event.target as HTMLInputElement).value)">
-            <p class="mt-1 text-xs text-tinta-fraca">Com DDD. Já vem o WhatsApp do parque; troque só se o evento tiver outro.</p>
+            <p class="font-semibold text-tinta">WhatsApp {{ CONTATO_DO_PARQUE.valor }}</p>
+            <p class="text-sm text-tinta-suave">O número oficial do Conquista Park. Entra sozinho em todo evento.</p>
           </div>
         </div>
       </section>
