@@ -13,6 +13,7 @@
  *    ponto de vista de quem olha pro palco. Inverter isso faz a fila A
  *    parecer a do fundo.
  */
+import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
@@ -204,7 +205,7 @@ useHead({ title: 'Mapa de assentos' })
         <div v-else-if="!setor.total" class="card py-12 text-center">
           <p class="titulo text-lg font-semibold text-tinta">{{ setor.nome }} não tem mapa</p>
           <p class="mx-auto mt-2 max-w-md text-sm text-tinta-suave">
-            Este setor vende por quantidade: {{ setor.estoque }} no estoque,
+            Este setor vende por quantidade: {{ estoqueSemLimite(setor.estoque) ? 'sem limite' : `${setor.estoque} no estoque` }},
             {{ setor.vendidos }} vendidos. Gerar um mapa desenha cada vaga como um lugar
             com nome; a venda continua por quantidade até o checkout escolher lugar.
           </p>

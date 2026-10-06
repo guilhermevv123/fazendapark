@@ -8,6 +8,7 @@
  * pedido cria um tipo de ingresso dentro do evento alheio.
  */
 import { z } from 'zod'
+import { ESTOQUE_SEM_LIMITE } from '../../../../utils/estoque-sem-limite'
 import { q1, tx } from '../../../../utils/db'
 import { CANAIS_PADRAO, explicarErro } from '../index.post'
 import { ROTULOS_INGRESSOS } from './ingressos.patch'
@@ -31,7 +32,8 @@ const Lote = z.object({
   faceCents: z.number().int().min(0).max(100_000_00),
   /** R$ 0,00 só com esta marca — ver o porquê em `evento/index.post.ts` */
   gratuito: z.boolean().default(false),
-  quantidade: z.number().int().min(1).max(1_000_000),
+  /** sem número = SEM LIMITE (dono, 06/10) — ver utils/estoque-sem-limite */
+  quantidade: z.number().int().min(1).max(ESTOQUE_SEM_LIMITE).default(ESTOQUE_SEM_LIMITE),
   minPorCompra: z.number().int().min(1).max(50).default(1),
   maxPorCompra: z.number().int().min(1).max(TETO_POR_COMPRA).default(TETO_POR_COMPRA),
   // Sem `canais`, site E balcão. O padrão antigo aqui (e o do banco) era só
@@ -47,7 +49,8 @@ const Tipo = z.object({
   o: z.literal('tipo'),
   loteId: z.string().uuid(),
   nome: z.string().min(1).max(80),
-  quantidade: z.number().int().min(1).max(1_000_000),
+  /** sem número = acompanha o lote (sem limite) */
+  quantidade: z.number().int().min(1).max(ESTOQUE_SEM_LIMITE).optional(),
   descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').default(0),
   /** preço próprio do tipo (043) — em vez do desconto */
   precoCents: z.number().int().min(1, 'o preço do tipo precisa ser maior que zero').max(10_000_000).nullish(),
@@ -149,7 +152,9 @@ export default defineEventHandler(async (event) => {
   // cada um vai no máximo até o lote, e o lote segura o total — a vitrine
   // mostra por tipo o menor entre a sobra do tipo e a do lote, então tipo
   // "maior" que o que resta não vira "esgotado" no meio do checkout.
-  if (d.quantidade > Number(lote.quantity)) {
+  // tipo sem número acompanha o lote (sem limite, ou o número que o lote tiver)
+  const qtdDoTipo = d.quantidade ?? Number(lote.quantity)
+  if (qtdDoTipo > Number(lote.quantity)) {
     throw createError({
       statusCode: 422,
       statusMessage: `O tipo não pode ter mais que o lote (${lote.quantity})`,
@@ -162,7 +167,7 @@ export default defineEventHandler(async (event) => {
      VALUES ($1,$2,$3,$4,$5,$6,
              COALESCE((SELECT MAX(sort_order) + 1 FROM ticket_types WHERE lot_id = $1), 1), $7)
      RETURNING id`,
-    [d.loteId, d.nome.trim(), d.quantidade, d.precoCents != null ? 0 : d.descontoBps, d.exigeDocumento,
+    [d.loteId, d.nome.trim(), qtdDoTipo, d.precoCents != null ? 0 : d.descontoBps, d.exigeDocumento,
      d.maxPorCliente ?? null, d.precoCents ?? null])
   return { ok: true, tipo: 'tipo', id: r.id }
 })

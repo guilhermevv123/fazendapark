@@ -30,6 +30,7 @@ export function loteCampeao<T extends { faceCents: number }>(linhas: T[]): T | n
  * peso (quanto da receita veio dali) — as duas perguntas que decidem qual
  * lote abrir da próxima vez.
  */
+import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
@@ -63,6 +64,8 @@ const linhas = computed(() => {
     const saiu = x.vendidos + x.cortesias
     return {
       ...x, saiu,
+      // lote sem teto: não existe "quanto do estoque saiu" — giro e sobra viram travessão
+      semLimite: estoqueSemLimite(x.estoque),
       giroPct: pct(saiu, x.estoque),
       pesoPct: pct(x.faceCents, totalFace),
       sobra: Math.max(x.estoque - saiu, 0),
@@ -78,13 +81,14 @@ const totais = computed(() => {
     face: l.reduce((s: number, x: any) => s + x.faceCents, 0),
     taxa: l.reduce((s: number, x: any) => s + x.taxaCents, 0),
     cortesias: l.reduce((s: number, x: any) => s + x.cortesias, 0),
+    semLimite: l.some((x: any) => x.semLimite),
   }
 })
 
 /** o lote que puxou a receita, e o que não saiu do lugar */
 const campeao = computed(() => loteCampeao(linhas.value))
 const parado = computed(() => {
-  const vivos = linhas.value.filter((x: any) => x.estoque > 0)
+  const vivos = linhas.value.filter((x: any) => x.estoque > 0 && !x.semLimite)
   return [...vivos].sort((a, b) => a.giroPct - b.giroPct)[0] ?? null
 })
 
@@ -94,8 +98,8 @@ function exportar() {
     ['Setor', 'Lote', 'Face unitária', 'Estoque', 'Vendidos', 'Cortesias',
      'Saiu', 'Sobra', 'Giro %', 'Face', 'Taxa', 'Peso na receita %'],
     linhas.value.map((x: any) => [
-      x.setor, x.lote, reais(x.faceUnitCents), x.estoque, x.vendidos,
-      x.cortesias, x.saiu, x.sobra, `${x.giroPct}%`,
+      x.setor, x.lote, reais(x.faceUnitCents), x.semLimite ? 'Sem limite' : x.estoque, x.vendidos,
+      x.cortesias, x.saiu, x.semLimite ? '' : x.sobra, x.semLimite ? '' : `${x.giroPct}%`,
       reais(x.faceCents), reais(x.taxaCents), `${x.pesoPct}%`,
     ]))
 }
@@ -123,7 +127,8 @@ useHead({ title: 'Vendas por lote' })
       <div class="card">
         <p class="rotulo-kpi">Saiu do estoque</p>
         <p class="numero-kpi mt-1">{{ totais.saiu }}</p>
-        <p class="mt-1 text-xs text-tinta-fraca">
+        <p v-if="totais.semLimite" class="mt-1 text-xs text-tinta-fraca">ingressos sem limite de quantidade</p>
+        <p v-else class="mt-1 text-xs text-tinta-fraca">
           de {{ totais.estoque.toLocaleString('pt-BR') }} ·
           {{ fmtPct(pct(totais.saiu, totais.estoque)) }} do total
         </p>
@@ -179,10 +184,11 @@ useHead({ title: 'Vendas por lote' })
             <td class="px-3 py-3 text-right tabular-nums"
                 :class="l.cortesias ? 'text-tinta-suave' : 'text-tinta-fraca'">{{ l.cortesias }}</td>
             <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">
-              {{ l.sobra.toLocaleString('pt-BR') }}
+              {{ l.semLimite ? 'Sem limite' : l.sobra.toLocaleString('pt-BR') }}
             </td>
             <td class="px-3 py-3">
-              <div class="flex items-center gap-2">
+              <span v-if="l.semLimite" class="text-xs text-tinta-fraca">—</span>
+              <div v-else class="flex items-center gap-2">
                 <div class="h-1.5 w-20 rounded-full bg-fundo-cinza">
                   <div class="h-1.5 rounded-full" :class="corDoGiro(l.giroPct)" data-parte="giro"
                        :style="{ width: `${l.giroPct ? Math.max(Math.min(l.giroPct, 100), 1.5) : 0}%` }" />
@@ -211,7 +217,7 @@ useHead({ title: 'Vendas por lote' })
             </td>
             <td class="px-3 py-3 text-right tabular-nums text-tinta">{{ totais.cortesias }}</td>
             <td class="px-3 py-3 text-right tabular-nums text-tinta-suave">
-              {{ (totais.estoque - totais.saiu).toLocaleString('pt-BR') }}
+              {{ totais.semLimite ? 'Sem limite' : (totais.estoque - totais.saiu).toLocaleString('pt-BR') }}
             </td>
             <td />
             <td class="px-3 py-3 text-right tabular-nums text-tinta">{{ reais(totais.face) }}</td>

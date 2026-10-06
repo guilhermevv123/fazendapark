@@ -45,6 +45,7 @@ export const ROTULO_DO_STATUS: Record<string, string> = {
  * A busca fica na URL (`?q=`) porque o operador precisa mandar o link do que
  * está vendo — "as cortesias que o João pediu" tem que ser um endereço.
  */
+import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
 import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
 definePageMeta({ layout: 'admin' })
@@ -437,7 +438,7 @@ useHead({ title: 'Cortesias' })
           <label class="rotulo">De qual lote</label>
           <select v-model="form.loteId" class="campo">
             <option v-for="l in data.lotes" :key="l.id" :value="l.id" :disabled="!podeReceber(l)">
-              {{ l.setor }} › {{ l.nome }} — {{ l.disponivel }} em estoque<template
+              {{ l.setor }} › {{ l.nome }} — {{ estoqueSemLimite(l.disponivel) ? 'sem limite' : `${l.disponivel} em estoque` }}<template
                 v-if="l.cota !== null">, {{ l.cotaRestam }} de cota</template>
             </option>
           </select>

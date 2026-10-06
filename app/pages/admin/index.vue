@@ -13,6 +13,7 @@
  *   · todo status do banco tem selo e, quando existe, filtro — cancelado, adiado e oculto não saem
  *     mais em texto cru, e o "pausado" (que o banco não tem) saiu (EVT-05).
  */
+import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { decidirAcesso, ehPapel, papelPode, podeAbrirPagina, type Papel } from '~~/server/utils/papeis'
 import { primeiraTelaDoEvento } from '~/composables/menuDoEvento'
 import { useConsultaNaUrl } from '~/composables/consultaNaUrl'
@@ -151,7 +152,7 @@ const chips = computed(() => {
 
 /** "4,8%"; `null` some a linha (evento sem lote ainda). */
 const pct = (vendidos: number, total: number) =>
-  total ? `${(vendidos / total * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%` : null
+  total && !estoqueSemLimite(total) ? `${(vendidos / total * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%` : null
 
 /** largura de uma parte da barra: nunca abaixo de 2% com alguma unidade, senão 14 de 20.000 some */
 const largura = (parte: number, total: number) =>
@@ -375,9 +376,10 @@ useHead({ title: 'Eventos' })
               <p class="text-[12.5px] font-semibold tabular-nums text-pool-700">{{ pct(pagos(e), e.estoque.total) }}</p>
             </div>
             <p class="titulo mt-0.5 text-[17px] font-bold tabular-nums text-ink-900" data-parte="pagos">
-              {{ milhar(pagos(e)) }}<span class="font-semibold text-ink-500">/{{ milhar(e.estoque.total) }}</span>
+              {{ milhar(pagos(e)) }}<span class="font-semibold text-ink-500">{{ estoqueSemLimite(e.estoque.total) ? ' · sem limite' : `/${milhar(e.estoque.total)}` }}</span>
             </p>
-            <div class="mt-1.5 flex h-2 overflow-hidden rounded-full bg-ink-100" aria-hidden="true">
+            <!-- lote sem teto: não há "do total" pra encher uma barra -->
+            <div v-if="!estoqueSemLimite(e.estoque.total)" class="mt-1.5 flex h-2 overflow-hidden rounded-full bg-ink-100" aria-hidden="true">
               <div class="h-full rounded-l-full bg-gradient-to-r from-pool-500 to-grape-600" :style="{ width: largura(pagos(e), e.estoque.total) }" />
               <div v-if="cortesias(e)" class="h-full bg-citrus-500" :style="{ width: largura(cortesias(e), e.estoque.total) }" />
             </div>

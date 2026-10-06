@@ -240,7 +240,10 @@ describe('tipo com preço próprio', () => {
     await tela.find('#inicio').setValue('2031-03-10T20:00')
     await tela.find('#fim').setValue('2031-03-10T23:00')
     await avancar(tela)
+    // sem limite de quantidade (dono, 06/10): o lote e os tipos vão com o teto do sistema
+    expect(corpoDoPost().setores[0].lotes[0].quantidade).toBe(1_000_000)
     const tipos = corpoDoPost().setores[0].lotes[0].tipos
+    expect(tipos.every((t: any) => t.quantidade === 1_000_000)).toBe(true)
     expect(tipos.find((t: any) => t.nome === 'VIP')).toMatchObject({ precoCents: 12000, descontoBps: 0 })
     expect(tipos.find((t: any) => t.nome === 'Inteira').precoCents).toBeNull()
   })

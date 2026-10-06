@@ -2,7 +2,7 @@
 /**
  * Criar evento — cinco passos, na mesma ordem e com os mesmos blocos do
  * painel de origem: Dados básicos → Descrição → Setores, lotes e tipos →
- * Preços e quantidades → Datas e horários.
+ * Preços → Datas e horários.
  *
  * Conferido de verdade em 21/09/2026, passo a passo, no painel da Zig do
  * próprio parque (sem publicar nada): o passo 1 leva TAMBÉM "Onde vai
@@ -21,6 +21,7 @@
  * lote inteiro sem perceber.
  */
 import { TETO_POR_COMPRA } from '~~/server/utils/limite-de-compra'
+import { ESTOQUE_SEM_LIMITE } from '~~/server/utils/estoque-sem-limite'
 import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
@@ -49,7 +50,7 @@ function novaChaveDeCriacao(): string {
 
 const PASSOS = [
   'Dados básicos', 'Descrição do evento', 'Setores, lotes e tipos',
-  'Preços e quantidades', 'Datas e horários',
+  'Preços', 'Datas e horários',
 ]
 const passo = ref(1)
 /** pra que lado o passo desliza: avançar entra pela direita, voltar pela esquerda */
@@ -240,7 +241,7 @@ function montarSetores() {
 
 function loteNovo(nome: string): Lote {
   return {
-    nome, faceCents: 0, quantidade: 100, minPorCompra: 1, maxPorCompra: TETO_POR_COMPRA,
+    nome, faceCents: 0, quantidade: ESTOQUE_SEM_LIMITE, minPorCompra: 1, maxPorCompra: TETO_POR_COMPRA,
     gratuito: false, canais: ['online', 'bilheteria'], tipos: [], expiraEm: '',
   }
 }
@@ -301,7 +302,6 @@ function validar(p: number): string[] {
         e.push(`"${s.nome} · ${l.nome}": o valor está R$ 0,00. Digite o preço ou marque "Ingresso gratuito".`)
       }
       if (!l.canais.length) e.push(`"${s.nome} · ${l.nome}": marque onde vende — Site, Bilheteria ou os dois.`)
-      if (l.quantidade < 1) e.push(`"${s.nome} · ${l.nome}": a quantidade tem que ser pelo menos 1.`)
       if (l.minPorCompra > l.maxPorCompra) {
         e.push(`"${s.nome} · ${l.nome}": o mínimo por compra passou do máximo.`)
       }
@@ -422,12 +422,13 @@ async function publicar() {
         lotes: s.lotes.map((l) => ({
           nome: l.nome.trim(), faceCents: l.faceCents,
           gratuito: l.faceCents === 0 && l.gratuito, canais: l.canais,
-          quantidade: l.quantidade,
+          // sem limite (dono, 06/10): o lote só fecha à mão — rascunho antigo com número não vale
+          quantidade: ESTOQUE_SEM_LIMITE,
           expiraEm: instanteNoFuso(l.expiraEm, f.fuso) ?? undefined,
           minPorCompra: l.minPorCompra, maxPorCompra: l.maxPorCompra,
           // cada tipo vai até o lote inteiro: é o lote que segura o total
           tipos: l.tipos.map((t) => ({
-            nome: t.nome.trim(), quantidade: l.quantidade,
+            nome: t.nome.trim(), quantidade: ESTOQUE_SEM_LIMITE,
             descontoBps: t.precoProprio ? 0 : t.descontoBps, exigeDocumento: t.exigeDocumento,
             // preço próprio (043) só em lote pago — o gratuito é gratuito pra todos os tipos
             precoCents: t.precoProprio && !l.gratuito ? t.precoCents : null,
@@ -786,7 +787,7 @@ useHead({ title: 'Criar evento' })
         <h2 class="titulo-bloco">Setores, lotes e tipos de ingresso</h2>
         <p class="apoio-bloco">
           Já vem pronto pro caso mais comum. Mude só o que o seu evento tiver de diferente —
-          preço e quantidade de cada um entram no próximo passo.
+          o preço de cada um entra no próximo passo.
         </p>
         <hr class="my-4 border-linha">
 
@@ -824,7 +825,7 @@ useHead({ title: 'Criar evento' })
           <h3 class="titulo text-[15px] font-semibold text-tinta">Lotes</h3>
           <InfoDica rotulo="O que é lote?">
             As levas de venda: 1º lote, 2º lote… Normalmente o preço sobe a cada lote. Todo
-            setor recebe os mesmos lotes, e a quantidade e o preço de cada um você define no
+            setor recebe os mesmos lotes, e o preço de cada um você define no
             próximo passo.
           </InfoDica>
         </div>
@@ -908,8 +909,8 @@ useHead({ title: 'Criar evento' })
            expira e onde vende. Taxa, limite por cliente e tempo de reserva
            ficam no padrão e se mudam depois em Configurações do evento. -->
       <section class="card">
-        <h2 class="titulo-bloco">Preços e quantidades</h2>
-        <p class="apoio-bloco">Digite o valor e a quantidade de cada lote. É só isso — o resto já vem no padrão.</p>
+        <h2 class="titulo-bloco">Preços</h2>
+        <p class="apoio-bloco">Digite o valor de cada lote. Não tem limite de quantidade: o lote vende até você fechar.</p>
         <hr class="my-4 border-linha">
 
         <div class="max-w-xs">
@@ -923,11 +924,11 @@ useHead({ title: 'Criar evento' })
           <p class="bg-gradient-to-r from-pool-700 to-grape-700 px-4 py-2.5 text-center text-[14px] font-semibold text-white">
             Setor: {{ s.nome }}
           </p>
-          <div class="hidden gap-3 bg-fundo-cinza px-4 py-2 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-tinta-suave sm:grid sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,1.3fr)_minmax(0,1fr)]">
-            <span>Lote</span><span>Valor</span><span>Qtd</span><span>Expira em</span><span>Canais de venda</span>
+          <div class="hidden gap-3 bg-fundo-cinza px-4 py-2 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-tinta-suave sm:grid sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.3fr)_minmax(0,1.3fr)_minmax(0,1fr)]">
+            <span>Lote</span><span>Valor</span><span>Fecha em</span><span>Canais de venda</span>
           </div>
           <div v-for="(l, j) in s.lotes" :key="j"
-               class="grid grid-cols-2 gap-3 border-t border-linha px-4 py-3.5 sm:items-start sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,1.3fr)_minmax(0,1fr)]">
+               class="grid grid-cols-2 gap-3 border-t border-linha px-4 py-3.5 sm:items-start sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.3fr)_minmax(0,1.3fr)_minmax(0,1fr)]">
             <div class="col-span-2 sm:col-span-1 sm:pt-2.5">
               <p class="titulo font-semibold text-tinta">{{ l.nome }}</p>
             </div>
@@ -959,15 +960,10 @@ useHead({ title: 'Criar evento' })
               </label>
             </div>
             <div>
-              <label class="rotulo sm:sr-only">Quantidade</label>
-              <input v-model.number="l.quantidade" type="number" min="1" class="campo text-center tabular-nums"
-                     :aria-label="`Quantidade do ${l.nome}`">
-            </div>
-            <div>
-              <label class="rotulo sm:sr-only">Expira em</label>
+              <label class="rotulo sm:sr-only">Fecha em</label>
               <input v-model="l.expiraEm" type="datetime-local" class="campo"
                      :aria-label="`Data de expiração do ${l.nome}`">
-              <p class="mt-1 text-[11.5px] text-tinta-fraca">opcional · no fuso do evento (passo 5)</p>
+              <p class="mt-1 text-[11.5px] text-tinta-fraca">opcional · sem data, vende até você fechar (sem limite de quantidade)</p>
             </div>
             <div class="col-span-2 sm:col-span-1">
               <label class="rotulo sm:sr-only">Canais de venda</label>

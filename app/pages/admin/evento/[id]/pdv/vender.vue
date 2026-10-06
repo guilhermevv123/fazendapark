@@ -388,7 +388,7 @@ function imprimir() {
                       :disabled="l.disponivel <= 0" @click="juntar(l)">
                 <p class="titulo font-semibold text-tinta">{{ l.nome }}</p>
                 <p class="numero-kpi mt-1">{{ reais(l.balcaoCents) }}</p>
-                <p class="mt-1 text-xs text-tinta-fraca">{{ l.disponivel }} disponíveis</p>
+                <p class="mt-1 text-xs text-tinta-fraca">{{ l.semLimite ? 'Sem limite' : `${l.disponivel} disponíveis` }}</p>
               </button>
               <!-- um botão por tipo (inteira, meia…) -->
               <button v-for="t in l.tipos" :key="t.id" type="button"
@@ -398,7 +398,7 @@ function imprimir() {
                 <p class="text-sm text-tinta-suave">{{ t.nome }}</p>
                 <p class="numero-kpi mt-1">{{ reais(t.balcaoCents) }}</p>
                 <p class="mt-1 text-xs text-tinta-fraca">
-                  {{ Math.min(l.disponivel, t.disponivel) }} disponíveis
+                  {{ t.semLimite ? 'Sem limite' : `${Math.min(l.disponivel, t.disponivel)} disponíveis` }}
                   <span v-if="t.exigeDocumento" class="selo-alerta ml-1">pede documento</span>
                 </p>
               </button>

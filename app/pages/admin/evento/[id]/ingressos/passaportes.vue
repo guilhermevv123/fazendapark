@@ -13,6 +13,7 @@
  * metade. A conta de "lugares de verdade" no rodapé é exatamente unidades ×
  * admite — é ela que responde quantas pessoas cabem, não o estoque.
  */
+import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
 definePageMeta({ layout: 'admin' })
 
@@ -41,11 +42,14 @@ const ROTULO: Record<string, string> = {
 function lugares(s: any) {
   const un = s.lotes.reduce((n: number, l: any) => n + l.quantidade, 0)
   const vendidas = s.lotes.reduce((n: number, l: any) => n + l.vendidos + l.reservados, 0)
-  return { unidades: un, vendidas, pessoas: un * s.admite, pessoasVendidas: vendidas * s.admite }
+  // lote sem teto: "quantas pessoas cabem" não tem número — conta só quem já comprou
+  const semLimite = s.lotes.some((l: any) => estoqueSemLimite(l.quantidade))
+  return { unidades: un, vendidas, pessoas: un * s.admite, pessoasVendidas: vendidas * s.admite, semLimite }
 }
 
+const semLimiteGeral = computed(() => grupos.value.some((s: any) => lugares(s).semLimite))
 const totalPessoas = computed(() =>
-  grupos.value.reduce((n: number, s: any) => n + lugares(s).pessoas, 0))
+  grupos.value.reduce((n: number, s: any) => n + (semLimiteGeral.value ? lugares(s).pessoasVendidas : lugares(s).pessoas), 0))
 
 async function salvarCampo(setorId: string, campos: any) {
   erro.value = ''
@@ -159,7 +163,7 @@ useHead({ title: 'Passaportes e grupos' })
       <div class="grid gap-4 p-4 sm:grid-cols-4">
         <div>
           <p class="rotulo-kpi">Unidades à venda</p>
-          <p class="numero-kpi mt-1">{{ lugares(s).unidades }}</p>
+          <p class="numero-kpi mt-1">{{ lugares(s).semLimite ? 'Sem limite' : lugares(s).unidades }}</p>
         </div>
         <div>
           <p class="rotulo-kpi">Unidades saídas</p>
@@ -167,8 +171,8 @@ useHead({ title: 'Passaportes e grupos' })
         </div>
         <div>
           <p class="rotulo-kpi">Pessoas que cabem</p>
-          <p class="numero-kpi mt-1 text-acao">{{ lugares(s).pessoas }}</p>
-          <p class="mt-1 text-xs text-tinta-fraca">{{ lugares(s).unidades }} × {{ s.admite }}</p>
+          <p class="numero-kpi mt-1 text-acao">{{ lugares(s).semLimite ? 'Sem limite' : lugares(s).pessoas }}</p>
+          <p class="mt-1 text-xs text-tinta-fraca">{{ lugares(s).semLimite ? `${s.admite} por unidade` : `${lugares(s).unidades} × ${s.admite}` }}</p>
         </div>
         <div>
           <p class="rotulo-kpi">Pessoas já vendidas</p>
@@ -195,9 +199,9 @@ useHead({ title: 'Passaportes e grupos' })
               {{ reais(Math.round(l.totalCents / s.admite)) }}
             </td>
             <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">
-              {{ l.disponivel }} de {{ l.quantidade }}
+              {{ estoqueSemLimite(l.quantidade) ? 'Sem limite' : `${l.disponivel} de ${l.quantidade}` }}
             </td>
-            <td class="px-3 py-2.5 text-right tabular-nums text-acao">{{ l.quantidade * s.admite }}</td>
+            <td class="px-3 py-2.5 text-right tabular-nums text-acao">{{ estoqueSemLimite(l.quantidade) ? 'Sem limite' : l.quantidade * s.admite }}</td>
           </tr>
         </tbody>
       </table>
@@ -208,7 +212,7 @@ useHead({ title: 'Passaportes e grupos' })
     <div v-if="grupos.length"
          class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 rounded-card bg-acao px-5 py-3 text-white">
       <p class="titulo text-base font-semibold">
-        Pessoas em passaportes e grupos: <span class="tabular-nums">{{ totalPessoas }}</span>
+        {{ semLimiteGeral ? 'Pessoas já vendidas em passaportes e grupos' : 'Pessoas em passaportes e grupos' }}: <span class="tabular-nums">{{ totalPessoas }}</span>
       </p>
       <p class="text-sm opacity-90">
         {{ grupos.length }} setor(es) fora do ingresso simples

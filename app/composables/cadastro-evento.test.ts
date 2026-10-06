@@ -272,9 +272,10 @@ describe('passo 3 no modelo da Zig', () => {
 
     const precos = tela.findAll('input[inputmode="numeric"]').map((i: any) => (i.element as HTMLInputElement).value)
     expect(precos[0], 'o 1º lote perdeu o preço').toBe('30,00')
-    // os dois lotes na tabela do setor
-    expect(tela.find('input[aria-label="Quantidade do 1º lote"]').exists()).toBe(true)
-    expect(tela.find('input[aria-label="Quantidade do 2º lote"]').exists()).toBe(true)
+    // os dois lotes na tabela do setor — e sem campo de quantidade (dono, 06/10: sem limite)
+    expect(tela.find('input[aria-label="Data de expiração do 1º lote"]').exists()).toBe(true)
+    expect(tela.find('input[aria-label="Data de expiração do 2º lote"]').exists()).toBe(true)
+    expect(tela.find('input[aria-label^="Quantidade do"]').exists(), 'voltou o campo de quantidade').toBe(false)
   })
 })
 

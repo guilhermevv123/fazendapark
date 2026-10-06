@@ -77,6 +77,7 @@ export function isolarParaImpressao(folha: Element | null): () => void {
  *
  * Por isso a coluna de cortesia existe separada em toda tabela daqui.
  */
+import { estoqueSemLimite, quantidadeNaTela } from '~~/server/utils/estoque-sem-limite'
 definePageMeta({ layout: 'admin' })
 
 const route = useRoute()
@@ -121,7 +122,7 @@ function imprimir() {
 function exportar() {
   if (!data.value) return
   const linhas: (string | number)[][] = (data.value.lotes ?? []).map((l: any) => [
-    l.setor, l.lote, reais(l.faceUnitCents), l.estoque, l.vendidos, l.cortesias,
+    l.setor, l.lote, reais(l.faceUnitCents), estoqueSemLimite(l.estoque) ? 'Sem limite' : l.estoque, l.vendidos, l.cortesias,
     reais(l.faceCents), reais(l.taxaCents),
   ])
   if (resultado.value) {
@@ -294,7 +295,7 @@ useHead({ title: 'Borderô' })
             <td class="px-4 py-2.5 text-tinta-suave">{{ l.setor }}</td>
             <td class="px-3 py-2.5 font-medium text-tinta">{{ l.lote }}</td>
             <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">{{ reais(l.faceUnitCents) }}</td>
-            <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">{{ l.estoque }}</td>
+            <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">{{ quantidadeNaTela(l.estoque) }}</td>
             <td class="px-3 py-2.5 text-right tabular-nums text-tinta">{{ l.vendidos }}</td>
             <td v-if="temCortesia" class="px-3 py-2.5 text-right tabular-nums"
                 :class="l.cortesias ? 'text-alerta' : 'text-tinta-fraca'">

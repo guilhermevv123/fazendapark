@@ -32,6 +32,7 @@ definePageMeta({ layout: 'admin' })
 // antes de configurar. O módulo é regra pura: não importa `pg` em valor, não
 // toca banco, não tem efeito colateral nenhum ao ser carregado.
 import { TETO_POR_COMPRA } from '~~/server/utils/limite-de-compra'
+import { ESTOQUE_SEM_LIMITE, estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { COTA_LEGAL_BPS, cotaDeMeias, MOTIVOS } from '~~/server/utils/meia-entrada'
 // A conta do preço é a do SERVIDOR (ADM-23): `precificar` é a que o checkout cobra e
 // `faceParaTotal` é a inversa dela. A cópia daqui arredondava diferente e a face "redonda"
@@ -114,10 +115,11 @@ async function mover(o: 'tipo' | 'setor', alvoId: string, direcao: 'subir' | 'de
  * é teto; lote é o que está na prateleira.
  */
 const totais = computed(() => {
-  const s = { quantidade: 0, vendidos: 0, reservados: 0, disponivel: 0, teto: 0 }
+  const s = { quantidade: 0, vendidos: 0, reservados: 0, disponivel: 0, teto: 0, semLimite: false }
   for (const setor of data.value?.setores ?? []) {
     s.teto += setor.capacidade ?? 0
     for (const l of setor.lotes) {
+      if (estoqueSemLimite(l.quantidade)) s.semLimite = true
       s.quantidade += l.quantidade
       s.vendidos += l.vendidos
       s.reservados += l.reservados
@@ -201,7 +203,7 @@ async function salvarSetor() {
  */
 const loteForm = reactive({
   aberto: false, id: '', setorId: '', nome: '', faceCents: 0,
-  quantidade: 100, minPorCompra: 1, maxPorCompra: TETO_POR_COMPRA,
+  quantidade: ESTOQUE_SEM_LIMITE, minPorCompra: 1, maxPorCompra: TETO_POR_COMPRA,
   abreEm: '', expiraEm: '', visivel: true,
   gratuito: false, canais: ['online', 'bilheteria'] as string[],
 })
@@ -229,7 +231,7 @@ function abrirLote(setorId: string, l?: any) {
     id: l?.id ?? '',
     nome: l?.nome ?? '',
     faceCents: l?.faceCents ?? 0,
-    quantidade: l?.quantidade ?? 100,
+    quantidade: l?.quantidade ?? ESTOQUE_SEM_LIMITE,
     minPorCompra: l?.minPorCompra ?? 1,
     maxPorCompra: l?.maxPorCompra ?? TETO_POR_COMPRA,
     abreEm: paraCampo(l?.abreEm ?? null),
@@ -251,7 +253,8 @@ function camposDoLote() {
     nome: loteForm.nome || 'Lote único',
     faceCents: loteForm.faceCents,
     gratuito: loteForm.faceCents === 0 && loteForm.gratuito,
-    quantidade: loteForm.quantidade,
+    // sem campo de quantidade (dono, 06/10): lote novo nasce sem limite no servidor, e editar não
+    // mexe no que já está gravado
     minPorCompra: loteForm.minPorCompra,
     maxPorCompra: loteForm.maxPorCompra,
     abreEm: deCampo(loteForm.abreEm),
@@ -412,7 +415,7 @@ const SELO_ESPECIE: Record<string, { texto: string; classe: string }> = {
  */
 function cotaDoLote(lote: any) {
   const meias = (lote.tipos ?? []).filter((t: any) => especieDoTipo(t) === 'meia')
-  if (!meias.length) return null
+  if (!meias.length || estoqueSemLimite(lote.quantidade)) return null
   const cota = cotaDeMeias(Number(lote.quantidade), COTA_LEGAL_BPS)
   const vendidas = meias.reduce((s: number, t: any) => s + Number(t.vendidos), 0)
   return { cota, vendidas, restam: Math.max(cota - vendidas, 0) }
@@ -441,8 +444,7 @@ function abrirTipo(loteId: string, t?: any) {
     aberto: true, loteId,
     id: t?.id ?? '',
     nome: t?.nome ?? '',
-    // tipo novo nasce com o que SOBRA do lote — um número fixo (50) estourava
-    // o lote de 30 já no primeiro "Criar tipo"
+    // sem campo de quantidade (dono, 06/10): o tipo novo acompanha o lote (o servidor decide)
     quantidade: t?.quantidade ?? sobraDoLote(loteId),
     descontoBps: t?.descontoBps ?? 0,
     exigeDocumento: t?.exigeDocumento ?? false,
@@ -456,7 +458,6 @@ async function salvarTipo() {
   if (preco && !(tipoForm.precoCents > 0)) { erro.value = 'Digite o preço do tipo.'; return }
   const campos = {
     nome: tipoForm.nome || 'Inteira',
-    quantidade: tipoForm.quantidade,
     descontoBps: preco ? 0 : tipoForm.descontoBps,
     precoCents: preco ? tipoForm.precoCents : null,
     exigeDocumento: tipoForm.exigeDocumento,
@@ -534,8 +535,8 @@ useHead({ title: 'Ingressos' })
       <div class="min-w-0">
         <p class="text-[15px] font-medium text-tinta">Lotes viram automaticamente</p>
         <p class="text-sm text-tinta-suave">
-          Quando um lote esgota, o próximo do mesmo setor abre sozinho. Desligado, cada
-          lote só aparece quando você mandar.
+          Não há limite de quantidade: o lote vende até você fechar (✓/✗ na linha do lote, ou a data
+          "Fecha em"). Ligado, quando um lote fecha o próximo do mesmo setor abre sozinho.
         </p>
       </div>
       <p class="ml-auto shrink-0 text-sm text-tinta-suave">
@@ -662,11 +663,17 @@ useHead({ title: 'Ingressos' })
                 </td>
 
                 <td class="px-3 py-3 text-right tabular-nums text-tinta">
-                  {{ lote.disponivel }}
-                  <span class="block text-xs text-tinta-fraca">de {{ lote.quantidade }}</span>
+                  <template v-if="estoqueSemLimite(lote.quantidade)">Sem limite</template>
+                  <template v-else>
+                    {{ lote.disponivel }}
+                    <span class="block text-xs text-tinta-fraca">de {{ lote.quantidade }}</span>
+                  </template>
                 </td>
 
-                <td class="px-3 py-3">
+                <td v-if="estoqueSemLimite(lote.quantidade)" class="px-3 py-3 text-xs text-tinta-fraca">
+                  vende até você fechar
+                </td>
+                <td v-else class="px-3 py-3">
                   <div class="h-2 w-full overflow-hidden rounded-full bg-fundo-cinza">
                     <div class="h-full rounded-full bg-acao"
                          :style="{ width: `${lote.quantidade ? Math.min(100, ((lote.vendidos + lote.reservados) / lote.quantidade) * 100) : 0}%` }" />
@@ -804,8 +811,11 @@ useHead({ title: 'Ingressos' })
                   </td>
                   <td class="px-3 py-2 text-right tabular-nums text-tinta-suave">{{ t.vendidos }}</td>
                   <td class="px-3 py-2 text-right tabular-nums text-tinta-suave">
-                    {{ t.quantidade - t.vendidos }}
-                    <span class="block text-xs text-tinta-fraca">de {{ t.quantidade }}</span>
+                    <template v-if="estoqueSemLimite(t.quantidade)">Sem limite</template>
+                    <template v-else>
+                      {{ t.quantidade - t.vendidos }}
+                      <span class="block text-xs text-tinta-fraca">de {{ t.quantidade }}</span>
+                    </template>
                   </td>
                   <td colspan="2" class="px-3 py-2 text-xs text-tinta-fraca">
                     <template v-if="t.maxPorCliente">máx. {{ t.maxPorCliente }} por cliente</template>
@@ -851,14 +861,14 @@ useHead({ title: 'Ingressos' })
     <div v-if="data.setores.length"
          class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 gap-y-1 rounded-card bg-acao px-5 py-3 text-white">
       <p class="titulo text-base font-semibold">
-        Quantidade Total: <span class="tabular-nums">{{ totais.quantidade }}</span>
-        <span v-if="totais.teto" class="font-normal opacity-80"> / {{ totais.teto }}</span>
+        Quantidade Total: <span class="tabular-nums">{{ totais.semLimite ? 'Sem limite' : totais.quantidade }}</span>
+        <span v-if="totais.teto && !totais.semLimite" class="font-normal opacity-80"> / {{ totais.teto }}</span>
       </p>
       <p class="text-sm opacity-90">
         Vendido + pendente: <span class="tabular-nums">{{ totais.vendidos + totais.reservados }}</span>
       </p>
       <p class="text-sm opacity-90">
-        Disponível: <span class="tabular-nums">{{ totais.disponivel }}</span>
+        Disponível: <span class="tabular-nums">{{ totais.semLimite ? 'sem limite' : totais.disponivel }}</span>
       </p>
       <NuxtLink v-if="podeDashboard" :to="`/admin/evento/${id}/dashboard`"
                 class="ml-auto rounded-card border border-white/60 px-3 py-1.5 text-sm font-semibold hover:bg-white/10">
@@ -888,14 +898,6 @@ useHead({ title: 'Ingressos' })
               {{ s.titulo ?? dataCurta(s.inicio) }}
             </option>
           </select>
-        </div>
-        <div>
-          <label for="sc" class="rotulo">Capacidade (opcional)</label>
-          <input id="sc" v-model.number="setorForm.capacidade" type="number" min="1"
-                 class="campo tabular-nums" placeholder="sem teto">
-          <p class="mt-1 text-xs text-tinta-fraca">
-            Teto do setor. A soma dos lotes não pode passar disso.
-          </p>
         </div>
         <div>
           <label for="sd" class="rotulo">Descrição (opcional)</label>
@@ -934,17 +936,13 @@ useHead({ title: 'Ingressos' })
           </label>
         </div>
         <div>
-          <label class="rotulo">Quantidade</label>
-          <input v-model.number="loteForm.quantidade" type="number" min="0" class="campo tabular-nums">
-        </div>
-        <div>
           <label class="rotulo">Mín. por compra</label>
           <input v-model.number="loteForm.minPorCompra" type="number" min="1" max="50" class="campo tabular-nums">
         </div>
         <div>
           <label class="rotulo">Máx. por compra</label>
           <input v-model.number="loteForm.maxPorCompra" type="number" min="1" :max="TETO_POR_COMPRA" class="campo tabular-nums">
-          <p class="mt-1 text-xs text-ink-600">{{ TETO_POR_COMPRA }} = sem limite: quem segura é a quantidade do lote.</p>
+          <p class="mt-1 text-xs text-ink-600">{{ TETO_POR_COMPRA }} = sem limite por compra.</p>
         </div>
         <div>
           <label class="rotulo">Abre em (opcional)</label>
@@ -1004,10 +1002,6 @@ useHead({ title: 'Ingressos' })
           <input v-model="tipoForm.nome" class="campo" placeholder="Meia-entrada">
         </div>
         <div>
-          <label class="rotulo">Quantidade</label>
-          <input v-model.number="tipoForm.quantidade" type="number" min="0" class="campo tabular-nums">
-        </div>
-        <div>
           <label class="rotulo" for="modo-tipo">Como cobra</label>
           <select id="modo-tipo" v-model="tipoForm.modo" class="campo" data-parte="modo-do-tipo">
             <option value="desconto">% de desconto sobre o lote</option>
@@ -1043,9 +1037,11 @@ useHead({ title: 'Ingressos' })
       <div v-if="especieDoForm === 'meia'" class="faixa-aviso mt-3">
         <p class="font-semibold text-tinta">Isto é uma meia-entrada legal.</p>
         <p class="mt-1">
-          Vale para até 40% dos ingressos do lote<template v-if="loteDoForm">
+          <template v-if="loteDoForm && estoqueSemLimite(loteDoForm.quantidade)">Neste lote não há limite de
+            quantidade, então a meia também não tem teto (a lei garante o mínimo de 40%, não obriga a limitar).</template>
+          <template v-else>Vale para até 40% dos ingressos do lote<template v-if="loteDoForm">
             — <strong class="tabular-nums">{{ inteiro(cotaDeMeias(Number(loteDoForm.quantidade))) }}</strong>
-            em "{{ loteDoForm.nome }}"</template>. O comprador escolhe o motivo na compra
+            em "{{ loteDoForm.nome }}"</template>.</template> O comprador escolhe o motivo na compra
           e a portaria confere:
         </p>
         <ul class="mt-2 space-y-1">

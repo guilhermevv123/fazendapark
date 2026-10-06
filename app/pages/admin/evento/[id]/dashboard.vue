@@ -149,6 +149,7 @@ export const COR_DO_CANAL: Record<string, string> = {
  * O período mora na URL (ADM-31): `?periodo=hoje|ontem|7d` ou `?de=&ate=`, e a aba em `?aba=`.
  * Em "Hoje" a página se atualiza sozinha a cada minuto e diz a hora da última leitura.
  */
+import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
 
 definePageMeta({ layout: 'admin' })
@@ -343,7 +344,8 @@ const porTipo = computed(() => {
   return { total, linhas: linhas.map((l) => ({ ...l, pct: total ? (l.ingressos / total) * 100 : 0 })) }
 })
 /** perto da cota: 7/8 dela (35% de um lote com a cota legal de 40%); passou: acima da cota */
-const cotas = computed(() => (data.value?.cotaDeMeia ?? []).map((c: any) => ({
+// lote sem teto: a cota de 40% de um milhão não trava nada, então a linha só faria barulho
+const cotas = computed(() => (data.value?.cotaDeMeia ?? []).filter((c: any) => !estoqueSemLimite(c.quantidade)).map((c: any) => ({
   ...c,
   estado: c.meias > c.cota ? 'estourou' : c.cota > 0 && c.meias >= c.cota * 0.875 ? 'perto' : 'ok',
   largura: larguraDaBarra(c.meias, c.quantidade),
@@ -945,14 +947,14 @@ useHead({ title: 'Dashboard do evento' })
                 <td class="px-4 py-2.5">
                   <div class="flex items-center gap-2">
                     <span class="w-12 text-right tabular-nums">{{ num(s.vendidos) }}</span>
-                    <span class="h-1.5 w-20 overflow-hidden rounded-full bg-ink-100">
+                    <span v-if="!estoqueSemLimite(s.quantidade)" class="h-1.5 w-20 overflow-hidden rounded-full bg-ink-100">
                       <span class="block h-full rounded-full bg-acao" data-parte="ocupacao-lote"
                             :style="{ width: `${larguraDaBarra(s.vendidos, s.quantidade)}%` }" />
                     </span>
                   </div>
                 </td>
                 <td class="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-tinta-suave">
-                  {{ num(s.quantidade - s.vendidos - s.reservados) }} / {{ num(s.quantidade) }}
+                  {{ estoqueSemLimite(s.quantidade) ? 'Sem limite' : `${num(s.quantidade - s.vendidos - s.reservados)} / ${num(s.quantidade)}` }}
                 </td>
                 <td class="whitespace-nowrap px-4 py-2.5 text-right font-medium tabular-nums">{{ reais(s.cobradoCents) }}</td>
               </tr>

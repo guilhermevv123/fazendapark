@@ -12,6 +12,7 @@
  * quebrar link já divulgado — então é gerado com cuidado e conferido contra
  * as rotas reservadas do próprio site.
  */
+import { ESTOQUE_SEM_LIMITE } from '../../../utils/estoque-sem-limite'
 import { z } from 'zod'
 import { q1, tx } from '../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
@@ -132,14 +133,16 @@ const Entrada = z.object({
        * balcão como "não está liberado para venda na bilheteria".
        */
       canais: z.array(z.enum(['online', 'bilheteria', 'cortesia'])).min(1).optional(),
-      quantidade: z.number().int().min(1).max(1_000_000),
+      /** sem número = SEM LIMITE (dono, 06/10: o lote só fecha à mão) — ver utils/estoque-sem-limite */
+      quantidade: z.number().int().min(1).max(ESTOQUE_SEM_LIMITE).default(ESTOQUE_SEM_LIMITE),
       /** o lote para de vender nesta hora (a vitrine e o checkout já leem `expires_at`) */
       expiraEm: z.string().datetime({ offset: true }).nullish(),
       minPorCompra: z.number().int().min(1).max(50).default(1),
       maxPorCompra: z.number().int().min(1).max(TETO_POR_COMPRA).default(TETO_POR_COMPRA),
       tipos: z.array(z.object({
         nome: z.string().min(1).max(80),
-        quantidade: z.number().int().min(1).max(1_000_000),
+        /** sem número = acompanha o lote (sem limite) */
+        quantidade: z.number().int().min(1).max(ESTOQUE_SEM_LIMITE).optional(),
         descontoBps: z.number().int().min(0).max(10_000, 'não pode passar de 100%').default(0),
         /** preço próprio do tipo (043) — em vez do desconto; o VIP mais caro que o lote */
         precoCents: z.number().int().min(1, 'preço do tipo precisa ser maior que zero').max(10_000_000).nullish(),
@@ -424,7 +427,7 @@ export default defineEventHandler(async (event) => {
           // própria no lote (`half_quota_bps`). Antes a soma dos tipos tinha que
           // caber no lote: "100" virava 50 inteiras + 50 meias, e a meia
           // esgotava com inteira sobrando.
-          const passou = l.tipos.find((t) => t.quantidade > l.quantidade)
+          const passou = l.tipos.find((t) => t.quantidade != null && t.quantidade > l.quantidade)
           if (passou) {
             throw createError({
               statusCode: 422,
@@ -446,7 +449,7 @@ export default defineEventHandler(async (event) => {
                                          requires_document, sort_order, price_cents)
                VALUES ($1,$2,$3,$4,$5,$6,$7)`,
               // preço próprio e desconto não convivem: com preço, o desconto é 0
-              [rl.rows[0].id, t.nome.trim(), t.quantidade, t.precoCents != null ? 0 : t.descontoBps,
+              [rl.rows[0].id, t.nome.trim(), t.quantidade ?? l.quantidade, t.precoCents != null ? 0 : t.descontoBps,
                t.exigeDocumento, it + 1, t.precoCents ?? null])
           }
         }

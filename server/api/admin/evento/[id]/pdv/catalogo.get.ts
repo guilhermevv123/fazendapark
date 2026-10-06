@@ -13,6 +13,7 @@
 import { q, q1 } from '../../../../../utils/db'
 import { faceDoTipo, precificar, type ModoTaxa } from '../../../../../utils/dinheiro'
 import { SQL_FIM_DO_DIA_DO_LOTE } from '../../../../../utils/caixa'
+import { estoqueSemLimite } from '../../../../../utils/estoque-sem-limite'
 
 export default defineEventHandler(async (event) => {
   const eventId = getRouterParam(event, 'id')!
@@ -64,6 +65,8 @@ export default defineEventHandler(async (event) => {
       balcaoCents: p.totalCents,
       taxaCents: p.feeCents,
       disponivel,
+      // lote sem teto (o dono fecha à mão): o balcão diz "Sem limite", não 999.999
+      semLimite: estoqueSemLimite(l.quantity),
       minimo: Number(l.min_per_order),
       maximo: Number(l.max_per_order),
       tipos: tipos.filter((t) => t.lot_id === l.id).map((t) => {
@@ -81,6 +84,7 @@ export default defineEventHandler(async (event) => {
           especie: t.kind,
           // tipos compartilham o lote: o que o tipo ainda tem, até o que sobra no lote
           disponivel: Math.min(Number(t.quantity) - Number(t.sold), disponivel),
+          semLimite: estoqueSemLimite(l.quantity) && estoqueSemLimite(t.quantity),
         }
       }),
     }
