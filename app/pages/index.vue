@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import VideoDoParque from '~/components/VideoDoParque.vue'
+import LogoMarca from '~/components/LogoMarca.vue'
 /**
  * A home do site de vendas — o que o comprador vê primeiro.
  *
@@ -8,8 +9,8 @@ import VideoDoParque from '~/components/VideoDoParque.vue'
  * chamada final. Os DADOS são os de cá. O parque vende por EDIÇÃO (evento com
  * data), não por calendário diário; então onde o site novo listava "próximas
  * datas abertas" esta home lista os eventos, e onde ele mostrava o preço do dia
- * ela mostra os ingressos do evento em destaque — com o preço que o comprador
- * de fato paga (`totalCents`, taxa inclusa), o mesmo que a vitrine cobra.
+ * ela mostra o painel do evento em destaque (foto, quando, onde e o "a partir de",
+ * taxa inclusa — o mesmo valor que a vitrine cobra).
  *
  * O que já era desta tela e ficou, porque cada item custou um bug:
  *
@@ -63,8 +64,6 @@ const SELO: Record<string, { texto: string; classe: string }> = {
 const selo = (s: string) => SELO[s] ?? SELO.em_breve!
 
 const vende = (s: string) => s === 'disponivel' || s === 'ultimas'
-/** Preço de vitrine: ingresso de graça diz "Grátis", não "R$ 0,00" (dono, 28/09). */
-const preco = (cents: number) => (Number(cents) === 0 ? 'Grátis' : reais(cents))
 
 const eventos = computed<any[]>(() => data.value?.eventos ?? [])
 /** Onde o comprador cai ao apertar "Comprar": o primeiro evento que ainda vende. */
@@ -82,8 +81,8 @@ const cidade = computed(() => {
  */
 /**
  * Mais de um evento no ar: todos entram no MESMO cartão, lado a lado (dono, 28/09: o destaque
- * detalhado em cima e o resto em linha, embaixo, ficava incoerente). Com um só, a home abre os
- * ingressos dele por dentro, como antes.
+ * detalhado em cima e o resto em linha, embaixo, ficava incoerente). Com um só, a home mostra o
+ * painel dele (foto, nome, quando, onde, "a partir de" e o botão de comprar).
  */
 const varios = computed(() => eventos.value.length > 1)
 
@@ -93,7 +92,6 @@ const { data: detalhe } = await useAsyncData('home-destaque',
     : null),
   { watch: [destaque] })
 
-/** Um cartão por setor, com o lote que ainda vende (ou o primeiro, se nenhum vende). */
 /*
  * Quando começa e quando termina, com hora (dono, 23/09: "é interessante que
  * apareça data de início e data de final"). O fim vem de `/api/e/:slug`, que
@@ -109,26 +107,25 @@ const quandoDestaque = computed(() => ({
   fim: comHora(detalhe.value?.evento?.fim),
 }))
 
-const ingressos = computed(() => (detalhe.value?.setores ?? [])
-  .map((s: any) => {
-    const lotes: any[] = s.lotes ?? []
-    const lote = lotes.find((l) => vende(l.situacao)) ?? lotes[0]
-    if (!lote) return null
-    return {
-      id: s.id as string,
-      nome: s.nome as string,
-      sessao: s.sessao as { titulo: string; inicio: string } | null,
-      // "ENTRADA" dentro de "ENTRADA INDIVIDUAL SÁBADO" é ruído; "COMBO 10
-      // PESSOAS" dentro de "COMBO SÁBADO" é informação.
-      lote: s.nome.toLowerCase().includes(String(lote.nome).toLowerCase()) ? '' : lote.nome as string,
-      situacao: lote.situacao as string,
-      variacoes: (lote.variacoes ?? []) as { tipoId: string; nome: string; totalCents: number; esgotado: boolean }[],
-    }
-  })
-  .filter(Boolean) as {
-    id: string; nome: string; sessao: { titulo: string; inicio: string } | null; lote: string
-    situacao: string; variacoes: { tipoId: string; nome: string; totalCents: number; esgotado: boolean }[]
-  }[])
+/**
+ * O painel do evento em destaque (dono, 06/10, com o print da Zig): foto, nome, quando, onde,
+ * "a partir de" e um botão. A escolha do ingresso é na página do evento — a home listava o setor
+ * ("Geral · 1º lote") com todos os tipos, nome que o dono nunca digitou e linha que quebrava
+ * no celular.
+ */
+const painel = computed(() => {
+  const e = destaque.value
+  if (!e) return null
+  const ev = detalhe.value?.evento
+  const local = ev?.local
+  const cidadeUf = [local?.cidade ?? e.cidade, local?.estado ?? e.estado].filter(Boolean).join(', ')
+  return {
+    nome: (ev?.nome ?? e.nome) as string,
+    capa: (ev?.banner ?? ev?.thumb ?? e.capa ?? e.miniatura ?? null) as string | null,
+    onde: [local?.online ? 'Online' : local?.nome, cidadeUf].filter(Boolean).join(' · '),
+    aPartirDeCents: (ev?.aPartirDeCents ?? e.aPartirDeCents ?? null) as number | null,
+  }
+})
 
 /** A capa entra palavra por palavra; "diversão" ganha o traço amarelo. */
 const TITULO = ['Água,', 'sol', 'e', 'diversão', 'em', 'família.']
@@ -391,51 +388,52 @@ useSeoMeta({
           <!-- o evento em destaque: quando e onde, e os ingressos com preço. O nome
                e o selo "À VENDA" saíram (dono, 23/09) — o nome é o que o produtor
                digitou no painel, e na vitrine só atrapalhava. -->
-          <div v-if="destaque && !varios" class="mt-8">
-            <dl class="flex flex-col gap-1 text-sm text-ink-600 sm:flex-row sm:flex-wrap sm:gap-x-6">
-              <div v-if="quandoDestaque.inicio" class="flex gap-1.5">
-                <dt class="font-semibold text-ink-800">Início:</dt><dd>{{ quandoDestaque.inicio }}</dd>
-              </div>
-              <div v-if="quandoDestaque.fim" class="flex gap-1.5">
-                <dt class="font-semibold text-ink-800">Término:</dt><dd>{{ quandoDestaque.fim }}</dd>
-              </div>
-              <div v-if="destaque.cidade" class="flex gap-1.5">
-                <dt class="font-semibold text-ink-800">Local:</dt><dd>{{ destaque.cidade }}</dd>
-              </div>
-            </dl>
+          <!-- o evento em destaque, no desenho da Zig (dono, 06/10): foto, nome, quando, onde, "a partir
+               de" e o botão. Os tipos de ingresso são escolhidos na página do evento. -->
+          <article v-if="destaque && !varios && painel" data-parte="painel-do-evento" data-revelar
+                   class="mt-8 grid gap-6 rounded-3xl bg-white p-4 shadow-card ring-1 ring-ink-200/70 sm:p-6 md:grid-cols-[minmax(0,22rem)_1fr] md:gap-10">
+            <NuxtLink :to="irComprar" class="block overflow-hidden rounded-2xl bg-pool-400" tabindex="-1" aria-hidden="true">
+              <img v-if="painel.capa" :src="painel.capa" alt="" width="1080" height="1080"
+                   class="aspect-square h-full w-full object-cover">
+              <span v-else class="flex aspect-square items-center justify-center p-10"><LogoMarca clara /></span>
+            </NuxtLink>
 
-            <ul v-if="ingressos.length" class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <li v-for="(ing, k) in ingressos" :key="ing.id" :data-revelar="k * 90"
-                  class="group flex flex-col rounded-3xl bg-white p-6 shadow-card ring-1 ring-ink-200/70 transition duration-300 hover:-translate-y-1.5 hover:shadow-pop hover:ring-pool-300">
-                <p v-if="ing.sessao" class="text-xs font-semibold uppercase tracking-wide text-pool-700">
-                  {{ ing.sessao.titulo }} · {{ diaMes(ing.sessao.inicio) }}
+            <div class="flex min-w-0 flex-col">
+              <h3 class="titulo text-3xl font-bold uppercase leading-[1.05] tracking-[-0.01em] text-ink-950 sm:text-4xl lg:text-5xl">
+                {{ painel.nome }}
+              </h3>
+
+              <ul class="mt-6 grid gap-3 text-[15px] text-ink-700 sm:text-base">
+                <li v-if="quandoDestaque.inicio" class="flex items-start gap-3">
+                  <svg class="mt-0.5 size-5 shrink-0 text-pool-700" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+                  </svg>
+                  <span><span class="sr-only">Quando: </span>{{ quandoDestaque.inicio }}<template v-if="quandoDestaque.fim">
+                    <span class="mx-1.5 text-ink-400" aria-hidden="true">›</span><span class="sr-only"> até </span>{{ quandoDestaque.fim }}</template></span>
+                </li>
+                <li v-if="painel.onde" class="flex items-start gap-3">
+                  <svg class="mt-0.5 size-5 shrink-0 text-pool-700" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" />
+                  </svg>
+                  <span><span class="sr-only">Onde: </span>{{ painel.onde }}</span>
+                </li>
+              </ul>
+
+              <div class="mt-8 md:mt-auto md:pt-8">
+                <p v-if="painel.aPartirDeCents === 0" class="titulo text-3xl font-bold text-ok">Grátis</p>
+                <p v-else-if="painel.aPartirDeCents != null" class="titulo text-2xl font-bold text-ink-950 sm:text-3xl">
+                  A partir de <span class="tabular-nums">{{ reais(painel.aPartirDeCents) }}</span>
                 </p>
-                <!-- B23: h3 logo abaixo do h2 "Ingressos e preços" — pular pra h4 quebrava o índice do leitor de tela -->
-                <h3 class="titulo mt-1 text-lg font-semibold leading-snug text-ink-900">{{ ing.nome }}</h3>
-                <p v-if="ing.lote" class="mt-1 text-sm text-ink-600">{{ ing.lote }}</p>
-                <ul class="mt-4 grid gap-1.5">
-                  <li v-for="v in ing.variacoes" :key="v.tipoId" class="flex items-baseline justify-between gap-3 text-[15px]">
-                    <!-- Combo não tem "Inteira/Meia": o valor é o do grupo todo. -->
-                    <span class="text-ink-700">{{ v.nome || 'Valor do combo' }}</span>
-                    <span class="titulo font-semibold tabular-nums text-ink-950"
-                          :class="v.esgotado ? 'text-ink-400 line-through' : (v.totalCents === 0 ? 'text-ok' : '')">{{ preco(v.totalCents) }}</span>
-                  </li>
-                </ul>
-                <div class="mt-auto pt-5">
-                  <span v-if="!vende(ing.situacao)" :class="selo(ing.situacao).classe">{{ selo(ing.situacao).texto }}</span>
-                  <NuxtLink v-else :to="irComprar"
-                            class="inline-flex items-center gap-1 text-sm font-semibold text-pool-700 hover:text-pool-800">
-                    Comprar
-                    <svg class="size-4 transition-transform duration-300 group-hover:translate-x-1" viewBox="0 0 24 24"
-                         fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                         stroke-linejoin="round" aria-hidden="true">
-                      <path d="m9 18 6-6-6-6" />
-                    </svg>
-                  </NuxtLink>
-                </div>
-              </li>
-            </ul>
-          </div>
+                <NuxtLink v-if="vende(destaque.situacao)" :to="irComprar"
+                          class="btn-cta mt-4 w-full justify-center px-8 py-4 text-base font-bold uppercase tracking-wide sm:w-auto sm:min-w-[20rem]">
+                  {{ painel.aPartirDeCents === 0 ? 'Pegar ingresso' : 'Comprar ingresso' }}
+                </NuxtLink>
+                <span v-else class="mt-4 inline-block" :class="selo(destaque.situacao).classe">{{ selo(destaque.situacao).texto }}</span>
+              </div>
+            </div>
+          </article>
 
           <!-- mais de um evento: todos no mesmo cartão (o mesmo desenho dos cartões de ingresso).
                O `<li>` sai sem atributo de propósito: `eventos-publicos.test.ts` fatia o HTML nele. -->
@@ -443,6 +441,12 @@ useSeoMeta({
             <li v-for="e in eventos" :key="e.slug">
               <NuxtLink :to="`/e/${e.slug}`" data-revelar
                         class="group flex h-full flex-col rounded-3xl bg-white p-6 shadow-card ring-1 ring-ink-200/70 transition duration-300 hover:-translate-y-1.5 hover:shadow-pop hover:ring-pool-300">
+                <!-- a foto do evento (dono, 06/10); sem foto, a marca no azul da piscina -->
+                <span class="-mx-2 -mt-2 mb-4 block overflow-hidden rounded-2xl bg-pool-400">
+                  <img v-if="e.miniatura" :src="e.miniatura" alt="" width="480" height="480" loading="lazy"
+                       class="aspect-square w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]">
+                  <span v-else class="flex aspect-square items-center justify-center p-10"><LogoMarca clara /></span>
+                </span>
                 <span class="flex items-start justify-between gap-3">
                   <h3 class="titulo text-lg font-semibold leading-snug text-ink-900">{{ e.nome }}</h3>
                   <span class="shrink-0"><span :class="selo(e.situacao).classe">{{ selo(e.situacao).texto }}</span></span>

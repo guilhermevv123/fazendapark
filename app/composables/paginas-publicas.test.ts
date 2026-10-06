@@ -327,9 +327,28 @@ describe('home · B23 e B31', () => {
     })
     expect(tela!.findAll('h4')).toHaveLength(0)
     const h3 = tela!.findAll('h3').map((x) => x.text())
-    expect(h3).toContain('Entrada individual')
+    expect(h3).toContain('ZZ Festa')
     const descricao = tela!.findAll('p').find((p) => p.text().includes('Primeiro parágrafo.'))
     expect(descricao?.classes()).toContain('whitespace-pre-line')
+  })
+
+  it('painel do evento (dono, 06/10): foto, nome, "a partir de" e o botão — sem o setor nem a lista de tipos', async () => {
+    const COM_FOTO = { ...DETALHE, evento: { ...DETALHE.evento, nome: 'ZZ Festa', banner: '/api/midia/zz/banner.webp',
+      local: { online: false, nome: 'Fazenda Park', cidade: 'Ubatã', estado: 'BA' }, aPartirDeCents: 5500 } }
+    G.useAsyncData = () => ({ data: ref(COM_FOTO), pending: ref(false), error: ref(null), refresh: async () => {} })
+    tela = await montarTela(await import('../pages/index.vue'), {
+      rota: { path: '/' }, respostas: { '/api/eventos-publicos': EVENTOS }, stubs: STUBS,
+    })
+    const painel = tela!.find('[data-parte="painel-do-evento"]')
+    expect(painel.exists()).toBe(true)
+    expect(painel.find('h3').text()).toBe('ZZ Festa')
+    expect(painel.find('img').attributes('src')).toBe('/api/midia/zz/banner.webp')
+    expect(painel.text()).toContain('Fazenda Park · Ubatã, BA')
+    expect(painel.text()).toMatch(/A partir de\s*R\$\s*55,00/)
+    expect(painel.text()).toContain('Comprar ingresso')
+    // o setor ("Entrada individual"/"Geral") e o tipo ("Inteira") ficam pra página do evento
+    expect(painel.text()).not.toContain('Entrada individual')
+    expect(painel.text()).not.toContain('Inteira')
   })
 })
 

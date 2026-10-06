@@ -108,7 +108,7 @@ export default defineEventHandler(async () => {
   const candidatos = await q<any>(
     `SELECT e.id, e.name AS nome, e.slug, e.starts_at, e.city, e.state,
             e.status, e.ends_at, e.timezone, e.sales_end_at, e.sales_end_minutes_after,
-            e.auto_rotate_lots, e.fee_bps, e.fee_mode_online
+            e.auto_rotate_lots, e.fee_bps, e.fee_mode_online, e.banner_url, e.thumb_url
        FROM events e
       WHERE e.status = 'ativo' AND e.is_private = false
       ORDER BY e.starts_at`)
@@ -192,6 +192,9 @@ export default defineEventHandler(async () => {
       inicio: e.starts_at,
       cidade: e.city,
       estado: e.state,
+      // a foto que o produtor subiu (dono, 06/10: "coloquei foto e não apareceu" na home)
+      capa: e.banner_url ?? e.thumb_url ?? null,
+      miniatura: e.thumb_url ?? e.banner_url ?? null,
       aPartirDeCents,
       // A palavra é a resposta; o preço é o complemento dela. Sem lote
       // comprável não há preço pra anunciar — e aí a home diz O QUE houve em
