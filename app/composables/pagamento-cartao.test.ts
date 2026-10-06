@@ -81,9 +81,23 @@ describe('cartão no site · a tela de pagamento', () => {
     await abrir()
     expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(false) // Pix é o padrão
     await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
+    // escolher o crédito não abre o formulário ali: o botão leva à tela do cartão (dono, 06/10)
+    expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(false)
+    expect(tela!.get('[data-parte="pagar"]').text()).toBe('Continuar com cartão de crédito')
+    await pagar()
+    expect(checkout(), 'o Continuar já mandou o checkout').toBeUndefined()
+    expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(true)
+    expect(tela!.find('h1').text()).toBe('Cartão de crédito')
+    expect(tela!.find('[data-forma="pix"]').exists(), 'a lista de formas segue na tela do cartão').toBe(false)
+    // "Trocar a forma" volta pra lista
+    await tela!.get('[data-parte="trocar-forma"]').trigger('click'); await espera()
+    expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(false)
+    expect(tela!.find('[data-forma="pix"]').exists()).toBe(true)
+    await pagar()
     expect(tela!.find('[data-parte="cartao-no-site"]').exists()).toBe(true)
     expect(tela!.text()).not.toContain('ambiente seguro do Asaas')
     // débito só existia pela fatura do Asaas: com o cartão no site, a opção some (dono, 06/10)
+    await tela!.get('[data-parte="trocar-forma"]').trigger('click'); await espera()
     expect(tela!.find('[data-forma="debito"]').exists(), 'débito ainda na lista — levaria pra fatura do Asaas').toBe(false)
     expect(tela!.find('[data-forma="pix"]').exists()).toBe(true)
   })
@@ -98,7 +112,7 @@ describe('cartão no site · a tela de pagamento', () => {
 
   it('faltando dado: o Pagar não chama o checkout e diz o que falta', async () => {
     await abrir()
-    await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
+    await tela!.get('[data-forma="credito"] input').setValue(true); await espera(); await pagar()
     await pagar()
     expect(checkout(), 'mandou o checkout com o cartão vazio').toBeUndefined()
     expect(tela!.text()).toContain('Confira os dados do cartão.')
@@ -112,7 +126,7 @@ describe('cartão no site · a tela de pagamento', () => {
 
   it('preenchido: o cartão vai no checkout (só dígitos) e a tela vai pro pago', async () => {
     await abrir()
-    await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
+    await tela!.get('[data-forma="credito"] input').setValue(true); await espera(); await pagar()
     await preencherCartao()
     await pagar()
     expect(checkout()!.opcoes.body).toMatchObject({
@@ -127,7 +141,7 @@ describe('cartão no site · a tela de pagamento', () => {
 
   it('o cartão de outra pessoa leva o CPF dela', async () => {
     await abrir()
-    await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
+    await tela!.get('[data-forma="credito"] input').setValue(true); await espera(); await pagar()
     await preencherCartao()
     await tela!.get('[data-parte="outro-titular"]').setValue(true); await espera()
     await tela!.get('[data-parte="campo-cpf-titular"]').setValue('111.444.777-35')
@@ -137,7 +151,7 @@ describe('cartão no site · a tela de pagamento', () => {
 
   it('recusado pelo banco: a frase aparece, o código some e a pessoa segue no pagamento', async () => {
     await abrir({ '/api/checkout': recusa('Cartão não aprovado: Transação não autorizada. Confira os dados ou use outro cartão.', 'cartao_recusado') })
-    await tela!.get('[data-forma="credito"] input').setValue(true); await espera()
+    await tela!.get('[data-forma="credito"] input').setValue(true); await espera(); await pagar()
     await preencherCartao()
     await pagar()
     expect(tela!.text()).toContain('Cartão não aprovado: Transação não autorizada')

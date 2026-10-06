@@ -164,6 +164,18 @@ const cpfDoTitular = ref('')
 const conferenciaDoCartao = ref<ConferenciaDoCartao | null>(null)
 const formularioDoCartao = ref<InstanceType<typeof CartaoDeCredito> | null>(null)
 const usaCartaoNoSite = computed(() => cartaoNoSite.value && forma.value === 'credito')
+/*
+ * A tela do cartão (dono, 06/10): escolhe "Cartão de crédito" → Continuar → uma tela SÓ do cartão,
+ * que entra animado e se preenche com o que a pessoa digita. Trocar a forma, ou sair do passo 2,
+ * volta pra lista.
+ */
+const naTelaDoCartao = ref(false)
+watch(forma, () => { naTelaDoCartao.value = false })
+watch(etapa, (e) => { if (e !== 'pagamento') naTelaDoCartao.value = false })
+function sairDaTelaDoCartao() {
+  naTelaDoCartao.value = false
+  erro.value = ''
+}
 onMounted(async () => {
   try { cartaoNoSite.value = !!(await $fetch<any>('/api/pagamento/cartao', { query: { evento: slug } }))?.ligado }
   catch { cartaoNoSite.value = false }
@@ -238,10 +250,11 @@ const FORMAS: { id: Forma; titulo: string; frase: string }[] = [
 const formasNaTela = computed(() => (cartaoNoSite.value ? FORMAS.filter((f) => f.id !== 'debito') : FORMAS))
 watch(cartaoNoSite, (ligado) => { if (ligado && forma.value === 'debito') forma.value = 'pix' })
 const rotuloDoBotao = computed(() => {
-  if (enviando.value) return 'Gerando a cobrança…'
+  if (enviando.value) return usaCartaoNoSite.value ? 'Confirmando com o banco…' : 'Gerando a cobrança…'
   const total = reais(totalACobrar.value)
   if (forma.value === 'pix') return `Pagar ${total} com Pix`
   if (forma.value === 'debito') return `Pagar ${total} no débito`
+  if (usaCartaoNoSite.value && !naTelaDoCartao.value) return 'Continuar com cartão de crédito'
   const n = parcelas.value
   return n > 1 ? `Pagar em ${n}× no crédito` : `Pagar ${total} no crédito`
 })
@@ -425,9 +438,16 @@ async function pagar(semDeclaracao = false) {
   erroNosDados.value = false
   campoComErro.value = ''
   if (precisaDaConta()) return
+  if (!gratis.value && usaCartaoNoSite.value && !naTelaDoCartao.value) {
+    naTelaDoCartao.value = true
+    if (import.meta.client) window.scrollTo({ top: 0, behavior: 'smooth' })
+    return
+  }
   if (!gratis.value && usaCartaoNoSite.value) {
     const falta = faltaNoCartao()
     if (falta) { erro.value = falta; return }
+    // o cartão "respira" enquanto o banco responde: sobe a tela até ele
+    if (import.meta.client) window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   enviando.value = true
   try {
@@ -963,9 +983,11 @@ useHead({ title: 'Pagamento' })
 
       <!-- ----------------------------------------- passo 2 · pagamento -->
       <section v-else-if="etapa === 'pagamento'">
-        <button type="button" class="text-sm text-acao hover:underline" @click="etapa = 'dados'">← Voltar</button>
+        <button v-if="naTelaDoCartao" type="button" class="text-sm text-acao hover:underline" data-parte="trocar-forma"
+                :disabled="enviando" @click="sairDaTelaDoCartao">← Trocar a forma de pagamento</button>
+        <button v-else type="button" class="text-sm text-acao hover:underline" @click="etapa = 'dados'">← Voltar</button>
         <div class="mt-3 flex items-baseline justify-between gap-3">
-          <h1 class="titulo text-2xl font-semibold text-tinta">Como você quer pagar?</h1>
+          <h1 class="titulo text-2xl font-semibold text-tinta">{{ naTelaDoCartao ? 'Cartão de crédito' : 'Como você quer pagar?' }}</h1>
           <p class="shrink-0 text-xs font-semibold uppercase tracking-wide text-tinta-fraca">Passo 2 de 2</p>
         </div>
         <p class="mt-1 text-tinta-suave">
@@ -994,7 +1016,7 @@ useHead({ title: 'Pagamento' })
         </div>
 
         <form class="mt-5 space-y-4" novalidate @submit.prevent="pagar()">
-          <fieldset>
+          <fieldset v-if="!naTelaDoCartao">
             <legend class="sr-only">Forma de pagamento</legend>
             <div class="space-y-3">
               <label v-for="f in formasNaTela" :key="f.id" :data-forma="f.id"
@@ -1025,7 +1047,7 @@ useHead({ title: 'Pagamento' })
             </div>
           </fieldset>
 
-          <div v-if="forma === 'credito'">
+          <div v-if="forma === 'credito' && !usaCartaoNoSite">
             <label for="parcelas" class="rotulo">Parcelas</label>
             <select id="parcelas" v-model.number="parcelas" class="campo">
               <option v-for="o in opcoesDeParcela" :key="o.n" :value="o.n">{{ o.rotulo }}</option>
@@ -1034,7 +1056,7 @@ useHead({ title: 'Pagamento' })
               Parcelas sem juros, sobre o total{{ cupom.estado === 'vale' ? ' já com o cupom' : '' }}.
             </p>
           </div>
-          <div v-if="usaCartaoNoSite" class="grid gap-4" data-parte="cartao-no-site">
+          <div v-if="usaCartaoNoSite && naTelaDoCartao" class="grid gap-4" data-parte="cartao-no-site">
             <CartaoDeCredito ref="formularioDoCartao" v-model="cartao" :desabilitado="enviando"
                              @conferencia="conferenciaDoCartao = $event" />
             <div class="grid grid-cols-[1fr_7rem] gap-3">
@@ -1048,6 +1070,15 @@ useHead({ title: 'Pagamento' })
                 <input id="cartao-numero-endereco" v-model="enderecoDoCartao.numero" class="campo" maxlength="10"
                        autocomplete="billing address-line2" placeholder="123 ou S/N" data-parte="campo-numero-endereco">
               </div>
+            </div>
+            <div>
+              <label for="parcelas" class="rotulo">Parcelas</label>
+              <select id="parcelas" v-model.number="parcelas" class="campo" :disabled="enviando">
+                <option v-for="o in opcoesDeParcela" :key="o.n" :value="o.n">{{ o.rotulo }}</option>
+              </select>
+              <p class="mt-1 text-xs text-tinta-fraca">
+                Parcelas sem juros, sobre o total{{ cupom.estado === 'vale' ? ' já com o cupom' : '' }}.
+              </p>
             </div>
             <label class="flex items-center gap-2 text-sm text-tinta-corpo">
               <input v-model="outroTitular" type="checkbox" class="h-5 w-5" data-parte="outro-titular">
@@ -1227,7 +1258,7 @@ useHead({ title: 'Pagamento' })
       <!-- ----------------------------------------------------------- pago -->
       <section v-else>
         <div class="card border-ok/40 bg-ok-claro text-center">
-          <span class="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-ok text-white">
+          <span class="pago-pulo mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-ok text-white">
             <IconeMenu nome="check" :tamanho="26" />
           </span>
           <p class="text-xs font-semibold uppercase tracking-wide text-ok">
@@ -1304,3 +1335,16 @@ useHead({ title: 'Pagamento' })
     </div>
   </div>
 </template>
+
+<style scoped>
+/* o ✓ do "Pagamento confirmado" chega com um pulo e uma onda (dono, 06/10: fechar o fluxo do cartão) */
+.pago-pulo { position: relative; animation: pulo 0.6s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
+.pago-pulo::after {
+  content: ''; position: absolute; inset: 0; border-radius: 9999px;
+  box-shadow: 0 0 0 0 currentColor; color: rgb(22 163 74 / 0.45);
+  animation: onda 1.1s 0.35s ease-out both;
+}
+@keyframes pulo { from { transform: scale(0.3); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes onda { from { box-shadow: 0 0 0 0 currentColor; } to { box-shadow: 0 0 0 18px transparent; } }
+@media (prefers-reduced-motion: reduce) { .pago-pulo, .pago-pulo::after { animation: none; } }
+</style>

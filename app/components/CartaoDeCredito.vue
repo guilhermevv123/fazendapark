@@ -95,6 +95,10 @@ const ID = useId()
   <div class="cartao-cc grid gap-5" data-parte="cartao-de-credito">
     <!-- O desenho do cartão: repete o que está nos campos, então é decorativo pra leitor de tela. -->
     <div class="palco mx-auto w-full max-w-[380px]" aria-hidden="true">
+      <!-- a chegada (dono, 06/10: "uma animação top, aparece o cartão"): o cartão entra girando e
+           assenta; enquanto o banco responde, a luz corre por ele. A virada do CVV fica no .cartao
+           de dentro, então as duas animações não brigam pelo mesmo transform. -->
+      <div class="chegada" :class="{ processando: desabilitado }">
       <div class="cartao" :class="{ virado }">
         <div class="face frente">
           <div class="flex items-start justify-between">
@@ -124,6 +128,7 @@ const ID = useId()
               <p class="text-[15px] font-semibold tabular-nums">{{ dados.mes || 'MM' }}/{{ dados.ano ? dados.ano.slice(-2) : 'AA' }}</p>
             </div>
           </div>
+          <span class="luz" />
         </div>
 
         <div class="face verso">
@@ -136,7 +141,12 @@ const ID = useId()
           </div>
         </div>
       </div>
+      </div>
     </div>
+    <p v-if="desabilitado" class="-mt-1 flex items-center justify-center gap-2 text-sm font-semibold text-pool-700"
+       role="status" data-parte="confirmando-com-o-banco">
+      <span class="girando" aria-hidden="true" />Confirmando com o banco…
+    </p>
 
     <fieldset class="grid gap-4" :disabled="desabilitado">
       <legend class="sr-only">Dados do cartão de crédito</legend>
@@ -193,6 +203,30 @@ const ID = useId()
 
 <style scoped>
 .palco { perspective: 1200px; }
+.chegada { transform-style: preserve-3d; animation: chegar 0.95s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes chegar {
+  0% { opacity: 0; transform: translateY(46px) rotateX(38deg) rotateY(-28deg) rotateZ(-6deg) scale(0.82); }
+  60% { opacity: 1; transform: translateY(-6px) rotateX(-4deg) rotateY(6deg) rotateZ(1deg) scale(1.02); }
+  100% { opacity: 1; transform: none; }
+}
+/* o reflexo que passa uma vez quando o cartão assenta, e em laço enquanto o banco responde */
+.luz {
+  position: absolute; inset: -40% auto -40% -60%; width: 45%; z-index: 2; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.38), transparent);
+  transform: rotate(18deg) translateX(0);
+  animation: reflexo 1.1s 0.75s ease-in-out both;
+}
+@keyframes reflexo { from { transform: rotate(18deg) translateX(0); } to { transform: rotate(18deg) translateX(520%); } }
+.processando { animation: respirar 1.6s ease-in-out infinite; }
+.processando .luz { animation: reflexo 1.3s ease-in-out infinite; }
+@keyframes respirar { 0%, 100% { transform: none; } 50% { transform: translateY(-4px) scale(1.015); } }
+.girando { width: 16px; height: 16px; border-radius: 9999px; border: 2px solid currentColor; border-right-color: transparent; animation: girar 0.8s linear infinite; }
+@keyframes girar { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .girando { animation-duration: 2.4s; }
+  .chegada, .processando, .luz, .processando .luz { animation: none; }
+  .luz { display: none; }
+}
 .cartao {
   position: relative;
   aspect-ratio: 1.586;
