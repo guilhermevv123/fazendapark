@@ -93,6 +93,9 @@ const { data: ficha, pending: carregandoFicha, error: falhaFicha, refresh: recar
 function abrirFicha(pedidoId: string) {
   abertoId.value = pedidoId
   limparAcoes()
+  // Com `immediate: false` (página aberta sem `?pedido=`), o useFetch do Nuxt 4 NÃO dispara sozinho
+  // quando o id muda — a ficha abria em branco (dono, 06/10). A busca é pedida aqui, no clique.
+  void recarregarFicha()
 }
 function fecharFicha() {
   abertoId.value = ''
@@ -333,7 +336,8 @@ useHead({ title: 'Vendas' })
           </button>
         </header>
 
-        <p v-if="carregandoFicha && !ficha" class="p-5 text-tinta-suave">Carregando…</p>
+        <!-- sem ficha e sem erro é "carregando", nunca painel em branco -->
+        <p v-if="!ficha && !falhaFicha" class="p-5 text-tinta-suave">Carregando…</p>
 
         <!-- ficha que não carregou diz por quê (antes: painel vazio) -->
         <div v-else-if="falhaFicha" class="p-5">
@@ -368,7 +372,8 @@ useHead({ title: 'Vendas' })
             <button v-if="ficha.acoes.mostrarCancelar"
                     type="button" class="btn-erro" data-parte="cancelar-pedido"
                     @click="cancelamento.aberto = !cancelamento.aberto; cancelamento.erro = ''">
-              {{ ficha.acoes.devolucaoPendente ? 'Tentar a devolução de novo' : 'Cancelar pedido' }}
+              {{ ficha.acoes.devolucaoPendente ? 'Tentar a devolução de novo'
+                : ficha.acoes.passouPelaPlataforma && ficha.acoes.aDevolverCents ? 'Estornar pedido' : 'Cancelar pedido' }}
             </button>
           </section>
           <p v-if="erroReimpressao" class="faixa-erro">{{ erroReimpressao }}</p>
@@ -420,7 +425,9 @@ useHead({ title: 'Vendas' })
                   <span class="block text-xs text-tinta-fraca">{{ ficha.acoes.arrependimentoMotivo }}</span>
                 </span>
               </label>
-              <label for="motivo-cancelamento" class="rotulo mt-3">Por que está cancelando?</label>
+              <label for="motivo-cancelamento" class="rotulo mt-3">
+                {{ ficha.acoes.passouPelaPlataforma ? 'Por que está estornando?' : 'Por que está cancelando?' }}
+              </label>
               <input id="motivo-cancelamento" v-model="cancelamento.motivo" class="campo"
                      placeholder="Ex.: cliente pediu o dinheiro de volta no balcão">
               <p v-if="cancelamento.erro" class="faixa-erro mt-2">{{ cancelamento.erro }}</p>
@@ -430,8 +437,10 @@ useHead({ title: 'Vendas' })
                 </button>
                 <button type="button" class="btn-erro flex-1" :disabled="cancelamento.enviando"
                         @click="cancelarPedido">
-                  {{ cancelamento.enviando ? 'Cancelando…'
-                    : ficha.acoes.devolucaoPendente ? 'Tentar a devolução' : `Cancelar ${ficha.pedido.codigo}` }}
+                  {{ cancelamento.enviando ? (ficha.acoes.passouPelaPlataforma ? 'Estornando…' : 'Cancelando…')
+                    : ficha.acoes.devolucaoPendente ? 'Tentar a devolução'
+                    : ficha.acoes.passouPelaPlataforma && ficha.acoes.aDevolverCents
+                      ? `Estornar ${reais(ficha.acoes.aDevolverCents)}` : `Cancelar ${ficha.pedido.codigo}` }}
                 </button>
               </div>
             </template>
