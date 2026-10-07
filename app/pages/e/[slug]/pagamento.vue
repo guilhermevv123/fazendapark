@@ -246,6 +246,9 @@ const FORMAS: { id: Forma; titulo: string; frase: string }[] = [
  * Com o cartão no site ligado, o débito SAI da lista (dono, 06/10: "não vamos usar o checkout do
  * Asaas nunca, tudo nosso"). A API do Asaas não aceita cartão de débito — ele só existia pela
  * fatura do Asaas, que é justamente o que o dono não quer. À vista fica o Pix.
+ * Débito digitado aqui pelo Mercado Pago também não serve: o GET /v1/payment_methods da conta do
+ * parque (06/10) só libera `debelo` (Elo Débito) — Visa e Master débito seriam recusados. O dono
+ * escolheu tirar o débito e deixar o Pix no lugar.
  */
 const formasNaTela = computed(() => (cartaoNoSite.value ? FORMAS.filter((f) => f.id !== 'debito') : FORMAS))
 watch(cartaoNoSite, (ligado) => { if (ligado && forma.value === 'debito') forma.value = 'pix' })
