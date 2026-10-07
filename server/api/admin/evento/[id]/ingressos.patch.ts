@@ -16,6 +16,7 @@ import { tx } from '../../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
 import { explicarErro } from '../index.post'
 import { TETO_POR_COMPRA } from '../../../../utils/limite-de-compra'
+import { conferirDiasDeUso, diasDoEvento } from '../../../../utils/dias-de-uso'
 
 const Entrada = z.object({
   // 'evento' entra aqui porque as chaves que a tela de ingressos liga e
@@ -48,6 +49,8 @@ const Entrada = z.object({
     taxaBps: z.number().int().min(0).max(5000, 'não pode passar de 50%').optional(),
     modoTaxaOnline: z.enum(['repassar', 'absorver']).optional(),
     modoTaxaPdv: z.enum(['repassar', 'absorver']).optional(),
+    /** dias de uso do tipo (047), 'AAAA-MM-DD'; `[]`/`null` = qualquer dia do evento */
+    diasDeUso: z.array(z.string().max(10)).max(62).nullish(),
   }),
 })
 
@@ -64,7 +67,7 @@ export const ROTULOS_INGRESSOS: Record<string, string> = {
   descontoBps: 'Desconto', precoCents: 'Preço do tipo', exigeDocumento: 'Exige documento', maxPorCliente: 'Máximo por cliente',
   capacidade: 'Capacidade', admite: 'Pessoas por unidade', sessoesCobertas: 'Sessões cobertas',
   giroAutomatico: 'Giro automático de lote', taxaBps: 'Taxa de serviço',
-  modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão',
+  modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão', diasDeUso: 'Dias de uso',
 }
 
 /** campo da API → coluna do banco, por entidade */
@@ -116,7 +119,9 @@ export default defineEventHandler(async (event) => {
   // preço próprio e desconto não convivem: com preço, o desconto zera
   if (o === 'tipo' && campos.precoCents != null) campos.descontoBps = 0
   const pares = Object.entries(campos).filter(([k, v]) => k in mapa && v !== undefined)
-  if (!pares.length) throw createError({ statusCode: 400, statusMessage: 'Nada para alterar' })
+  // dias de uso (047) não é coluna do mapa: vale pro tipo E pros de mesmo nome nos outros lotes
+  const mexeNosDias = o === 'tipo' && campos.diasDeUso !== undefined
+  if (!pares.length && !mexeNosDias) throw createError({ statusCode: 400, statusMessage: 'Nada para alterar' })
 
   // quem mexeu no preço, no estoque ou na taxa — `registrarAuditoria` carimba usuário e
   // organização (ADM-26); o INSERT solto daqui gravava a mudança sem autor
@@ -233,16 +238,44 @@ export default defineEventHandler(async (event) => {
     // — um parâmetro solto num IS NOT NULL não tem tipo que o Postgres possa
     // inferir, e o UPDATE inteiro falhava com "Server Error" enquanto a tela
     // dizia que salvou.
-    const sets = pares.map(([k], i) => `${mapa[k]} = $${i + 2}`).join(', ')
-    const valores = pares.map(([, v]) => v)
-    await c.query(`UPDATE ${TABELA[o]} SET ${sets} WHERE id = $1`, [id, ...valores])
+    if (pares.length) {
+      const sets = pares.map(([k], i) => `${mapa[k]} = $${i + 2}`).join(', ')
+      const valores = pares.map(([, v]) => v)
+      await c.query(`UPDATE ${TABELA[o]} SET ${sets} WHERE id = $1`, [id, ...valores])
+    }
+
+    // Dias de uso (047): do TIPO, não do lote (dono, 07/10: "independente dos lotes"). O tipo de
+    // mesmo nome nos outros lotes deste evento recebe os mesmos dias — senão o "SEXTA" do 2º lote
+    // passaria no domingo. A comparação é pelo nome de ANTES de uma troca de nome nesta edição.
+    let irmaos = 0
+    let diasAntes: string[] | null = null
+    let diasDepois: string[] | null = null
+    if (mexeNosDias) {
+      const { rows: [ev] } = await c.query(
+        `SELECT starts_at, ends_at, timezone FROM events WHERE id = $1`, [eventoId])
+      const conf = conferirDiasDeUso(campos.diasDeUso, diasDoEvento(ev?.starts_at, ev?.ends_at, ev?.timezone))
+      if (!conf.ok) throw createError({ statusCode: 422, statusMessage: conf.erro })
+      diasDepois = conf.dias
+      const { rows: [antes] } = await c.query(
+        `SELECT valid_dates::text[] AS d FROM ticket_types WHERE id = $1`, [id])
+      diasAntes = antes?.d ?? null
+      const r = await c.query(
+        `UPDATE ticket_types tt SET valid_dates = $3::date[]
+           FROM lots l JOIN sectors s ON s.id = l.sector_id
+          WHERE l.id = tt.lot_id AND s.event_id = $1
+            AND (tt.id = $2 OR lower(btrim(tt.name)) = lower(btrim($4)))`,
+        [eventoId, id, diasDepois, linha.name])
+      irmaos = Math.max(0, (r.rowCount ?? 1) - 1)
+    }
 
     await registrarAuditoria({
       autor, entidade: o, entidadeId: id, acao: 'editado',
-      antes: Object.fromEntries(pares.map(([k]) => [k, linha[mapa[k]]])),
-      depois: Object.fromEntries(pares),
+      antes: { ...Object.fromEntries(pares.map(([k]) => [k, linha[mapa[k]]])),
+               ...(mexeNosDias ? { diasDeUso: diasAntes } : {}) },
+      depois: { ...Object.fromEntries(pares), ...(mexeNosDias ? { diasDeUso: diasDepois, tiposDeMesmoNome: irmaos } : {}) },
     }, c)
 
-    return { ok: true, alterados: pares.map(([k]) => k) }
+    return { ok: true, alterados: [...pares.map(([k]) => k), ...(mexeNosDias ? ['diasDeUso'] : [])],
+             ...(mexeNosDias ? { diasDeUso: diasDepois, tiposDeMesmoNome: irmaos } : {}) }
   })
 })

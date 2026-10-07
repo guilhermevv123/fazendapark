@@ -8,6 +8,7 @@
 
 import { diaLocal } from '~/composables/formato'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
+import { mensagemForaDoDiaDeUso, valeNoDiaDeUso } from '~~/server/utils/dias-de-uso'
 
 /**
  * Este papel pode ler o log de leituras (`/checkins`)? A MESMA grade que tranca a rota no servidor
@@ -47,6 +48,8 @@ export type Resposta = {
   digitado?: boolean
   /** QR assinado com uma chave que saiu da lista (troca de chave): vale como digitado, com o aviso */
   qrAntigo?: boolean
+  /** o tipo do ingresso não vale HOJE (047, dias de uso): "NÃO VALE HOJE", não "AINDA NÃO" */
+  foraDoDia?: boolean
 }
 
 /** o mesmo mínimo do servidor (`qr: z.string().min(4)` em `/api/checkin`) */
@@ -237,6 +240,7 @@ export function respostaForaDaLista(listaEm: string | null): Resposta {
 export function tituloDoVeredito(r: Resposta): string {
   if (r.resultado === 'nao_lido') return 'NÃO LIDO — TENTE DE NOVO'
   if (r.resultado === 'fora_da_lista') return 'CHAME O SUPERVISOR'
+  if (r.foraDoDia) return 'NÃO VALE HOJE'
   if (r.consulta) {
     if (r.ok) return 'VÁLIDO — NÃO ENTROU'
     return r.resultado === 'fora_da_sessao' ? 'AINDA NÃO' : 'BARRADO'
@@ -249,6 +253,8 @@ export const CLASSE_CONSULTA = 'bg-grape-600 text-white'
 
 /** a cor do cartão (e da faixa da câmera) pra ESTA resposta */
 export function classeDoVeredito(r: Resposta): string {
+  // dia errado (047) é parada, não "espera": vermelho, mesmo sendo `fora_da_sessao` no livro
+  if (r.foraDoDia) return 'bg-erro text-white'
   if (r.consulta && r.ok) return CLASSE_CONSULTA
   return CLASSE[r.resultado] ?? 'bg-erro text-white'
 }
@@ -319,6 +325,7 @@ export function corDoPonto(r: Resposta): string {
   if (r.consulta && r.ok) return 'bg-grape-600'
   if (r.ok) return 'bg-ok'
   if (r.resultado === 'nao_lido') return 'bg-tinta-suave'
+  if (r.foraDoDia) return 'bg-erro'
   if (r.resultado === 'fora_da_lista' || r.resultado === 'ja_usado'
       || r.resultado === 'fora_da_sessao') return 'bg-alerta'
   return 'bg-erro'
@@ -434,6 +441,8 @@ type IngressoLocal = {
   /** a meia desce com a lista: é no apagão que o operador mais precisa dela */
   meia?: Meia | null
   sessaoInicio: string | null; sessaoFim: string | null
+  /** dias de uso do tipo (047), 'AAAA-MM-DD'; ausente = qualquer dia */
+  diasDeUso?: string[]
   /** marcado por ESTE aparelho enquanto estava sem rede */
   usadoAqui?: { em: string; gate: string | null }
 } & PassaporteLocal
@@ -769,6 +778,14 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
   // tem como perguntar a ninguém.
   const dados = { titular: t.titular, setor: t.setor, lote: t.lote, tipo: t.tipo,
                   meia: t.meia ?? null }
+
+  // Dia de uso do tipo (047), a mesma régua da porta online: o ingresso de sexta não passa no
+  // domingo. O dia é o do relógio do aparelho — o tablet está no parque.
+  if (!valeNoDiaDeUso(t.diasDeUso, diaLocal())) {
+    return { local: true, ok: false, resultado: 'fora_da_sessao', foraDoDia: true,
+             mensagem: mensagemForaDoDiaDeUso(t.diasDeUso), ingresso: dados,
+             ...(consultar ? { consulta: true } : {}) }
+  }
 
   // Mesma regra do servidor (`/api/checkin`): a consulta responde SEMPRE, com
   // os dados do ingresso, e diz se o horário ainda não chegou. As duas portas

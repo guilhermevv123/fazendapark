@@ -40,6 +40,7 @@
  */
 import { db, q, q1 } from '../../utils/db'
 import { montarQr } from '../../utils/ingresso'
+import { fraseDosDiasDeUso } from '../../utils/dias-de-uso'
 import { CANAL_CORTESIA, eCortesia } from '../../utils/emissao'
 import { PEDIDO_VIVO } from '../../utils/liquido'
 import { conferirFreio, marcarNoFreio } from '../../utils/sessao'
@@ -139,6 +140,7 @@ export default defineEventHandler(async (event) => {
                 EXISTS (SELECT 1 FROM ticket_transfers tr
                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido') AS transferido,
                 l.name AS lote, s.name AS setor, tt.name AS tipo,
+                tt.valid_dates::text[] AS dias_de_uso,
                 ses.title AS sessao, ses.starts_at AS sessao_inicio,
                 -- reagendado pelo cliente (036): o pedido novo que substituiu este ingresso
                 (SELECT o2.code FROM orders o2 WHERE o2.rescheduled_from_ticket_id = t.id) AS reagendado_para
@@ -166,6 +168,8 @@ export default defineEventHandler(async (event) => {
             /** saiu de graça, mas é VENDA: promoção de 100%, criança, lote R$ 0 */
             gratuito: Boolean(t.is_courtesy) && !eCortesia(t.is_courtesy, o.channel),
             usadoEm: t.checked_in_at, setor: t.setor, lote: t.lote, tipo: t.tipo,
+            /** "sexta 09/10" — em que dia este ingresso passa na catraca (047); null = qualquer dia */
+            diasDeUso: fraseDosDiasDeUso(t.dias_de_uso) || null,
             sessao: t.sessao, sessaoInicio: t.sessao_inicio,
             /** código do pedido novo quando o cliente trocou este ingresso de dia */
             reagendadoPara: t.reagendado_para ?? null,

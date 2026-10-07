@@ -7,12 +7,13 @@
  */
 import { q, q1 } from '../../../../utils/db'
 import { precificar, faceDoTipo, type ModoTaxa } from '../../../../utils/dinheiro'
+import { diasDoEvento, limparDiasDeUso } from '../../../../utils/dias-de-uso'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
 
   const ev = await q1<any>(
-    `SELECT id, name, status, fee_bps, fee_mode_online, fee_mode_pos, starts_at,
+    `SELECT id, name, status, fee_bps, fee_mode_online, fee_mode_pos, starts_at, ends_at, timezone,
             auto_rotate_lots
        FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
@@ -35,7 +36,8 @@ export default defineEventHandler(async (event) => {
 
   const tipos = await q<any>(
     `SELECT tt.id, tt.lot_id, tt.name, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents,
-            tt.requires_document, tt.max_per_customer, tt.sort_order
+            tt.requires_document, tt.max_per_customer, tt.sort_order,
+            tt.valid_dates::text[] AS dias_de_uso
        FROM ticket_types tt
        JOIN lots l ON l.id = tt.lot_id JOIN sectors s ON s.id = l.sector_id
       WHERE s.event_id = $1 ORDER BY tt.sort_order`, [id])
@@ -48,6 +50,8 @@ export default defineEventHandler(async (event) => {
       id: ev.id, nome: ev.name, status: ev.status, inicio: ev.starts_at,
       taxaBps: bps, modoTaxaOnline: ev.fee_mode_online, modoTaxaPdv: ev.fee_mode_pos,
       giroAutomatico: ev.auto_rotate_lots,
+      // os dias que dá pra marcar como "dia de uso" de um tipo (047), no fuso do evento
+      dias: diasDoEvento(ev.starts_at, ev.ends_at, ev.timezone),
     },
     sessoes: sessoes.map((s) => ({
       id: s.id, titulo: s.title, inicio: s.starts_at, fim: s.ends_at,
@@ -87,6 +91,8 @@ export default defineEventHandler(async (event) => {
               precoCents: t.price_cents == null ? null : Number(t.price_cents),
               exigeDocumento: t.requires_document,
               maxPorCliente: t.max_per_customer,
+              /** dias em que passa na catraca (047); `null` = qualquer dia do evento */
+              diasDeUso: limparDiasDeUso(t.dias_de_uso),
               faceCents: pp.faceCents, taxaCents: pp.feeCents, totalCents: pp.totalCents,
               podeApagar: Number(t.sold) === 0,
             }

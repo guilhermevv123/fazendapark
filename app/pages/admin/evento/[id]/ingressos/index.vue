@@ -41,6 +41,8 @@ import { COTA_LEGAL_BPS, cotaDeMeias, MOTIVOS } from '~~/server/utils/meia-entra
 import { faceParaTotal, precificar, type ModoTaxa } from '~~/server/utils/dinheiro'
 import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
 import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
+import DiasDeUsoDoTipo from '~/components/DiasDeUsoDoTipo.vue'
+import { fraseDosDiasDeUso } from '~~/server/utils/dias-de-uso'
 
 const route = useRoute()
 const id = route.params.id as string
@@ -429,6 +431,10 @@ const tipoForm = reactive({
   descontoBps: 0, exigeDocumento: false, maxPorCliente: null as number | null,
   /** preço próprio (043): VIP/Black com preço deles, em vez do desconto */
   modo: 'desconto' as 'desconto' | 'preco', precoCents: 0,
+  /** dias de uso na catraca (047); `null` = qualquer dia */
+  diasDeUso: undefined as string[] | null | undefined,
+  /** os dias como abriram — só manda o campo quando mudou (o PATCH aplica nos tipos de mesmo nome) */
+  diasAntes: '' as string,
 })
 /** Quanto do lote ainda não foi distribuído entre os tipos. */
 function sobraDoLote(loteId: string) {
@@ -451,6 +457,9 @@ function abrirTipo(loteId: string, t?: any) {
     maxPorCliente: t?.maxPorCliente ?? null,
     modo: t?.precoCents != null ? 'preco' : 'desconto',
     precoCents: t?.precoCents ?? 0,
+    // tipo novo: `undefined` deixa o nome sugerir o dia ("SEXTA" → a sexta do evento)
+    diasDeUso: t ? (t.diasDeUso ?? null) : undefined,
+    diasAntes: (t?.diasDeUso ?? []).join(),
   })
 }
 async function salvarTipo() {
@@ -462,6 +471,10 @@ async function salvarTipo() {
     precoCents: preco ? tipoForm.precoCents : null,
     exigeDocumento: tipoForm.exigeDocumento,
     maxPorCliente: tipoForm.maxPorCliente || null,
+    // Só quando mudou: no PATCH os dias valem pros tipos de mesmo nome dos outros lotes, e editar o
+    // preço não pode mexer neles. No tipo novo sem dia marcado, o servidor herda os do mesmo nome.
+    ...((tipoForm.diasDeUso ?? []).join() !== tipoForm.diasAntes
+      ? { diasDeUso: tipoForm.diasDeUso ?? [] } : {}),
   }
   const ok = tipoForm.id
     ? await chamar('PATCH', { o: 'tipo', id: tipoForm.id, campos })
@@ -802,6 +815,10 @@ useHead({ title: 'Ingressos' })
                       {{ SELO_ESPECIE[especieDoTipo(t)].texto }}
                     </span>
                     <span v-if="t.exigeDocumento" class="ml-2 select-none text-xs text-tinta-fraca">com documento</span>
+                    <span v-if="t.diasDeUso?.length" class="selo-neutro ml-2 select-none" data-parte="selo-dias-de-uso"
+                          :title="`Na catraca, passa só: ${fraseDosDiasDeUso(t.diasDeUso)}`">
+                      só {{ fraseDosDiasDeUso(t.diasDeUso) }}
+                    </span>
                   </td>
                   <td class="px-3 py-2 text-right">
                     <span class="tabular-nums text-tinta">{{ reais(t.totalCents) }}</span>
@@ -1028,6 +1045,10 @@ useHead({ title: 'Ingressos' })
           <input v-model="tipoForm.exigeDocumento" type="checkbox"> Exige documento
         </label>
       </div>
+
+      <!-- dias de uso na catraca (047): o "SEXTA" não passa no domingo -->
+      <DiasDeUsoDoTipo v-model="tipoForm.diasDeUso" class="mt-4" :dias="data?.evento?.dias ?? []"
+                       :nome="tipoForm.nome" :auto-pelo-nome="!tipoForm.id" />
 
       <!-- O que este tipo VAI ser. A espécie não é um campo separado: ela sai
            do desconto + "exige documento", que é o que o produtor já preenche.

@@ -467,6 +467,10 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                 <dt class="text-tinta-fraca">Ingresso</dt>
                 <dd class="text-right font-medium text-tinta">{{ t.tipo ?? 'Ingresso' }}</dd>
               </div>
+              <div v-if="t.diasDeUso" class="flex justify-between gap-3" data-parte="dia-de-uso">
+                <dt class="text-tinta-fraca">Vale só</dt>
+                <dd class="text-right font-semibold capitalize text-tinta">{{ t.diasDeUso }}</dd>
+              </div>
               <div class="flex justify-between gap-3">
                 <dt class="text-tinta-fraca">Setor</dt>
                 <dd class="text-right text-tinta-corpo">{{ t.setor }}<template v-if="t.lote"> · {{ t.lote }}</template></dd>

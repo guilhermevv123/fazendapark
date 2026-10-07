@@ -53,6 +53,7 @@ import { q, q1, tx } from '../../utils/db'
 import { exigir } from '../../utils/sessao'
 import { ehPapel, papelDoRoleLegado, papelPode, ROTULO } from '../../utils/papeis'
 import { lerQr } from '../../utils/ingresso'
+import { limparDiasDeUso } from '../../utils/dias-de-uso'
 import {
   chaveDoCodigo, conferirRelogio, ehPassaporte, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA,
   MENSAGEM_DE_RELOGIO, novoSalDaLista, numeroParaALista,
@@ -370,6 +371,7 @@ async function listaDoEvento(eventId: string, orgId: string) {
             t.half_reason, t.half_document, t.half_document_required,
             es.id AS sessao_id, es.starts_at, es.ends_at,
             s.sessions_covered,
+            tt.valid_dates::text[] AS dias_de_uso,
             CASE WHEN COALESCE(s.sessions_covered, 1) > 1 THEN
               (SELECT COALESCE(json_agg(DISTINCT to_char(e.entered_at AT TIME ZONE ev.timezone, 'YYYY-MM-DD')), '[]'::json)
                  FROM entries e WHERE e.ticket_id = t.id)
@@ -410,6 +412,8 @@ async function listaDoEvento(eventId: string, orgId: string) {
       meia: meiaNaLista(meiaDoIngresso(t)),
       sessaoInicio: t.starts_at,
       sessaoFim: t.ends_at,
+      // dias de uso do tipo (047): sem rede o portão também barra o ingresso de sexta no domingo
+      ...(limparDiasDeUso(t.dias_de_uso) ? { diasDeUso: limparDiasDeUso(t.dias_de_uso) } : {}),
       // só no passaporte de vários dias (ADM-04): quantos cobre, quais dias já usou, em quais vale
       ...(Number(t.sessions_covered ?? 1) > 1
         ? { diasCobertos: Number(t.sessions_covered), diasUsados: t.dias_usados ?? [],

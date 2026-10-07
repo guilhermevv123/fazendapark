@@ -18,6 +18,7 @@ import { q1, tx } from '../../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../../utils/auditoria'
 import { fusoValido } from '../../../../app/composables/fusoHorario'
 import { TETO_POR_COMPRA } from '../../../utils/limite-de-compra'
+import { conferirDiasDeUso, diasDoEvento } from '../../../utils/dias-de-uso'
 
 /**
  * Prefixos que já são rota do site. Um evento com slug "admin" ou "api"
@@ -147,6 +148,8 @@ const Entrada = z.object({
         /** preço próprio do tipo (043) — em vez do desconto; o VIP mais caro que o lote */
         precoCents: z.number().int().min(1, 'preço do tipo precisa ser maior que zero').max(10_000_000).nullish(),
         exigeDocumento: z.boolean().default(false),
+        /** dias em que passa na catraca (047), 'AAAA-MM-DD'; vazio = qualquer dia do evento */
+        diasDeUso: z.array(z.string().max(10)).max(62).nullish(),
       })).max(20).default([]),
     })).max(40).default([]),
   })).max(60).default([]),
@@ -184,6 +187,7 @@ const ROTULOS: Record<string, string> = {
   // o mesmo nome de campo muda de sentido conforme o pai: "nome" de um lote não é o do evento
   'setores.nome': 'Nome do setor', 'setores.tipo': 'Tipo do setor', 'setores.descricao': 'Descrição do setor',
   'lotes.nome': 'Nome do lote', 'tipos.nome': 'Nome do tipo', 'tipos.quantidade': 'Quantidade do tipo',
+  'tipos.diasDeUso': 'Dias de uso do tipo',
   'sessoes.titulo': 'Título da sessão', 'sessoes.inicio': 'Início da sessão', 'sessoes.fim': 'Fim da sessão',
   'local.nome': 'Nome Fantasia', 'suporte.tipo': 'Tipo de contato', 'suporte.valor': 'Contato',
 }
@@ -258,6 +262,24 @@ export default defineEventHandler(async (event) => {
 
   if (new Date(d.fim) <= new Date(d.inicio)) {
     throw createError({ statusCode: 422, statusMessage: 'O término tem que ser depois do início' })
+  }
+
+  // Dias de uso dos tipos (047): conferidos contra o calendário do evento, e os do TIPO valem pro
+  // tipo de mesmo nome dos outros lotes (dono, 07/10: "independente dos lotes") — quem marcou a
+  // sexta no "SEXTA" do 1º lote não precisa marcar de novo no 2º.
+  {
+    const calendario = diasDoEvento(d.inicio, d.fim, d.fuso)
+    const porNome = new Map<string, string[]>()
+    for (const st of d.setores) for (const l of st.lotes) for (const t of l.tipos) {
+      const c = conferirDiasDeUso(t.diasDeUso, calendario)
+      if (!c.ok) throw createError({ statusCode: 422, statusMessage: `Tipo "${t.nome.trim()}": ${c.erro}` })
+      t.diasDeUso = c.dias
+      const chave = t.nome.trim().toLowerCase()
+      if (c.dias && !porNome.has(chave)) porNome.set(chave, c.dias)
+    }
+    for (const st of d.setores) for (const l of st.lotes) for (const t of l.tipos) {
+      if (!t.diasDeUso) t.diasDeUso = porNome.get(t.nome.trim().toLowerCase()) ?? null
+    }
   }
 
   // Sessão com fim antes (ou a menos de 15 min) do início morria no CHECK
@@ -446,11 +468,11 @@ export default defineEventHandler(async (event) => {
           for (const [it, t] of l.tipos.entries()) {
             await c.query(
               `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps,
-                                         requires_document, sort_order, price_cents)
-               VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                                         requires_document, sort_order, price_cents, valid_dates)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date[])`,
               // preço próprio e desconto não convivem: com preço, o desconto é 0
               [rl.rows[0].id, t.nome.trim(), t.quantidade ?? l.quantidade, t.precoCents != null ? 0 : t.descontoBps,
-               t.exigeDocumento, it + 1, t.precoCents ?? null])
+               t.exigeDocumento, it + 1, t.precoCents ?? null, t.diasDeUso ?? null])
           }
         }
       }

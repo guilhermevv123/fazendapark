@@ -613,3 +613,41 @@ describe('o log de leituras só é pedido por quem pode lê-lo', () => {
     expect(recargasDoLog).toBeGreaterThan(0)
   })
 })
+
+// ===========================================================================
+// 07/10 — dia de uso do tipo (047): o ingresso de SEXTA não passa no domingo, nem sem rede
+// ===========================================================================
+
+describe('dia de uso do tipo, sem rede (047)', () => {
+  const hoje = () => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const outroDia = () => new Date(new Date(`${hoje()}T12:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10)
+  const comLista = (diasDeUso: string[]) => ({
+    ...SINC_OK,
+    lista: { geradaEm: new Date().toISOString(), truncada: false, ingressos: [{
+      codigo: 'CON-DIAS-AAAA', status: 'valido', titular: 'Fulana do Dia', setor: 'S', lote: 'L',
+      tipo: 'ENTRADA SEXTA', pessoas: 1, sessaoInicio: null, sessaoFim: null, diasDeUso,
+    }] },
+  })
+
+  it('tipo de outro dia: NÃO VALE HOJE, vermelho, com o dia certo — e nada vai pra fila', async () => {
+    const { tituloDoVeredito, classeDoVeredito } = await tela()
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista([outroDia()]))
+    await lerCodigo(t, 'CON-DIAS-AAAA')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+    expect(t.text()).toContain('Este ingresso não vale hoje — vale só')
+    expect(JSON.parse(localStorage.getItem(`dt_portaria_fila_${EVENTO}`) ?? '[]'),
+      'o ingresso de outro dia entrou na fila offline').toHaveLength(0)
+    const r = { ok: false, resultado: 'fora_da_sessao', mensagem: 'x', foraDoDia: true }
+    expect(tituloDoVeredito(r)).toBe('NÃO VALE HOJE')
+    expect(classeDoVeredito(r)).toBe('bg-erro text-white')
+  })
+
+  it('tipo de hoje passa sem rede', async () => {
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista([hoje()]))
+    await lerCodigo(t, 'CON-DIAS-AAAA')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+  })
+})

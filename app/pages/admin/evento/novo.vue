@@ -25,6 +25,8 @@ import { ESTOQUE_SEM_LIMITE } from '~~/server/utils/estoque-sem-limite'
 import { faceDoTipo, precificar } from '~~/server/utils/dinheiro'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
+import DiasDeUsoDoTipo from '~/components/DiasDeUsoDoTipo.vue'
+import { diasDoEvento } from '~~/server/utils/dias-de-uso'
 import {
   CONTATO_DO_PARQUE, LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe,
 } from '~/composables/eventoDoParque'
@@ -161,7 +163,11 @@ type Setor = { nome: string; tipo: string; descricao: string; capacidade: number
  * acrescentar um lote não apaga preço nem quantidade dos outros.
  */
 /** `modo`: o tipo sai com desconto sobre o lote (meia) ou com preço próprio (VIP, Black…) */
-type TipoDoEvento = { nome: string; descontoBps: number; exigeDocumento: boolean; modo?: 'desconto' | 'preco' }
+type TipoDoEvento = {
+  nome: string; descontoBps: number; exigeDocumento: boolean; modo?: 'desconto' | 'preco'
+  /** dias de uso na catraca (047), marcados no passo 5 — o tipo é o mesmo em todos os lotes */
+  diasDeUso?: string[] | null
+}
 const estrutura = reactive({
   setores: ['Geral'] as string[],
   lotes: ['1º lote'] as string[],
@@ -382,6 +388,24 @@ const encerraCampo = computed({
 const iso = (data: string, hora: string) =>
   instanteNoFuso(`${data}T${hora || '00:00'}`, f.fuso)
 
+/* ------------------------------------------- dias de uso dos tipos (047) ---
+ * Dono, 07/10: "o ingresso de sexta, o cara tenta passar domingo". Os dias de cada tipo saem das
+ * datas do passo 5 (é lá que o evento ganha início e fim) e já vêm marcados pelo NOME do tipo
+ * ("SEXTA" → a sexta do evento) até a pessoa mexer. Nenhum dia = passa em qualquer dia.
+ */
+const diasDoEventoNoAssistente = computed(() => {
+  if (!f.inicioData) return []
+  return diasDoEvento(iso(f.inicioData, f.inicioHora), iso(f.fimData || f.inicioData, f.fimHora), f.fuso)
+})
+const tiposComNome = computed(() => estrutura.tipos.filter((t) => t.nome.trim()))
+function diasDoTipoNoAssistente(nome: string): string[] | null {
+  const t = estrutura.tipos.find((x) => x.nome.trim().toLowerCase() === nome.trim().toLowerCase())
+  const validos = new Set(diasDoEventoNoAssistente.value.map((d) => d.dia))
+  // dia que saiu do evento (a data mudou depois de marcar) não vai: o servidor recusaria o evento inteiro
+  const dias = (t?.diasDeUso ?? []).filter((d) => validos.has(d))
+  return dias.length ? dias : null
+}
+
 async function publicar() {
   salvando.value = true
   erro.value = ''
@@ -429,6 +453,8 @@ async function publicar() {
           // cada tipo vai até o lote inteiro: é o lote que segura o total
           tipos: l.tipos.map((t) => ({
             nome: t.nome.trim(), quantidade: ESTOQUE_SEM_LIMITE,
+            // dias de uso na catraca (047): os do tipo, iguais em todos os lotes
+            diasDeUso: diasDoTipoNoAssistente(t.nome),
             descontoBps: t.precoProprio ? 0 : t.descontoBps, exigeDocumento: t.exigeDocumento,
             // preço próprio (043) só em lote pago — o gratuito é gratuito pra todos os tipos
             precoCents: t.precoProprio && !l.gratuito ? t.precoCents : null,
@@ -1024,6 +1050,19 @@ useHead({ title: 'Criar evento' })
           <p class="mt-1 text-[12.5px] text-tinta-suave">Em branco: o site vende até 1 dia antes do término do evento. A bilheteria não para.</p>
         </div>
 
+        <!-- dias de uso na catraca (047): o "SEXTA" não passa no domingo -->
+        <template v-if="tiposComNome.length">
+          <h3 class="titulo mt-6 text-[15px] font-semibold text-tinta">Dias de uso dos ingressos</h3>
+          <p class="mt-1 text-[12.5px] text-tinta-suave">
+            Em que dia cada tipo passa na catraca. O nome do tipo já marca o dia (ex.: "SEXTA"); confira e ajuste.
+          </p>
+          <div class="mt-3 grid gap-3" data-parte="dias-de-uso-dos-tipos">
+            <div v-for="t in tiposComNome" :key="t.nome">
+              <p class="mb-1 text-sm font-semibold text-tinta">{{ t.nome.trim() }}</p>
+              <DiasDeUsoDoTipo v-model="t.diasDeUso" :dias="diasDoEventoNoAssistente" :nome="t.nome" auto-pelo-nome />
+            </div>
+          </div>
+        </template>
       </section>
     </template>
     </div>

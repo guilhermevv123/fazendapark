@@ -13,6 +13,7 @@ import { q1, tx } from '../../../../utils/db'
 import { CANAIS_PADRAO, explicarErro } from '../index.post'
 import { ROTULOS_INGRESSOS } from './ingressos.patch'
 import { TETO_POR_COMPRA } from '../../../../utils/limite-de-compra'
+import { conferirDiasDeUso, diasDoEvento, limparDiasDeUso } from '../../../../utils/dias-de-uso'
 
 const Setor = z.object({
   o: z.literal('setor'),
@@ -56,6 +57,11 @@ const Tipo = z.object({
   precoCents: z.number().int().min(1, 'o preço do tipo precisa ser maior que zero').max(10_000_000).nullish(),
   exigeDocumento: z.boolean().default(false),
   maxPorCliente: z.number().int().min(1).max(200).nullish(),
+  /**
+   * dias em que passa na catraca (047), 'AAAA-MM-DD'. Sem o campo, herda os do tipo de MESMO NOME
+   * em outro lote deste evento (os dias são do tipo, não do lote); `[]`/`null` = qualquer dia.
+   */
+  diasDeUso: z.array(z.string().max(10)).max(62).nullish(),
 })
 
 const Entrada = z.discriminatedUnion('o', [Setor, Lote, Tipo])
@@ -70,7 +76,7 @@ export default defineEventHandler(async (event) => {
   }
   const d = p.data
 
-  const ev = await q1<any>(`SELECT id, status FROM events WHERE id = $1`, [eventoId])
+  const ev = await q1<any>(`SELECT id, status, starts_at, ends_at, timezone FROM events WHERE id = $1`, [eventoId])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
 
   // ------------------------------------------------------------- setor ---
@@ -161,13 +167,30 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // Dias de uso (047): os mandados, conferidos contra o calendário do evento; sem o campo, os do
+  // tipo de mesmo nome que já existir em outro lote — "SEXTA" do 2º lote passa na mesma sexta.
+  let dias: string[] | null = null
+  if (d.diasDeUso !== undefined) {
+    const c = conferirDiasDeUso(d.diasDeUso, diasDoEvento(ev.starts_at, ev.ends_at, ev.timezone))
+    if (!c.ok) throw createError({ statusCode: 422, statusMessage: c.erro })
+    dias = c.dias
+  } else {
+    const irmao = await q1<any>(
+      `SELECT tt.valid_dates::text[] AS dias
+         FROM ticket_types tt JOIN lots l ON l.id = tt.lot_id JOIN sectors s ON s.id = l.sector_id
+        WHERE s.event_id = $1 AND lower(btrim(tt.name)) = lower(btrim($2))
+          AND COALESCE(cardinality(tt.valid_dates), 0) > 0
+        LIMIT 1`, [eventoId, d.nome])
+    dias = limparDiasDeUso(irmao?.dias)
+  }
+
   const r = await q1<any>(
     `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps, requires_document,
-                               max_per_customer, sort_order, price_cents)
+                               max_per_customer, sort_order, price_cents, valid_dates)
      VALUES ($1,$2,$3,$4,$5,$6,
-             COALESCE((SELECT MAX(sort_order) + 1 FROM ticket_types WHERE lot_id = $1), 1), $7)
+             COALESCE((SELECT MAX(sort_order) + 1 FROM ticket_types WHERE lot_id = $1), 1), $7, $8::date[])
      RETURNING id`,
     [d.loteId, d.nome.trim(), qtdDoTipo, d.precoCents != null ? 0 : d.descontoBps, d.exigeDocumento,
-     d.maxPorCliente ?? null, d.precoCents ?? null])
-  return { ok: true, tipo: 'tipo', id: r.id }
+     d.maxPorCliente ?? null, d.precoCents ?? null, dias])
+  return { ok: true, tipo: 'tipo', id: r.id, diasDeUso: dias }
 })

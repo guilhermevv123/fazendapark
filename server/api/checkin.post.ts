@@ -26,6 +26,7 @@ import {
   SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA, SQL_PRIMEIRA_ENTRADA, SQL_PUBLICO, SQL_ULTIMA_ENTRADA,
 } from '../utils/catraca'
 import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingresso'
+import { diaDeUsoDe, limparDiasDeUso, mensagemForaDoDiaDeUso, valeNoDiaDeUso } from '../utils/dias-de-uso'
 import { explicarErro } from './admin/evento/index.post'
 
 /** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
@@ -173,6 +174,8 @@ async function decidir(event: H3Event) {
             s.name AS setor, l.name AS lote, tt.name AS tipo, tt.kind AS especie,
             s.sessions_covered,
             es.starts_at AS sessao_inicio, es.ends_at AS sessao_fim,
+            -- dias de uso do tipo (047): texto, nunca Date — o pg montaria meia-noite no fuso do servidor
+            tt.valid_dates::text[] AS dias_de_uso, ev.timezone AS fuso,
             -- Volte Mais (037): a portaria avisa "retorno com desconto na consumação"
             (SELECT json_build_object('nome', lp.nome, 'consumacao_bps', lp.consumacao_bps)
                FROM orders o JOIN loyalty_programs lp ON lp.id = o.loyalty_program_id
@@ -180,6 +183,7 @@ async function decidir(event: H3Event) {
        FROM tickets t
        JOIN sectors s ON s.id = t.sector_id
        JOIN lots l    ON l.id = t.lot_id
+       JOIN events ev ON ev.id = t.event_id
        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
        LEFT JOIN event_sessions es ON es.id = t.session_id
       WHERE t.code = $1 AND t.org_id = $2`, [codigo, orgDaSessao])
@@ -204,6 +208,12 @@ async function decidir(event: H3Event) {
     foraDaSessao = agora < abre || agora > fecha
   }
 
+  // ---- dia de uso do tipo (047): o ingresso de SEXTA não passa no domingo ----
+  // Dono, 07/10: "o ingresso que o cara tem de sexta, ele tenta passar domingo". O dia de hoje é o
+  // do calendário no fuso do evento; tipo sem dias marcados passa em qualquer dia (o de sempre).
+  const diasDeUso = limparDiasDeUso(ingresso.dias_de_uso)
+  const foraDoDia = !valeNoDiaDeUso(diasDeUso, diaDeUsoDe(new Date(), ingresso.fuso))
+
   /**
    * "Só conferir" responde SEMPRE — inclusive fora da janela da sessão.
    *
@@ -227,6 +237,12 @@ async function decidir(event: H3Event) {
    * exatamente como antes — é ela que decide quem passa.
    */
   if (apenasConsultar) {
+    if (foraDoDia) {
+      return {
+        ok: false, resultado: 'fora_da_sessao' as const, foraDoDia: true, diasDeUso,
+        mensagem: mensagemForaDoDiaDeUso(diasDeUso), consulta: true, ingresso: dadosDoIngresso(ingresso),
+      }
+    }
     return {
       ok: !foraDaSessao,
       resultado: (foraDaSessao ? 'fora_da_sessao' : 'ok') as const,
@@ -238,6 +254,13 @@ async function decidir(event: H3Event) {
     }
   }
 
+  // Fora do dia volta como `fora_da_sessao` no livro de leituras (é o CHECK de `checkins`), com a
+  // frase do dia certo e `foraDoDia` pra tela dizer "NÃO VALE HOJE" em vez de "AINDA NÃO".
+  if (foraDoDia) {
+    const r = await registrar('fora_da_sessao', ingresso.id, codigo)
+    return { ...r, mensagem: mensagemForaDoDiaDeUso(diasDeUso), foraDoDia: true, diasDeUso,
+             ingresso: dadosDoIngresso(ingresso) }
+  }
   if (foraDaSessao) return registrar('fora_da_sessao', ingresso.id, codigo)
 
   // ---- passaporte de vários dias: uma entrada por dia de uso (ADM-04) -----
