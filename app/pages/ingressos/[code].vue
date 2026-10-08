@@ -93,6 +93,7 @@ async function salvarImagem() {
         volteMais: data.value.fidelidade?.nome ?? null },
       comQr.value.map((t: any) => ({
         codigo: t.codigo, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.titular, diasDeUso: t.diasDeUso ?? null,
+        pessoaDoCombo: t.pessoaDoCombo ?? null,
         qrUrl: `/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.value.pedido)}`,
       })))
     if (r === 'baixado') recadoDaImagem.value = comQr.value.length > 1 ? 'Imagens baixadas.' : 'Imagem baixada.'
@@ -401,6 +402,9 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               <div class="absolute inset-x-0 bottom-0 p-4 text-white">
                 <p class="titulo text-lg font-semibold leading-snug">{{ data.evento.nome }}</p>
                 <p v-if="t.diasDeUso" class="text-sm font-semibold text-white/90">Vale só {{ t.diasDeUso }}</p>
+                <p v-if="t.pessoaDoCombo" class="text-sm font-semibold text-white/90" data-parte="pessoa-do-combo">
+                  Combo · {{ t.pessoaDoCombo }}
+                </p>
               </div>
               <span class="absolute right-3 top-3 rounded-md bg-white/90 px-2 py-0.5 text-xs font-semibold tabular-nums text-ink-800">
                 {{ i + 1 }}/{{ data.ingressos.length }}
@@ -465,6 +469,10 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               <div class="flex justify-between gap-3">
                 <dt class="text-tinta-fraca">Ingresso</dt>
                 <dd class="text-right font-medium text-tinta">{{ t.tipo ?? 'Ingresso' }}</dd>
+              </div>
+              <div v-if="t.pessoaDoCombo" class="flex justify-between gap-3">
+                <dt class="text-tinta-fraca">Combo</dt>
+                <dd class="text-right font-semibold text-tinta">{{ t.pessoaDoCombo.replace(/^./, (c: string) => c.toUpperCase()) }}</dd>
               </div>
               <div v-if="t.diasDeUso" class="flex justify-between gap-3" data-parte="dia-de-uso">
                 <dt class="text-tinta-fraca">Vale só</dt>

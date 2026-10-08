@@ -29,6 +29,7 @@ import { PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { saldoParaSaque } from '../../../../utils/saque'
 import { retratoDoPublico, SQL_PUBLICO } from '../../../../utils/catraca'
 import { eCortesiaMesmo } from './cortesias.post'
+import { SQL_UNIDADE_DO_INGRESSO } from '../../../../utils/combo'
 
 /**
  * O que a CASA chama de cortesia — importado da rota que emite, não reescrito
@@ -79,10 +80,11 @@ export default defineEventHandler(async (event) => {
     `SELECT s.name AS setor, s.kind AS setor_tipo, s.sort_order AS ord_setor,
             l.id AS lote_id, l.name AS lote, l.sort_order AS ord_lote,
             l.price_cents, l.quantity,
-            (SELECT count(*)::int FROM tickets t
+            -- por UNIDADE (a do estoque): as partes de um combo (050) são 1 venda
+            (SELECT count(DISTINCT ${SQL_UNIDADE_DO_INGRESSO})::int FROM tickets t
               WHERE t.lot_id = l.id AND t.status <> 'cancelado'
                 AND NOT (${E_CORTESIA('t')})) AS vendidos,
-            (SELECT count(*)::int FROM tickets t
+            (SELECT count(DISTINCT ${SQL_UNIDADE_DO_INGRESSO})::int FROM tickets t
               WHERE t.lot_id = l.id AND t.status <> 'cancelado'
                 AND ${E_CORTESIA('t')}) AS cortesias,
             COALESCE(SUM(oi.quantity * oi.unit_face_cents)
@@ -168,9 +170,9 @@ export default defineEventHandler(async (event) => {
   // aqui e 2 na tela de Cortesias no evento semeado: uma cortesia CANCELADA,
   // que já devolveu a cota e não ocupa mais lugar nenhum.
   const emitidos = await q1<any>(
-    `SELECT count(*)::int AS total,
-            count(*) FILTER (WHERE ${E_CORTESIA('t')} AND t.status <> 'cancelado')::int AS cortesias,
-            count(*) FILTER (WHERE t.status = 'cancelado')::int AS cancelados
+    `SELECT count(DISTINCT ${SQL_UNIDADE_DO_INGRESSO})::int AS total,
+            count(DISTINCT ${SQL_UNIDADE_DO_INGRESSO}) FILTER (WHERE ${E_CORTESIA('t')} AND t.status <> 'cancelado')::int AS cortesias,
+            count(DISTINCT ${SQL_UNIDADE_DO_INGRESSO}) FILTER (WHERE t.status = 'cancelado')::int AS cancelados
        FROM tickets t WHERE t.event_id = $1`, [id])
 
   // Quem entrou sai do LIVRO de entradas (`SQL_PUBLICO`), a mesma régua do

@@ -8,7 +8,7 @@
 
 import { diaLocal } from '~/composables/formato'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
-import { mensagemForaDoDiaDeUso, valeNoDiaDeUso } from '~~/server/utils/dias-de-uso'
+import { fraseDosDiasDeUso, mensagemForaDoDiaDeUso, rotuloDoDiaDeUso, valeNoDiaDeUso } from '~~/server/utils/dias-de-uso'
 import {
   FORMAS_DE_TROCA, opcoesDeTroca, reaisDaTroca, ROTULO_DA_FORMA,
   type FormaDeTroca, type OpcaoDeTroca, type TipoParaTroca,
@@ -54,11 +54,17 @@ export type Resposta = {
   qrAntigo?: boolean
   /** o tipo do ingresso não vale HOJE (047, dias de uso): "NÃO VALE HOJE", não "AINDA NÃO" */
   foraDoDia?: boolean
+  /** os dias em que o ingresso vale — a pergunta da troca diz "é de sábado, hoje é domingo" */
+  diasDeUso?: string[] | null
   /** troca de dia (049): as opções de hoje com a diferença — o porteiro cobra e libera */
   troca?: { hoje: string; pagoCents: number; pessoas: number; opcoes: OpcaoDeTroca[] }
   /** a troca que liberou esta pessoa: o tipo de hoje, quanto foi cobrado e como */
   trocaFeita?: { tipo: string; cobradoCents: number; forma: FormaDeTroca }
+  /** combo (050): esta é a pessoa `seq` de `tamanho`, e o estado de cada parte do combo */
+  combo?: ComboDaPorta
 }
+
+type ComboDaPorta = { seq: number; tamanho: number; partes: { seq: number; status: string }[] }
 
 /** o mesmo mínimo do servidor (`qr: z.string().min(4)` em `/api/checkin`) */
 export const MINIMO_DO_CODIGO = 4
@@ -452,13 +458,17 @@ type IngressoLocal = {
   /** dias de uso do tipo (047), 'AAAA-MM-DD'; ausente = qualquer dia */
   diasDeUso?: string[]
   /** troca de dia sem rede (049): o tipo comprado e quanto custou a face */
-  tipoId?: string | null; pagoCents?: number
+  tipoId?: string | null; pagoCents?: number; pessoasDoTipo?: number
+  /** combo (050): a parte `seq` de `tamanho` do grupo — sem rede o portão libera as irmãs */
+  combo?: { grupo: string; seq: number; tamanho: number }
   /** marcado por ESTE aparelho enquanto estava sem rede */
   usadoAqui?: { em: string; gate: string | null }
 } & PassaporteLocal
 type Passagem = { id: string; qr: string; gate: string | null; em: string; offline: boolean
   /** troca de dia cobrada sem rede (049) — sobe na sincronização junto da passagem */
-  troca?: { tipoId: string; forma: FormaDeTroca; cobradoCents: number; tipoNome: string } }
+  troca?: { tipoId: string; forma: FormaDeTroca; cobradoCents: number; tipoNome: string }
+  /** combo (050): a passagem é da pessoa k do combo do QR lido */
+  parte?: number }
 
 const CHAVE_LISTA = `dt_portaria_lista_${id}`
 const CHAVE_FILA = `dt_portaria_fila_${id}`
@@ -741,8 +751,34 @@ async function registrarWorker() {
  * o QR não sai do servidor, então conferir assinatura aqui seria impossível
  * de qualquer jeito.
  */
+/**
+ * O ingresso da lista deste aparelho — o do QR, ou (combo, 050) a parte `parte` do mesmo combo do QR.
+ */
+function ingressoLocalDe(bruto: string, parte?: number): IngressoLocal | undefined {
+  const t = mapa.value.get(chaveLocal(codigoDoQr(bruto).codigo))
+  if (!parte) return t
+  if (!t?.combo) return undefined
+  return lista.value.find((x) => x.combo?.grupo === t.combo!.grupo && x.combo.seq === parte)
+}
+
+/** as partes do combo como a lista deste aparelho as vê (o que passou aqui conta como usado) */
+function comboLocal(t: IngressoLocal): ComboDaPorta | undefined {
+  if (!t.combo) return undefined
+  const partes = lista.value.filter((x) => x.combo?.grupo === t.combo!.grupo)
+    .map((x) => ({ seq: x.combo!.seq, status: x.usadoAqui && x.status === 'valido' ? 'usado' : x.status }))
+    .sort((a, b) => a.seq - b.seq)
+  return { seq: t.combo.seq, tamanho: t.combo.tamanho, partes }
+}
+
 function validarLocal(bruto: string, idPassagem: string = novoId(),
-                      consultar: boolean = apenasConsultar.value): Resposta {
+                      consultar: boolean = apenasConsultar.value, parte?: number): Resposta {
+  const r = validarLocalSemCombo(bruto, idPassagem, consultar, parte)
+  const t = ingressoLocalDe(bruto, parte)
+  const combo = t ? comboLocal(t) : undefined
+  return combo ? { ...r, combo } : r
+}
+
+function validarLocalSemCombo(bruto: string, idPassagem: string, consultar: boolean, parte?: number): Resposta {
   const { codigo: cod, eventoDoQr } = codigoDoQr(bruto)
   const base = { local: true, ok: false }
 
@@ -760,7 +796,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
                + 'Chame o supervisor.' }
   }
 
-  const t = mapa.value.get(chaveLocal(cod))
+  const t = parte ? ingressoLocalDe(bruto, parte) : mapa.value.get(chaveLocal(cod))
   // Fora da lista baixada não é prova de fraude: pode ser venda de depois da
   // descida, ou código de outro evento digitado à mão. Âmbar e supervisor.
   if (!t) return respostaForaDaLista(listaEm.value)
@@ -804,8 +840,9 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
     const pagoCents = Math.max(0, Number(t.pagoCents ?? 0))
     const troca = passaporte || !tiposDaTroca.value.length ? undefined
       : { hoje, pagoCents, pessoas: Number(t.pessoas ?? 1),
-          opcoes: opcoesDeTroca({ tipo: t.tipo, pessoas: Number(t.pessoas ?? 1), pagoCents }, tiposDaTroca.value, hoje) }
-    return { local: true, ok: false, resultado: 'fora_da_sessao', foraDoDia: true,
+          opcoes: opcoesDeTroca({ tipo: t.tipo, pessoas: Number(t.pessoas ?? 1),
+            pessoasDoTipo: Number(t.pessoasDoTipo ?? t.pessoas ?? 1), pagoCents }, tiposDaTroca.value, hoje) }
+    return { local: true, ok: false, resultado: 'fora_da_sessao', foraDoDia: true, diasDeUso: t.diasDeUso ?? null,
              mensagem: mensagemForaDoDiaDeUso(t.diasDeUso), ingresso: dados, troca,
              ...(consultar ? { consulta: true } : {}) }
   }
@@ -835,7 +872,7 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
   t.usadoAqui = { em, gate: gate.value || null }
   if (passaporte) t.diasAqui = [...new Set([...(t.diasAqui ?? []), diaLocal(new Date(em))])]
   fila.value = [...fila.value, { id: idPassagem, qr: bruto.trim(), gate: gate.value || null,
-                                 em, offline: true }]
+                                 em, offline: true, ...(parte ? { parte } : {}) }]
   guardar(CHAVE_FILA, fila.value)
   guardarLista()
 
@@ -849,9 +886,9 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
  * às 10h05, com a internet caída, passava de novo — a lista do aparelho ainda dizia "válido" até a
  * próxima descida (15 min). Agora o que o servidor decidiu fica escrito aqui na hora.
  */
-function marcarNaListaDoAparelho(bruto: string, r: Resposta | null) {
+function marcarNaListaDoAparelho(bruto: string, r: Resposta | null, parte?: number) {
   if (!r || r.consulta || !lista.value.length) return
-  const t = mapa.value.get(chaveLocal(codigoDoQr(bruto).codigo))
+  const t = ingressoLocalDe(bruto, parte)
   if (!t) return
   if (r.ok) {
     const em = new Date().toISOString()
@@ -982,6 +1019,25 @@ const trocaTipo = ref<string | null>(null)
 const trocaForma = ref<FormaDeTroca | null>(null)
 const trocando = ref(false)
 const trocaErro = ref('')
+/**
+ * Dono, 08/10: "leu o ingresso tem que perguntar ... sempre que for dia diferente tem que ter
+ * certeza" — até sem diferença (o de R$ 40 entrando no dia de R$ 30). O liberar abre a pergunta; só o
+ * "Sim" grava. Uma pergunta por toque: trocar o tipo ou a forma fecha a pergunta.
+ */
+const trocaPerguntando = ref(false)
+const perguntaDaTroca = computed(() => {
+  const r = ultima.value
+  const o = opcaoDaTroca.value
+  if (!r?.troca || !o) return null
+  const doIngresso = fraseDosDiasDeUso(r.diasDeUso) || 'outro dia'
+  const hoje = r.troca.hoje ? rotuloDoDiaDeUso(r.troca.hoje) : 'hoje'
+  const quantas = r.combo ? trocaQuantas.value : 1
+  const pessoas = quantas > 1 ? `${quantas} pessoas deste combo: ` : ''
+  const cobranca = o.diferencaCents > 0
+    ? `cobrar ${reaisDaTroca(o.diferencaCents * quantas)} (${trocaForma.value ? ROTULO_DA_FORMA[trocaForma.value].toLowerCase() : '—'})`
+    : 'sem cobrança — a diferença não é devolvida'
+  return { doIngresso, hoje, quantas, cobranca: (pessoas + cobranca).replace(/^./, (c) => c.toUpperCase()) }
+})
 const opcaoDaTroca = computed(() =>
   ultima.value?.troca?.opcoes.find((o) => o.tipoId === trocaTipo.value) ?? null)
 const podeTrocar = computed(() => {
@@ -996,36 +1052,48 @@ watch(ultima, (r, antes) => {
     return
   }
   trocaAberta.value = false
+  trocaPerguntando.value = false
   trocaForma.value = null
   trocaErro.value = ''
   trocaTipo.value = r?.troca?.opcoes[0]?.tipoId ?? null
 })
+watch([trocaTipo, trocaForma], () => { trocaPerguntando.value = false })
 
 function abrirTroca() {
   trocaErro.value = ''
   trocaAberta.value = true
 }
+/** o primeiro toque em liberar só pergunta; o "Sim" é que grava */
+function perguntarTroca() {
+  const opcao = opcaoDaTroca.value
+  if (!opcao || trocando.value) return
+  if (opcao.diferencaCents > 0 && !trocaForma.value) { trocaErro.value = 'Escolha como a pessoa pagou a diferença.'; return }
+  trocaErro.value = ''
+  trocaPerguntando.value = true
+}
 function fecharTroca() {
+  trocaPerguntando.value = false
   trocaAberta.value = false
   trocaForma.value = null
   trocaErro.value = ''
 }
 
 /** libera pelo aparelho, sem rede: a mesma marca da leitura offline, com a troca na fila */
-function trocarSemRede(r0: Resposta, idPassagem: string, opcao: OpcaoDeTroca, forma: FormaDeTroca) {
+function trocarSemRede(r0: Resposta, idPassagem: string, opcao: OpcaoDeTroca, forma: FormaDeTroca,
+                       parte?: number): boolean {
   const bruto = ultimoBruto.value
-  const t = mapa.value.get(chaveLocal(codigoDoQr(bruto).codigo))
-  if (!t) { trocaErro.value = 'Este ingresso não está na lista do aparelho — chame o supervisor.'; return }
+  const t = ingressoLocalDe(bruto, parte)
+  if (!t) { trocaErro.value = 'Este ingresso não está na lista do aparelho — chame o supervisor.'; return false }
   if (t.status === 'usado' || t.status === 'cancelado' || t.usadoAqui) {
     trocaErro.value = t.status === 'cancelado' ? 'Ingresso cancelado — não dá pra liberar.'
       : 'Este ingresso já passou por este aparelho — não cobre de novo.'
-    return
+    return false
   }
   const em = new Date().toISOString()
   t.usadoAqui = { em, gate: gate.value || null }
   fila.value = [...fila.value, { id: idPassagem, qr: bruto.trim(), gate: gate.value || null, em, offline: true,
                                  troca: { tipoId: opcao.tipoId, forma, cobradoCents: opcao.diferencaCents,
-                                          tipoNome: opcao.nome } }]
+                                          tipoNome: opcao.nome }, ...(parte ? { parte } : {}) }]
   guardar(CHAVE_FILA, fila.value)
   guardarLista()
   ultima.value = {
@@ -1035,52 +1103,187 @@ function trocarSemRede(r0: Resposta, idPassagem: string, opcao: OpcaoDeTroca, fo
       : 'Liberado com troca de dia — sem diferença · sem rede',
     pessoas: t.pessoas, ingresso: r0.ingresso,
     trocaFeita: { tipo: opcao.nome, cobradoCents: opcao.diferencaCents, forma },
+    ...(comboLocal(t) ? { combo: comboLocal(t) } : {}),
   }
   void tentarReconectar()
+  return true
 }
 
 async function confirmarTroca() {
   const r0 = ultima.value
   const opcao = opcaoDaTroca.value
-  if (!r0?.troca || !opcao || trocando.value) return
+  if (!r0?.troca || !opcao || trocando.value || !trocaPerguntando.value) return
+  trocaPerguntando.value = false
   const forma: FormaDeTroca | null = opcao.diferencaCents > 0 ? trocaForma.value : 'sem_diferenca'
   if (!forma) { trocaErro.value = 'Escolha como a pessoa pagou a diferença.'; return }
   trocaErro.value = ''
   trocando.value = true
-  // UM id pra passagem e pra troca, criado antes de saber se vai ter rede (mesmo motivo do `ler`)
-  const idPassagem = novoId()
+  // combo (050): cada pessoa é um ingresso — a troca roda parte por parte, cada uma com o seu id
+  const partes: (number | undefined)[] = !r0.combo ? [undefined]
+    : partesDaTroca.value.length ? partesDaTroca.value.slice(0, trocaQuantas.value) : [r0.combo.seq]
+  let feitas = 0
+  let ultimaResp: Resposta | null = null
   try {
-    if (!online.value || r0.local) {
-      trocarSemRede(r0, idPassagem, opcao, forma)
-    } else {
+    for (const parte of partes) {
+      // UM id pra passagem e pra troca, criado antes de saber se vai ter rede (mesmo motivo do `ler`)
+      const idPassagem = novoId()
+      if (!online.value || r0.local) {
+        if (!trocarSemRede(r0, idPassagem, opcao, forma, parte)) break
+        ultimaResp = ultima.value
+        feitas++
+        continue
+      }
       try {
         const resp = await $fetch<Resposta>('/api/portaria/troca-de-dia', {
           method: 'POST',
           body: { id: idPassagem, qr: ultimoBruto.value, eventId: id, tipoId: opcao.tipoId, forma,
-                  cobradoCents: opcao.diferencaCents, gate: gate.value || undefined, deviceId: aparelho.value },
+                  cobradoCents: opcao.diferencaCents, gate: gate.value || undefined, deviceId: aparelho.value,
+                  ...(parte ? { parteDoCombo: parte } : {}) },
         })
-        ultima.value = { ...resp, ingresso: r0.ingresso }
+        ultimaResp = { ...resp, ingresso: r0.ingresso }
         if (resp?.publico) publico.value = resp.publico
-        marcarNaListaDoAparelho(ultimoBruto.value, ultima.value)
-        refresh()
+        marcarNaListaDoAparelho(ultimoBruto.value, ultimaResp, parte)
+        feitas++
       } catch (e: any) {
         if (falhaDeRede(e)) {
           // MESMO id: se o servidor gravou antes de a resposta se perder, a fila volta "repetida"
           online.value = false
-          trocarSemRede(r0, idPassagem, opcao, forma)
+          if (!trocarSemRede(r0, idPassagem, opcao, forma, parte)) break
+          ultimaResp = ultima.value
+          feitas++
         } else {
           const nova = e?.data?.data?.troca
-          if (nova) ultima.value = { ...r0, troca: nova }
+          if (nova && !feitas) ultima.value = { ...r0, troca: nova }
           trocaErro.value = e?.data?.statusMessage || e?.statusMessage || 'Não deu pra liberar agora. Tente de novo.'
+          break
         }
       }
     }
-    if (ultima.value?.trocaFeita) {
+    if (feitas && ultimaResp) {
+      ultima.value = feitas === 1 ? ultimaResp : {
+        ...ultimaResp,
+        mensagem: `${feitas} pessoas deste combo liberadas com troca de dia`
+          + (ultimaResp.local ? ' · sem rede' : ''),
+        pessoas: feitas,
+        trocaFeita: { tipo: opcao.nome, cobradoCents: opcao.diferencaCents * feitas, forma },
+      }
+      if (!ultima.value.local) refresh()
       historico.value.unshift({ ...ultima.value, codigo: ultimoBruto.value, quando: new Date() })
       historico.value = historico.value.slice(0, 12)
+      if (feitas < partes.length && !trocaErro.value) {
+        trocaErro.value = `Só ${feitas} de ${partes.length} foram liberadas — leia o ingresso de novo.`
+      }
     }
   } finally {
     trocando.value = false
+  }
+}
+
+/* ------------------------------------------------------------- combo (050) */
+/*
+ * Dono, 08/10: "tem que aparecer os 10, porque ele vai invalidando, ingresso por ingresso ... saber
+ * esse combo aqui, 9 pessoas foram, 1 não foi". Cada pessoa do combo é um ingresso. O grupo que chega
+ * com UM celular (ou com o print do QR antigo) não trava a fila: lido um, a porta mostra quantos do
+ * combo faltam e "Entrar mais pessoas deste combo" libera as outras partes, uma a uma, cada uma
+ * com o seu id — com rede pelo `/api/checkin`, sem rede pela lista do aparelho.
+ */
+const comboAberto = ref(false)
+const comboQuantas = ref(1)
+const comboEntrando = ref(false)
+const comboErro = ref('')
+/** as partes do combo que ainda não entraram, a lida primeiro */
+const partesQueFaltam = computed(() => (ultima.value?.combo?.partes ?? [])
+  .filter((p) => p.status === 'valido').map((p) => p.seq))
+const resumoDoCombo = computed(() => {
+  const c = ultima.value?.combo
+  if (!c) return null
+  const entraram = c.partes.filter((p) => p.status === 'usado').length
+  return { seq: c.seq, tamanho: c.tamanho, entraram, faltam: c.partes.filter((p) => p.status === 'valido').length }
+})
+const podeEntrarMais = computed(() => {
+  const r = ultima.value
+  return !!r?.combo && !r.consulta && !r.foraDoDia && (r.resultado === 'ok' || r.resultado === 'ja_usado')
+    && partesQueFaltam.value.length > 0
+})
+/** troca de dia de combo: as partes que ainda valem, a lida primeiro */
+const partesDaTroca = computed(() => {
+  const c = ultima.value?.combo
+  if (!c) return []
+  const validas = c.partes.filter((p) => p.status === 'valido').map((p) => p.seq)
+  return [...validas.filter((s) => s === c.seq), ...validas.filter((s) => s !== c.seq)]
+})
+const trocaQuantas = ref(1)
+watch(ultima, () => {
+  comboAberto.value = false
+  comboErro.value = ''
+  comboQuantas.value = partesQueFaltam.value.length || 1
+  trocaQuantas.value = 1
+})
+
+function mudarQuantas(alvo: 'combo' | 'troca', passo: number) {
+  if (alvo === 'combo') {
+    comboQuantas.value = Math.min(partesQueFaltam.value.length, Math.max(1, comboQuantas.value + passo))
+  } else {
+    trocaQuantas.value = Math.min(Math.max(1, partesDaTroca.value.length), Math.max(1, trocaQuantas.value + passo))
+    trocaPerguntando.value = false
+  }
+}
+
+async function entrarMaisDoCombo() {
+  const r0 = ultima.value
+  if (!r0?.combo || comboEntrando.value) return
+  const bruto = ultimoBruto.value
+  const partes = partesQueFaltam.value.slice(0, comboQuantas.value)
+  comboEntrando.value = true
+  comboErro.value = ''
+  let liberadas = 0
+  let recusadas = 0
+  let ultimaResp: Resposta | null = null
+  try {
+    for (const parte of partes) {
+      const idPassagem = novoId()
+      let r: Resposta
+      if (!online.value) {
+        r = validarLocal(bruto, idPassagem, false, parte)
+      } else {
+        try {
+          r = await $fetch<Resposta>('/api/checkin', {
+            method: 'POST',
+            body: { qr: bruto, eventId: id, gate: gate.value || undefined, apenasConsultar: false,
+                    entradaId: idPassagem, deviceId: aparelho.value, parteDoCombo: parte },
+          })
+          if (r?.publico) publico.value = r.publico
+          marcarNaListaDoAparelho(bruto, r, parte)
+        } catch (e: any) {
+          if (!falhaDeRede(e)) { comboErro.value = respostaDeFalha(e).mensagem; break }
+          online.value = false
+          // MESMO id da tentativa online (ver `ler`)
+          r = validarLocal(bruto, idPassagem, false, parte)
+        }
+      }
+      ultimaResp = r
+      if (r.ok) liberadas++
+      else recusadas++
+    }
+    if (ultimaResp) {
+      ultima.value = {
+        ...ultimaResp,
+        ok: liberadas > 0, resultado: liberadas > 0 ? 'ok' : ultimaResp.resultado,
+        mensagem: liberadas > 0
+          ? `Mais ${liberadas} ${liberadas === 1 ? 'pessoa' : 'pessoas'} deste combo liberada${liberadas === 1 ? '' : 's'}`
+            + (recusadas ? ` · ${recusadas} recusada${recusadas === 1 ? '' : 's'} (já usadas ou fora da lista)` : '')
+            + (ultimaResp.local ? ' · sem rede' : '')
+          : ultimaResp.mensagem,
+        pessoas: liberadas, ingresso: r0.ingresso,
+      }
+      if (liberadas && !ultima.value.local) refresh()
+      historico.value.unshift({ ...ultima.value, codigo: bruto, quando: new Date() })
+      historico.value = historico.value.slice(0, 12)
+      ultimoBruto.value = bruto
+    }
+    if (liberadas) void tentarReconectar()
+  } finally {
+    comboEntrando.value = false
   }
 }
 
@@ -1558,7 +1761,7 @@ useHead({
           Câmera
         </button>
       </div>
-      <LeitorCamera v-if="modoCamera" class="mb-4" :pausada="lendo || trocaAberta" :veredito="vereditoCamera"
+      <LeitorCamera v-if="modoCamera" class="mb-4" :pausada="lendo || trocaAberta || comboAberto" :veredito="vereditoCamera"
                     @ler="lerDaCamera" />
       <form class="flex flex-wrap items-end gap-3" @submit.prevent="ler">
         <div class="min-w-[280px] flex-1">
@@ -1733,6 +1936,43 @@ useHead({
         <template v-else>sem diferença</template>
       </p>
 
+      <!-- combo (050): cada pessoa é um ingresso — quem do combo já entrou -->
+      <p v-if="resumoDoCombo" class="mt-3 rounded-lg bg-white/15 px-3 py-2 text-base font-semibold" data-parte="combo">
+        Combo · pessoa {{ resumoDoCombo.seq }} de {{ resumoDoCombo.tamanho }} ·
+        {{ resumoDoCombo.entraram }} {{ resumoDoCombo.entraram === 1 ? 'entrou' : 'entraram' }} ·
+        faltam {{ resumoDoCombo.faltam }}
+      </p>
+      <div v-if="podeEntrarMais" class="mt-4 rounded-lg bg-white p-4 text-left text-tinta" data-parte="combo-mais">
+        <button v-if="!comboAberto" type="button" class="btn-primario min-h-[52px] w-full text-lg"
+                data-parte="abrir-combo-mais" @click="comboAberto = true">
+          Entrar mais pessoas deste combo ({{ partesQueFaltam.length }})
+        </button>
+        <template v-else>
+          <p class="text-base font-semibold">Quantas pessoas deste combo estão entrando agora?</p>
+          <div class="mt-3 flex items-center justify-center gap-3">
+            <button type="button" class="btn-secundario min-h-[52px] min-w-[56px] text-2xl" aria-label="Menos uma"
+                    :disabled="comboEntrando || comboQuantas <= 1" data-parte="combo-menos"
+                    @click="mudarQuantas('combo', -1)">−</button>
+            <span class="min-w-[4ch] text-center text-3xl font-bold tabular-nums" data-parte="combo-quantas">{{ comboQuantas }}</span>
+            <button type="button" class="btn-secundario min-h-[52px] min-w-[56px] text-2xl" aria-label="Mais uma"
+                    :disabled="comboEntrando || comboQuantas >= partesQueFaltam.length" data-parte="combo-mais-um"
+                    @click="mudarQuantas('combo', 1)">+</button>
+          </div>
+          <p class="mt-1 text-center text-sm text-tinta-suave">de {{ partesQueFaltam.length }} que ainda não entraram</p>
+          <p v-if="comboErro" class="mt-3 rounded-[6px] bg-erro-claro px-3 py-2 text-sm font-semibold text-erro"
+             role="alert" data-parte="combo-erro">{{ comboErro }}</p>
+          <div class="mt-3 grid grid-cols-2 gap-2">
+            <button type="button" class="btn-secundario min-h-[52px] text-base" :disabled="comboEntrando"
+                    data-parte="cancelar-combo-mais" @click="comboAberto = false">Voltar</button>
+            <button type="button" class="btn-primario min-h-[52px] text-base" :disabled="comboEntrando"
+                    data-parte="confirmar-combo-mais" @click="entrarMaisDoCombo">
+              <template v-if="comboEntrando">Liberando…</template>
+              <template v-else>Liberar {{ comboQuantas }}</template>
+            </button>
+          </div>
+        </template>
+      </div>
+
       <!-- troca de dia (049): o ingresso de outro dia entra pagando a diferença -->
       <div v-if="podeTrocar" class="mt-5 rounded-lg bg-white p-4 text-left text-tinta" data-parte="troca-de-dia">
         <template v-if="!ultima.troca!.opcoes.length">
@@ -1770,6 +2010,20 @@ useHead({
             </button>
           </div>
 
+          <template v-if="ultima.combo && partesDaTroca.length > 1">
+            <p class="mt-4 text-sm font-semibold">Quantas pessoas deste combo trocam</p>
+            <div class="mt-2 flex items-center gap-3">
+              <button type="button" class="btn-secundario min-h-[52px] min-w-[56px] text-2xl" aria-label="Menos uma"
+                      :disabled="trocando || trocaQuantas <= 1" data-parte="troca-menos"
+                      @click="mudarQuantas('troca', -1)">−</button>
+              <span class="min-w-[4ch] text-center text-3xl font-bold tabular-nums" data-parte="troca-quantas">{{ trocaQuantas }}</span>
+              <button type="button" class="btn-secundario min-h-[52px] min-w-[56px] text-2xl" aria-label="Mais uma"
+                      :disabled="trocando || trocaQuantas >= partesDaTroca.length" data-parte="troca-mais-um"
+                      @click="mudarQuantas('troca', 1)">+</button>
+              <span class="text-sm text-tinta-suave">de {{ partesDaTroca.length }}</span>
+            </div>
+          </template>
+
           <template v-if="opcaoDaTroca && opcaoDaTroca.diferencaCents > 0">
             <p class="mt-4 text-sm font-semibold">Como pagou</p>
             <div class="mt-2 grid grid-cols-2 gap-2">
@@ -1786,19 +2040,42 @@ useHead({
           <p v-if="trocaErro" class="mt-3 rounded-[6px] bg-erro-claro px-3 py-2 text-sm font-semibold text-erro"
              role="alert" data-parte="troca-erro">{{ trocaErro }}</p>
 
-          <button type="button" class="btn-primario mt-4 min-h-[56px] w-full text-lg" data-parte="confirmar-troca"
-                  :disabled="trocando || !opcaoDaTroca || (opcaoDaTroca.diferencaCents > 0 && !trocaForma)"
-                  @click="confirmarTroca">
-            <template v-if="trocando">Liberando…</template>
-            <template v-else-if="opcaoDaTroca && opcaoDaTroca.diferencaCents > 0">
-              Recebi {{ reaisDaTroca(opcaoDaTroca.diferencaCents) }} — liberar
-            </template>
-            <template v-else>Liberar sem cobrança</template>
-          </button>
-          <button type="button" class="btn-secundario mt-2 min-h-[48px] w-full" :disabled="trocando"
-                  data-parte="cancelar-troca" @click="fecharTroca">
-            Não trocar
-          </button>
+          <!-- "tem certeza?" (dono, 08/10): dia diferente SEMPRE pergunta, com ou sem diferença -->
+          <div v-if="trocaPerguntando && perguntaDaTroca" class="mt-4 rounded-[6px] border-2 border-alerta bg-alerta-claro p-3"
+               role="alertdialog" aria-labelledby="pergunta-troca" data-parte="pergunta-troca">
+            <p id="pergunta-troca" class="text-lg font-bold">Tem certeza?</p>
+            <p class="mt-1 text-base">
+              Este ingresso é de <strong>{{ perguntaDaTroca.doIngresso }}</strong> e hoje é
+              <strong>{{ perguntaDaTroca.hoje }}</strong>. Ele entra hoje e <strong>não vale mais</strong> no dia dele.
+            </p>
+            <p class="mt-1 text-base font-semibold">{{ perguntaDaTroca.cobranca }}</p>
+            <div class="mt-3 grid grid-cols-2 gap-2">
+              <button type="button" class="btn-secundario min-h-[52px] text-base" :disabled="trocando"
+                      data-parte="pergunta-troca-nao" @click="trocaPerguntando = false">
+                Voltar
+              </button>
+              <button type="button" class="btn-primario min-h-[52px] text-base" :disabled="trocando"
+                      data-parte="confirmar-troca" @click="confirmarTroca">
+                <template v-if="trocando">Liberando…</template>
+                <template v-else>Sim, liberar</template>
+              </button>
+            </div>
+          </div>
+          <template v-else>
+            <button type="button" class="btn-primario mt-4 min-h-[56px] w-full text-lg" data-parte="liberar-troca"
+                    :disabled="trocando || !opcaoDaTroca || (opcaoDaTroca.diferencaCents > 0 && !trocaForma)"
+                    @click="perguntarTroca">
+              <template v-if="trocando">Liberando…</template>
+              <template v-else-if="opcaoDaTroca && opcaoDaTroca.diferencaCents > 0">
+                Recebi {{ reaisDaTroca(opcaoDaTroca.diferencaCents * (ultima.combo ? trocaQuantas : 1)) }} — liberar
+              </template>
+              <template v-else>Liberar sem cobrança</template>
+            </button>
+            <button type="button" class="btn-secundario mt-2 min-h-[48px] w-full" :disabled="trocando"
+                    data-parte="cancelar-troca" @click="fecharTroca">
+              Não trocar
+            </button>
+          </template>
         </template>
       </div>
       <button type="button" class="mt-5 min-h-[48px] w-full rounded-lg bg-white/95 text-lg font-semibold text-tinta lg:hidden"

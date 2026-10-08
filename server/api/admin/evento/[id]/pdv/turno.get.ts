@@ -87,7 +87,7 @@ export default defineEventHandler(async (event) => {
             o.payment_method, o.paid_at,
             o.cash_received_cents, o.change_cents,
             COALESCE(c.name, '—') AS comprador,
-            (SELECT count(*)::int FROM tickets t WHERE t.order_id = o.id) AS ingressos
+            (SELECT count(DISTINCT COALESCE(t.combo_group, t.id))::int FROM tickets t WHERE t.order_id = o.id) AS ingressos
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
       WHERE o.pos_shift_id = $1 AND ${SQL_CONTA_NO_TURNO}
       ORDER BY o.paid_at DESC LIMIT 100`, [turnoId, turno.closed_at])

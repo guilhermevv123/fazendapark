@@ -84,7 +84,9 @@ export default defineEventHandler(async (event) => {
             ${SQL_E_VENDA_GRATUITA('t')}  AS gratuito,
             ${SQL_CORTESIA_SEM_ORIGEM('t')} AS origem_nao_registrada,
             t.holder_document, t.issued_at, t.checked_in_at,
-            s.name AS setor, l.name AS lote, tt.name AS tipo,
+            s.name AS setor, l.name AS lote, -- combo (050): cada pessoa é um ingresso — o tipo diz qual delas
+            CASE WHEN t.combo_size IS NOT NULL THEN tt.name || ' · pessoa ' || t.combo_seq || ' de ' || t.combo_size
+                 ELSE tt.name END AS tipo,
             o.code AS pedido, o.id AS pedido_id, o.channel,
             c.name AS comprador, c.email AS comprador_email,
             u.name AS validado_por
@@ -96,7 +98,7 @@ export default defineEventHandler(async (event) => {
        LEFT JOIN customers c ON c.id = o.customer_id
        LEFT JOIN users u ON u.id = t.checked_in_by
       WHERE ${filtro}
-      ORDER BY t.issued_at DESC
+      ORDER BY t.issued_at DESC, t.combo_group NULLS FIRST, t.combo_seq, t.code
       LIMIT ${PAGINA} OFFSET ${(p - 1) * PAGINA}`, par)
 
   // O total usa o MESMO filtro da lista. Contar com um WHERE diferente é como

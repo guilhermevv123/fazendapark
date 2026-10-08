@@ -12,7 +12,9 @@
 import type { PoolClient } from 'pg'
 import { confirmar, EstoqueInsuficiente, LoteIndisponivel, reservar } from './estoque'
 import { tx } from './db'
+import { randomUUID } from 'node:crypto'
 import { gerarCodigo } from './ingresso'
+import { partesPorUnidade } from './combo'
 import {
   conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, motivoValido,
 } from './meia-entrada'
@@ -341,7 +343,7 @@ export async function emitirNaTransacao(
     // na gaveta. É o mesmo cuidado que a migração 015 tomou no gatilho dela.
     `SELECT oi.id, oi.lot_id AS "lotId", oi.ticket_type_id AS "ticketTypeId",
             oi.quantity AS quantidade, s.id AS sector_id, s.session_id,
-            tt.kind AS especie,
+            tt.kind AS especie, tt.admits AS "admitsDoTipo",
             oi.half_reason            AS "motivoDaMeia",
             oi.half_document          AS "numeroDaMeia",
             oi.half_document_required AS "exigenciaCongelada",
@@ -372,6 +374,7 @@ export async function emitirNaTransacao(
 
   let n = 0
   let meiasSemMotivo = 0
+  let grupoAtual: string | null = null
   for (const item of itens) {
     // A exigência é calculada UMA vez por item: ela é do tipo de ingresso
     // vendido, não de cada unidade. Calcular dentro do laço só multiplicaria
@@ -379,7 +382,13 @@ export async function emitirNaTransacao(
     const exigencia = exigenciaDeMeia(item)
     const semMotivo = exigencia != null && !motivoValido(item.motivoDaMeia)
 
-    for (let k = 0; k < item.quantidade; k++) {
+    // Combo (050): cada unidade emite um ingresso POR PESSOA, irmãos pelo `combo_group` — a porta
+    // valida um a um e o painel sabe que "9 de 10 entraram". Fora do combo, 1 por unidade.
+    const partes = partesPorUnidade(item.admitsDoTipo)
+    for (let k = 0; k < item.quantidade * partes; k++) {
+      const seq = partes > 1 ? (k % partes) + 1 : null
+      const grupo = partes > 1 && seq === 1 ? randomUUID() : grupoAtual
+      grupoAtual = grupo
       await c.query(
         // As três colunas de meia vêm explícitas. O gatilho da 015 continua
         // sendo a rede (ele só escreve onde encontra NULL, então não briga com
@@ -391,9 +400,10 @@ export async function emitirNaTransacao(
         `INSERT INTO tickets (org_id, event_id, session_id, order_id, order_item_id,
                               sector_id, lot_id, ticket_type_id, code, qr_secret,
                               status, is_courtesy, holder_name, holder_email, holder_document,
-                              half_reason, half_document, half_document_required)
+                              half_reason, half_document, half_document_required,
+                              people, combo_group, combo_seq, combo_size)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,encode(gen_random_bytes(16),'hex'),
-                 'valido',$10,$11,$12,$13,$14,$15,$16)`,
+                 'valido',$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
         [pedido.org_id, pedido.event_id, item.session_id, orderId, item.id,
          item.sector_id, item.lotId, item.ticketTypeId,
          gerarCodigo(prefixo), fechouEmZero,
@@ -403,7 +413,8 @@ export async function emitirNaTransacao(
          k === 0 ? item.comprador_nome : null,
          k === 0 ? item.comprador_email : null,
          k === 0 ? item.comprador_doc : null,
-         item.motivoDaMeia ?? null, item.numeroDaMeia ?? null, exigencia])
+         item.motivoDaMeia ?? null, item.numeroDaMeia ?? null, exigencia,
+         partes > 1 ? 1 : null, partes > 1 ? grupo : null, seq, partes > 1 ? partes : null])
       n++
       if (semMotivo) meiasSemMotivo++
     }

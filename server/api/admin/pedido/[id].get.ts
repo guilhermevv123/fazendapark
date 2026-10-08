@@ -61,7 +61,9 @@ export default defineEventHandler(async (event) => {
   const ingressos = await q<any>(
     `SELECT t.id, t.code, t.status, t.holder_name, t.holder_document,
             t.checked_in_at, t.is_courtesy,
-            s.name AS setor, l.name AS lote, tt.name AS tipo,
+            s.name AS setor, l.name AS lote, -- combo (050): cada pessoa é um ingresso — o tipo diz qual delas
+            CASE WHEN t.combo_size IS NOT NULL THEN tt.name || ' · pessoa ' || t.combo_seq || ' de ' || t.combo_size
+                 ELSE tt.name END AS tipo,
             u.name AS validado_por
        FROM tickets t
        JOIN sectors s ON s.id = t.sector_id
@@ -69,7 +71,7 @@ export default defineEventHandler(async (event) => {
        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
        LEFT JOIN users u ON u.id = t.checked_in_by
       WHERE t.order_id = $1
-      ORDER BY s.sort_order, t.issued_at`, [pedido.id])
+      ORDER BY s.sort_order, t.issued_at, t.combo_group NULLS FIRST, t.combo_seq, t.code`, [pedido.id])
 
   // As colunas são event_name/created_at. Chutar nome de coluna já custou um
   // 500 em toda consulta de pedido pago neste mesmo projeto — confira no \d.

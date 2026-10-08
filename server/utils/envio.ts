@@ -222,7 +222,7 @@ export async function montarMensagemDoPedido(
       WHERE t.order_id = $1 AND t.status <> 'cancelado'
         AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr
                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido')
-      ORDER BY s.sort_order, t.issued_at, t.code`, [orderId])
+      ORDER BY s.sort_order, t.issued_at, t.combo_group NULLS FIRST, t.combo_seq, t.code`, [orderId])
 
   if (!ingressos.length) {
     // Todos passaram adiante (ou foram cancelados): não há o que mandar, e

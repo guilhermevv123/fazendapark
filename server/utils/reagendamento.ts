@@ -67,6 +67,8 @@ export interface IngressoParaReagendar {
   descontoBps: number
   /** o tipo tem preço próprio (043): troca só pelo tipo de MESMO nome no outro dia */
   precoProprio: boolean
+  /** combo (050): parte de combo ou combo antigo de um ingresso só — não reagenda pelo site */
+  combo: boolean
   pedidoId: string
   pedido: string
   pedidoStatus: string
@@ -91,7 +93,8 @@ const SQL_INGRESSO = `
          e.name AS evento, e.starts_at, e.timezone,
          l.name AS lote, s.name AS setor, s.kind AS setor_kind,
          tt.name AS tipo, COALESCE(tt.kind, 'inteira') AS especie, COALESCE(tt.discount_bps, 0) AS desconto,
-         tt.price_cents IS NOT NULL AS preco_proprio
+         tt.price_cents IS NOT NULL AS preco_proprio,
+         (t.combo_group IS NOT NULL OR COALESCE(tt.admits, 1) > 1) AS combo
     FROM tickets t
     JOIN orders o ON o.id = t.order_id
     JOIN events e ON e.id = t.event_id
@@ -108,6 +111,7 @@ function paraIngresso(r: any): IngressoParaReagendar {
     eventoId: r.event_id, evento: r.evento, eventoInicio: r.starts_at, fuso: r.timezone,
     loteId: r.lot_id, lote: r.lote, setor: r.setor, setorTipo: r.setor_kind,
     tipoId: r.ticket_type_id, tipo: r.tipo, especie: r.especie, descontoBps: Number(r.desconto), precoProprio: r.preco_proprio === true,
+    combo: r.combo === true,
     pedidoId: r.order_id, pedido: r.order_code, pedidoStatus: r.order_status, canal: r.channel,
     orgId: r.org_id, contaId: r.customer_account_id, clienteId: r.customer_id,
     pagoCents: Number(r.pago_cents),
@@ -138,6 +142,9 @@ export function motivoSemReagendamento(i: IngressoParaReagendar, agora = new Dat
   if (i.transferido) return 'Este ingresso foi transferido para outra pessoa.'
   if (i.status === 'usado' || i.usadoEm) return 'Este ingresso já foi utilizado.'
   if (i.status !== 'valido') return 'Este ingresso não está mais válido.'
+  // combo (050): cada pessoa é um ingresso, e trocar UMA parte de dia separaria o grupo — e o estoque
+  // anda por unidade (o combo inteiro), não por pessoa
+  if (i.combo) return 'Combo não é reagendado pelo site. Fale com o parque.'
   if (i.setorTipo === 'passaporte') {
     return 'Passaporte vale por mais de um dia e não é reagendado pelo site. Fale com o parque.'
   }

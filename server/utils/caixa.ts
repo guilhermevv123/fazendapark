@@ -266,7 +266,7 @@ export async function contarTurno(c: PoolClient, shiftId: string): Promise<Conta
   // Ingresso cancelado não conta como emitido: ele não existe mais pra
   // portaria, e contar mantém na tela um número que a catraca já não aceita.
   const { rows: ing } = await c.query(
-    `SELECT count(*)::int AS n FROM tickets t
+    `SELECT count(DISTINCT COALESCE(t.combo_group, t.id))::int AS n FROM tickets t
        JOIN orders o ON o.id = t.order_id
       WHERE o.pos_shift_id = $1
         AND (t.status <> 'cancelado'

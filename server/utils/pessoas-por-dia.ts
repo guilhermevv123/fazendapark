@@ -19,6 +19,8 @@ export interface GrupoDeIngressos {
   /** pessoas por ingresso (COALESCE(tt.admits, s.admits, 1)) */
   pessoas: number
   ingressos: number
+  /** partes de combo (050): cada ingresso leva 1 pessoa, mas é gente que veio em combo */
+  emCombo?: boolean
 }
 
 export interface TipoNoDia { nome: string; ingressos: number; pessoas: number; porIngresso: number }
@@ -69,7 +71,7 @@ export function pessoasPorDiaDeUso(
     const g = { ...g0, pessoas: Math.max(1, Number(g0.pessoas) || 1), ingressos: Number(g0.ingressos) || 0 }
     if (!g.ingressos) continue
     const total = g.ingressos * g.pessoas
-    const combo = g.pessoas > 1 ? total : 0
+    const combo = g.pessoas > 1 || g.emCombo ? total : 0
     const marcados = limparDiasDeUso(g.dias) ?? []
     if (!marcados.length) {
       qualquerDia.pessoas += total; qualquerDia.ingressos += g.ingressos; qualquerDia.emCombo += combo

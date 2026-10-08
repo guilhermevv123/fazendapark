@@ -62,8 +62,11 @@ export default defineEventHandler(async (event) => {
             o.refunded_cents, o.created_at, o.paid_at, o.canceled_at, o.expires_at,
             c.name AS cliente, c.email, c.document, c.phone,
             COALESCE((SELECT SUM(quantity) FROM order_items WHERE order_id = o.id),0)::int AS itens,
-            COALESCE((SELECT count(*) FROM tickets WHERE order_id = o.id
-                        AND checked_in_at IS NOT NULL),0)::int AS entraram
+            -- PESSOAS que já entraram (combo de 10 = até 10; cada parte do combo, 050, é 1)
+            COALESCE((SELECT SUM(COALESCE(t.people, tt.admits, s.admits, 1)) FROM tickets t
+                        JOIN sectors s ON s.id = t.sector_id
+                        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
+                       WHERE t.order_id = o.id AND t.checked_in_at IS NOT NULL),0)::int AS entraram
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
       WHERE ${onde}
       ORDER BY o.created_at DESC

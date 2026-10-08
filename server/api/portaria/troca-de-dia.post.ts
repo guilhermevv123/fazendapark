@@ -26,6 +26,7 @@ import { diaDeUsoDe, limparDiasDeUso, valeNoDiaDeUso } from '../../utils/dias-de
 import { ehPassaporte, retratoDoPublico, SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA, SQL_PUBLICO } from '../../utils/catraca'
 import { conferirTroca, opcoesDeTroca, ROTULO_DA_FORMA, type FormaDeTroca } from '../../utils/troca-de-dia'
 import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../../utils/troca-de-dia-banco'
+import { SQL_PESSOAS_DO_INGRESSO } from '../../utils/combo'
 
 const Corpo = z.object({
   /** uuid do tablet: é o id da passagem E da troca */
@@ -37,6 +38,8 @@ const Corpo = z.object({
   cobradoCents: z.number().int().min(0).max(100_000_00),
   gate: z.string().max(40).nullish(),
   deviceId: z.string().max(60).nullish(),
+  /** combo (050): troca a pessoa k do combo do QR lido (ver `/api/checkin`) */
+  parteDoCombo: z.number().int().min(1).max(100).nullish(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -56,7 +59,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400,
       statusMessage: 'A troca enviada não está no formato esperado. Leia o ingresso de novo.' })
   }
-  const { id, qr, eventId, tipoId, forma, cobradoCents, gate, deviceId } = p.data
+  const { id, qr, eventId, tipoId, forma, cobradoCents, gate, deviceId, parteDoCombo } = p.data
   const operador = sessao.usuarioId
   const orgId = sessao.orgId
 
@@ -78,11 +81,15 @@ export default defineEventHandler(async (event) => {
 
   const ingresso = await q1<any>(
     `SELECT t.id, t.status, t.ticket_type_id, tt.name AS tipo, s.sessions_covered,
-            tt.valid_dates::text[] AS dias_de_uso, COALESCE(tt.admits, s.admits, 1)::int AS pessoas,
+            tt.valid_dates::text[] AS dias_de_uso, ${SQL_PESSOAS_DO_INGRESSO}::int AS pessoas,
+            COALESCE(tt.admits, s.admits, 1)::int AS pessoas_do_tipo, t.code,
             ${SQL_PAGO_DO_INGRESSO} AS pago_cents
        FROM tickets t JOIN sectors s ON s.id = t.sector_id
        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
-      WHERE t.code = $1 AND t.org_id = $2 AND t.event_id = $3`, [codigo, orgId, eventId])
+      WHERE t.org_id = $2 AND t.event_id = $3 AND ${parteDoCombo
+        ? `t.combo_seq = $4 AND t.combo_group =
+             (SELECT b.combo_group FROM tickets b WHERE b.code = $1 AND b.org_id = $2)`
+        : 't.code = $1'}`, parteDoCombo ? [codigo, orgId, eventId, parteDoCombo] : [codigo, orgId, eventId])
   if (!ingresso) recusar(404, 'Ingresso não encontrado neste evento.')
   if (ingresso.status === 'cancelado') recusar(409, 'Ingresso cancelado — não dá pra trocar o dia.')
   if (ingresso.status !== 'valido') recusar(409, 'Este ingresso já foi usado — leia de novo pra ver quando entrou.')
@@ -95,8 +102,10 @@ export default defineEventHandler(async (event) => {
 
   // ---- a conta, com o preço de AGORA ---------------------------------------
   const tipos = await tiposDaTrocaDeDia(eventId)
-  const pagoCents = pagoDoIngressoNaTroca(ingresso.pago_cents, ingresso.ticket_type_id, tipos)
-  const opcoes = opcoesDeTroca({ tipo: ingresso.tipo, pessoas: ingresso.pessoas, pagoCents }, tipos, hoje)
+  const pagoCents = pagoDoIngressoNaTroca(ingresso.pago_cents, ingresso.ticket_type_id, tipos,
+    ingresso.pessoas, ingresso.pessoas_do_tipo)
+  const opcoes = opcoesDeTroca({ tipo: ingresso.tipo, pessoas: ingresso.pessoas,
+    pessoasDoTipo: ingresso.pessoas_do_tipo, pagoCents }, tipos, hoje)
   const conferido = conferirTroca(opcoes, tipoId, cobradoCents, forma)
   if (!conferido.ok) {
     // 409 com a conta nova: a tela troca o valor e o porteiro confirma de novo
@@ -113,7 +122,7 @@ export default defineEventHandler(async (event) => {
       [id, ingresso.id, orgId, gate ?? null, deviceId ?? null, operador, false, null])
     await c.query(
       `INSERT INTO checkins (event_id, ticket_id, code_lido, resultado, gate, operator_id)
-       VALUES ($1,$2,$3,'ok',$4,$5)`, [eventId, ingresso.id, codigo.slice(0, 120), gate ?? null, operador])
+       VALUES ($1,$2,$3,'ok',$4,$5)`, [eventId, ingresso.id, String(ingresso.code ?? codigo).slice(0, 120), gate ?? null, operador])
     const people = Number(livro.rows[0]?.people ?? ingresso.pessoas ?? 1)
     await c.query(
       `INSERT INTO day_changes (id, org_id, event_id, ticket_id, from_type_id, to_type_id, from_type_name,

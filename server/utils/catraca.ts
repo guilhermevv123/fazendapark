@@ -86,7 +86,7 @@ export const SQL_MARCA_ENTRADA_EM = `
 export const SQL_GRAVA_ENTRADA = `
   INSERT INTO entries (id, org_id, event_id, ticket_id, session_id, people,
                        gate, device_id, operator_id, offline, entered_at)
-  SELECT $1, t.org_id, t.event_id, t.id, t.session_id, COALESCE(tt.admits, s.admits),
+  SELECT $1, t.org_id, t.event_id, t.id, t.session_id, COALESCE(t.people, tt.admits, s.admits),
          $4, $5, $6, $7, COALESCE($8::timestamptz, now())
     FROM tickets t
     JOIN sectors s ON s.id = t.sector_id
@@ -357,7 +357,7 @@ export const SQL_DIAS_DO_PASSAPORTE = `
 export const SQL_GRAVA_ENTRADA_NA_SESSAO = `
   INSERT INTO entries (id, org_id, event_id, ticket_id, session_id, people,
                        gate, device_id, operator_id, offline, entered_at)
-  SELECT $1, t.org_id, t.event_id, t.id, COALESCE($9::uuid, t.session_id), COALESCE(tt.admits, s.admits),
+  SELECT $1, t.org_id, t.event_id, t.id, COALESCE($9::uuid, t.session_id), COALESCE(t.people, tt.admits, s.admits),
          $4, $5, $6, $7, COALESCE($8::timestamptz, now())
     FROM tickets t
     JOIN sectors s ON s.id = t.sector_id
@@ -562,6 +562,8 @@ export type EntradaDaFila = {
   offline?: boolean
   /** troca de dia cobrada na porta sem rede (049) — ver `/api/portaria/sincronizar` */
   troca?: { tipoId: string; forma: string; cobradoCents: number; tipoNome?: string | null } | null
+  /** combo (050): a passagem é da pessoa k do combo do QR lido, não do próprio QR */
+  parte?: number | null
 }
 
 /**

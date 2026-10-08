@@ -119,7 +119,7 @@ export default defineEventHandler(async (event) => {
               c.name AS comprador, c.email AS comprador_email, c.document AS comprador_doc,
               t.name AS ponto, u.name AS operador,
               pr.name AS promoter, pc.code AS cupom,
-              (SELECT count(*)::int FROM tickets k WHERE k.order_id = o.id) AS ingressos
+              (SELECT count(DISTINCT COALESCE(k.combo_group, k.id))::int FROM tickets k WHERE k.order_id = o.id) AS ingressos
          FROM orders o
          LEFT JOIN customers c ON c.id = o.customer_id
          LEFT JOIN pos_terminals t ON t.id = o.pos_terminal_id
@@ -138,7 +138,7 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.fee_cents),0)::bigint AS taxa_do_comprador,
               COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
               ${SQL_LIQUIDO('o.')} AS liquido,
-              COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
+              COALESCE(SUM((SELECT count(DISTINCT COALESCE(k.combo_group, k.id)) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
          FROM orders o WHERE ${ondeVivo} GROUP BY 1 ORDER BY 2 DESC`, par),
 
     // `LEFT JOIN`, não `JOIN`: venda de balcão sem ponto registrado existe
@@ -150,7 +150,7 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
               COALESCE(SUM(CASE WHEN o.payment_method = 'dinheiro' THEN o.total_cents END),0)::bigint
                 AS dinheiro,
-              COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
+              COALESCE(SUM((SELECT count(DISTINCT COALESCE(k.combo_group, k.id)) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
          FROM orders o
          LEFT JOIN pos_terminals t ON t.id = o.pos_terminal_id
          LEFT JOIN users u ON u.id = o.sold_by
@@ -167,7 +167,7 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.total_cents),0)::bigint AS cobrado,
               COALESCE(SUM(o.face_cents),0)::bigint AS face,
               COALESCE(SUM(o.platform_cents),0)::bigint AS taxa,
-              COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
+              COALESCE(SUM((SELECT count(DISTINCT COALESCE(k.combo_group, k.id)) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos
          FROM orders o WHERE ${ondeVivo} AND o.paid_at IS NOT NULL
         GROUP BY 1 ORDER BY 1 DESC`, par),
 
@@ -179,7 +179,7 @@ export default defineEventHandler(async (event) => {
               COALESCE(SUM(o.platform_cents),0)::bigint AS taxa_plataforma,
               COALESCE(SUM(o.discount_cents),0)::bigint AS desconto,
               COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
-              COALESCE(SUM((SELECT count(*) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos,
+              COALESCE(SUM((SELECT count(DISTINCT COALESCE(k.combo_group, k.id)) FROM tickets k WHERE k.order_id = o.id)),0)::int AS ingressos,
               ${SQL_LIQUIDO('o.')} AS liquido
          FROM orders o WHERE ${ondeVivo}`, par),
 

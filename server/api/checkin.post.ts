@@ -29,10 +29,11 @@ import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingress
 import { diaDeUsoDe, limparDiasDeUso, mensagemForaDoDiaDeUso, valeNoDiaDeUso } from '../utils/dias-de-uso'
 import { explicarErro } from './admin/evento/index.post'
 import { opcoesDeTroca } from '../utils/troca-de-dia'
+import { SQL_PESSOAS_DO_INGRESSO } from '../utils/combo'
 import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../utils/troca-de-dia-banco'
 
 /** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
-const ROTULOS: Record<string, string> = { qr: 'Código lido', eventId: 'Evento', gate: 'Portão', apenasConsultar: 'Só conferir', entradaId: 'Passagem', deviceId: 'Aparelho' }
+const ROTULOS: Record<string, string> = { qr: 'Código lido', eventId: 'Evento', gate: 'Portão', apenasConsultar: 'Só conferir', entradaId: 'Passagem', deviceId: 'Aparelho', parteDoCombo: 'Pessoa do combo' }
 
 const Entrada = z.object({
   qr: z.string().min(4).max(200),
@@ -49,6 +50,12 @@ const Entrada = z.object({
   entradaId: z.string().uuid().optional(),
   /** qual tablet. Vira a coluna que explica duas entradas do mesmo ingresso. */
   deviceId: z.string().max(60).optional(),
+  /**
+   * Combo (050): "a pessoa k DESTE combo" — o QR lido é de uma parte e o porteiro libera outra
+   * do mesmo combo (o grupo chegou com um celular só). Quem decide é o banco: a parte k do grupo
+   * do código lido; código fora de combo com parte = não encontrado.
+   */
+  parteDoCombo: z.number().int().min(1).max(100).optional(),
 })
 
 /**
@@ -62,15 +69,28 @@ export const AVISO_QR_ANTIGO = 'QR de antes da troca de chave: confira o documen
 
 export default defineEventHandler(async (event) => {
   const resposta: any = await decidir(event)
-  return (event.context as any).qrAntigo && resposta && typeof resposta === 'object'
-    ? { ...resposta, qrAntigo: true, aviso: AVISO_QR_ANTIGO }
-    : resposta
+  const ctx = event.context as any
+  // combo (050): toda resposta sobre uma parte diz quem do combo já entrou — DEPOIS da decisão
+  const combo = ctx.comboGrupo && resposta && typeof resposta === 'object'
+    ? await comboDoIngresso(ctx.comboGrupo, ctx.comboSeq) : null
+  const r = combo ? { ...resposta, combo } : resposta
+  return ctx.qrAntigo && r && typeof r === 'object'
+    ? { ...r, qrAntigo: true, aviso: AVISO_QR_ANTIGO }
+    : r
 })
+
+/** as partes do combo, na ordem, com o estado de cada uma: "9 de 10 entraram" */
+export async function comboDoIngresso(grupo: string, seq: number) {
+  const partes = await q<{ seq: number; status: string }>(
+    `SELECT combo_seq AS seq, status FROM tickets WHERE combo_group = $1 ORDER BY combo_seq`, [grupo])
+  return { seq: Number(seq), tamanho: partes.length,
+           partes: partes.map((p) => ({ seq: Number(p.seq), status: p.status })) }
+}
 
 async function decidir(event: H3Event) {
   const p = Entrada.safeParse(await readBody(event))
   if (!p.success) throw createError({ statusCode: 400, statusMessage: explicarErro(p.error, ROTULOS) })
-  const { qr, eventId, gate, apenasConsultar, entradaId, deviceId } = p.data
+  const { qr, eventId, gate, apenasConsultar, entradaId, deviceId, parteDoCombo } = p.data
 
   // Quem leu. O middleware já exigiu sessão nesta rota, então o operador
   // SEMPRE existe aqui. Sem este carimbo, `checkins.operator_id` e
@@ -179,7 +199,10 @@ async function decidir(event: H3Event) {
             -- dias de uso do tipo (047): texto, nunca Date — o pg montaria meia-noite no fuso do servidor
             tt.valid_dates::text[] AS dias_de_uso, ev.timezone AS fuso,
             -- troca de dia (049): o tipo, as pessoas e quanto custou — pra oferecer a diferença na porta
-            t.ticket_type_id, COALESCE(tt.admits, s.admits, 1)::int AS pessoas, ${SQL_PAGO_DO_INGRESSO} AS pago_cents,
+            t.ticket_type_id, ${SQL_PESSOAS_DO_INGRESSO}::int AS pessoas, ${SQL_PAGO_DO_INGRESSO} AS pago_cents,
+            COALESCE(tt.admits, s.admits, 1)::int AS pessoas_do_tipo,
+            -- combo (050): a parte e o grupo — a porta diz "pessoa 3 de 10" e quantos já entraram
+            t.code, t.combo_group, t.combo_seq, t.combo_size,
             -- Volte Mais (037): a portaria avisa "retorno com desconto na consumação"
             (SELECT json_build_object('nome', lp.nome, 'consumacao_bps', lp.consumacao_bps)
                FROM orders o JOIN loyalty_programs lp ON lp.id = o.loyalty_program_id
@@ -190,16 +213,26 @@ async function decidir(event: H3Event) {
        JOIN events ev ON ev.id = t.event_id
        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
        LEFT JOIN event_sessions es ON es.id = t.session_id
-      WHERE t.code = $1 AND t.org_id = $2`, [codigo, orgDaSessao])
+      WHERE ${parteDoCombo
+        ? `t.org_id = $2 AND t.combo_seq = $3 AND t.combo_group =
+             (SELECT b.combo_group FROM tickets b WHERE b.code = $1 AND b.org_id = $2)`
+        : 't.code = $1 AND t.org_id = $2'}`,
+    parteDoCombo ? [codigo, orgDaSessao, parteDoCombo] : [codigo, orgDaSessao])
   // O `org_id` no WHERE é o que separa "ingresso de outro evento MEU"
   // (evento_errado, mensagem útil pro público) de "ingresso de outra
   // empresa" — que aqui simplesmente não existe.
 
   if (!ingresso) return registrar('invalido', null, codigo)
-  if (ingresso.event_id !== eventId) return registrar('evento_errado', ingresso.id, codigo)
-  if (ingresso.status === 'cancelado') return registrar('cancelado', ingresso.id, codigo)
+  if (ingresso.combo_group) {
+    (event.context as any).comboGrupo = ingresso.combo_group;
+    (event.context as any).comboSeq = ingresso.combo_seq
+  }
+  // a leitura entra no log com o código da PARTE liberada, não o do QR que estava na mão
+  const codigoLido = String(ingresso.code ?? codigo)
+  if (ingresso.event_id !== eventId) return registrar('evento_errado', ingresso.id, codigoLido)
+  if (ingresso.status === 'cancelado') return registrar('cancelado', ingresso.id, codigoLido)
   if (ingresso.status === 'usado') {
-    const r = await registrar('ja_usado', ingresso.id, codigo)
+    const r = await registrar('ja_usado', ingresso.id, codigoLido)
     return { ...r, ...(await ondeEntrou(ingresso)), titular: ingresso.holder_name }
   }
 
@@ -266,11 +299,11 @@ async function decidir(event: H3Event) {
   // Fora do dia volta como `fora_da_sessao` no livro de leituras (é o CHECK de `checkins`), com a
   // frase do dia certo e `foraDoDia` pra tela dizer "NÃO VALE HOJE" em vez de "AINDA NÃO".
   if (foraDoDia) {
-    const r = await registrar('fora_da_sessao', ingresso.id, codigo)
+    const r = await registrar('fora_da_sessao', ingresso.id, codigoLido)
     return { ...r, mensagem: mensagemForaDoDiaDeUso(diasDeUso), foraDoDia: true, diasDeUso, troca,
              ingresso: dadosDoIngresso(ingresso) }
   }
-  if (foraDaSessao) return registrar('fora_da_sessao', ingresso.id, codigo)
+  if (foraDaSessao) return registrar('fora_da_sessao', ingresso.id, codigoLido)
 
   // ---- passaporte de vários dias: uma entrada por dia de uso (ADM-04) -----
   // O `UPDATE … SET status = 'usado'` de baixo queimava o passaporte de 3 dias na 1ª leitura e
@@ -283,14 +316,14 @@ async function decidir(event: H3Event) {
     }))
     const mensagem = mensagemDoPassaporte(pp)
     if (pp.resultado === 'fora_da_sessao') {
-      return { ...(await registrar('fora_da_sessao', ingresso.id, codigo)), mensagem }
+      return { ...(await registrar('fora_da_sessao', ingresso.id, codigoLido)), mensagem }
     }
     if (pp.resultado === 'ja_usado') {
-      const r = await registrar('ja_usado', ingresso.id, codigo)
+      const r = await registrar('ja_usado', ingresso.id, codigoLido)
       // "já entrou HOJE": a passagem que responde é a mais recente, não a do 1º dia
       return { ...r, mensagem, ...(await ondeEntrou(ingresso, SQL_ULTIMA_ENTRADA)), titular: ingresso.holder_name }
     }
-    const r = await registrar('ok', ingresso.id, codigo)
+    const r = await registrar('ok', ingresso.id, codigoLido)
     return { ...r, mensagem, ingresso: dadosDoIngresso(ingresso), pessoas: pp.pessoas,
              passaporte: { dia: pp.dia, dias: pp.dias } }
   }
@@ -320,20 +353,22 @@ async function decidir(event: H3Event) {
   })
 
   if (!passagem) {
-    const r = await registrar('ja_usado', ingresso.id, codigo)
+    const r = await registrar('ja_usado', ingresso.id, codigoLido)
     return { ...r, ...(await ondeEntrou(ingresso)), titular: ingresso.holder_name }
   }
 
-  const r = await registrar('ok', ingresso.id, codigo)
+  const r = await registrar('ok', ingresso.id, codigoLido)
   return { ...r, ingresso: dadosDoIngresso(ingresso), pessoas: passagem.pessoas }
 }
 
 /** as opções de troca de dia deste ingresso pra hoje (049), com o que ele custou */
 async function trocaDoIngresso(i: any, eventId: string, hoje: string) {
   const tipos = await tiposDaTrocaDeDia(eventId)
-  const pagoCents = pagoDoIngressoNaTroca(i.pago_cents, i.ticket_type_id, tipos)
   const pessoas = Number(i.pessoas ?? 1)
-  return { hoje, pagoCents, pessoas, opcoes: opcoesDeTroca({ tipo: i.tipo, pessoas, pagoCents }, tipos, hoje) }
+  const pessoasDoTipo = Number(i.pessoas_do_tipo ?? pessoas)
+  const pagoCents = pagoDoIngressoNaTroca(i.pago_cents, i.ticket_type_id, tipos, pessoas, pessoasDoTipo)
+  return { hoje, pagoCents, pessoas,
+           opcoes: opcoesDeTroca({ tipo: i.tipo, pessoas, pessoasDoTipo, pagoCents }, tipos, hoje) }
 }
 
 function dadosDoIngresso(i: any) {

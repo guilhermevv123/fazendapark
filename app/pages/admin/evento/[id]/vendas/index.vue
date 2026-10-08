@@ -287,7 +287,7 @@ useHead({ title: 'Vendas' })
             </td>
             <td class="px-4 py-3 text-right tabular-nums text-tinta">
               {{ p.itens }}
-              <span v-if="p.entraram" class="text-xs text-ok">({{ p.entraram }} entrou)</span>
+              <span v-if="p.entraram" class="text-xs text-ok">({{ p.entraram }} {{ p.entraram === 1 ? 'pessoa entrou' : 'pessoas entraram' }})</span>
             </td>
             <td class="px-4 py-3 text-right tabular-nums font-medium text-tinta">
               {{ reais(p.totalCents) }}

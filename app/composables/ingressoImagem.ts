@@ -18,6 +18,8 @@ export interface IngressoParaImagem {
   titular?: string | null
   /** "domingo 11/10" — os dias em que este ingresso passa (047) */
   diasDeUso?: string | null
+  /** combo (050): "pessoa 3 de 10" */
+  pessoaDoCombo?: string | null
 }
 export interface DadosDaImagem {
   evento: string
@@ -112,6 +114,7 @@ export async function desenharIngresso(d: DadosDaImagem, t: IngressoParaImagem, 
   const linhas: [string, string][] = []
   if (t.titular) linhas.push(['Titular', t.titular])
   if (t.diasDeUso) linhas.push(['Vale só', t.diasDeUso.replace(/^./, (c) => c.toUpperCase())])
+  if (t.pessoaDoCombo) linhas.push(['Combo', t.pessoaDoCombo.replace(/^./, (c) => c.toUpperCase())])
   const setor = [t.setor, t.lote].filter(Boolean).join(' · ')
   if (setor) linhas.push(['Setor', setor])
   linhas.push(['Pedido', d.pedido])

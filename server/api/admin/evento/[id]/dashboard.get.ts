@@ -34,6 +34,7 @@ import { retratoDoPublico, SQL_PUBLICO } from '../../../../utils/catraca'
 import { cotaDeMeias } from '../../../../utils/meia-entrada'
 import { diasDoEvento } from '../../../../utils/dias-de-uso'
 import { pessoasPorDiaDeUso } from '../../../../utils/pessoas-por-dia'
+import { SQL_PESSOAS_DO_INGRESSO, SQL_UNIDADE_DO_INGRESSO } from '../../../../utils/combo'
 
 /**
  * O FUNIL É O DO CHECKOUT DO SITE (ADM-28): só pedido online tem carrinho, PIX que expira e
@@ -401,7 +402,8 @@ export default defineEventHandler(async (event) => {
     q<any>(
       `SELECT s.name AS setor, l.name AS lote,
               l.quantity::int, l.sold::int, l.reserved::int,
-              (SELECT COUNT(*)::int
+              -- por UNIDADE: as 10 partes de um combo (050) são 1 venda do lote
+              (SELECT COUNT(DISTINCT ${SQL_UNIDADE_DO_INGRESSO})::int
                  FROM tickets t
                  JOIN orders ot ON ot.id = t.order_id
                 WHERE t.lot_id = l.id AND t.status <> 'cancelado'
@@ -648,12 +650,14 @@ export default defineEventHandler(async (event) => {
   const [gruposDoDia, entradasPorDia, trocas] = await Promise.all([
     q<any>(
       `SELECT tt.name AS tipo, tt.valid_dates::text[] AS dias,
-              COALESCE(tt.admits, s.admits, 1)::int AS pessoas, count(*)::int AS ingressos
+              -- a parte de combo (050) leva 1 pessoa; o combo antigo, de um ingresso só, leva as do tipo
+              ${SQL_PESSOAS_DO_INGRESSO}::int AS pessoas, (t.combo_group IS NOT NULL) AS em_combo,
+              count(*)::int AS ingressos
          FROM tickets t
          JOIN sectors s ON s.id = t.sector_id
          LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
         WHERE t.event_id = $1 AND t.status IN ('valido', 'usado')
-        GROUP BY 1, 2, 3`, [id]),
+        GROUP BY 1, 2, 3, 4`, [id]),
     q<any>(
       `SELECT to_char(e.entered_at AT TIME ZONE ${fusoSql(fuso)}, 'YYYY-MM-DD') AS dia,
               COALESCE(SUM(e.people),0)::int AS pessoas
@@ -667,7 +671,8 @@ export default defineEventHandler(async (event) => {
         WHERE dc.event_id = $1 ORDER BY dc.created_at DESC LIMIT 500`, [id]),
   ])
   const pessoasPorDia = pessoasPorDiaDeUso(
-    gruposDoDia.map((g) => ({ tipo: g.tipo, dias: g.dias, pessoas: Number(g.pessoas), ingressos: Number(g.ingressos) })),
+    gruposDoDia.map((g) => ({ tipo: g.tipo, dias: g.dias, pessoas: Number(g.pessoas), ingressos: Number(g.ingressos),
+                              emCombo: Boolean(g.em_combo) })),
     diasDoEvento(ev.starts_at, ev.ends_at, fuso),
     Object.fromEntries(entradasPorDia.map((e) => [e.dia, Number(e.pessoas)])),
   )

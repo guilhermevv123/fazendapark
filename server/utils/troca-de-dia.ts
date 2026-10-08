@@ -43,7 +43,12 @@ export interface IngressoParaTroca {
   /** nome do tipo comprado ("ENTRADA INDIVIDUAL SÁBADO") */
   tipo: string | null
   pessoas: number
-  /** quanto a pessoa pagou pela face de UM ingresso, em centavos */
+  /**
+   * pessoas do TIPO, quando o ingresso é uma parte de combo (050): a parte leva 1 pessoa de um combo
+   * de 10. Troca por combo de 10 de hoje, pagando a fração (1/10 do combo). Ausente = `pessoas`.
+   */
+  pessoasDoTipo?: number
+  /** quanto a pessoa pagou pela face DESTE ingresso (a parte, no combo), em centavos */
   pagoCents: number
 }
 
@@ -68,11 +73,12 @@ export function nomeSemDia(nome: string | null | undefined): string {
 /** as opções de troca pra HOJE, a sugerida primeiro; vazio = não há tipo de hoje com as mesmas pessoas */
 export function opcoesDeTroca(ingresso: IngressoParaTroca, tipos: TipoParaTroca[], hoje: string): OpcaoDeTroca[] {
   const pessoas = Math.max(1, Number(ingresso.pessoas) || 1)
+  const doTipo = Math.max(pessoas, Number(ingresso.pessoasDoTipo) || pessoas)
   const pago = Math.max(0, Math.round(Number(ingresso.pagoCents) || 0))
   const meu = nomeSemDia(ingresso.tipo)
   const melhores = new Map<string, TipoParaTroca>()
   for (const t of tipos) {
-    if (Math.max(1, Number(t.pessoas) || 1) !== pessoas) continue
+    if (Math.max(1, Number(t.pessoas) || 1) !== doTipo) continue
     if (!valeNoDiaDeUso(t.dias, hoje)) continue
     // tipo "qualquer dia" (sem dias) não é troca de dia: é outro produto. Só entra se tiver dia marcado.
     if (!t.dias?.length) continue
@@ -82,12 +88,14 @@ export function opcoesDeTroca(ingresso: IngressoParaTroca, tipos: TipoParaTroca[
       || (t.disponivel === atual.disponivel && t.ordem < atual.ordem)) melhores.set(chave, t)
   }
   return [...melhores.entries()]
-    .map(([chave, t]) => ({
-      tipoId: t.id, nome: t.nome, pessoas,
-      precoCents: Math.max(0, Math.round(t.faceCents)),
-      diferencaCents: Math.max(0, Math.round(t.faceCents) - pago),
-      sugerida: chave === meu && meu !== '',
-    }))
+    .map(([chave, t]) => {
+      // a parte do combo paga a fração dela: 1 pessoa de um combo de 10 = 1/10 do combo de hoje
+      const preco = Math.max(0, Math.round(t.faceCents * pessoas / doTipo))
+      return { tipoId: t.id, nome: t.nome, pessoas,
+      precoCents: preco,
+      diferencaCents: Math.max(0, preco - pago),
+      sugerida: chave === meu && meu !== '' }
+    })
     .sort((a, b) => Number(b.sugerida) - Number(a.sugerida)
       || a.diferencaCents - b.diferencaCents || a.nome.localeCompare(b.nome))
 }

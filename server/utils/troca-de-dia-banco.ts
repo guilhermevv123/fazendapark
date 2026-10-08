@@ -46,8 +46,16 @@ export async function tiposDaTrocaDeDia(eventId: string, c?: PoolClient): Promis
   }))
 }
 
-/** o que a pessoa pagou, ou (sem item no pedido) o preço de hoje do tipo que ela comprou */
-export function pagoDoIngressoNaTroca(pagoCents: unknown, tipoId: string | null, tipos: TipoParaTroca[]): number {
-  if (pagoCents != null && Number.isFinite(Number(pagoCents))) return Math.max(0, Math.round(Number(pagoCents)))
-  return Math.max(0, tipos.find((t) => t.id === tipoId)?.faceCents ?? 0)
+/**
+ * O que a pessoa pagou por ESTE ingresso, ou (sem item no pedido) o preço de hoje do tipo que ela
+ * comprou. Parte de combo (050): a fração dela da unidade — `pessoas` do ingresso / `pessoasDoTipo`.
+ */
+export function pagoDoIngressoNaTroca(pagoCents: unknown, tipoId: string | null, tipos: TipoParaTroca[],
+  pessoas = 1, pessoasDoTipo = pessoas): number {
+  const unidade = pagoCents != null && Number.isFinite(Number(pagoCents))
+    ? Math.max(0, Number(pagoCents))
+    : Math.max(0, tipos.find((t) => t.id === tipoId)?.faceCents ?? 0)
+  const p = Math.max(1, Number(pessoas) || 1)
+  const doTipo = Math.max(p, Number(pessoasDoTipo) || p)
+  return Math.round(unidade * p / doTipo)
 }

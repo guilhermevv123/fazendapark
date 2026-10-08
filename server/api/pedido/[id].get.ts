@@ -47,6 +47,7 @@ import { conferirFreio, marcarNoFreio } from '../../utils/sessao'
 import { qrCodePix } from '../../utils/asaas'
 import { garantirCupomDeConsumacao } from '../../utils/cupom-consumacao'
 import { diaNoFusoDaFidelidade, programaDeFidelidadeDaOrg } from '../../utils/fidelidade'
+import { rotuloDaParte } from '../../utils/combo'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -140,7 +141,7 @@ export default defineEventHandler(async (event) => {
                 EXISTS (SELECT 1 FROM ticket_transfers tr
                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido') AS transferido,
                 l.name AS lote, s.name AS setor, tt.name AS tipo,
-                tt.valid_dates::text[] AS dias_de_uso,
+                tt.valid_dates::text[] AS dias_de_uso, t.combo_seq, t.combo_size,
                 ses.title AS sessao, ses.starts_at AS sessao_inicio,
                 -- reagendado pelo cliente (036): o pedido novo que substituiu este ingresso
                 (SELECT o2.code FROM orders o2 WHERE o2.rescheduled_from_ticket_id = t.id) AS reagendado_para
@@ -150,7 +151,8 @@ export default defineEventHandler(async (event) => {
            LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
            LEFT JOIN event_sessions ses ON ses.id = s.session_id
           WHERE t.order_id = $1
-          ORDER BY s.sort_order, t.issued_at`, [o.id]))
+          -- as partes de um combo (050) em ordem, pessoa 1 a 10 (todas nascem no mesmo instante)
+          ORDER BY s.sort_order, t.issued_at, t.combo_group NULLS FIRST, t.combo_seq, t.code`, [o.id]))
         .map((t) => {
           const status = t.transferido && t.status === 'valido' ? 'transferido' : t.status
           // QR (e o código legível, que a portaria aceita digitado) só pro
@@ -170,6 +172,8 @@ export default defineEventHandler(async (event) => {
             usadoEm: t.checked_in_at, setor: t.setor, lote: t.lote, tipo: t.tipo,
             /** "sexta 09/10" — em que dia este ingresso passa na catraca (047); null = qualquer dia */
             diasDeUso: fraseDosDiasDeUso(t.dias_de_uso) || null,
+            /** combo (050): "pessoa 3 de 10" — cada pessoa do combo é um ingresso */
+            pessoaDoCombo: rotuloDaParte(t.combo_seq, t.combo_size),
             sessao: t.sessao, sessaoInicio: t.sessao_inicio,
             /** código do pedido novo quando o cliente trocou este ingresso de dia */
             reagendadoPara: t.reagendado_para ?? null,

@@ -696,10 +696,16 @@ describe('troca de dia na portaria (049)', () => {
     expect(texto(t, '[data-parte="abrir-troca"]')).toContain('R$ 10,00')
 
     await clicar(t, '[data-parte="abrir-troca"]')
-    expect(t.find('[data-parte="confirmar-troca"]').attributes('disabled'),
+    expect(t.find('[data-parte="liberar-troca"]').attributes('disabled'),
       'liberou sem dizer como a pessoa pagou').toBeDefined()
     await clicar(t, '[data-forma="dinheiro"]')
-    expect(texto(t, '[data-parte="confirmar-troca"]')).toContain('Recebi R$ 10,00')
+    expect(texto(t, '[data-parte="liberar-troca"]')).toContain('Recebi R$ 10,00')
+    await clicar(t, '[data-parte="liberar-troca"]')
+    // dia diferente SEMPRE pergunta antes de gravar
+    expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+    expect(JSON.parse(localStorage.getItem(`dt_portaria_fila_${EVENTO}`) ?? '[]')).toHaveLength(0)
+    expect(texto(t, '[data-parte="pergunta-troca"]')).toContain('Tem certeza?')
+    expect(texto(t, '[data-parte="pergunta-troca"]')).toContain('Cobrar R$ 10,00 (dinheiro)')
     await clicar(t, '[data-parte="confirmar-troca"]')
 
     expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
@@ -713,6 +719,31 @@ describe('troca de dia na portaria (049)', () => {
     await lerCodigo(t, 'CON-TROC-AAAA')
     expect(t.find('[data-parte="veredito"]').text()).toBe('BARRADO')
     expect(t.find('[data-parte="abrir-troca"]').exists()).toBe(false)
+  })
+
+  it('SEM diferença (o mais caro num dia mais barato) também pergunta; "Voltar" não libera', async () => {
+    const lista = comLista()
+    // o comprado custou R$ 40, hoje custa R$ 30: sem cobrança, mas é dia diferente
+    lista.lista.ingressos[0]!.pagoCents = 4000
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), lista)
+    await lerCodigo(t, 'CON-TROC-AAAA')
+    expect(texto(t, '[data-parte="abrir-troca"]')).toContain('sem diferença')
+    await clicar(t, '[data-parte="abrir-troca"]')
+    expect(t.find('[data-forma="dinheiro"]').exists(), 'pediu forma de pagamento sem diferença').toBe(false)
+    await clicar(t, '[data-parte="liberar-troca"]')
+    const pergunta = texto(t, '[data-parte="pergunta-troca"]')
+    expect(pergunta).toContain('Tem certeza?')
+    expect(pergunta).toContain('não é devolvida')
+    expect(pergunta).toMatch(/é de \S+ \d{2}\/\d{2} e hoje é \S+ \d{2}\/\d{2}/)
+    await clicar(t, '[data-parte="pergunta-troca-nao"]')
+    expect(t.find('[data-parte="pergunta-troca"]').exists()).toBe(false)
+    expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+    expect(JSON.parse(localStorage.getItem(`dt_portaria_fila_${EVENTO}`) ?? '[]')).toHaveLength(0)
+    await clicar(t, '[data-parte="liberar-troca"]')
+    await clicar(t, '[data-parte="confirmar-troca"]')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    const fila = JSON.parse(localStorage.getItem(`dt_portaria_fila_${EVENTO}`) ?? '[]')
+    expect(fila[0].troca).toMatchObject({ forma: 'sem_diferenca', cobradoCents: 0 })
   })
 
   it('"Não trocar" fecha o painel e ninguém entra', async () => {
@@ -747,14 +778,124 @@ describe('troca de dia na portaria (049)', () => {
     await lerCodigo(t, 'CON-TROC-BBBB')
     await clicar(t, '[data-parte="abrir-troca"]')
     await clicar(t, '[data-forma="pix"]')
+    await clicar(t, '[data-parte="liberar-troca"]')
+    expect(chamadas.some((c) => c.url === '/api/portaria/troca-de-dia'), 'gravou antes do "Sim"').toBe(false)
     await clicar(t, '[data-parte="confirmar-troca"]')
 
     const enviada = chamadas.find((c) => c.url === '/api/portaria/troca-de-dia')!
     expect(enviada.opcoes.body).toMatchObject({ qr: 'CON-TROC-BBBB', eventId: EVENTO, tipoId: TIPO_HOJE,
       forma: 'pix', cobradoCents: 1000 })
     expect(texto(t, '[data-parte="troca-erro"]')).toContain('R$ 15,00')
-    expect(texto(t, '[data-parte="confirmar-troca"]'), 'a tela não trocou o valor pela conta nova')
+    expect(texto(t, '[data-parte="liberar-troca"]'), 'a tela não trocou o valor pela conta nova')
       .toContain('Recebi R$ 15,00')
     expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+  })
+})
+
+// ===========================================================================
+// 08/10 — combo vira um ingresso por pessoa (050): lido um, a porta mostra quem do combo falta e
+// "Entrar mais pessoas deste combo" libera as outras partes — com e SEM rede
+// ===========================================================================
+
+describe('combo: um ingresso por pessoa na porta (050)', () => {
+  const hoje = () => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const outroDia = () => new Date(new Date(`${hoje()}T12:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10)
+  const GRUPO = '33333333-3333-4333-8333-333333333333'
+  const COMBO_HOJE = '44444444-4444-4444-8444-444444444444'
+  const COMBO_OUTRO = '55555555-5555-4555-8555-555555555555'
+  const parte = (k: number, dia: string, tipoId: string, extra: any = {}) => ({
+    codigo: `CON-CMB${k}-AAAA`, status: 'valido', titular: k === 1 ? 'Família Combo' : null, setor: 'Geral',
+    lote: '1º lote', tipo: dia === hoje() ? 'COMBO DOMINGO - COMBO 10 PESSOAS' : 'COMBO SABADO - COMBO 10 PESSOAS',
+    pessoas: 1, sessaoInicio: null, sessaoFim: null, diasDeUso: [dia], tipoId, pagoCents: 1600, pessoasDoTipo: 10,
+    combo: { grupo: GRUPO, seq: k, tamanho: 3 }, ...extra,
+  })
+  const comLista = (dia: string, tipoId: string) => ({
+    ...SINC_OK,
+    lista: {
+      geradaEm: new Date().toISOString(), truncada: false,
+      tiposDaTroca: [
+        { id: COMBO_OUTRO, nome: 'COMBO SABADO - COMBO 10 PESSOAS', dias: [outroDia()], faceCents: 16000, pessoas: 10,
+          disponivel: true, ordem: 0 },
+        { id: COMBO_HOJE, nome: 'COMBO DOMINGO - COMBO 10 PESSOAS', dias: [hoje()], faceCents: 25000, pessoas: 10,
+          disponivel: true, ordem: 1 },
+      ],
+      ingressos: [1, 2, 3].map((k) => parte(k, dia, tipoId)),
+    },
+  })
+  const texto = (t: any, seletor: string) => t.find(seletor).text().replace(/\s+/g, ' ')
+  const clicar = async (t: any, seletor: string) => {
+    await t.find(seletor).trigger('click')
+    for (let k = 0; k < 4; k++) await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+  }
+  const fila = () => JSON.parse(localStorage.getItem(`dt_portaria_fila_${EVENTO}`) ?? '[]')
+
+  it('SEM REDE: lido um, mostra "pessoa 1 de 3 · faltam 2"; libera mais 1 pela parte, na fila', async () => {
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista(hoje(), COMBO_HOJE))
+    await lerCodigo(t, 'CON-CMB1-AAAA')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    expect(texto(t, '[data-parte="combo"]')).toContain('pessoa 1 de 3 · 1 entrou · faltam 2')
+    await clicar(t, '[data-parte="abrir-combo-mais"]')
+    expect(t.find('[data-parte="combo-quantas"]').text(), 'começa em todas as que faltam').toBe('2')
+    await clicar(t, '[data-parte="combo-menos"]')
+    expect(t.find('[data-parte="combo-quantas"]').text()).toBe('1')
+    await clicar(t, '[data-parte="confirmar-combo-mais"]')
+
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    expect(t.text()).toContain('Mais 1 pessoa deste combo liberada')
+    expect(texto(t, '[data-parte="combo"]')).toContain('2 entraram · faltam 1')
+    const f = fila()
+    expect(f).toHaveLength(2)
+    expect(f[0].parte, 'a lida vai sem parte').toBeUndefined()
+    expect(f[1]).toMatchObject({ qr: 'CON-CMB1-AAAA', parte: 2 })
+    expect(f[0].id).not.toBe(f[1].id)
+
+    // a mesma parte não passa de novo: o que falta é só a 3
+    await clicar(t, '[data-parte="abrir-combo-mais"]')
+    expect(t.find('[data-parte="combo-quantas"]').text()).toBe('1')
+    await clicar(t, '[data-parte="confirmar-combo-mais"]')
+    expect(fila().map((x: any) => x.parte)).toEqual([undefined, 2, 3])
+    expect(t.find('[data-parte="abrir-combo-mais"]').exists(), 'oferece mais com o combo inteiro dentro').toBe(false)
+  })
+
+  it('COM REDE: cada pessoa a mais vai ao servidor pela parte, com o seu id', async () => {
+    const combo = { seq: 1, tamanho: 3, partes: [{ seq: 1, status: 'usado' }, { seq: 2, status: 'valido' }, { seq: 3, status: 'valido' }] }
+    const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'ok', pessoas: 1, combo,
+      ingresso: { titular: 'Família', setor: 'Geral', lote: '1º lote', tipo: 'COMBO' } })
+    await lerCodigo(t, 'CON-CMB1-BBBB')
+    await clicar(t, '[data-parte="abrir-combo-mais"]')
+    await clicar(t, '[data-parte="confirmar-combo-mais"]')
+    const enviadas = chamadas.filter((c) => c.url === '/api/checkin').map((c) => c.opcoes.body)
+    expect(enviadas).toHaveLength(3)
+    expect(enviadas[1]).toMatchObject({ qr: 'CON-CMB1-BBBB', eventId: EVENTO, parteDoCombo: 2, apenasConsultar: false })
+    expect(enviadas[2]).toMatchObject({ parteDoCombo: 3 })
+    expect(new Set(enviadas.map((b: any) => b.entradaId)).size, 'id repetido entre pessoas').toBe(3)
+    expect(t.text()).toContain('Mais 2 pessoas deste combo liberadas')
+  })
+
+  it('SEM REDE, combo de outro dia: troca 2 pessoas, cobra 2 × R$ 9,00 e pergunta antes', async () => {
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista(outroDia(), COMBO_OUTRO))
+    await lerCodigo(t, 'CON-CMB1-AAAA')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+    expect(t.find('[data-parte="abrir-combo-mais"]').exists(), 'entrar mais num combo que não vale hoje').toBe(false)
+    expect(texto(t, '[data-parte="abrir-troca"]')).toContain('R$ 9,00')
+    await clicar(t, '[data-parte="abrir-troca"]')
+    expect(t.find('[data-parte="troca-quantas"]').text()).toBe('1')
+    await clicar(t, '[data-parte="troca-mais-um"]')
+    await clicar(t, '[data-forma="pix"]')
+    expect(texto(t, '[data-parte="liberar-troca"]')).toContain('Recebi R$ 18,00')
+    await clicar(t, '[data-parte="liberar-troca"]')
+    expect(texto(t, '[data-parte="pergunta-troca"]')).toContain('2 pessoas deste combo: cobrar R$ 18,00 (pix)')
+    expect(fila()).toHaveLength(0)
+    await clicar(t, '[data-parte="confirmar-troca"]')
+
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    expect(texto(t, '[data-parte="troca-feita"]')).toContain('R$ 18,00 em pix')
+    const f = fila()
+    expect(f.map((x: any) => x.parte)).toEqual([1, 2])
+    for (const x of f) expect(x.troca).toMatchObject({ tipoId: COMBO_HOJE, forma: 'pix', cobradoCents: 900 })
   })
 })

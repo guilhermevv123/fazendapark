@@ -25,6 +25,8 @@ export interface IngressoNoPdf {
   sessao?: string | null
   /** "domingo 11/10" — os dias em que este ingresso passa (047) */
   diasDeUso?: string | null
+  /** combo (050): "pessoa 3 de 10" */
+  pessoaDoCombo?: string | null
 }
 
 export interface PdfDosIngressos {
@@ -122,7 +124,7 @@ export async function montarPdfDosIngressos(d: PdfDosIngressos): Promise<Uint8Ar
     const topoCartao = y - 6
     const cabecalho = 26
     const qrTam = 220
-    const altCartao = cabecalho + 16 + qrTam + 12 + 22 + 14 + 84
+    const altCartao = cabecalho + 16 + qrTam + 12 + 22 + 14 + 98
     const baseCartao = topoCartao - altCartao
     p.drawRectangle({ x: M, y: baseCartao, width: L - 2 * M, height: altCartao, color: rgb(1, 1, 1),
       borderColor: LINHA, borderWidth: 1 })
@@ -148,12 +150,13 @@ export async function montarPdfDosIngressos(d: PdfDosIngressos): Promise<Uint8Ar
     const dados: [string, string][] = []
     if (t.titular) dados.push(['Titular', latin1(t.titular)])
     if (t.diasDeUso) dados.push(['Vale só', latin1(t.diasDeUso.replace(/^./, (c) => c.toUpperCase()))])
+    if (t.pessoaDoCombo) dados.push(['Combo', latin1(t.pessoaDoCombo.replace(/^./, (c) => c.toUpperCase()))])
     const setor = [t.setor, t.lote].filter(Boolean).join(' · ')
     if (setor) dados.push(['Setor', latin1(setor)])
     if (t.sessao) dados.push(['Sessão', latin1(t.sessao)])
     dados.push(['Pedido', latin1(d.pedido)])
     yy -= 16
-    for (const [k, v] of dados.slice(0, 5)) {
+    for (const [k, v] of dados.slice(0, 6)) {
       p.drawText(k, { x: M + 14, y: yy, size: 9.5, font: normal, color: SUAVE })
       const valor = linhas(v, negrito, 9.5, L - 2 * M - 90, 1)[0] ?? ''
       p.drawText(valor, { x: L - M - 14 - negrito.widthOfTextAtSize(valor, 9.5), y: yy, size: 9.5, font: negrito, color: TINTA })

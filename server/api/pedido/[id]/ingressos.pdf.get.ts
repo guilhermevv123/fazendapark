@@ -12,6 +12,7 @@ import { montarQr } from '../../../utils/ingresso'
 import { montarPdfDosIngressos } from '../../../utils/ingresso-pdf'
 import { PEDIDO_VIVO } from '../../../utils/liquido'
 import { conferirFreio, marcarNoFreio } from '../../../utils/sessao'
+import { rotuloDaParte } from '../../../utils/combo'
 
 const CODIGO = /^[A-Z0-9-]{6,40}$/i
 
@@ -32,7 +33,7 @@ export default defineEventHandler(async (event) => {
   }
   const ingressos = await q<any>(
     `SELECT t.code, t.holder_name, l.name AS lote, s.name AS setor, tt.name AS tipo, ses.title AS sessao,
-            tt.valid_dates::text[] AS dias_de_uso
+            tt.valid_dates::text[] AS dias_de_uso, t.combo_seq, t.combo_size
        FROM tickets t
        JOIN lots l ON l.id = t.lot_id
        JOIN sectors s ON s.id = l.sector_id
@@ -40,7 +41,7 @@ export default defineEventHandler(async (event) => {
        LEFT JOIN event_sessions ses ON ses.id = s.session_id
       WHERE t.order_id = $1 AND t.status = 'valido'
         AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr WHERE tr.ticket_id = t.id AND tr.status = 'concluido')
-      ORDER BY t.issued_at, t.code`, [o.id])
+      ORDER BY t.issued_at, t.combo_group NULLS FIRST, t.combo_seq, t.code`, [o.id])
   if (!ingressos.length) {
     throw createError({ statusCode: 410, statusMessage: 'Este pedido não tem ingresso válido para baixar.' })
   }
@@ -60,6 +61,7 @@ export default defineEventHandler(async (event) => {
     ingressos: comQr.map(({ code, qr, t }) => ({
       codigo: code, qr, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.holder_name, sessao: t.sessao,
       diasDeUso: fraseDosDiasDeUso(t.dias_de_uso) || null,
+      pessoaDoCombo: rotuloDaParte(t.combo_seq, t.combo_size),
     })),
   })
   setHeader(event, 'Content-Type', 'application/pdf')

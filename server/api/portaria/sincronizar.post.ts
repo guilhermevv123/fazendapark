@@ -56,6 +56,7 @@ import { lerQr } from '../../utils/ingresso'
 import { diaDeUsoDe, limparDiasDeUso } from '../../utils/dias-de-uso'
 import { opcoesDeTroca, type TipoParaTroca } from '../../utils/troca-de-dia'
 import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../../utils/troca-de-dia-banco'
+import { SQL_PESSOAS_DO_INGRESSO } from '../../utils/combo'
 import {
   chaveDoCodigo, conferirRelogio, ehPassaporte, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA,
   MENSAGEM_DE_RELOGIO, novoSalDaLista, numeroParaALista,
@@ -86,6 +87,11 @@ const ItemDaFila = z.object({
     cobradoCents: z.number().int().min(0).max(100_000_00),
     tipoNome: z.string().max(200).nullish(),
   }).nullish(),
+  /**
+   * Combo (050): a pessoa k do combo do QR lido — o grupo chegou com um celular só e o porteiro
+   * liberou as outras partes sem rede. O banco acha a parte pelo grupo do código lido.
+   */
+  parte: z.number().int().min(1).max(100).nullish(),
 })
 
 const Corpo = z.object({
@@ -161,8 +167,10 @@ export default defineEventHandler(async (event) => {
     const troca = item.troca!
     tiposDaTroca ??= await tiposDaTrocaDeDia(eventId)
     const dia = diaDeUsoDe(quando ? new Date(quando) : new Date(), evento.timezone)
-    const pagoCents = pagoDoIngressoNaTroca(ingresso.pago_cents, ingresso.ticket_type_id, tiposDaTroca)
-    const opcao = opcoesDeTroca({ tipo: ingresso.tipo, pessoas: ingresso.pessoas, pagoCents }, tiposDaTroca, dia)
+    const pagoCents = pagoDoIngressoNaTroca(ingresso.pago_cents, ingresso.ticket_type_id, tiposDaTroca,
+      ingresso.pessoas, ingresso.pessoas_do_tipo)
+    const opcao = opcoesDeTroca({ tipo: ingresso.tipo, pessoas: ingresso.pessoas,
+      pessoasDoTipo: ingresso.pessoas_do_tipo, pagoCents }, tiposDaTroca, dia)
       .find((o) => o.tipoId === troca.tipoId)
     const destino = tiposDaTroca.find((t) => t.id === troca.tipoId)
     await c.query(
@@ -218,12 +226,16 @@ export default defineEventHandler(async (event) => {
     if ((lido.ok || qrAntigo) && lido.eventId !== eventId) { registra('invalido'); continue }
 
     const ingresso = await q1<any>(
-      `SELECT t.id, t.status, s.sessions_covered, t.ticket_type_id, tt.name AS tipo,
-              COALESCE(tt.admits, s.admits, 1)::int AS pessoas, ${SQL_PAGO_DO_INGRESSO} AS pago_cents
+      `SELECT t.id, t.code, t.status, s.sessions_covered, t.ticket_type_id, tt.name AS tipo,
+              ${SQL_PESSOAS_DO_INGRESSO}::int AS pessoas, COALESCE(tt.admits, s.admits, 1)::int AS pessoas_do_tipo,
+              ${SQL_PAGO_DO_INGRESSO} AS pago_cents
          FROM tickets t JOIN sectors s ON s.id = t.sector_id
          LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
-        WHERE t.code = $1 AND t.org_id = $2 AND t.event_id = $3`,
-      [codigo, orgId, eventId])
+        WHERE t.org_id = $2 AND t.event_id = $3 AND ${item.parte
+          ? `t.combo_seq = $4 AND t.combo_group =
+               (SELECT b.combo_group FROM tickets b WHERE b.code = $1 AND b.org_id = $2)`
+          : 't.code = $1'}`,
+      item.parte ? [codigo, orgId, eventId, item.parte] : [codigo, orgId, eventId])
     if (!ingresso) { registra('invalido'); continue }
 
     const quando = relogio.em
@@ -250,7 +262,7 @@ export default defineEventHandler(async (event) => {
         await c.query(
           `INSERT INTO checkins (event_id, ticket_id, code_lido, resultado, gate, operator_id, created_at)
            VALUES ($1,$2,$3,'ok',$4,$5, COALESCE($6::timestamptz, now()))`,
-          [eventId, ingresso.id, codigo.slice(0, 120), item.gate ?? null, operador, quando])
+          [eventId, ingresso.id, String(ingresso.code ?? codigo).slice(0, 120), item.gate ?? null, operador, quando])
 
         if (trava?.status === 'cancelado') return 'cancelado' as const
         const marcou = await c.query(SQL_MARCA_PASSAPORTE, [ingresso.id, operador, dias >= cobre, quando])
@@ -303,7 +315,7 @@ export default defineEventHandler(async (event) => {
       await c.query(
         `INSERT INTO checkins (event_id, ticket_id, code_lido, resultado, gate, operator_id, created_at)
          VALUES ($1,$2,$3,'ok',$4,$5, COALESCE($6::timestamptz, now()))`,
-        [eventId, ingresso.id, codigo.slice(0, 120), item.gate ?? null, operador, quando])
+        [eventId, ingresso.id, String(ingresso.code ?? codigo).slice(0, 120), item.gate ?? null, operador, quando])
 
       // Cancelado nunca vira 'usado' — e a pessoa entrou assim mesmo, porque
       // a lista do tablet era mais velha que o cancelamento. Fica registrada
@@ -413,8 +425,11 @@ async function listaDoEvento(eventId: string, orgId: string) {
     // deixa o portão sem rede dizer "já entrou hoje" ou "pode entrar, 2º dia".
     `SELECT t.code, t.status, t.holder_name, s.name AS setor, t.ticket_type_id,
             ${SQL_PAGO_DO_INGRESSO} AS pago_cents,
-            -- pessoas por ingresso: a do tipo (combo de 10, 048) ou a do setor
-            COALESCE(tt.admits, s.admits) AS admits,
+            -- pessoas por ingresso: a do ingresso (parte de combo = 1, 050), a do tipo (048) ou a do setor
+            COALESCE(t.people, tt.admits, s.admits) AS admits,
+            COALESCE(tt.admits, s.admits, 1)::int AS pessoas_do_tipo,
+            -- combo (050): sem rede o portão diz "pessoa 3 de 10" e libera as outras partes do grupo
+            t.combo_group, t.combo_seq, t.combo_size,
             l.name AS lote, tt.name AS tipo, tt.kind AS especie,
             t.half_reason, t.half_document, t.half_document_required,
             es.id AS sessao_id, es.starts_at, es.ends_at,
@@ -465,7 +480,11 @@ async function listaDoEvento(eventId: string, orgId: string) {
       sessaoFim: t.ends_at,
       // dias de uso do tipo (047): sem rede o portão também barra o ingresso de sexta no domingo
       ...(limparDiasDeUso(t.dias_de_uso) ? { diasDeUso: limparDiasDeUso(t.dias_de_uso),
-        tipoId: t.ticket_type_id, pagoCents: pagoDoIngressoNaTroca(t.pago_cents, t.ticket_type_id, tiposDaTroca) } : {}),
+        tipoId: t.ticket_type_id, pessoasDoTipo: Number(t.pessoas_do_tipo),
+        pagoCents: pagoDoIngressoNaTroca(t.pago_cents, t.ticket_type_id, tiposDaTroca,
+          Number(t.admits ?? 1), Number(t.pessoas_do_tipo)) } : {}),
+      ...(t.combo_group ? { combo: { grupo: t.combo_group, seq: Number(t.combo_seq),
+                                     tamanho: Number(t.combo_size) } } : {}),
       // só no passaporte de vários dias (ADM-04): quantos cobre, quais dias já usou, em quais vale
       ...(Number(t.sessions_covered ?? 1) > 1
         ? { diasCobertos: Number(t.sessions_covered), diasUsados: t.dias_usados ?? [],
