@@ -53,7 +53,9 @@ import { q, q1, tx } from '../../utils/db'
 import { exigir } from '../../utils/sessao'
 import { ehPapel, papelDoRoleLegado, papelPode, ROTULO } from '../../utils/papeis'
 import { lerQr } from '../../utils/ingresso'
-import { limparDiasDeUso } from '../../utils/dias-de-uso'
+import { diaDeUsoDe, limparDiasDeUso } from '../../utils/dias-de-uso'
+import { opcoesDeTroca, type TipoParaTroca } from '../../utils/troca-de-dia'
+import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../../utils/troca-de-dia-banco'
 import {
   chaveDoCodigo, conferirRelogio, ehPassaporte, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA,
   MENSAGEM_DE_RELOGIO, novoSalDaLista, numeroParaALista,
@@ -73,6 +75,17 @@ const ItemDaFila = z.object({
   /** hora da passagem medida no tablet; ausente = agora */
   em: z.string().datetime({ offset: true }).nullish(),
   offline: z.boolean().default(true),
+  /**
+   * Troca de dia feita SEM REDE (049): o ingresso era de outro dia e o porteiro cobrou a diferença.
+   * O dinheiro já está na mão dele — a troca é registrada sempre, com o valor que ele cobrou; o
+   * servidor calcula o esperado ao lado e a divergência fica à vista, nunca corrigida em silêncio.
+   */
+  troca: z.object({
+    tipoId: z.string().uuid(),
+    forma: z.enum(['dinheiro', 'pix', 'credito', 'debito', 'sem_diferenca']),
+    cobradoCents: z.number().int().min(0).max(100_000_00),
+    tipoNome: z.string().max(200).nullish(),
+  }).nullish(),
 })
 
 const Corpo = z.object({
@@ -126,13 +139,15 @@ export default defineEventHandler(async (event) => {
   // middleware de tenant alcança. 404 e não 403 — "existe, mas não é seu" já
   // confirma que o id é de um evento real de outra empresa.
   const evento = await q1<any>(
-    `SELECT id, name, starts_at, ends_at FROM events WHERE id = $1 AND org_id = $2`,
+    `SELECT id, name, starts_at, ends_at, timezone FROM events WHERE id = $1 AND org_id = $2`,
     [eventId, orgId])
   if (!evento) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
 
   /* ------------------------------------------------------------ a fila sobe */
 
   const { fila, repetidasNoEnvio } = normalizarFila(p.data.fila)
+  // os preços de agora, uma vez por envio e só se alguma passagem trouxe troca de dia (049)
+  let tiposDaTroca: TipoParaTroca[] | null = null
   const itens: Array<{
     id: string; codigo: string; resultado: ResultadoDaFila; mensagem: string
     /** só aparece quando o relógio do aparelho foi recusado */
@@ -140,6 +155,31 @@ export default defineEventHandler(async (event) => {
   }> = []
   /** as passagens cuja hora foi recusada — viram um aviso só, no fim */
   const tortos: Relogio[] = []
+
+  /** grava a troca de dia que veio na fila (049), com o esperado calculado aqui ao lado do cobrado */
+  const gravarTrocaDaFila = async (c: any, item: typeof fila[number], ingresso: any, quando: string | null) => {
+    const troca = item.troca!
+    tiposDaTroca ??= await tiposDaTrocaDeDia(eventId)
+    const dia = diaDeUsoDe(quando ? new Date(quando) : new Date(), evento.timezone)
+    const pagoCents = pagoDoIngressoNaTroca(ingresso.pago_cents, ingresso.ticket_type_id, tiposDaTroca)
+    const opcao = opcoesDeTroca({ tipo: ingresso.tipo, pessoas: ingresso.pessoas, pagoCents }, tiposDaTroca, dia)
+      .find((o) => o.tipoId === troca.tipoId)
+    const destino = tiposDaTroca.find((t) => t.id === troca.tipoId)
+    await c.query(
+      `INSERT INTO day_changes (id, org_id, event_id, ticket_id, from_type_id, to_type_id, from_type_name,
+                                to_type_name, day, pago_cents, preco_cents, cobrado_cents, esperado_cents,
+                                forma, people, gate, device_id, operator_id, offline, created_at)
+       SELECT $1,$2,$3,$4,$5, (SELECT id FROM ticket_types WHERE id = $6), $7,$8,$9::date,$10,$11,$12,$13,
+              $14,$15,$16,$17,$18,$19, COALESCE($20::timestamptz, now())
+       ON CONFLICT (id) DO NOTHING`,
+      [item.id, orgId, eventId, ingresso.id, ingresso.ticket_type_id, troca.tipoId, ingresso.tipo,
+       destino?.nome ?? troca.tipoNome ?? null, dia, pagoCents,
+       opcao?.precoCents ?? destino?.faceCents ?? 0, troca.cobradoCents,
+       // sem opção válida agora (preço/dia mudou depois), o esperado é o próprio preço de hoje − o pago
+       opcao?.diferencaCents ?? Math.max(0, (destino?.faceCents ?? 0) - pagoCents),
+       troca.forma, Math.min(100, Math.max(1, Number(ingresso.pessoas ?? 1))), item.gate ?? null,
+       deviceId ?? null, operador, item.offline, quando])
+  }
 
   for (const item of fila) {
     // O QR pode vir assinado (DT1:…) ou o operador digitou o código legível —
@@ -178,8 +218,10 @@ export default defineEventHandler(async (event) => {
     if ((lido.ok || qrAntigo) && lido.eventId !== eventId) { registra('invalido'); continue }
 
     const ingresso = await q1<any>(
-      `SELECT t.id, t.status, s.sessions_covered
+      `SELECT t.id, t.status, s.sessions_covered, t.ticket_type_id, tt.name AS tipo,
+              COALESCE(tt.admits, s.admits, 1)::int AS pessoas, ${SQL_PAGO_DO_INGRESSO} AS pago_cents
          FROM tickets t JOIN sectors s ON s.id = t.sector_id
+         LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
         WHERE t.code = $1 AND t.org_id = $2 AND t.event_id = $3`,
       [codigo, orgId, eventId])
     if (!ingresso) { registra('invalido'); continue }
@@ -227,6 +269,9 @@ export default defineEventHandler(async (event) => {
       // Nada de volta = este id já está no livro. É reenvio da mesma fila, e
       // a pessoa já foi contada. Este é o ponto inteiro do id nascer no
       // dispositivo.
+      // Troca de dia (049): o dinheiro foi cobrado na porta — grava SEMPRE que a passagem vier com ela,
+      // inclusive no reenvio (o `ON CONFLICT (id)` da troca segura a repetição, igual ao do livro).
+      if (item.troca) await gravarTrocaDaFila(c, item, ingresso, quando)
       if (gravou.rowCount !== 1) return 'repetida' as const
 
       // Carimba o ingresso com a hora da PASSAGEM. `rowCount 0` = ele já
@@ -366,7 +411,8 @@ async function listaDoEvento(eventId: string, orgId: string) {
   const linhas = await q<any>(
     // Passaporte (ADM-04): os dias já usados e os dias do lote descem junto, só pra ele — é o que
     // deixa o portão sem rede dizer "já entrou hoje" ou "pode entrar, 2º dia".
-    `SELECT t.code, t.status, t.holder_name, s.name AS setor,
+    `SELECT t.code, t.status, t.holder_name, s.name AS setor, t.ticket_type_id,
+            ${SQL_PAGO_DO_INGRESSO} AS pago_cents,
             -- pessoas por ingresso: a do tipo (combo de 10, 048) ou a do setor
             COALESCE(tt.admits, s.admits) AS admits,
             l.name AS lote, tt.name AS tipo, tt.kind AS especie,
@@ -395,8 +441,11 @@ async function listaDoEvento(eventId: string, orgId: string) {
 
   // Sem o código em claro (ADM-25): cada item leva a CHAVE do código, e o sal desce junto.
   const sal = novoSalDaLista()
+  // troca de dia sem rede (049): os tipos com o preço de agora e, em cada ingresso, quanto custou
+  const tiposDaTroca = await tiposDaTrocaDeDia(eventId)
   return {
     geradaEm: new Date().toISOString(),
+    tiposDaTroca,
     truncada: linhas.length >= LIMITE_LISTA,
     sal,
     ingressos: linhas.map((t) => ({
@@ -415,7 +464,8 @@ async function listaDoEvento(eventId: string, orgId: string) {
       sessaoInicio: t.starts_at,
       sessaoFim: t.ends_at,
       // dias de uso do tipo (047): sem rede o portão também barra o ingresso de sexta no domingo
-      ...(limparDiasDeUso(t.dias_de_uso) ? { diasDeUso: limparDiasDeUso(t.dias_de_uso) } : {}),
+      ...(limparDiasDeUso(t.dias_de_uso) ? { diasDeUso: limparDiasDeUso(t.dias_de_uso),
+        tipoId: t.ticket_type_id, pagoCents: pagoDoIngressoNaTroca(t.pago_cents, t.ticket_type_id, tiposDaTroca) } : {}),
       // só no passaporte de vários dias (ADM-04): quantos cobre, quais dias já usou, em quais vale
       ...(Number(t.sessions_covered ?? 1) > 1
         ? { diasCobertos: Number(t.sessions_covered), diasUsados: t.dias_usados ?? [],

@@ -645,7 +645,7 @@ export default defineEventHandler(async (event) => {
   // a quantidade de funcionários"). O evento inteiro, não o período escolhido: é o retrato de quem
   // ainda vem. Ingresso de pé (válido ou já usado — o usado veio, e conta no dia dele), cada um
   // com as pessoas do tipo (combo de 10 = 10), nos dias de uso do tipo (047).
-  const [gruposDoDia, entradasPorDia] = await Promise.all([
+  const [gruposDoDia, entradasPorDia, trocas] = await Promise.all([
     q<any>(
       `SELECT tt.name AS tipo, tt.valid_dates::text[] AS dias,
               COALESCE(tt.admits, s.admits, 1)::int AS pessoas, count(*)::int AS ingressos
@@ -658,6 +658,13 @@ export default defineEventHandler(async (event) => {
       `SELECT to_char(e.entered_at AT TIME ZONE ${fusoSql(fuso)}, 'YYYY-MM-DD') AS dia,
               COALESCE(SUM(e.people),0)::int AS pessoas
          FROM entries e WHERE e.event_id = $1 GROUP BY 1`, [id]),
+    // TROCA DE DIA NA PORTARIA (049): o dinheiro que entrou na mão do porteiro, troca por troca
+    q<any>(
+      `SELECT dc.id, dc.created_at, dc.day::text AS dia, dc.from_type_name, dc.to_type_name,
+              dc.cobrado_cents, dc.esperado_cents, dc.forma, dc.people, dc.gate, dc.offline,
+              u.name AS operador
+         FROM day_changes dc LEFT JOIN users u ON u.id = dc.operator_id
+        WHERE dc.event_id = $1 ORDER BY dc.created_at DESC LIMIT 500`, [id]),
   ])
   const pessoasPorDia = pessoasPorDiaDeUso(
     gruposDoDia.map((g) => ({ tipo: g.tipo, dias: g.dias, pessoas: Number(g.pessoas), ingressos: Number(g.ingressos) })),
@@ -669,6 +676,8 @@ export default defineEventHandler(async (event) => {
     evento: { id: ev.id, nome: ev.name, status: ev.status },
     /** quantas pessoas vêm em cada dia do evento (combo conta as pessoas; ingresso sem dia à parte) */
     pessoasPorDia,
+    /** trocas de dia cobradas na portaria (049): o total por forma e a lista pra conferir o caixa */
+    trocasDeDia: resumoDasTrocas(trocas),
     periodo: {
       de: inicio.toISOString(), ate: fim.toISOString(), fuso, hoje,
       // o que a tela acende e escreve: o nome do período e os dias de calendário dele
@@ -822,3 +831,29 @@ export default defineEventHandler(async (event) => {
     })),
   }
 })
+
+/** o resumo das trocas de dia (049): total, por forma, e as que divergiram do preço do servidor */
+function resumoDasTrocas(linhas: any[]) {
+  const porForma: Record<string, { trocas: number; cents: number }> = {}
+  let cents = 0
+  let pessoas = 0
+  let divergentes = 0
+  for (const t of linhas) {
+    const c = Number(t.cobrado_cents)
+    cents += c
+    pessoas += Number(t.people ?? 1)
+    if (c !== Number(t.esperado_cents)) divergentes++
+    porForma[t.forma] ??= { trocas: 0, cents: 0 }
+    porForma[t.forma]!.trocas++
+    porForma[t.forma]!.cents += c
+  }
+  return {
+    trocas: linhas.length, pessoas, cobradoCents: cents, divergentes, porForma,
+    lista: linhas.map((t) => ({
+      id: t.id, em: t.created_at, dia: t.dia, de: t.from_type_name, para: t.to_type_name,
+      cobradoCents: Number(t.cobrado_cents), esperadoCents: Number(t.esperado_cents),
+      forma: t.forma, pessoas: Number(t.people ?? 1), portao: t.gate, offline: Boolean(t.offline),
+      operador: t.operador ?? null,
+    })),
+  }
+}

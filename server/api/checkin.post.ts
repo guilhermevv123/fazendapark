@@ -28,6 +28,8 @@ import {
 import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingresso'
 import { diaDeUsoDe, limparDiasDeUso, mensagemForaDoDiaDeUso, valeNoDiaDeUso } from '../utils/dias-de-uso'
 import { explicarErro } from './admin/evento/index.post'
+import { opcoesDeTroca } from '../utils/troca-de-dia'
+import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../utils/troca-de-dia-banco'
 
 /** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
 const ROTULOS: Record<string, string> = { qr: 'Código lido', eventId: 'Evento', gate: 'Portão', apenasConsultar: 'Só conferir', entradaId: 'Passagem', deviceId: 'Aparelho' }
@@ -176,6 +178,8 @@ async function decidir(event: H3Event) {
             es.starts_at AS sessao_inicio, es.ends_at AS sessao_fim,
             -- dias de uso do tipo (047): texto, nunca Date — o pg montaria meia-noite no fuso do servidor
             tt.valid_dates::text[] AS dias_de_uso, ev.timezone AS fuso,
+            -- troca de dia (049): o tipo, as pessoas e quanto custou — pra oferecer a diferença na porta
+            t.ticket_type_id, COALESCE(tt.admits, s.admits, 1)::int AS pessoas, ${SQL_PAGO_DO_INGRESSO} AS pago_cents,
             -- Volte Mais (037): a portaria avisa "retorno com desconto na consumação"
             (SELECT json_build_object('nome', lp.nome, 'consumacao_bps', lp.consumacao_bps)
                FROM orders o JOIN loyalty_programs lp ON lp.id = o.loyalty_program_id
@@ -212,7 +216,12 @@ async function decidir(event: H3Event) {
   // Dono, 07/10: "o ingresso que o cara tem de sexta, ele tenta passar domingo". O dia de hoje é o
   // do calendário no fuso do evento; tipo sem dias marcados passa em qualquer dia (o de sempre).
   const diasDeUso = limparDiasDeUso(ingresso.dias_de_uso)
-  const foraDoDia = !valeNoDiaDeUso(diasDeUso, diaDeUsoDe(new Date(), ingresso.fuso))
+  const hoje = diaDeUsoDe(new Date(), ingresso.fuso)
+  const foraDoDia = !valeNoDiaDeUso(diasDeUso, hoje)
+  // Troca de dia (049): o ingresso de outro dia segue barrado, mas a porta já recebe as opções de hoje
+  // com a diferença — o porteiro cobra e libera por `/api/portaria/troca-de-dia`. Passaporte não troca.
+  const troca = foraDoDia && !ehPassaporte(ingresso.sessions_covered)
+    ? await trocaDoIngresso(ingresso, eventId, hoje) : undefined
 
   /**
    * "Só conferir" responde SEMPRE — inclusive fora da janela da sessão.
@@ -239,7 +248,7 @@ async function decidir(event: H3Event) {
   if (apenasConsultar) {
     if (foraDoDia) {
       return {
-        ok: false, resultado: 'fora_da_sessao' as const, foraDoDia: true, diasDeUso,
+        ok: false, resultado: 'fora_da_sessao' as const, foraDoDia: true, diasDeUso, troca,
         mensagem: mensagemForaDoDiaDeUso(diasDeUso), consulta: true, ingresso: dadosDoIngresso(ingresso),
       }
     }
@@ -258,7 +267,7 @@ async function decidir(event: H3Event) {
   // frase do dia certo e `foraDoDia` pra tela dizer "NÃO VALE HOJE" em vez de "AINDA NÃO".
   if (foraDoDia) {
     const r = await registrar('fora_da_sessao', ingresso.id, codigo)
-    return { ...r, mensagem: mensagemForaDoDiaDeUso(diasDeUso), foraDoDia: true, diasDeUso,
+    return { ...r, mensagem: mensagemForaDoDiaDeUso(diasDeUso), foraDoDia: true, diasDeUso, troca,
              ingresso: dadosDoIngresso(ingresso) }
   }
   if (foraDaSessao) return registrar('fora_da_sessao', ingresso.id, codigo)
@@ -317,6 +326,14 @@ async function decidir(event: H3Event) {
 
   const r = await registrar('ok', ingresso.id, codigo)
   return { ...r, ingresso: dadosDoIngresso(ingresso), pessoas: passagem.pessoas }
+}
+
+/** as opções de troca de dia deste ingresso pra hoje (049), com o que ele custou */
+async function trocaDoIngresso(i: any, eventId: string, hoje: string) {
+  const tipos = await tiposDaTrocaDeDia(eventId)
+  const pagoCents = pagoDoIngressoNaTroca(i.pago_cents, i.ticket_type_id, tipos)
+  const pessoas = Number(i.pessoas ?? 1)
+  return { hoje, pagoCents, pessoas, opcoes: opcoesDeTroca({ tipo: i.tipo, pessoas, pagoCents }, tipos, hoje) }
 }
 
 function dadosDoIngresso(i: any) {

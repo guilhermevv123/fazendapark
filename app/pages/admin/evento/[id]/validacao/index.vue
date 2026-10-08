@@ -9,6 +9,10 @@
 import { diaLocal } from '~/composables/formato'
 import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { mensagemForaDoDiaDeUso, valeNoDiaDeUso } from '~~/server/utils/dias-de-uso'
+import {
+  FORMAS_DE_TROCA, opcoesDeTroca, reaisDaTroca, ROTULO_DA_FORMA,
+  type FormaDeTroca, type OpcaoDeTroca, type TipoParaTroca,
+} from '~~/server/utils/troca-de-dia'
 
 /**
  * Este papel pode ler o log de leituras (`/checkins`)? A MESMA grade que tranca a rota no servidor
@@ -50,6 +54,10 @@ export type Resposta = {
   qrAntigo?: boolean
   /** o tipo do ingresso não vale HOJE (047, dias de uso): "NÃO VALE HOJE", não "AINDA NÃO" */
   foraDoDia?: boolean
+  /** troca de dia (049): as opções de hoje com a diferença — o porteiro cobra e libera */
+  troca?: { hoje: string; pagoCents: number; pessoas: number; opcoes: OpcaoDeTroca[] }
+  /** a troca que liberou esta pessoa: o tipo de hoje, quanto foi cobrado e como */
+  trocaFeita?: { tipo: string; cobradoCents: number; forma: FormaDeTroca }
 }
 
 /** o mesmo mínimo do servidor (`qr: z.string().min(4)` em `/api/checkin`) */
@@ -443,10 +451,14 @@ type IngressoLocal = {
   sessaoInicio: string | null; sessaoFim: string | null
   /** dias de uso do tipo (047), 'AAAA-MM-DD'; ausente = qualquer dia */
   diasDeUso?: string[]
+  /** troca de dia sem rede (049): o tipo comprado e quanto custou a face */
+  tipoId?: string | null; pagoCents?: number
   /** marcado por ESTE aparelho enquanto estava sem rede */
   usadoAqui?: { em: string; gate: string | null }
 } & PassaporteLocal
-type Passagem = { id: string; qr: string; gate: string | null; em: string; offline: boolean }
+type Passagem = { id: string; qr: string; gate: string | null; em: string; offline: boolean
+  /** troca de dia cobrada sem rede (049) — sobe na sincronização junto da passagem */
+  troca?: { tipoId: string; forma: FormaDeTroca; cobradoCents: number; tipoNome: string } }
 
 const CHAVE_LISTA = `dt_portaria_lista_${id}`
 const CHAVE_FILA = `dt_portaria_fila_${id}`
@@ -504,11 +516,14 @@ const swPronto = ref<'sim' | 'nao' | 'indisponivel'>('indisponivel')
  * apresenta como completo é exatamente o que ela existe pra não fazer.
  */
 const listaTruncada = ref(false)
+/** os tipos com o preço de quando a lista desceu — a conta da troca de dia sem rede (049) */
+const tiposDaTroca = ref<TipoParaTroca[]>([])
 
 /** A lista e a marca de corte viajam juntas pro localStorage — ver acima. */
 function guardarLista() {
   guardar(CHAVE_LISTA, {
     em: listaEm.value, truncada: listaTruncada.value, sal: salDaLista.value, ingressos: lista.value,
+    tiposDaTroca: tiposDaTroca.value,
   })
 }
 
@@ -599,9 +614,11 @@ onMounted(async () => {
   }
 
   const guardada = recuperar<
-    { em: string; truncada?: boolean; sal?: string | null; ingressos: IngressoLocal[] } | null>(CHAVE_LISTA, null)
+    { em: string; truncada?: boolean; sal?: string | null; ingressos: IngressoLocal[]
+      tiposDaTroca?: TipoParaTroca[] } | null>(CHAVE_LISTA, null)
   if (guardada) {
     lista.value = guardada.ingressos
+    tiposDaTroca.value = Array.isArray(guardada.tiposDaTroca) ? guardada.tiposDaTroca : []
     listaEm.value = guardada.em
     salDaLista.value = guardada.sal ?? null
     // Lista guardada por uma versão anterior não tem a marca: fica `false`,
@@ -782,8 +799,14 @@ function validarLocal(bruto: string, idPassagem: string = novoId(),
   // Dia de uso do tipo (047), a mesma régua da porta online: o ingresso de sexta não passa no
   // domingo. O dia é o do relógio do aparelho — o tablet está no parque.
   if (!valeNoDiaDeUso(t.diasDeUso, diaLocal())) {
+    // troca de dia (049): a MESMA conta do servidor, com os preços da lista baixada
+    const hoje = diaLocal()
+    const pagoCents = Math.max(0, Number(t.pagoCents ?? 0))
+    const troca = passaporte || !tiposDaTroca.value.length ? undefined
+      : { hoje, pagoCents, pessoas: Number(t.pessoas ?? 1),
+          opcoes: opcoesDeTroca({ tipo: t.tipo, pessoas: Number(t.pessoas ?? 1), pagoCents }, tiposDaTroca.value, hoje) }
     return { local: true, ok: false, resultado: 'fora_da_sessao', foraDoDia: true,
-             mensagem: mensagemForaDoDiaDeUso(t.diasDeUso), ingresso: dados,
+             mensagem: mensagemForaDoDiaDeUso(t.diasDeUso), ingresso: dados, troca,
              ...(consultar ? { consulta: true } : {}) }
   }
 
@@ -927,6 +950,7 @@ async function ler() {
       // leu de uma lista — entra por ele. A porta não trava (a câmera pode ter quebrado e a fila
       // anda), mas o veredito pede pra conferir o documento de quem está passando.
       ultima.value = { ...ultima.value, digitado: codigoDoQr(c).digitado }
+      ultimoBruto.value = c
       historico.value.unshift({ ...ultima.value, codigo: c, quando: new Date() })
       historico.value = historico.value.slice(0, 12)
     }
@@ -936,6 +960,127 @@ async function ler() {
     lendo.value = false
     // nextTick: o input só volta a existir depois do repintar
     nextTick(() => campo.value?.focus())
+  }
+}
+
+/* ------------------------------------------------------- troca de dia (049) */
+/*
+ * Dono, 08/10: "e se aparecer alguém com ingresso de sábado pra entrar domingo? ... bloquear, mas se
+ * a pessoa quiser entrar, ela faz o pagamento lá na hora, o valor da diferença, e aí ela entra";
+ * "lembrando que é Android" e "a internet pode cair".
+ *
+ * O veredito continua NÃO VALE HOJE. Embaixo, "Cobrar diferença e liberar": o porteiro escolhe o
+ * tipo de hoje (o irmão do comprado já vem marcado), como a pessoa pagou, e confirma o valor que
+ * recebeu. Com rede, quem decide é o servidor (preço de agora); sem rede, o aparelho faz a MESMA conta
+ * com a lista baixada, libera e a troca sobe na fila com o MESMO id da passagem — reenviar não cobra
+ * duas vezes. Enquanto o painel está aberto a câmera pausa: a leitura seguinte não pode apagar a
+ * cobrança no meio.
+ */
+const ultimoBruto = ref('')
+const trocaAberta = ref(false)
+const trocaTipo = ref<string | null>(null)
+const trocaForma = ref<FormaDeTroca | null>(null)
+const trocando = ref(false)
+const trocaErro = ref('')
+const opcaoDaTroca = computed(() =>
+  ultima.value?.troca?.opcoes.find((o) => o.tipoId === trocaTipo.value) ?? null)
+const podeTrocar = computed(() => {
+  const r = ultima.value
+  return !!r && !!r.foraDoDia && !r.consulta && !!r.troca
+})
+
+watch(ultima, (r, antes) => {
+  // a resposta nova de uma troca recusada (409 com a conta nova) mantém o painel aberto
+  if (r && antes && r.troca && antes.troca && r !== antes && r.foraDoDia && antes.foraDoDia && trocaAberta.value) {
+    if (!r.troca.opcoes.some((o) => o.tipoId === trocaTipo.value)) trocaTipo.value = r.troca.opcoes[0]?.tipoId ?? null
+    return
+  }
+  trocaAberta.value = false
+  trocaForma.value = null
+  trocaErro.value = ''
+  trocaTipo.value = r?.troca?.opcoes[0]?.tipoId ?? null
+})
+
+function abrirTroca() {
+  trocaErro.value = ''
+  trocaAberta.value = true
+}
+function fecharTroca() {
+  trocaAberta.value = false
+  trocaForma.value = null
+  trocaErro.value = ''
+}
+
+/** libera pelo aparelho, sem rede: a mesma marca da leitura offline, com a troca na fila */
+function trocarSemRede(r0: Resposta, idPassagem: string, opcao: OpcaoDeTroca, forma: FormaDeTroca) {
+  const bruto = ultimoBruto.value
+  const t = mapa.value.get(chaveLocal(codigoDoQr(bruto).codigo))
+  if (!t) { trocaErro.value = 'Este ingresso não está na lista do aparelho — chame o supervisor.'; return }
+  if (t.status === 'usado' || t.status === 'cancelado' || t.usadoAqui) {
+    trocaErro.value = t.status === 'cancelado' ? 'Ingresso cancelado — não dá pra liberar.'
+      : 'Este ingresso já passou por este aparelho — não cobre de novo.'
+    return
+  }
+  const em = new Date().toISOString()
+  t.usadoAqui = { em, gate: gate.value || null }
+  fila.value = [...fila.value, { id: idPassagem, qr: bruto.trim(), gate: gate.value || null, em, offline: true,
+                                 troca: { tipoId: opcao.tipoId, forma, cobradoCents: opcao.diferencaCents,
+                                          tipoNome: opcao.nome } }]
+  guardar(CHAVE_FILA, fila.value)
+  guardarLista()
+  ultima.value = {
+    local: true, ok: true, resultado: 'ok',
+    mensagem: opcao.diferencaCents > 0
+      ? `Liberado com troca de dia — diferença paga (${ROTULO_DA_FORMA[forma]}) · sem rede`
+      : 'Liberado com troca de dia — sem diferença · sem rede',
+    pessoas: t.pessoas, ingresso: r0.ingresso,
+    trocaFeita: { tipo: opcao.nome, cobradoCents: opcao.diferencaCents, forma },
+  }
+  void tentarReconectar()
+}
+
+async function confirmarTroca() {
+  const r0 = ultima.value
+  const opcao = opcaoDaTroca.value
+  if (!r0?.troca || !opcao || trocando.value) return
+  const forma: FormaDeTroca | null = opcao.diferencaCents > 0 ? trocaForma.value : 'sem_diferenca'
+  if (!forma) { trocaErro.value = 'Escolha como a pessoa pagou a diferença.'; return }
+  trocaErro.value = ''
+  trocando.value = true
+  // UM id pra passagem e pra troca, criado antes de saber se vai ter rede (mesmo motivo do `ler`)
+  const idPassagem = novoId()
+  try {
+    if (!online.value || r0.local) {
+      trocarSemRede(r0, idPassagem, opcao, forma)
+    } else {
+      try {
+        const resp = await $fetch<Resposta>('/api/portaria/troca-de-dia', {
+          method: 'POST',
+          body: { id: idPassagem, qr: ultimoBruto.value, eventId: id, tipoId: opcao.tipoId, forma,
+                  cobradoCents: opcao.diferencaCents, gate: gate.value || undefined, deviceId: aparelho.value },
+        })
+        ultima.value = { ...resp, ingresso: r0.ingresso }
+        if (resp?.publico) publico.value = resp.publico
+        marcarNaListaDoAparelho(ultimoBruto.value, ultima.value)
+        refresh()
+      } catch (e: any) {
+        if (falhaDeRede(e)) {
+          // MESMO id: se o servidor gravou antes de a resposta se perder, a fila volta "repetida"
+          online.value = false
+          trocarSemRede(r0, idPassagem, opcao, forma)
+        } else {
+          const nova = e?.data?.data?.troca
+          if (nova) ultima.value = { ...r0, troca: nova }
+          trocaErro.value = e?.data?.statusMessage || e?.statusMessage || 'Não deu pra liberar agora. Tente de novo.'
+        }
+      }
+    }
+    if (ultima.value?.trocaFeita) {
+      historico.value.unshift({ ...ultima.value, codigo: ultimoBruto.value, quando: new Date() })
+      historico.value = historico.value.slice(0, 12)
+    }
+  } finally {
+    trocando.value = false
   }
 }
 
@@ -1100,6 +1245,7 @@ async function sincronizar({ comLista = false } = {}) {
         })
         salDaLista.value = salNovo
         listaEm.value = r.lista.geradaEm
+        tiposDaTroca.value = Array.isArray(r.lista.tiposDaTroca) ? r.lista.tiposDaTroca : []
 
         // O servidor corta a lista em 20 mil e MARCA o corte. Sem ler essa
         // marca, o tablet ficaria recusando ingresso bom no apagão sem que
@@ -1412,7 +1558,7 @@ useHead({
           Câmera
         </button>
       </div>
-      <LeitorCamera v-if="modoCamera" class="mb-4" :pausada="lendo" :veredito="vereditoCamera"
+      <LeitorCamera v-if="modoCamera" class="mb-4" :pausada="lendo || trocaAberta" :veredito="vereditoCamera"
                     @ler="lerDaCamera" />
       <form class="flex flex-wrap items-end gap-3" @submit.prevent="ler">
         <div class="min-w-[280px] flex-1">
@@ -1576,6 +1722,85 @@ useHead({
       <p v-if="ultima.local" class="mt-2 text-sm opacity-90">
         decidido no aparelho, sem rede — será conferido na sincronização
       </p>
+
+      <!-- troca de dia (049): o que liberou esta pessoa -->
+      <p v-if="ultima.trocaFeita" class="mt-3 rounded-lg bg-white/15 px-3 py-2 text-base font-semibold"
+         data-parte="troca-feita">
+        Troca de dia: {{ ultima.trocaFeita.tipo }} ·
+        <template v-if="ultima.trocaFeita.cobradoCents > 0">
+          {{ reaisDaTroca(ultima.trocaFeita.cobradoCents) }} em {{ ROTULO_DA_FORMA[ultima.trocaFeita.forma].toLowerCase() }}
+        </template>
+        <template v-else>sem diferença</template>
+      </p>
+
+      <!-- troca de dia (049): o ingresso de outro dia entra pagando a diferença -->
+      <div v-if="podeTrocar" class="mt-5 rounded-lg bg-white p-4 text-left text-tinta" data-parte="troca-de-dia">
+        <template v-if="!ultima.troca!.opcoes.length">
+          <p class="text-sm font-semibold">Não há ingresso de hoje com o mesmo número de pessoas para trocar.</p>
+          <p class="mt-1 text-sm text-tinta-suave">Venda um ingresso novo no balcão, se a pessoa quiser entrar.</p>
+        </template>
+        <template v-else-if="!trocaAberta">
+          <button type="button" class="btn-primario min-h-[52px] w-full text-lg" data-parte="abrir-troca"
+                  @click="abrirTroca">
+            Cobrar diferença e liberar
+            <template v-if="ultima.troca!.opcoes[0]">
+              ({{ ultima.troca!.opcoes[0].diferencaCents ? reaisDaTroca(ultima.troca!.opcoes[0].diferencaCents) : 'sem diferença' }})
+            </template>
+          </button>
+        </template>
+        <template v-else>
+          <p class="text-sm font-semibold text-tinta-suave">
+            Pagou {{ reaisDaTroca(ultima.troca!.pagoCents) }}
+            <template v-if="ultima.troca!.pessoas > 1"> · combo de {{ ultima.troca!.pessoas }} pessoas</template>
+          </p>
+          <p class="mt-3 text-sm font-semibold">Trocar por</p>
+          <div class="mt-2 grid gap-2">
+            <button v-for="o in ultima.troca!.opcoes" :key="o.tipoId" type="button"
+                    class="flex min-h-[52px] items-center justify-between gap-3 rounded-[6px] border-2 px-3 text-left"
+                    :class="trocaTipo === o.tipoId ? 'border-acao bg-acao-fraco' : 'border-linha bg-white'"
+                    :aria-pressed="trocaTipo === o.tipoId" :data-tipo="o.tipoId"
+                    :disabled="trocando" @click="trocaTipo = o.tipoId; trocaErro = ''">
+              <span class="min-w-0 font-semibold [overflow-wrap:anywhere]">{{ o.nome }}</span>
+              <span class="shrink-0 text-right">
+                <span class="block text-lg font-bold tabular-nums">
+                  {{ o.diferencaCents ? reaisDaTroca(o.diferencaCents) : 'sem diferença' }}
+                </span>
+                <span class="block text-xs text-tinta-suave">hoje {{ reaisDaTroca(o.precoCents) }}</span>
+              </span>
+            </button>
+          </div>
+
+          <template v-if="opcaoDaTroca && opcaoDaTroca.diferencaCents > 0">
+            <p class="mt-4 text-sm font-semibold">Como pagou</p>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <button v-for="f in FORMAS_DE_TROCA" :key="f" type="button"
+                      class="min-h-[52px] rounded-[6px] border-2 px-2 text-base font-semibold"
+                      :class="trocaForma === f ? 'border-acao bg-acao text-white' : 'border-linha bg-white text-tinta'"
+                      :aria-pressed="trocaForma === f" :data-forma="f"
+                      :disabled="trocando" @click="trocaForma = f; trocaErro = ''">
+                {{ ROTULO_DA_FORMA[f] }}
+              </button>
+            </div>
+          </template>
+
+          <p v-if="trocaErro" class="mt-3 rounded-[6px] bg-erro-claro px-3 py-2 text-sm font-semibold text-erro"
+             role="alert" data-parte="troca-erro">{{ trocaErro }}</p>
+
+          <button type="button" class="btn-primario mt-4 min-h-[56px] w-full text-lg" data-parte="confirmar-troca"
+                  :disabled="trocando || !opcaoDaTroca || (opcaoDaTroca.diferencaCents > 0 && !trocaForma)"
+                  @click="confirmarTroca">
+            <template v-if="trocando">Liberando…</template>
+            <template v-else-if="opcaoDaTroca && opcaoDaTroca.diferencaCents > 0">
+              Recebi {{ reaisDaTroca(opcaoDaTroca.diferencaCents) }} — liberar
+            </template>
+            <template v-else>Liberar sem cobrança</template>
+          </button>
+          <button type="button" class="btn-secundario mt-2 min-h-[48px] w-full" :disabled="trocando"
+                  data-parte="cancelar-troca" @click="fecharTroca">
+            Não trocar
+          </button>
+        </template>
+      </div>
       <button type="button" class="mt-5 min-h-[48px] w-full rounded-lg bg-white/95 text-lg font-semibold text-tinta lg:hidden"
               data-parte="veredito-ok" @click="vereditoFechado = true; nextTick(() => campo?.focus())">
         OK, próximo

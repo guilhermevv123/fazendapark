@@ -560,6 +560,8 @@ export type EntradaDaFila = {
   /** hora da passagem, medida no dispositivo (ISO) */
   em?: string | null
   offline?: boolean
+  /** troca de dia cobrada na porta sem rede (049) — ver `/api/portaria/sincronizar` */
+  troca?: { tipoId: string; forma: string; cobradoCents: number; tipoNome?: string | null } | null
 }
 
 /**

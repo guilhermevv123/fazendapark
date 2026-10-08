@@ -152,6 +152,7 @@ export const COR_DO_CANAL: Record<string, string> = {
 import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
 import { funcionariosPara } from '~~/server/utils/pessoas-por-dia'
+import { ROTULO_DA_FORMA } from '~~/server/utils/troca-de-dia'
 
 definePageMeta({ layout: 'admin' })
 
@@ -847,6 +848,66 @@ useHead({ title: 'Dashboard do evento' })
           {{ num(pessoasPorDia.foraDoEvento.pessoas) }} pessoas têm ingresso marcado para dia que não é deste evento
           (a data do evento mudou depois) — confira os dias de uso em Configurar ingressos.
         </p>
+      </section>
+
+      <!-- ============================================ trocas de dia na portaria (049) -->
+      <section v-if="data.trocasDeDia?.trocas" class="card mt-4" data-parte="trocas-de-dia">
+        <header>
+          <h2 class="titulo-bloco">Trocas de dia na portaria</h2>
+          <p class="apoio-bloco">ingresso de outro dia que entrou pagando a diferença — o dinheiro ficou com a portaria</p>
+        </header>
+        <div class="mt-4 flex flex-wrap items-end gap-x-8 gap-y-3">
+          <div>
+            <p class="numero-kpi" data-parte="trocas-total">{{ reais(data.trocasDeDia.cobradoCents) }}</p>
+            <p class="mt-1 text-sm text-tinta-suave">
+              {{ num(data.trocasDeDia.trocas) }} {{ data.trocasDeDia.trocas === 1 ? 'troca' : 'trocas' }} ·
+              {{ num(data.trocasDeDia.pessoas) }} pessoas
+            </p>
+          </div>
+          <ul class="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            <li v-for="(v, f) in data.trocasDeDia.porForma" :key="f" class="text-tinta-suave">
+              {{ ROTULO_DA_FORMA[f as keyof typeof ROTULO_DA_FORMA] ?? f }}:
+              <strong class="tabular-nums text-tinta">{{ reais(v.cents) }}</strong> ({{ num(v.trocas) }})
+            </li>
+          </ul>
+        </div>
+        <p v-if="data.trocasDeDia.divergentes" class="faixa-aviso mt-3" data-parte="trocas-divergentes">
+          {{ num(data.trocasDeDia.divergentes) }} troca(s) feitas sem rede cobraram valor diferente do preço atual —
+          confira na lista abaixo (coluna "esperado").
+        </p>
+        <details class="mt-3 text-sm">
+          <summary class="cursor-pointer select-none font-medium text-acao">ver cada troca</summary>
+          <div class="mt-2 overflow-x-auto">
+            <table class="tabela-cartoes w-full min-w-[640px] text-sm">
+              <thead>
+                <tr class="border-b border-linha text-left text-xs uppercase text-tinta-fraca">
+                  <th class="py-2 pr-3 font-medium">Quando</th>
+                  <th class="py-2 pr-3 font-medium">De → para</th>
+                  <th class="py-2 pr-3 text-right font-medium">Cobrado</th>
+                  <th class="py-2 pr-3 font-medium">Forma</th>
+                  <th class="py-2 font-medium">Porteiro</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="t in data.trocasDeDia.lista" :key="t.id" class="border-b border-linha last:border-0">
+                  <td class="py-2 pr-3 tabular-nums">
+                    {{ diaMesHora(t.em) }}
+                    <span v-if="t.offline" class="selo-neutro ml-1">sem rede</span>
+                  </td>
+                  <td class="py-2 pr-3">{{ t.de }} → <strong>{{ t.para }}</strong>
+                    <span v-if="t.pessoas > 1" class="text-tinta-fraca"> · {{ t.pessoas }} pessoas</span></td>
+                  <td class="py-2 pr-3 text-right tabular-nums">
+                    {{ reais(t.cobradoCents) }}
+                    <span v-if="t.cobradoCents !== t.esperadoCents" class="block text-xs text-alerta">
+                      esperado {{ reais(t.esperadoCents) }}</span>
+                  </td>
+                  <td class="py-2 pr-3">{{ ROTULO_DA_FORMA[t.forma as keyof typeof ROTULO_DA_FORMA] ?? t.forma }}</td>
+                  <td class="py-2">{{ t.operador ?? '—' }}<template v-if="t.portao"> · {{ t.portao }}</template></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
       </section>
 
       <!-- ====================================================== próximos dias -->

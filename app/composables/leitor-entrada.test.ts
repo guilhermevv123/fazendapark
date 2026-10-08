@@ -651,3 +651,110 @@ describe('dia de uso do tipo, sem rede (047)', () => {
     expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
   })
 })
+
+// ===========================================================================
+// 08/10 — troca de dia na portaria (049): o ingresso de outro dia entra pagando a diferença,
+// com rede e SEM rede (o tablet faz a mesma conta com a lista baixada)
+// ===========================================================================
+
+describe('troca de dia na portaria (049)', () => {
+  const hoje = () => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const outroDia = () => new Date(new Date(`${hoje()}T12:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10)
+  const TIPO_HOJE = '11111111-1111-4111-8111-111111111111'
+  const comLista = () => ({
+    ...SINC_OK,
+    lista: {
+      geradaEm: new Date().toISOString(), truncada: false,
+      tiposDaTroca: [
+        { id: '22222222-2222-4222-8222-222222222222', nome: 'ENTRADA INDIVIDUAL SABADO', dias: [outroDia()],
+          faceCents: 2000, pessoas: 1, disponivel: true, ordem: 0 },
+        { id: TIPO_HOJE, nome: 'ENTRADA INDIVIDUAL DOMINGO', dias: [hoje()], faceCents: 3000, pessoas: 1,
+          disponivel: true, ordem: 1 },
+      ],
+      ingressos: [{
+        codigo: 'CON-TROC-AAAA', status: 'valido', titular: 'Fulana da Troca', setor: 'Geral', lote: '1º lote',
+        tipo: 'ENTRADA INDIVIDUAL SABADO', pessoas: 1, sessaoInicio: null, sessaoFim: null,
+        diasDeUso: [outroDia()], tipoId: '22222222-2222-4222-8222-222222222222', pagoCents: 2000,
+      }],
+    },
+  })
+  /** o texto com o espaço da moeda ("R$ 10,00" usa espaço inseparável) normalizado */
+  const texto = (t: any, seletor: string) => t.find(seletor).text().replace(/\s/g, ' ')
+  const clicar = async (t: any, seletor: string) => {
+    await t.find(seletor).trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+  }
+
+  it('SEM REDE: barra, oferece a diferença, cobra em dinheiro e libera — a troca vai pra fila', async () => {
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista())
+    await lerCodigo(t, 'CON-TROC-AAAA')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+    expect(texto(t, '[data-parte="abrir-troca"]')).toContain('R$ 10,00')
+
+    await clicar(t, '[data-parte="abrir-troca"]')
+    expect(t.find('[data-parte="confirmar-troca"]').attributes('disabled'),
+      'liberou sem dizer como a pessoa pagou').toBeDefined()
+    await clicar(t, '[data-forma="dinheiro"]')
+    expect(texto(t, '[data-parte="confirmar-troca"]')).toContain('Recebi R$ 10,00')
+    await clicar(t, '[data-parte="confirmar-troca"]')
+
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    expect(texto(t, '[data-parte="troca-feita"]')).toContain('R$ 10,00 em dinheiro')
+    const fila = JSON.parse(localStorage.getItem(`dt_portaria_fila_${EVENTO}`) ?? '[]')
+    expect(fila).toHaveLength(1)
+    expect(fila[0].troca).toEqual({ tipoId: TIPO_HOJE, forma: 'dinheiro', cobradoCents: 1000,
+      tipoNome: 'ENTRADA INDIVIDUAL DOMINGO' })
+
+    // o mesmo ingresso de novo, ainda sem rede: já passou aqui — não cobra de novo
+    await lerCodigo(t, 'CON-TROC-AAAA')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('BARRADO')
+    expect(t.find('[data-parte="abrir-troca"]').exists()).toBe(false)
+  })
+
+  it('"Não trocar" fecha o painel e ninguém entra', async () => {
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista())
+    await lerCodigo(t, 'CON-TROC-AAAA')
+    await clicar(t, '[data-parte="abrir-troca"]')
+    await clicar(t, '[data-parte="cancelar-troca"]')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+    expect(JSON.parse(localStorage.getItem(`dt_portaria_fila_${EVENTO}`) ?? '[]')).toHaveLength(0)
+  })
+
+  it('COM REDE: o servidor recusa o valor velho com a conta nova; confirmado de novo, libera', async () => {
+    const troca = { hoje: hoje(), pagoCents: 2000, pessoas: 1,
+      opcoes: [{ tipoId: TIPO_HOJE, nome: 'ENTRADA INDIVIDUAL DOMINGO', pessoas: 1, precoCents: 3000,
+                 diferencaCents: 1000, sugerida: true }] }
+    const t = await montarTela(await tela(), {
+      rota: { params: { id: EVENTO }, path: `/admin/evento/${EVENTO}/validacao` },
+      respostas: {
+        '/api/admin/evento/': LOG,
+        '/api/portaria/sincronizar': SINC_OK,
+        '/api/checkin': { ok: false, resultado: 'fora_da_sessao', foraDoDia: true, mensagem: 'Este ingresso não vale hoje',
+                          troca, ingresso: { titular: 'Fulana', setor: 'Geral', lote: '1º lote', tipo: 'ENTRADA INDIVIDUAL SABADO' } },
+        '/api/portaria/troca-de-dia': Object.assign(new Error('409'), {
+          statusCode: 409, data: { statusMessage: 'A diferença agora é R$ 15,00. Confira e confirme de novo.',
+            data: { troca: { ...troca, opcoes: [{ ...troca.opcoes[0], precoCents: 3500, diferencaCents: 1500 }] } } } }),
+      },
+      stubs: { AbasSecao: true, LeitorCamera: true },
+    })
+    montadas.push(t)
+    await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+    await lerCodigo(t, 'CON-TROC-BBBB')
+    await clicar(t, '[data-parte="abrir-troca"]')
+    await clicar(t, '[data-forma="pix"]')
+    await clicar(t, '[data-parte="confirmar-troca"]')
+
+    const enviada = chamadas.find((c) => c.url === '/api/portaria/troca-de-dia')!
+    expect(enviada.opcoes.body).toMatchObject({ qr: 'CON-TROC-BBBB', eventId: EVENTO, tipoId: TIPO_HOJE,
+      forma: 'pix', cobradoCents: 1000 })
+    expect(texto(t, '[data-parte="troca-erro"]')).toContain('R$ 15,00')
+    expect(texto(t, '[data-parte="confirmar-troca"]'), 'a tela não trocou o valor pela conta nova')
+      .toContain('Recebi R$ 15,00')
+    expect(t.find('[data-parte="veredito"]').text()).toBe('NÃO VALE HOJE')
+  })
+})
