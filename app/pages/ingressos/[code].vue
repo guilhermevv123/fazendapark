@@ -89,10 +89,10 @@ async function salvarImagem() {
   try {
     const ev = data.value.evento
     const r = await salvarIngressosComoImagem(
-      { evento: ev.nome, quando: quando(ev.inicio), local: ev.local ?? null, pedido: data.value.pedido,
+      { evento: ev.nome, local: ev.local ?? null, pedido: data.value.pedido,
         volteMais: data.value.fidelidade?.nome ?? null },
       comQr.value.map((t: any) => ({
-        codigo: t.codigo, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.titular,
+        codigo: t.codigo, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.titular, diasDeUso: t.diasDeUso ?? null,
         qrUrl: `/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.value.pedido)}`,
       })))
     if (r === 'baixado') recadoDaImagem.value = comQr.value.length > 1 ? 'Imagens baixadas.' : 'Imagem baixada.'
@@ -233,10 +233,9 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
 
       <template v-else-if="data">
         <h1 class="titulo text-2xl font-semibold text-tinta">{{ data.evento.nome }}</h1>
-        <p class="mt-1 text-tinta-suave">
-          {{ quando(data.evento.inicio) }}
-          <template v-if="data.evento.local"> · {{ data.evento.local }}</template>
-        </p>
+        <!-- sem a data de INÍCIO do evento (dono, 08/10): no ingresso de domingo ela fazia o
+             comprador achar que era pra ir na sexta. O dia que vale está em cada ingresso ("Vale só"). -->
+        <p v-if="data.evento.local" class="mt-1 text-tinta-suave">{{ data.evento.local }}</p>
 
         <div class="card mt-4 flex flex-wrap items-center gap-x-6 gap-y-2">
           <div>
@@ -401,7 +400,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               <div class="absolute inset-0 bg-gradient-to-t from-ink-950/80 via-ink-950/25 to-transparent" />
               <div class="absolute inset-x-0 bottom-0 p-4 text-white">
                 <p class="titulo text-lg font-semibold leading-snug">{{ data.evento.nome }}</p>
-                <p class="text-sm text-white/85">{{ quando(data.evento.inicio) }}</p>
+                <p v-if="t.diasDeUso" class="text-sm font-semibold text-white/90">Vale só {{ t.diasDeUso }}</p>
               </div>
               <span class="absolute right-3 top-3 rounded-md bg-white/90 px-2 py-0.5 text-xs font-semibold tabular-nums text-ink-800">
                 {{ i + 1 }}/{{ data.ingressos.length }}
@@ -527,7 +526,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
           </div>
 
           <p class="text-center text-sm text-tinta-fraca print:hidden">
-            Guarde este link. Na portaria, apresente o QR — ou informe o código, se a leitura falhar.
+            Guarde este link.
           </p>
         </section>
       </template>

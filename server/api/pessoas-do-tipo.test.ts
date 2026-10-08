@@ -168,6 +168,11 @@ describe('combo que conta como N pessoas (048)', () => {
     expect(r.corpo.totais.pessoasPagantes).toBe(12)
     // o número grande: 1 combo de 10 + 2 individuais = 12 ingressos
     expect(r.corpo.totais.pagosContandoCombo, 'o combo voltou a contar 1 no "Ingressos vendidos"').toBe(12)
+    // "Pessoas por dia": os 2 ingressos emitidos (combo 10 + individual) não têm dia → qualquer dia
+    expect(r.corpo.pessoasPorDia.qualquerDia).toMatchObject({ pessoas: 11, ingressos: 2, emCombo: 10 })
+    expect(r.corpo.pessoasPorDia.dias.length, 'o evento tem dia').toBeGreaterThan(0)
+    // quem passou na catraca hoje (o combo: 10 + a individual: 1) aparece no dia de hoje
+    expect(r.corpo.pessoasPorDia.dias.reduce((n: number, d: any) => n + d.entraram, 0)).toBe(11)
     expect(r.corpo.publico.pessoas).toBe(11)
   })
 

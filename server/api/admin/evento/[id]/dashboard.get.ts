@@ -32,6 +32,8 @@ import { q, q1 } from '../../../../utils/db'
 import { PAGANTE, PEDIDO_VIVO, SQL_LIQUIDO, SQL_LIQUIDO_DIRETO, SQL_LIQUIDO_GATEWAY } from '../../../../utils/liquido'
 import { retratoDoPublico, SQL_PUBLICO } from '../../../../utils/catraca'
 import { cotaDeMeias } from '../../../../utils/meia-entrada'
+import { diasDoEvento } from '../../../../utils/dias-de-uso'
+import { pessoasPorDiaDeUso } from '../../../../utils/pessoas-por-dia'
 
 /**
  * O FUNIL É O DO CHECKOUT DO SITE (ADM-28): só pedido online tem carrinho, PIX que expira e
@@ -639,8 +641,34 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // PESSOAS POR DIA (dono, 08/10: "medir quantas pessoas vão vir de acordo com os dias ... pra ver
+  // a quantidade de funcionários"). O evento inteiro, não o período escolhido: é o retrato de quem
+  // ainda vem. Ingresso de pé (válido ou já usado — o usado veio, e conta no dia dele), cada um
+  // com as pessoas do tipo (combo de 10 = 10), nos dias de uso do tipo (047).
+  const [gruposDoDia, entradasPorDia] = await Promise.all([
+    q<any>(
+      `SELECT tt.name AS tipo, tt.valid_dates::text[] AS dias,
+              COALESCE(tt.admits, s.admits, 1)::int AS pessoas, count(*)::int AS ingressos
+         FROM tickets t
+         JOIN sectors s ON s.id = t.sector_id
+         LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
+        WHERE t.event_id = $1 AND t.status IN ('valido', 'usado')
+        GROUP BY 1, 2, 3`, [id]),
+    q<any>(
+      `SELECT to_char(e.entered_at AT TIME ZONE ${fusoSql(fuso)}, 'YYYY-MM-DD') AS dia,
+              COALESCE(SUM(e.people),0)::int AS pessoas
+         FROM entries e WHERE e.event_id = $1 GROUP BY 1`, [id]),
+  ])
+  const pessoasPorDia = pessoasPorDiaDeUso(
+    gruposDoDia.map((g) => ({ tipo: g.tipo, dias: g.dias, pessoas: Number(g.pessoas), ingressos: Number(g.ingressos) })),
+    diasDoEvento(ev.starts_at, ev.ends_at, fuso),
+    Object.fromEntries(entradasPorDia.map((e) => [e.dia, Number(e.pessoas)])),
+  )
+
   return {
     evento: { id: ev.id, nome: ev.name, status: ev.status },
+    /** quantas pessoas vêm em cada dia do evento (combo conta as pessoas; ingresso sem dia à parte) */
+    pessoasPorDia,
     periodo: {
       de: inicio.toISOString(), ate: fim.toISOString(), fuso, hoje,
       // o que a tela acende e escreve: o nome do período e os dias de calendário dele

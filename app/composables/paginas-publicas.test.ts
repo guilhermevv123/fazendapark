@@ -193,13 +193,23 @@ describe('/ingressos · B08 e B20 — pedido pendente', () => {
 })
 
 describe('/ingressos · B24 — o fuso do evento', () => {
+  // "usado em" é a hora que a página ainda escreve: a de INÍCIO do evento saiu (dono, 08/10)
+  const usado = (fuso?: string) => pedido({
+    ...(fuso ? { fuso } : {}),
+    ingressos: [INGRESSO(1, { status: 'usado', usadoEm: '2026-10-04T12:00:00.000Z' })],
+  })
   it('o mesmo instante sai 9h num evento de Salvador e 8h num de Manaus', async () => {
     // trava: `dataNoFuso(v, data.value?.fuso)`
-    await abrirPedido(pedido())
+    await abrirPedido(usado())
     expect(tela!.text()).toMatch(/04 de outubro de 2026[^0-9]*09:00/)
     tela!.unmount(); tela = null
-    await abrirPedido(pedido({ fuso: 'America/Manaus' }))
+    await abrirPedido(usado('America/Manaus'))
     expect(tela!.text()).toMatch(/04 de outubro de 2026[^0-9]*08:00/)
+  })
+  it('a data de início do evento não aparece no ingresso (confundia o dia de uso)', async () => {
+    await abrirPedido(pedido({ ingressos: [INGRESSO(1, { diasDeUso: 'domingo 11/10' })] }))
+    expect(tela!.text(), 'a data de início voltou pro ingresso').not.toMatch(/04 de outubro de 2026/)
+    expect(tela!.find('[data-parte="dia-de-uso"]').text()).toContain('domingo 11/10')
   })
 })
 

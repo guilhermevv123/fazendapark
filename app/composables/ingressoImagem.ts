@@ -16,10 +16,16 @@ export interface IngressoParaImagem {
   setor?: string | null
   lote?: string | null
   titular?: string | null
+  /** "domingo 11/10" — os dias em que este ingresso passa (047) */
+  diasDeUso?: string | null
 }
 export interface DadosDaImagem {
   evento: string
-  quando: string
+  /**
+   * NÃO é desenhado (dono, 08/10): a data de INÍCIO do evento em cima do ingresso de domingo fez o
+   * comprador achar que era pra ir na sexta. O dia que vale sai no cartão ("Vale só"), por ingresso.
+   */
+  quando?: string
   local?: string | null
   pedido: string
   /** Volte Mais (042): o ingresso do retorno sai com a faixa "Cliente <nome>" no topo */
@@ -97,9 +103,6 @@ export async function desenharIngresso(d: DadosDaImagem, t: IngressoParaImagem, 
   ctx.font = `700 56px ${SANS}`
   for (const l of quebrar(ctx, d.evento, W - 2 * M, 2)) { ctx.fillText(l, W / 2, y); y += 66 }
   ctx.fillStyle = COR.suave
-  ctx.font = `400 36px ${SANS}`
-  ctx.fillText(d.quando, W / 2, y + 4)
-  y += 50
   if (d.local) { ctx.font = `400 32px ${SANS}`; ctx.fillText(d.local, W / 2, y + 4); y += 46 }
 
   // cartão
@@ -108,6 +111,7 @@ export async function desenharIngresso(d: DadosDaImagem, t: IngressoParaImagem, 
   const qrTam = 640
   const linhas: [string, string][] = []
   if (t.titular) linhas.push(['Titular', t.titular])
+  if (t.diasDeUso) linhas.push(['Vale só', t.diasDeUso.replace(/^./, (c) => c.toUpperCase())])
   const setor = [t.setor, t.lote].filter(Boolean).join(' · ')
   if (setor) linhas.push(['Setor', setor])
   linhas.push(['Pedido', d.pedido])
@@ -156,15 +160,7 @@ export async function desenharIngresso(d: DadosDaImagem, t: IngressoParaImagem, 
   }
   ctx.textAlign = 'center'
 
-  // rodapé
-  const caixa = H - 230
-  ctx.fillStyle = COR.uvaClara
-  ctx.beginPath(); ctx.roundRect(M, caixa, W - 2 * M, 120, 20); ctx.fill()
-  ctx.fillStyle = COR.tinta
-  ctx.font = `400 30px ${SANS}`
-  ctx.fillText('Na portaria, mostre este QR Code.', W / 2, caixa + 52)
-  ctx.fillStyle = COR.suave
-  ctx.fillText('Se a câmera falhar, informe o código do ingresso.', W / 2, caixa + 94)
+  // rodapé: só o site (a caixa "Na portaria, mostre este QR Code" saiu a pedido do dono, 08/10)
   ctx.fillStyle = COR.uva
   ctx.font = `700 28px ${SANS}`
   ctx.fillText('www.conquistapark.com.br', W / 2, H - 50)

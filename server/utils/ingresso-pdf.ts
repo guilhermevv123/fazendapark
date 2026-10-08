@@ -23,11 +23,17 @@ export interface IngressoNoPdf {
   lote?: string | null
   titular?: string | null
   sessao?: string | null
+  /** "domingo 11/10" — os dias em que este ingresso passa (047) */
+  diasDeUso?: string | null
 }
 
 export interface PdfDosIngressos {
   evento: string
-  quando: string
+  /**
+   * NÃO é escrito (dono, 08/10): a data de INÍCIO do evento em cima do ingresso de domingo fez o
+   * comprador achar que era pra ir na sexta. O dia que vale sai no cartão ("Vale só"), por ingresso.
+   */
+  quando?: string
   local?: string | null
   pedido: string
   ingressos: IngressoNoPdf[]
@@ -35,7 +41,6 @@ export interface PdfDosIngressos {
 
 const hex = (h: string) => rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
 const UVA = hex('#583c8d')
-const UVA_CLARA = hex('#f6f3fb')
 const TINTA = hex('#1e1a2e')
 const SUAVE = hex('#5a5570')
 const LINHA = hex('#d7caec')
@@ -110,15 +115,14 @@ export async function montarPdfDosIngressos(d: PdfDosIngressos): Promise<Uint8Ar
       centro(p, l, y, negrito, 17)
       y -= 21
     }
-    centro(p, latin1(d.quando), y, normal, 11, SUAVE)
-    y -= 15
+    y += 6
     if (d.local) { centro(p, latin1(d.local), y, normal, 10, SUAVE); y -= 14 }
 
     // cartão do ingresso
     const topoCartao = y - 6
     const cabecalho = 26
     const qrTam = 220
-    const altCartao = cabecalho + 16 + qrTam + 12 + 22 + 14 + 70
+    const altCartao = cabecalho + 16 + qrTam + 12 + 22 + 14 + 84
     const baseCartao = topoCartao - altCartao
     p.drawRectangle({ x: M, y: baseCartao, width: L - 2 * M, height: altCartao, color: rgb(1, 1, 1),
       borderColor: LINHA, borderWidth: 1 })
@@ -143,23 +147,20 @@ export async function montarPdfDosIngressos(d: PdfDosIngressos): Promise<Uint8Ar
     for (let x = M + 8; x < L - M - 8; x += 8) p.drawLine({ start: { x, y: yy }, end: { x: x + 4, y: yy }, thickness: 1, color: LINHA })
     const dados: [string, string][] = []
     if (t.titular) dados.push(['Titular', latin1(t.titular)])
+    if (t.diasDeUso) dados.push(['Vale só', latin1(t.diasDeUso.replace(/^./, (c) => c.toUpperCase()))])
     const setor = [t.setor, t.lote].filter(Boolean).join(' · ')
     if (setor) dados.push(['Setor', latin1(setor)])
     if (t.sessao) dados.push(['Sessão', latin1(t.sessao)])
     dados.push(['Pedido', latin1(d.pedido)])
     yy -= 16
-    for (const [k, v] of dados.slice(0, 4)) {
+    for (const [k, v] of dados.slice(0, 5)) {
       p.drawText(k, { x: M + 14, y: yy, size: 9.5, font: normal, color: SUAVE })
       const valor = linhas(v, negrito, 9.5, L - 2 * M - 90, 1)[0] ?? ''
       p.drawText(valor, { x: L - M - 14 - negrito.widthOfTextAtSize(valor, 9.5), y: yy, size: 9.5, font: negrito, color: TINTA })
       yy -= 14
     }
 
-    // na portaria
-    const caixaY = 36
-    p.drawRectangle({ x: M, y: caixaY, width: L - 2 * M, height: 44, color: UVA_CLARA })
-    centro(p, 'Na portaria, mostre este QR Code no celular ou impresso.', caixaY + 26, normal, 9, TINTA)
-    centro(p, 'Se a câmera falhar, informe o código do ingresso.', caixaY + 12, normal, 9, SUAVE)
+    // rodapé: só o site (a caixa "Na portaria, mostre este QR Code" saiu a pedido do dono, 08/10)
     centro(p, 'www.conquistapark.com.br', 16, negrito, 8.5, UVA)
   }
   return pdf.save()

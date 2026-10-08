@@ -7,7 +7,7 @@
  * entra e o transferido é de outra pessoa agora (dois PDFs com o mesmo QR = duas pessoas na porta).
  */
 import { q, q1 } from '../../../utils/db'
-import { quando } from '../../../utils/email'
+import { fraseDosDiasDeUso } from '../../../utils/dias-de-uso'
 import { montarQr } from '../../../utils/ingresso'
 import { montarPdfDosIngressos } from '../../../utils/ingresso-pdf'
 import { PEDIDO_VIVO } from '../../../utils/liquido'
@@ -31,7 +31,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado' })
   }
   const ingressos = await q<any>(
-    `SELECT t.code, t.holder_name, l.name AS lote, s.name AS setor, tt.name AS tipo, ses.title AS sessao
+    `SELECT t.code, t.holder_name, l.name AS lote, s.name AS setor, tt.name AS tipo, ses.title AS sessao,
+            tt.valid_dates::text[] AS dias_de_uso
        FROM tickets t
        JOIN lots l ON l.id = t.lot_id
        JOIN sectors s ON s.id = l.sector_id
@@ -55,9 +56,10 @@ export default defineEventHandler(async (event) => {
 
   const local = [o.venue_name, [o.city, o.state].filter(Boolean).join('/')].filter(Boolean).join(' · ')
   const bytes = await montarPdfDosIngressos({
-    evento: o.evento, quando: quando(o.starts_at, o.timezone), local: local || null, pedido: o.code,
+    evento: o.evento, local: local || null, pedido: o.code,
     ingressos: comQr.map(({ code, qr, t }) => ({
       codigo: code, qr, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.holder_name, sessao: t.sessao,
+      diasDeUso: fraseDosDiasDeUso(t.dias_de_uso) || null,
     })),
   })
   setHeader(event, 'Content-Type', 'application/pdf')

@@ -151,6 +151,7 @@ export const COR_DO_CANAL: Record<string, string> = {
  */
 import { estoqueSemLimite } from '~~/server/utils/estoque-sem-limite'
 import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
+import { funcionariosPara } from '~~/server/utils/pessoas-por-dia'
 
 definePageMeta({ layout: 'admin' })
 
@@ -246,6 +247,35 @@ onBeforeUnmount(() => clearInterval(relogio))
 const atualizadoAs = computed(() => String(data.value?.periodo?.atualizadoAs ?? ''))
 
 const num = (n: number) => Number(n ?? 0).toLocaleString('pt-BR')
+
+/* ------------------------------------------------------- pessoas por dia */
+const pessoasPorDia = computed(() => data.value?.pessoasPorDia ?? null)
+/**
+ * "1 funcionário a cada N pessoas" — a régua é de quem olha, então fica no navegador, por evento
+ * (conveniência: sem ela o cartão mostra só as pessoas). Leitura e escrita protegidas: aba
+ * anônima ou armazenamento bloqueado não derrubam a tela.
+ */
+const CHAVE_EQUIPE = `dt:pessoas-por-funcionario:${id}`
+const pessoasPorFuncionario = ref<number | null>(null)
+onMounted(() => {
+  try {
+    const v = Number(localStorage.getItem(CHAVE_EQUIPE))
+    if (v > 0) pessoasPorFuncionario.value = v
+  } catch { /* sem armazenamento: começa vazio */ }
+})
+/** só dígitos (o campo é texto: `type=number` aceita "e" e "-" e some com o valor no celular) */
+function lerPessoasPorFuncionario(ev: Event) {
+  const alvo = ev.target as HTMLInputElement
+  const digitos = alvo.value.replace(/\D/g, '').slice(0, 5)
+  if (alvo.value !== digitos) alvo.value = digitos
+  pessoasPorFuncionario.value = digitos ? Number(digitos) : null
+}
+watch(pessoasPorFuncionario, (v) => {
+  try {
+    if (Number(v) > 0) localStorage.setItem(CHAVE_EQUIPE, String(v))
+    else localStorage.removeItem(CHAVE_EQUIPE)
+  } catch { /* sem armazenamento: vale só nesta visita */ }
+})
 const t = computed(() => data.value?.totais ?? {})
 
 /* ------------------------------------------------------------- comparação */
@@ -743,6 +773,81 @@ useHead({ title: 'Dashboard do evento' })
           </div>
         </section>
       </div>
+
+      <!-- ================================================== pessoas por dia -->
+      <!-- dono, 08/10: "medir quantas pessoas vão vir de acordo com os dias ... pra ver a
+           quantidade de funcionários". O evento inteiro (não o período): combo conta cada pessoa. -->
+      <section v-if="pessoasPorDia" class="card mt-4" data-parte="pessoas-por-dia">
+        <header class="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 class="titulo-bloco">Pessoas por dia</h2>
+            <p class="apoio-bloco">quem vem em cada dia, pelos dias de uso dos ingressos — combo conta cada pessoa</p>
+          </div>
+          <label class="flex flex-wrap items-center gap-2 text-sm text-tinta-suave" data-parte="regua-equipe">
+            1 funcionário a cada
+            <input :value="pessoasPorFuncionario ?? ''" type="text" inputmode="numeric" maxlength="5"
+                   class="campo w-24 py-1.5 text-right tabular-nums" placeholder="ex.: 50" aria-label="Pessoas por funcionário"
+                   @input="lerPessoasPorFuncionario">
+            pessoas
+          </label>
+        </header>
+
+        <p v-if="!pessoasPorDia.dias.length" class="mt-4 text-sm text-tinta-suave">
+          O evento ainda não tem data de início e fim — preencha nas configurações para ver os dias.
+        </p>
+        <ul v-else class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <li v-for="d in pessoasPorDia.dias" :key="d.dia" :data-dia="d.dia"
+              class="rounded-xl bg-fundo-cinza p-4 ring-1 ring-inset ring-linha">
+            <p class="font-semibold capitalize text-tinta">{{ d.rotulo }}</p>
+            <p class="numero-kpi mt-2" data-parte="pessoas-do-dia">{{ num(d.pessoas) }}</p>
+            <p class="mt-1 text-sm text-tinta-suave">
+              pessoas · {{ num(d.ingressos) }} {{ d.ingressos === 1 ? 'ingresso' : 'ingressos' }}
+              <template v-if="d.emCombo"> · <strong class="text-tinta">{{ num(d.emCombo) }}</strong> em combo</template>
+            </p>
+            <p v-if="funcionariosPara(d.pessoas, pessoasPorFuncionario)" class="mt-2 text-sm font-semibold text-acao"
+               data-parte="equipe-do-dia">
+              ≈ {{ num(funcionariosPara(d.pessoas, pessoasPorFuncionario)) }}
+              {{ funcionariosPara(d.pessoas, pessoasPorFuncionario) === 1 ? 'funcionário' : 'funcionários' }}
+            </p>
+            <template v-if="d.entraram">
+              <div class="mt-3 h-2 overflow-hidden rounded-full bg-white ring-1 ring-inset ring-linha">
+                <div class="h-full rounded-full bg-ok" :style="{ width: `${larguraDaBarra(d.entraram, d.pessoas)}%` }" />
+              </div>
+              <p class="mt-1 text-xs tabular-nums text-tinta-suave" data-parte="entraram-no-dia">
+                {{ num(d.entraram) }} já entraram
+              </p>
+            </template>
+            <p v-if="d.temIngressoDeVariosDias" class="mt-2 text-xs text-alerta">
+              inclui ingresso que vale em mais de um dia (conta em cada um)
+            </p>
+            <details v-if="d.tipos.length" class="mt-3 text-sm">
+              <summary class="cursor-pointer select-none font-medium text-acao">por tipo</summary>
+              <ul class="mt-2 space-y-1">
+                <li v-for="t in d.tipos" :key="t.nome + t.porIngresso" class="flex justify-between gap-3">
+                  <span class="min-w-0 text-tinta-corpo [overflow-wrap:anywhere]">{{ t.nome }}</span>
+                  <span class="shrink-0 tabular-nums text-tinta">
+                    {{ num(t.pessoas) }}<span v-if="t.porIngresso > 1" class="text-xs text-tinta-fraca">
+                      ({{ num(t.ingressos) }} × {{ t.porIngresso }})</span>
+                  </span>
+                </li>
+              </ul>
+            </details>
+          </li>
+        </ul>
+
+        <p v-if="pessoasPorDia.qualquerDia.pessoas" class="faixa-aviso mt-4" data-parte="qualquer-dia">
+          <strong>{{ num(pessoasPorDia.qualquerDia.pessoas) }} pessoas</strong>
+          ({{ num(pessoasPorDia.qualquerDia.ingressos) }} ingressos) têm ingresso sem dia marcado e podem vir em
+          qualquer dia — não estão somadas acima<template v-if="funcionariosPara(pessoasPorDia.qualquerDia.pessoas, pessoasPorFuncionario)">
+          (≈ {{ num(funcionariosPara(pessoasPorDia.qualquerDia.pessoas, pessoasPorFuncionario)) }} funcionários se vierem todas no mesmo dia)</template>.
+          <NuxtLink v-if="podeAbrir('/ingressos')" :to="`/admin/evento/${id}/ingressos`" class="font-semibold underline">
+            Marcar o dia em Configurar ingressos</NuxtLink>
+        </p>
+        <p v-if="pessoasPorDia.foraDoEvento.pessoas" class="mt-3 text-sm text-erro" data-parte="fora-do-evento">
+          {{ num(pessoasPorDia.foraDoEvento.pessoas) }} pessoas têm ingresso marcado para dia que não é deste evento
+          (a data do evento mudou depois) — confira os dias de uso em Configurar ingressos.
+        </p>
+      </section>
 
       <!-- ====================================================== próximos dias -->
       <section v-if="data.proximosDias?.length" class="card mt-4" data-parte="proximos-dias">
