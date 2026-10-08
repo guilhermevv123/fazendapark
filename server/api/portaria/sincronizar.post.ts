@@ -366,7 +366,9 @@ async function listaDoEvento(eventId: string, orgId: string) {
   const linhas = await q<any>(
     // Passaporte (ADM-04): os dias já usados e os dias do lote descem junto, só pra ele — é o que
     // deixa o portão sem rede dizer "já entrou hoje" ou "pode entrar, 2º dia".
-    `SELECT t.code, t.status, t.holder_name, s.name AS setor, s.admits,
+    `SELECT t.code, t.status, t.holder_name, s.name AS setor,
+            -- pessoas por ingresso: a do tipo (combo de 10, 048) ou a do setor
+            COALESCE(tt.admits, s.admits) AS admits,
             l.name AS lote, tt.name AS tipo, tt.kind AS especie,
             t.half_reason, t.half_document, t.half_document_required,
             es.id AS sessao_id, es.starts_at, es.ends_at,

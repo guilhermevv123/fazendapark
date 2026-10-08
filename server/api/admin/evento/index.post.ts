@@ -150,6 +150,8 @@ const Entrada = z.object({
         exigeDocumento: z.boolean().default(false),
         /** dias em que passa na catraca (047), 'AAAA-MM-DD'; vazio = qualquer dia do evento */
         diasDeUso: z.array(z.string().max(10)).max(62).nullish(),
+        /** pessoas por ingresso (048, o combo de 10); sem o campo = a do setor */
+        pessoas: z.number().int().min(1, 'pelo menos 1 pessoa').max(100, 'no máximo 100 pessoas por ingresso').nullish(),
       })).max(20).default([]),
     })).max(40).default([]),
   })).max(60).default([]),
@@ -187,7 +189,7 @@ const ROTULOS: Record<string, string> = {
   // o mesmo nome de campo muda de sentido conforme o pai: "nome" de um lote não é o do evento
   'setores.nome': 'Nome do setor', 'setores.tipo': 'Tipo do setor', 'setores.descricao': 'Descrição do setor',
   'lotes.nome': 'Nome do lote', 'tipos.nome': 'Nome do tipo', 'tipos.quantidade': 'Quantidade do tipo',
-  'tipos.diasDeUso': 'Dias de uso do tipo',
+  'tipos.diasDeUso': 'Dias de uso do tipo', 'tipos.pessoas': 'Pessoas por ingresso',
   'sessoes.titulo': 'Título da sessão', 'sessoes.inicio': 'Início da sessão', 'sessoes.fim': 'Fim da sessão',
   'local.nome': 'Nome Fantasia', 'suporte.tipo': 'Tipo de contato', 'suporte.valor': 'Contato',
 }
@@ -468,11 +470,11 @@ export default defineEventHandler(async (event) => {
           for (const [it, t] of l.tipos.entries()) {
             await c.query(
               `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps,
-                                         requires_document, sort_order, price_cents, valid_dates)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date[])`,
+                                         requires_document, sort_order, price_cents, valid_dates, admits)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date[],$9)`,
               // preço próprio e desconto não convivem: com preço, o desconto é 0
               [rl.rows[0].id, t.nome.trim(), t.quantidade ?? l.quantidade, t.precoCents != null ? 0 : t.descontoBps,
-               t.exigeDocumento, it + 1, t.precoCents ?? null, t.diasDeUso ?? null])
+               t.exigeDocumento, it + 1, t.precoCents ?? null, t.diasDeUso ?? null, t.pessoas ?? null])
           }
         }
       }

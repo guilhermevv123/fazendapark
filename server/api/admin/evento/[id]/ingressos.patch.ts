@@ -51,6 +51,8 @@ const Entrada = z.object({
     modoTaxaPdv: z.enum(['repassar', 'absorver']).optional(),
     /** dias de uso do tipo (047), 'AAAA-MM-DD'; `[]`/`null` = qualquer dia do evento */
     diasDeUso: z.array(z.string().max(10)).max(62).nullish(),
+    /** pessoas por ingresso do TIPO (048, o combo de 10); `null` = a do setor */
+    pessoas: z.number().int().min(1, 'pelo menos 1 pessoa').max(100, 'no máximo 100 pessoas por ingresso').nullish(),
   }),
 })
 
@@ -67,7 +69,7 @@ export const ROTULOS_INGRESSOS: Record<string, string> = {
   descontoBps: 'Desconto', precoCents: 'Preço do tipo', exigeDocumento: 'Exige documento', maxPorCliente: 'Máximo por cliente',
   capacidade: 'Capacidade', admite: 'Pessoas por unidade', sessoesCobertas: 'Sessões cobertas',
   giroAutomatico: 'Giro automático de lote', taxaBps: 'Taxa de serviço',
-  modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão', diasDeUso: 'Dias de uso',
+  modoTaxaOnline: 'Taxa no site', modoTaxaPdv: 'Taxa no balcão', diasDeUso: 'Dias de uso', pessoas: 'Pessoas por ingresso',
 }
 
 /** campo da API → coluna do banco, por entidade */
@@ -85,6 +87,7 @@ const COLUNAS: Record<string, Record<string, string>> = {
   tipo: {
     nome: 'name', quantidade: 'quantity', descontoBps: 'discount_bps', precoCents: 'price_cents',
     exigeDocumento: 'requires_document', maxPorCliente: 'max_per_customer',
+    pessoas: 'admits',
   },
   evento: {
     nome: 'name', descricao: 'description', giroAutomatico: 'auto_rotate_lots',
@@ -268,11 +271,25 @@ export default defineEventHandler(async (event) => {
       irmaos = Math.max(0, (r.rowCount ?? 1) - 1)
     }
 
+    // Pessoas por ingresso (048), a mesma régua dos dias: o "COMBO 10 PESSOAS" do 2º lote é o mesmo
+    // combo — senão a catraca contaria 10 num lote e 1 no outro.
+    let irmaosPessoas = 0
+    if (o === 'tipo' && campos.pessoas !== undefined) {
+      const r = await c.query(
+        `UPDATE ticket_types tt SET admits = $3
+           FROM lots l JOIN sectors s ON s.id = l.sector_id
+          WHERE l.id = tt.lot_id AND s.event_id = $1 AND tt.id <> $2
+            AND lower(btrim(tt.name)) = lower(btrim($4))`,
+        [eventoId, id, campos.pessoas ?? null, linha.name])
+      irmaosPessoas = r.rowCount ?? 0
+    }
+
     await registrarAuditoria({
       autor, entidade: o, entidadeId: id, acao: 'editado',
       antes: { ...Object.fromEntries(pares.map(([k]) => [k, linha[mapa[k]]])),
                ...(mexeNosDias ? { diasDeUso: diasAntes } : {}) },
-      depois: { ...Object.fromEntries(pares), ...(mexeNosDias ? { diasDeUso: diasDepois, tiposDeMesmoNome: irmaos } : {}) },
+      depois: { ...Object.fromEntries(pares), ...(mexeNosDias ? { diasDeUso: diasDepois, tiposDeMesmoNome: irmaos } : {}),
+                ...(irmaosPessoas ? { pessoasNosTiposDeMesmoNome: irmaosPessoas } : {}) },
     }, c)
 
     return { ok: true, alterados: [...pares.map(([k]) => k), ...(mexeNosDias ? ['diasDeUso'] : [])],

@@ -289,9 +289,18 @@ export default defineEventHandler(async (event) => {
               COUNT(*) FILTER (WHERE o.status = 'estornado_parcial')::int AS com_estorno,
               COALESCE(SUM(oi.n),0)::int               AS ingressos,
               COUNT(*) FILTER (WHERE ${PAGANTE})::int  AS pagantes,
-              COALESCE(SUM(oi.n) FILTER (WHERE ${PAGANTE}),0)::int AS ingressos_pagantes
+              COALESCE(SUM(oi.n) FILTER (WHERE ${PAGANTE}),0)::int AS ingressos_pagantes,
+              -- PESSOAS (048): o combo de 10 é 1 ingresso e 10 pessoas — do tipo, ou do setor (mesa)
+              COALESCE(SUM(oi.pessoas) FILTER (WHERE ${PAGANTE}),0)::int AS pessoas_pagantes
          FROM orders o
-         LEFT JOIN LATERAL (SELECT SUM(quantity)::int AS n FROM order_items WHERE order_id = o.id) oi ON true
+         LEFT JOIN LATERAL (
+           SELECT SUM(i.quantity)::int AS n,
+                  SUM(i.quantity * COALESCE(tt.admits, s.admits, 1))::int AS pessoas
+             FROM order_items i
+             JOIN lots l ON l.id = i.lot_id
+             JOIN sectors s ON s.id = l.sector_id
+             LEFT JOIN ticket_types tt ON tt.id = i.ticket_type_id
+            WHERE i.order_id = o.id) oi ON true
         WHERE o.event_id = $1 AND ${vivoNoPeriodo}`, p),
 
     q1<any>(
@@ -666,6 +675,8 @@ export default defineEventHandler(async (event) => {
       pedidosComEstorno: Number(totais.com_estorno),
       ingressos: emitidos,
       pagos: emitidos - gratis,
+      /** pessoas que os ingressos PAGOS levam (048): o combo de 10 conta 10 — o "Ingressos vendidos" conta 1 */
+      pessoasPagantes: Number(totais.pessoas_pagantes ?? 0),
       // EMITIDAS, não "ocupando lugar" — e o nome diz qual das duas é.
       //
       // Este número é a decomposição de `ingressos` (item do pedido): tudo que

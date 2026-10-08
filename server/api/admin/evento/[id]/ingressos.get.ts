@@ -37,7 +37,7 @@ export default defineEventHandler(async (event) => {
   const tipos = await q<any>(
     `SELECT tt.id, tt.lot_id, tt.name, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents,
             tt.requires_document, tt.max_per_customer, tt.sort_order,
-            tt.valid_dates::text[] AS dias_de_uso
+            tt.valid_dates::text[] AS dias_de_uso, tt.admits
        FROM ticket_types tt
        JOIN lots l ON l.id = tt.lot_id JOIN sectors s ON s.id = l.sector_id
       WHERE s.event_id = $1 ORDER BY tt.sort_order`, [id])
@@ -93,6 +93,8 @@ export default defineEventHandler(async (event) => {
               maxPorCliente: t.max_per_customer,
               /** dias em que passa na catraca (047); `null` = qualquer dia do evento */
               diasDeUso: limparDiasDeUso(t.dias_de_uso),
+              /** pessoas por ingresso deste tipo (048, combo de 10); `null` = a do setor */
+              pessoas: t.admits == null ? null : Number(t.admits),
               faceCents: pp.faceCents, taxaCents: pp.feeCents, totalCents: pp.totalCents,
               podeApagar: Number(t.sold) === 0,
             }

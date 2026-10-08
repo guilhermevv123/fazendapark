@@ -69,9 +69,11 @@ export const SQL_MARCA_ENTRADA_EM = `
  *    Quem chama sabe o que aconteceu pelo `RETURNING`: linha de volta = entrada
  *    nova; nada = já estava lá.
  *
- * 2. `people` vem de `sectors.admits`, lido aqui — **nunca do número que o
- *    tablet mandou**. Quem conta o público não pode aceitar a contagem de um
- *    dispositivo que passa a noite fora de rede na mão de um terceirizado.
+ * 2. `people` vem do TIPO (`ticket_types.admits`, o combo de 10 — 048) ou, sem
+ *    ele, do setor (`sectors.admits`, a mesa de 4), lido aqui — **nunca do
+ *    número que o tablet mandou**. Quem conta o público não pode aceitar a
+ *    contagem de um dispositivo que passa a noite fora de rede na mão de um
+ *    terceirizado.
  *
  * 3. O `WHERE t.org_id = $3` é a cerca da organização DENTRO do insert. Um
  *    ingresso de outra produtora simplesmente não produz linha — e quem chama
@@ -84,10 +86,11 @@ export const SQL_MARCA_ENTRADA_EM = `
 export const SQL_GRAVA_ENTRADA = `
   INSERT INTO entries (id, org_id, event_id, ticket_id, session_id, people,
                        gate, device_id, operator_id, offline, entered_at)
-  SELECT $1, t.org_id, t.event_id, t.id, t.session_id, s.admits,
+  SELECT $1, t.org_id, t.event_id, t.id, t.session_id, COALESCE(tt.admits, s.admits),
          $4, $5, $6, $7, COALESCE($8::timestamptz, now())
     FROM tickets t
     JOIN sectors s ON s.id = t.sector_id
+    LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
    WHERE t.id = $2 AND t.org_id = $3
   ON CONFLICT (id) DO NOTHING
   RETURNING id, people`
@@ -354,10 +357,11 @@ export const SQL_DIAS_DO_PASSAPORTE = `
 export const SQL_GRAVA_ENTRADA_NA_SESSAO = `
   INSERT INTO entries (id, org_id, event_id, ticket_id, session_id, people,
                        gate, device_id, operator_id, offline, entered_at)
-  SELECT $1, t.org_id, t.event_id, t.id, COALESCE($9::uuid, t.session_id), s.admits,
+  SELECT $1, t.org_id, t.event_id, t.id, COALESCE($9::uuid, t.session_id), COALESCE(tt.admits, s.admits),
          $4, $5, $6, $7, COALESCE($8::timestamptz, now())
     FROM tickets t
     JOIN sectors s ON s.id = t.sector_id
+    LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
    WHERE t.id = $2 AND t.org_id = $3
   ON CONFLICT (id) DO NOTHING
   RETURNING id, people`

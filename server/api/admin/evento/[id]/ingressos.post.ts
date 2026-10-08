@@ -62,6 +62,8 @@ const Tipo = z.object({
    * em outro lote deste evento (os dias são do tipo, não do lote); `[]`/`null` = qualquer dia.
    */
   diasDeUso: z.array(z.string().max(10)).max(62).nullish(),
+  /** pessoas por ingresso (048, o combo de 10); sem o campo = a do setor */
+  pessoas: z.number().int().min(1, 'pelo menos 1 pessoa').max(100, 'no máximo 100 pessoas por ingresso').nullish(),
 })
 
 const Entrada = z.discriminatedUnion('o', [Setor, Lote, Tipo])
@@ -186,11 +188,11 @@ export default defineEventHandler(async (event) => {
 
   const r = await q1<any>(
     `INSERT INTO ticket_types (lot_id, name, quantity, discount_bps, requires_document,
-                               max_per_customer, sort_order, price_cents, valid_dates)
+                               max_per_customer, sort_order, price_cents, valid_dates, admits)
      VALUES ($1,$2,$3,$4,$5,$6,
-             COALESCE((SELECT MAX(sort_order) + 1 FROM ticket_types WHERE lot_id = $1), 1), $7, $8::date[])
+             COALESCE((SELECT MAX(sort_order) + 1 FROM ticket_types WHERE lot_id = $1), 1), $7, $8::date[], $9)
      RETURNING id`,
     [d.loteId, d.nome.trim(), qtdDoTipo, d.precoCents != null ? 0 : d.descontoBps, d.exigeDocumento,
-     d.maxPorCliente ?? null, d.precoCents ?? null, dias])
+     d.maxPorCliente ?? null, d.precoCents ?? null, dias, d.pessoas ?? null])
   return { ok: true, tipo: 'tipo', id: r.id, diasDeUso: dias }
 })

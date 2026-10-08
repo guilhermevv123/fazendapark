@@ -517,6 +517,11 @@ useHead({ title: 'Dashboard do evento' })
           <p v-if="variacao('ingressos')" class="mt-1 text-sm font-semibold" :class="variacao('ingressos')!.classe">
             {{ variacao('ingressos')!.texto }} <span class="font-normal text-tinta-suave">vs anterior</span>
           </p>
+          <!-- combo de 10 é 1 ingresso e 10 pessoas (048): a contagem de gente vem junto -->
+          <p v-if="t.pessoasPagantes && t.pessoasPagantes !== t.ingressosPagantes" class="mt-1 text-sm font-semibold text-tinta"
+             data-parte="pessoas-vendidas">
+            = {{ num(t.pessoasPagantes) }} pessoas <span class="font-normal text-tinta-suave">(combos contam cada pessoa)</span>
+          </p>
           <p class="mt-1 text-sm text-tinta-suave">
             {{ num(t.ingressosPorPedido) }} ingressos por pedido
             <template v-if="t.cortesiasEmitidas"> · + {{ num(t.cortesiasEmitidas) }} de cortesia</template>

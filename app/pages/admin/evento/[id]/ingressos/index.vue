@@ -43,6 +43,7 @@ import { ehPapel, podeAbrirPagina } from '~~/server/utils/papeis'
 import { ultimoDadoBom } from '~/composables/ultimoDadoBom'
 import DiasDeUsoDoTipo from '~/components/DiasDeUsoDoTipo.vue'
 import { fraseDosDiasDeUso } from '~~/server/utils/dias-de-uso'
+import { MAX_PESSOAS_DO_TIPO, pessoasPeloNome, seloDePessoas } from '~~/server/utils/pessoas-do-tipo'
 
 const route = useRoute()
 const id = route.params.id as string
@@ -435,6 +436,20 @@ const tipoForm = reactive({
   diasDeUso: undefined as string[] | null | undefined,
   /** os dias como abriram — só manda o campo quando mudou (o PATCH aplica nos tipos de mesmo nome) */
   diasAntes: '' as string,
+  /** pessoas por ingresso (048, combo de 10); `null` = a do setor */
+  pessoas: null as number | null,
+  pessoasAntes: null as number | null,
+  /** a pessoa mexeu no campo: o nome do tipo novo para de sugerir */
+  pessoasMexeu: false,
+})
+/* o tipo NOVO chamado "COMBO 10 PESSOAS" já nasce contando 10 (048), até a pessoa mexer no campo */
+watch(() => tipoForm.nome, (nome) => {
+  if (!tipoForm.aberto || tipoForm.id || tipoForm.pessoasMexeu) return
+  tipoForm.pessoas = pessoasPeloNome(nome)
+})
+const sugestaoDePessoas = computed(() => {
+  const v = pessoasPeloNome(tipoForm.nome)
+  return v && v !== tipoForm.pessoas ? v : null
 })
 /** Quanto do lote ainda não foi distribuído entre os tipos. */
 function sobraDoLote(loteId: string) {
@@ -460,6 +475,9 @@ function abrirTipo(loteId: string, t?: any) {
     // tipo novo: `undefined` deixa o nome sugerir o dia ("SEXTA" → a sexta do evento)
     diasDeUso: t ? (t.diasDeUso ?? null) : undefined,
     diasAntes: (t?.diasDeUso ?? []).join(),
+    pessoas: t ? (t.pessoas ?? null) : null,
+    pessoasAntes: t ? (t.pessoas ?? null) : null,
+    pessoasMexeu: false,
   })
 }
 async function salvarTipo() {
@@ -475,6 +493,9 @@ async function salvarTipo() {
     // preço não pode mexer neles. No tipo novo sem dia marcado, o servidor herda os do mesmo nome.
     ...((tipoForm.diasDeUso ?? []).join() !== tipoForm.diasAntes
       ? { diasDeUso: tipoForm.diasDeUso ?? [] } : {}),
+    // pessoas por ingresso (048): 1 ou vazio = a do setor; só manda quando mudou
+    ...((tipoForm.pessoas && tipoForm.pessoas > 1 ? tipoForm.pessoas : null) !== tipoForm.pessoasAntes
+      ? { pessoas: tipoForm.pessoas && tipoForm.pessoas > 1 ? tipoForm.pessoas : null } : {}),
   }
   const ok = tipoForm.id
     ? await chamar('PATCH', { o: 'tipo', id: tipoForm.id, campos })
@@ -815,6 +836,9 @@ useHead({ title: 'Ingressos' })
                       {{ SELO_ESPECIE[especieDoTipo(t)].texto }}
                     </span>
                     <span v-if="t.exigeDocumento" class="ml-2 select-none text-xs text-tinta-fraca">com documento</span>
+                    <span v-if="seloDePessoas(t.pessoas)" class="selo-neutro ml-2 select-none" data-parte="selo-pessoas">
+                      {{ seloDePessoas(t.pessoas) }}
+                    </span>
                     <span v-if="t.diasDeUso?.length" class="selo-neutro ml-2 select-none" data-parte="selo-dias-de-uso"
                           :title="`Na catraca, passa só: ${fraseDosDiasDeUso(t.diasDeUso)}`">
                       só {{ fraseDosDiasDeUso(t.diasDeUso) }}
@@ -1044,6 +1068,21 @@ useHead({ title: 'Ingressos' })
         <label class="flex items-center gap-2 pt-6 text-sm text-tinta-corpo">
           <input v-model="tipoForm.exigeDocumento" type="checkbox"> Exige documento
         </label>
+        <!-- combo (048): 1 ingresso que leva N pessoas — catraca e painel contam as N -->
+        <div class="sm:col-span-2" data-parte="pessoas-do-tipo">
+          <label class="rotulo" for="pessoas-tipo">Conta como quantas pessoas</label>
+          <input id="pessoas-tipo" :value="tipoForm.pessoas ?? ''" type="number" min="1" :max="MAX_PESSOAS_DO_TIPO" step="1"
+                 class="campo max-w-[180px] tabular-nums" placeholder="1"
+                 @input="tipoForm.pessoasMexeu = true; tipoForm.pessoas = Number(($event.target as HTMLInputElement).value) || null">
+          <p class="mt-1 text-xs text-tinta-fraca">
+            Combo de 10 = 10: na catraca ele entra contando 10 pessoas, e o painel conta as 10. Vazio ou 1 = uma pessoa.
+          </p>
+          <button v-if="sugestaoDePessoas" type="button" class="mt-1 text-sm font-medium text-acao hover:underline"
+                  data-parte="sugestao-pessoas"
+                  @click="tipoForm.pessoasMexeu = true; tipoForm.pessoas = sugestaoDePessoas">
+            Pelo nome do tipo: {{ sugestaoDePessoas }} pessoas
+          </button>
+        </div>
       </div>
 
       <!-- dias de uso na catraca (047): o "SEXTA" não passa no domingo -->

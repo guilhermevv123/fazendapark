@@ -27,6 +27,7 @@ import { decidirAcesso, ehPapel } from '~~/server/utils/papeis'
 import { instanteNoFuso } from '~/composables/fusoHorario'
 import DiasDeUsoDoTipo from '~/components/DiasDeUsoDoTipo.vue'
 import { diasDoEvento } from '~~/server/utils/dias-de-uso'
+import { MAX_PESSOAS_DO_TIPO, pessoasPeloNome } from '~~/server/utils/pessoas-do-tipo'
 import {
   CONTATO_DO_PARQUE, LOCAL_DO_PARQUE, MAPA_DO_PARQUE, NOMES_DAS_CATEGORIAS, subcategoriasDe,
 } from '~/composables/eventoDoParque'
@@ -167,6 +168,8 @@ type TipoDoEvento = {
   nome: string; descontoBps: number; exigeDocumento: boolean; modo?: 'desconto' | 'preco'
   /** dias de uso na catraca (047), marcados no passo 5 — o tipo é o mesmo em todos os lotes */
   diasDeUso?: string[] | null
+  /** pessoas por ingresso (048, combo de 10); `undefined` = o que o nome diz, `null` = 1 */
+  pessoas?: number | null
 }
 const estrutura = reactive({
   setores: ['Geral'] as string[],
@@ -398,6 +401,15 @@ const diasDoEventoNoAssistente = computed(() => {
   return diasDoEvento(iso(f.inicioData, f.inicioHora), iso(f.fimData || f.inicioData, f.fimHora), f.fuso)
 })
 const tiposComNome = computed(() => estrutura.tipos.filter((t) => t.nome.trim()))
+/** o que o campo "conta como quantas pessoas" do passo 5 mostra — e é isso que vai pro servidor */
+function pessoasNaTela(t: TipoDoEvento): number | null {
+  const v = t.pessoas === undefined ? pessoasPeloNome(t.nome) : t.pessoas
+  return v && v > 1 ? Math.min(v, MAX_PESSOAS_DO_TIPO) : null
+}
+function pessoasDoTipoNoAssistente(nome: string): number | null {
+  const t = estrutura.tipos.find((x) => x.nome.trim().toLowerCase() === nome.trim().toLowerCase())
+  return t ? pessoasNaTela(t) : null
+}
 function diasDoTipoNoAssistente(nome: string): string[] | null {
   const t = estrutura.tipos.find((x) => x.nome.trim().toLowerCase() === nome.trim().toLowerCase())
   const validos = new Set(diasDoEventoNoAssistente.value.map((d) => d.dia))
@@ -455,6 +467,8 @@ async function publicar() {
             nome: t.nome.trim(), quantidade: ESTOQUE_SEM_LIMITE,
             // dias de uso na catraca (047): os do tipo, iguais em todos os lotes
             diasDeUso: diasDoTipoNoAssistente(t.nome),
+            // combo (048): quantas pessoas cada ingresso leva — o que o passo 5 mostrou
+            pessoas: pessoasDoTipoNoAssistente(t.nome),
             descontoBps: t.precoProprio ? 0 : t.descontoBps, exigeDocumento: t.exigeDocumento,
             // preço próprio (043) só em lote pago — o gratuito é gratuito pra todos os tipos
             precoCents: t.precoProprio && !l.gratuito ? t.precoCents : null,
@@ -1054,12 +1068,20 @@ useHead({ title: 'Criar evento' })
         <template v-if="tiposComNome.length">
           <h3 class="titulo mt-6 text-[15px] font-semibold text-tinta">Dias de uso dos ingressos</h3>
           <p class="mt-1 text-[12.5px] text-tinta-suave">
-            Em que dia cada tipo passa na catraca. O nome do tipo já marca o dia (ex.: "SEXTA"); confira e ajuste.
+            Em que dia cada tipo passa na catraca, e quantas pessoas ele leva (combo). O nome do tipo já marca o
+            dia ("SEXTA") e as pessoas ("COMBO 10 PESSOAS"); confira e ajuste.
           </p>
           <div class="mt-3 grid gap-3" data-parte="dias-de-uso-dos-tipos">
             <div v-for="t in tiposComNome" :key="t.nome">
               <p class="mb-1 text-sm font-semibold text-tinta">{{ t.nome.trim() }}</p>
               <DiasDeUsoDoTipo v-model="t.diasDeUso" :dias="diasDoEventoNoAssistente" :nome="t.nome" auto-pelo-nome />
+              <label class="mt-2 flex flex-wrap items-center gap-2 text-sm text-tinta-corpo" data-parte="pessoas-do-tipo">
+                Conta como
+                <input :value="pessoasNaTela(t) ?? ''" type="number" min="1" :max="MAX_PESSOAS_DO_TIPO" step="1"
+                       class="campo w-20 py-2 tabular-nums" placeholder="1" :aria-label="`Pessoas por ingresso do tipo ${t.nome}`"
+                       @input="t.pessoas = Number(($event.target as HTMLInputElement).value) || null">
+                pessoa(s) na catraca e no painel <span class="text-tinta-suave">(combo de 10 = 10)</span>
+              </label>
             </div>
           </div>
         </template>
