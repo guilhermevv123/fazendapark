@@ -208,7 +208,7 @@ useHead({ title: 'Códigos promocionais' })
     </p>
 
     <div v-else class="card mt-5 overflow-x-auto p-0">
-      <table class="w-full min-w-[900px] border-collapse text-sm">
+      <table class="tabela-cartoes w-full min-w-[900px] border-collapse text-sm">
         <thead>
           <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
             <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Código</th>

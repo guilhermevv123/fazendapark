@@ -513,14 +513,15 @@ useHead({ title: 'Dashboard do evento' })
         <article class="card overflow-hidden pt-0" data-parte="kpi-ingressos">
           <div class="-mx-5 mb-4 h-1.5 bg-sun-400" />
           <p class="rotulo-kpi flex items-center gap-2"><IconeMenu nome="bilhetes" :tamanho="18" /> Ingressos vendidos</p>
-          <p class="numero-kpi mt-2" data-parte="ingressos-vendidos">{{ num(t.pagos) }}</p>
+          <!-- o combo de 10 conta 10 (dono, 08/10); quantas VENDAS foram fica na linha de baixo -->
+          <p class="numero-kpi mt-2" data-parte="ingressos-vendidos">{{ num(t.pagosContandoCombo ?? t.pagos) }}</p>
           <p v-if="variacao('ingressos')" class="mt-1 text-sm font-semibold" :class="variacao('ingressos')!.classe">
             {{ variacao('ingressos')!.texto }} <span class="font-normal text-tinta-suave">vs anterior</span>
           </p>
           <!-- combo de 10 é 1 ingresso e 10 pessoas (048): a contagem de gente vem junto -->
-          <p v-if="t.pessoasPagantes && t.pessoasPagantes !== t.ingressosPagantes" class="mt-1 text-sm font-semibold text-tinta"
+          <p v-if="t.pagosContandoCombo != null && t.pagosContandoCombo !== t.pagos" class="mt-1 text-sm text-tinta-suave"
              data-parte="pessoas-vendidas">
-            = {{ num(t.pessoasPagantes) }} pessoas <span class="font-normal text-tinta-suave">(combos contam cada pessoa)</span>
+            <strong class="text-tinta">{{ num(t.pagos) }} vendas</strong> · cada combo conta as pessoas que leva
           </p>
           <p class="mt-1 text-sm text-tinta-suave">
             {{ num(t.ingressosPorPedido) }} ingressos por pedido
@@ -889,7 +890,7 @@ useHead({ title: 'Dashboard do evento' })
           </li>
         </ul>
         <div class="hidden overflow-x-auto sm:block">
-          <table class="w-full min-w-[520px] text-sm">
+          <table class="tabela-cartoes w-full min-w-[520px] text-sm">
             <thead class="bg-fundo-cinza text-left text-xs uppercase text-tinta-suave">
               <tr>
                 <th class="px-4 py-2 font-semibold" />
@@ -933,7 +934,7 @@ useHead({ title: 'Dashboard do evento' })
           <p class="apoio-bloco">"Vendidos" é o total histórico do lote; a coluna do período segue a régua do painel.</p>
         </header>
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[640px] text-sm">
+          <table class="tabela-cartoes w-full min-w-[640px] text-sm">
             <thead class="bg-fundo-cinza text-left text-xs uppercase text-tinta-suave">
               <tr>
                 <th class="px-4 py-2 font-semibold">Setor</th>
@@ -1149,7 +1150,7 @@ useHead({ title: 'Dashboard do evento' })
             <h2 class="titulo-bloco">Quem mais comprou</h2>
           </header>
           <div class="overflow-x-auto">
-            <table class="w-full min-w-[480px] text-sm">
+            <table class="tabela-cartoes w-full min-w-[480px] text-sm">
               <thead class="bg-fundo-cinza text-left text-xs uppercase text-tinta-suave">
                 <tr>
                   <th class="px-4 py-2 font-semibold">Pessoa</th>

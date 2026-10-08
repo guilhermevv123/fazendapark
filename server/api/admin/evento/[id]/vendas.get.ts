@@ -88,6 +88,12 @@ export default defineEventHandler(async (event) => {
             COALESCE(SUM(o.refunded_cents),0)::bigint AS estornado,
             COALESCE(SUM((SELECT SUM(quantity) FROM order_items WHERE order_id = o.id))
                        FILTER (WHERE ${PEDIDO_VIVO('o.')} AND o.channel <> 'cortesia'),0)::int AS ingressos_vendidos,
+            -- o mesmo, com o combo contando as pessoas que leva (048: combo de 10 = 10)
+            COALESCE(SUM((SELECT SUM(i.quantity * COALESCE(tt.admits, s.admits, 1))
+                            FROM order_items i JOIN lots l ON l.id = i.lot_id JOIN sectors s ON s.id = l.sector_id
+                            LEFT JOIN ticket_types tt ON tt.id = i.ticket_type_id
+                           WHERE i.order_id = o.id))
+                       FILTER (WHERE ${PEDIDO_VIVO('o.')} AND o.channel <> 'cortesia'),0)::int AS ingressos_contando_combo,
             COALESCE(SUM((SELECT SUM(quantity) FROM order_items WHERE order_id = o.id))
                        FILTER (WHERE ${PEDIDO_VIVO('o.')} AND o.channel = 'cortesia'),0)::int AS cortesias
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
@@ -105,6 +111,8 @@ export default defineEventHandler(async (event) => {
       pendenteCents: Number(somas.pendente),
       estornadoCents: Number(somas.estornado),
       ingressosVendidos: Number(somas.ingressos_vendidos),
+      /** o "Ingressos vendidos" com o combo de 10 contando 10 (dono, 08/10) */
+      ingressosContandoCombo: Number(somas.ingressos_contando_combo),
       cortesias: Number(somas.cortesias),
     },
     pedidos: linhas.map((l) => ({

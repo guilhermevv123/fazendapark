@@ -385,7 +385,7 @@ useHead({ title: 'Relatórios' })
             <td class="w-8 px-4 py-2.5 text-xs tabular-nums text-tinta-fraca">{{ i + 1 }}</td>
             <td class="py-2.5">
               <p class="text-tinta">{{ c.nome }}</p>
-              <p class="text-xs text-tinta-fraca">{{ c.email }}</p>
+              <p class="text-xs text-tinta-fraca [overflow-wrap:anywhere]">{{ c.email }}</p>
             </td>
             <td class="px-3 py-2.5 text-right tabular-nums text-tinta-suave">
               {{ c.pedidos }} ped. · {{ c.ingressos }} ing.

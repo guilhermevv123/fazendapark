@@ -181,7 +181,7 @@ useHead({ title: 'Passaportes e grupos' })
       </div>
 
       <div v-if="s.lotes.length" class="overflow-x-auto">
-        <table class="w-full border-collapse text-sm">
+        <table class="tabela-cartoes w-full border-collapse text-sm">
         <thead>
           <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
             <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Lote</th>
@@ -210,7 +210,7 @@ useHead({ title: 'Passaportes e grupos' })
     </section>
 
     <div v-if="grupos.length"
-         class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 rounded-card bg-acao px-5 py-3 text-white">
+         class="mt-4 flex flex-wrap items-center gap-x-8 rounded-card bg-acao px-5 py-3 text-white md:sticky md:bottom-0">
       <p class="titulo text-base font-semibold">
         {{ semLimiteGeral ? 'Pessoas já vendidas em passaportes e grupos' : 'Pessoas em passaportes e grupos' }}: <span class="tabular-nums">{{ totalPessoas }}</span>
       </p>

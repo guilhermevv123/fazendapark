@@ -541,7 +541,7 @@ useHead({ title: 'Visão geral' })
         <section class="card mt-4 p-0" aria-labelledby="titulo-evento">
           <h2 id="titulo-evento" class="titulo border-b border-ink-200 px-4 py-3 text-lg font-semibold text-ink-900 sm:px-5">Por evento</h2>
           <div class="relative overflow-x-auto">
-            <table class="w-full text-sm sm:min-w-[36rem]">
+            <table class="tabela-cartoes w-full text-sm sm:min-w-[36rem]">
               <thead>
                 <tr class="border-b border-ink-200 text-left text-xs font-semibold uppercase tracking-wide text-ink-600">
                   <th class="px-4 py-2 font-semibold sm:px-5">Evento</th>
@@ -719,7 +719,7 @@ useHead({ title: 'Visão geral' })
           </div>
           <!-- e-mail comprido não quebra sozinho: a tabela rola dentro do cartão em vez de esticar a página -->
           <div class="relative overflow-x-auto">
-            <table class="w-full text-sm sm:min-w-[30rem]">
+            <table class="tabela-cartoes w-full text-sm sm:min-w-[30rem]">
               <thead>
                 <tr class="border-b border-ink-200 text-left text-xs font-semibold uppercase tracking-wide text-ink-600">
                   <th class="w-10 px-4 py-2 font-semibold sm:px-5">#</th><th class="py-2 font-semibold">Cliente</th>

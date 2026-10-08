@@ -49,6 +49,63 @@ body {
   }
 }
 
+/* TABELA QUE VIRA CARTÃO NO CELULAR (dono, 08/10: "tenho que passar por lado e aí é foda").
+   A tabela larga do painel (lotes, cupons, cortesias, vendas, histórico…) rolava de lado num
+   telefone de 375px. Com `tabela-cartoes`, abaixo de 768px cada linha vira um cartão e cada
+   célula uma linha "RÓTULO ……… valor" — o rótulo é o título da coluna, que o plugin
+   `tabela-cartoes.client.ts` copia pra `data-rotulo` de cada célula. Nada some: são as mesmas
+   células, os mesmos botões, os mesmos selos; só o desenho muda. No computador, tabela igual.
+   Célula com `data-rotulo=""` (posto à mão, ou colspan) ocupa a largura toda, sem rótulo. */
+@media (max-width: 767px) {
+  table.tabela-cartoes { display: block; width: 100%; min-width: 0 !important; }
+  table.tabela-cartoes > thead { display: none; }
+  table.tabela-cartoes > tbody, table.tabela-cartoes > tfoot { display: block; }
+  table.tabela-cartoes > tbody > tr, table.tabela-cartoes > tfoot > tr {
+    display: block;
+    position: relative;
+    padding: 10px 14px;
+    border-bottom: 1px solid theme('colors.linha.DEFAULT');
+  }
+  table.tabela-cartoes > tbody > tr > :is(td, th), table.tabela-cartoes > tfoot > tr > :is(td, th) {
+    /* flow-root: o rótulo flutua na margem esquerda e a célula cresce até ele caber —
+       rótulo de duas linhas ("Vendido + pendente") não encavala a de baixo */
+    display: flow-root;
+    min-height: 0;
+    padding: 5px 0 5px 40% !important;
+    text-align: right;
+    border: 0;
+    overflow-wrap: anywhere;
+    width: auto !important;
+  }
+  table.tabela-cartoes > tbody > tr > :is(td, th)::before, table.tabela-cartoes > tfoot > tr > :is(td, th)::before {
+    content: attr(data-rotulo);
+    float: left;
+    /* % da margem é da caixa de conteúdo (60% da célula): 66,667% dela = os 40% do recuo */
+    margin-left: -66.667%;
+    width: calc(66.667% - 10px);
+    padding-top: 1px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: theme('colors.ink.600');
+    overflow-wrap: anywhere;
+  }
+  /* sem rótulo: largura toda, alinhada à esquerda (o nome no topo do cartão, a faixa da cota) */
+  table.tabela-cartoes > tbody > tr > :is(td, th):is([data-rotulo=""], :not([data-rotulo])),
+  table.tabela-cartoes > tfoot > tr > :is(td, th):is([data-rotulo=""], :not([data-rotulo])) {
+    padding-left: 0 !important;
+    text-align: left;
+  }
+  table.tabela-cartoes > tbody > tr > :is(td, th):is([data-rotulo=""], :not([data-rotulo]))::before,
+  table.tabela-cartoes > tfoot > tr > :is(td, th):is([data-rotulo=""], :not([data-rotulo]))::before { content: none; }
+  /* célula vazia (a coluna da seta numa linha de tipo, observação em branco) não vira linha à toa */
+  table.tabela-cartoes > tbody > tr > td:empty { display: none; }
+  /* a fila de botões da célula vai pra direita, como no resto do cartão */
+  table.tabela-cartoes td > .flex.justify-end { justify-content: flex-end; flex-wrap: wrap; }
+}
+
 ::selection {
   background: theme('colors.pool.200');
   color: theme('colors.ink.950');

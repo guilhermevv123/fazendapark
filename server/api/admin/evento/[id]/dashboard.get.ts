@@ -677,6 +677,13 @@ export default defineEventHandler(async (event) => {
       pagos: emitidos - gratis,
       /** pessoas que os ingressos PAGOS levam (048): o combo de 10 conta 10 — o "Ingressos vendidos" conta 1 */
       pessoasPagantes: Number(totais.pessoas_pagantes ?? 0),
+      /**
+       * o "Ingressos vendidos" do topo com o combo contando o que vale (dono, 08/10: "um combo de
+       * 10 vale como 10 ingressos"): `pagos` + as pessoas a mais que os combos pagos levam. A
+       * régua de `pagos` fica a mesma; só soma o que o combo traz além de 1.
+       */
+      pagosContandoCombo: (emitidos - gratis)
+        + Math.max(0, Number(totais.pessoas_pagantes ?? 0) - Number(totais.ingressos_pagantes ?? 0)),
       // EMITIDAS, não "ocupando lugar" — e o nome diz qual das duas é.
       //
       // Este número é a decomposição de `ingressos` (item do pedido): tudo que

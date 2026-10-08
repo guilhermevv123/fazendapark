@@ -332,7 +332,7 @@ useHead({ title: 'Clientes' })
 
       <div v-else class="card mt-4 p-0" :class="pending && 'opacity-60'" :aria-busy="pending">
         <div class="relative overflow-x-auto">
-          <table class="w-full min-w-[56rem] text-sm">
+          <table class="tabela-cartoes w-full min-w-[56rem] text-sm">
             <thead>
               <tr class="border-b border-linha text-left text-xs text-tinta-fraca">
                 <th class="px-4 py-3 font-semibold">Cliente</th>

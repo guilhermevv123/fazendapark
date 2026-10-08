@@ -277,7 +277,7 @@ useHead({ title: 'Borderô' })
     <!-- ========================================================= por lote -->
     <section class="card mt-4 overflow-x-auto p-0">
       <h2 class="rotulo-kpi px-4 pt-4">Por setor e lote</h2>
-      <table class="mt-3 w-full min-w-[820px] border-collapse text-sm">
+      <table class="tabela-cartoes mt-3 w-full min-w-[820px] border-collapse text-sm">
         <thead>
           <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
             <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Setor</th>

@@ -8,7 +8,9 @@
  *  2. a entrada individual do MESMO setor segue contando 1 (o setor não muda);
  *  3. a lista do tablet leva as 10 (sem rede a porta conta igual);
  *  4. o painel grava as pessoas no tipo e no de mesmo nome do outro lote, e volta a 1 com `null`;
- *  5. o dashboard soma pessoas vendidas (o combo vendido conta 10), sem mexer em "ingressos vendidos".
+ *  5. o dashboard soma pessoas vendidas (o combo vendido conta 10), sem mexer em "ingressos vendidos";
+ *  6. o número que o dono lê (08/10: "um combo de 10 vale como 10 ingressos") conta o combo como 10 no
+ *     dashboard, no card de Vendas e na coluna Vendido de Configurar ingressos — com as vendas ao lado.
  *
  * Fixtura desta corrida (marca de `scripts/test-setup.ts`), apagada no fim. Sem servidor, PULA.
  */
@@ -103,6 +105,9 @@ beforeAll(async () => {
     [ORG, EVENTO, `PED-ZZP-${MARCA_MAIUSCULA}`.slice(0, 40)])
   await sql(`INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity, unit_face_cents, unit_fee_cents, unit_total_cents)
              VALUES ($1,$2,$3,1,16000,0,16000), ($1,$2,$4,2,1000,0,1000)`, [o.id, LOTE_1, TIPO_COMBO, TIPO_INDIVIDUAL])
+  // os contadores do estoque, como o checkout deixa: 3 unidades no lote, 1 combo e 2 individuais
+  await sql(`UPDATE lots SET sold = 3 WHERE id = $1`, [LOTE_1])
+  await sql(`UPDATE ticket_types SET sold = CASE id WHEN $1 THEN 1 ELSE 2 END WHERE id IN ($1, $2)`, [TIPO_COMBO, TIPO_INDIVIDUAL])
   const ingresso = (code: string, tid: string) => sql(
     `INSERT INTO tickets (org_id, event_id, sector_id, lot_id, ticket_type_id, order_id, code, qr_secret, status, holder_name)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'teste','valido','Fulano do Combo') ON CONFLICT (code) DO NOTHING`,
@@ -161,6 +166,8 @@ describe('combo que conta como N pessoas (048)', () => {
     expect(r.status, JSON.stringify(r.corpo).slice(0, 300)).toBe(200)
     expect(r.corpo.totais.pagos).toBe(3)
     expect(r.corpo.totais.pessoasPagantes).toBe(12)
+    // o número grande: 1 combo de 10 + 2 individuais = 12 ingressos
+    expect(r.corpo.totais.pagosContandoCombo, 'o combo voltou a contar 1 no "Ingressos vendidos"').toBe(12)
     expect(r.corpo.publico.pessoas).toBe(11)
   })
 
@@ -171,6 +178,26 @@ describe('combo que conta como N pessoas (048)', () => {
     const tipos = r.corpo.setores[0].lotes.flatMap((l: any) => l.tipos)
     expect(tipos.find((t: any) => t.id === TIPO_COMBO).pessoas).toBe(10)
     expect(tipos.find((t: any) => t.id === TIPO_INDIVIDUAL).pessoas).toBeNull()
+  })
+
+  it('Configurar ingressos mostra o vendido com o combo contando 10, sem mexer no estoque', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const r = await painel('GET')
+    expect(r.status).toBe(200)
+    const lote = r.corpo.setores[0].lotes.find((l: any) => l.id === LOTE_1)
+    expect(lote.vendidos, 'o estoque é em unidades').toBe(3)
+    expect(lote.vendidosContandoCombo).toBe(12)
+    const tipo = (tid: string) => lote.tipos.find((t: any) => t.id === tid)
+    expect(tipo(TIPO_COMBO)).toMatchObject({ vendidos: 1, vendidosContandoCombo: 10 })
+    expect(tipo(TIPO_INDIVIDUAL)).toMatchObject({ vendidos: 2, vendidosContandoCombo: 2 })
+  })
+
+  it('o card de Vendas conta o combo como 10 e guarda as vendas', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const r = await painel('GET', undefined, '/vendas')
+    expect(r.status, JSON.stringify(r.corpo).slice(0, 300)).toBe(200)
+    expect(r.corpo.totais.ingressosVendidos).toBe(3)
+    expect(r.corpo.totais.ingressosContandoCombo).toBe(12)
   })
 
   it('gravar as pessoas no combo grava no de mesmo nome do outro lote; null volta a 1', async (ctx) => {

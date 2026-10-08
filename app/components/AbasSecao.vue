@@ -65,12 +65,16 @@ const atual = computed(() => {
 </script>
 
 <template>
-  <nav v-if="abas.length > 1" data-parte="abas" class="-mb-px sem-barra flex gap-6 overflow-x-auto border-b border-linha">
+  <!-- No celular as abas quebram linha e viram botões (dono, 08/10: "tenho que passar por lado"):
+       a faixa que rolava de lado escondia Cupons, Cortesias e Promoters atrás da borda. -->
+  <nav v-if="abas.length > 1" data-parte="abas"
+       class="sem-barra -mb-px flex flex-wrap gap-2 sm:flex-nowrap sm:gap-6 sm:overflow-x-auto sm:border-b sm:border-linha">
     <NuxtLink v-for="a in abas" :key="a.para" :to="a.para"
-              class="whitespace-nowrap border-b-2 px-1 pb-3 pt-2 text-[15px] transition-colors"
+              class="inline-flex min-h-10 items-center whitespace-nowrap rounded-[6px] border px-3 text-[15px] transition-colors
+                     sm:min-h-0 sm:rounded-none sm:border-0 sm:border-b-2 sm:px-1 sm:pb-3 sm:pt-2"
               :class="atual === a.para
-                ? 'border-acao font-semibold text-acao'
-                : 'border-transparent text-tinta-suave hover:text-tinta'">
+                ? 'border-acao bg-acao font-semibold text-white sm:bg-transparent sm:text-acao'
+                : 'border-linha bg-white text-tinta-suave hover:text-tinta sm:border-transparent sm:bg-transparent'">
       {{ a.aba ?? a.nome }}
     </NuxtLink>
   </nav>

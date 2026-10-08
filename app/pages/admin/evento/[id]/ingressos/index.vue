@@ -118,13 +118,15 @@ async function mover(o: 'tipo' | 'setor', alvoId: string, direcao: 'subir' | 'de
  * é teto; lote é o que está na prateleira.
  */
 const totais = computed(() => {
-  const s = { quantidade: 0, vendidos: 0, reservados: 0, disponivel: 0, teto: 0, semLimite: false }
+  const s = { quantidade: 0, vendidos: 0, vendidosContandoCombo: 0, reservados: 0, disponivel: 0, teto: 0, semLimite: false }
   for (const setor of data.value?.setores ?? []) {
     s.teto += setor.capacidade ?? 0
     for (const l of setor.lotes) {
       if (estoqueSemLimite(l.quantidade)) s.semLimite = true
       s.quantidade += l.quantidade
       s.vendidos += l.vendidos
+      // o combo de 10 conta 10 (dono, 08/10); `vendidos` segue em unidades, que é o que o estoque desconta
+      s.vendidosContandoCombo += l.vendidosContandoCombo ?? l.vendidos
       s.reservados += l.reservados
       s.disponivel += l.disponivel
     }
@@ -425,6 +427,8 @@ function cotaDoLote(lote: any) {
 }
 
 const inteiro = (n: number) => n.toLocaleString('pt-BR')
+/** o vendido do lote com o combo contando as pessoas (combo de 10 = 10) */
+const vendidoDoLote = (lote: any) => Number(lote.vendidosContandoCombo ?? lote.vendidos)
 
 /* --------------------------------------------------------------- tipos ---- */
 const tipoForm = reactive({
@@ -573,7 +577,7 @@ useHead({ title: 'Ingressos' })
           "Fecha em"). Ligado, quando um lote fecha o próximo do mesmo setor abre sozinho.
         </p>
       </div>
-      <p class="ml-auto shrink-0 text-sm text-tinta-suave">
+      <p class="text-sm text-tinta-suave sm:ml-auto sm:shrink-0">
         Taxa <strong class="text-tinta">{{ (data.evento.taxaBps / 100).toFixed(2) }}%</strong> ·
         online: <strong class="text-tinta">{{ data.evento.modoTaxaOnline === 'repassar' ? 'comprador paga' : 'produção absorve' }}</strong>
       </p>
@@ -642,7 +646,7 @@ useHead({ title: 'Ingressos' })
 
       <!-- tabela de lotes -->
       <div v-else class="overflow-x-auto">
-        <table class="w-full min-w-[920px] border-collapse text-sm">
+        <table class="tabela-cartoes w-full min-w-[920px] border-collapse text-sm">
           <thead>
             <tr class="border-y border-linha bg-fundo-cinza/60 text-left">
               <th class="w-8" />
@@ -659,7 +663,8 @@ useHead({ title: 'Ingressos' })
           <tbody>
             <template v-for="lote in setor.lotes" :key="lote.id">
               <tr class="border-b border-linha align-middle last:border-0">
-                <td class="pl-2">
+                <!-- no celular a seta vai pro canto do cartão, ao lado do nome -->
+                <td class="pl-2 max-md:!absolute max-md:right-2 max-md:top-2 max-md:!p-0" data-rotulo="">
                   <button v-if="lote.tipos.length" type="button"
                           class="p-1 text-tinta-fraca transition-transform hover:text-tinta"
                           :class="expandidos.includes(lote.id) && 'rotate-180'"
@@ -668,8 +673,8 @@ useHead({ title: 'Ingressos' })
                   </button>
                 </td>
 
-                <td class="px-3 py-3">
-                  <p class="font-medium text-tinta">{{ lote.nome }}</p>
+                <td class="px-3 py-3 max-md:pr-12" data-rotulo="">
+                  <p class="font-medium text-tinta max-md:text-base max-md:font-semibold">{{ lote.nome }}</p>
                   <p v-if="rotuloCanais(lote.canais)" class="text-xs text-alerta">{{ rotuloCanais(lote.canais) }}</p>
                   <p v-if="lote.abreEm || lote.expiraEm" class="text-xs text-tinta-fraca">
                     <template v-if="lote.abreEm">abre {{ dataHora(lote.abreEm) }}</template>
@@ -689,10 +694,13 @@ useHead({ title: 'Ingressos' })
                   </p>
                 </td>
 
-                <td class="px-3 py-3 text-right tabular-nums text-tinta">
-                  {{ lote.vendidos + lote.reservados }}
+                <td class="px-3 py-3 text-right tabular-nums text-tinta" data-parte="vendido-lote">
+                  {{ vendidoDoLote(lote) + lote.reservados }}
                   <span v-if="lote.reservados" class="block text-xs text-tinta-fraca">
-                    {{ lote.vendidos }} pago · {{ lote.reservados }} em carrinho
+                    {{ vendidoDoLote(lote) }} pago · {{ lote.reservados }} em carrinho
+                  </span>
+                  <span v-if="vendidoDoLote(lote) !== lote.vendidos" class="block text-xs text-tinta-fraca">
+                    {{ lote.vendidos }} vendas · combo conta as pessoas
                   </span>
                 </td>
 
@@ -823,9 +831,9 @@ useHead({ title: 'Ingressos' })
                   </td>
                 </tr>
 
-                <tr v-for="(t, ti) in lote.tipos" :key="t.id" class="border-b border-linha bg-fundo-cinza/40">
+                <tr v-for="(t, ti) in lote.tipos" :key="t.id" class="border-b border-linha bg-fundo-cinza/40 max-md:ml-4 max-md:border-l-4 max-md:border-l-acao/30">
                   <td />
-                  <td class="px-3 py-2 pl-6">
+                  <td class="px-3 py-2 pl-6" data-rotulo="">
                     <span class="font-medium text-tinta">{{ t.nome }}</span>
                     <!-- select-none: copiar o nome da lista não pode levar o selo junto (06/10, um tipo
                          nasceu "…PESSOASpreço próprio" assim) -->
@@ -850,7 +858,13 @@ useHead({ title: 'Ingressos' })
                       face {{ reais(t.faceCents) }} + taxa {{ reais(t.taxaCents) }}
                     </span>
                   </td>
-                  <td class="px-3 py-2 text-right tabular-nums text-tinta-suave">{{ t.vendidos }}</td>
+                  <td class="px-3 py-2 text-right tabular-nums text-tinta-suave" data-parte="vendido-tipo">
+                    {{ t.vendidosContandoCombo ?? t.vendidos }}
+                    <span v-if="t.vendidosContandoCombo != null && t.vendidosContandoCombo !== t.vendidos"
+                          class="block text-xs text-tinta-fraca">
+                      {{ t.vendidos }} {{ t.vendidos === 1 ? 'combo' : 'combos' }} × {{ t.pessoas }}
+                    </span>
+                  </td>
                   <td class="px-3 py-2 text-right tabular-nums text-tinta-suave">
                     <template v-if="estoqueSemLimite(t.quantidade)">Sem limite</template>
                     <template v-else>
@@ -900,13 +914,16 @@ useHead({ title: 'Ingressos' })
 
     <!-- ================================================ rodapé do total -->
     <div v-if="data.setores.length"
-         class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 gap-y-1 rounded-card bg-acao px-5 py-3 text-white">
+         class="mt-4 flex flex-wrap items-center gap-x-8 gap-y-1 rounded-card bg-acao px-5 py-3 text-white md:sticky md:bottom-0">
       <p class="titulo text-base font-semibold">
         Quantidade Total: <span class="tabular-nums">{{ totais.semLimite ? 'Sem limite' : totais.quantidade }}</span>
         <span v-if="totais.teto && !totais.semLimite" class="font-normal opacity-80"> / {{ totais.teto }}</span>
       </p>
       <p class="text-sm opacity-90">
-        Vendido + pendente: <span class="tabular-nums">{{ totais.vendidos + totais.reservados }}</span>
+        Vendido + pendente: <span class="tabular-nums" data-parte="vendido-total">{{ totais.vendidosContandoCombo + totais.reservados }}</span>
+        <span v-if="totais.vendidosContandoCombo !== totais.vendidos" class="opacity-80">
+          ({{ totais.vendidos }} vendas · combo conta as pessoas)
+        </span>
       </p>
       <p class="text-sm opacity-90">
         Disponível: <span class="tabular-nums">{{ totais.semLimite ? 'sem limite' : totais.disponivel }}</span>

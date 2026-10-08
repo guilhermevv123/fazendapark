@@ -395,7 +395,7 @@ useHead({ title: 'Sessões e datas' })
     </section>
 
     <div v-if="visiveis.length"
-         class="sticky bottom-0 mt-4 flex flex-wrap items-center gap-x-8 rounded-card bg-acao px-5 py-3 text-white">
+         class="mt-4 flex flex-wrap items-center gap-x-8 rounded-card bg-acao px-5 py-3 text-white md:sticky md:bottom-0">
       <p class="titulo text-base font-semibold">
         Pessoas confirmadas no período: <span class="tabular-nums">{{ totalPessoas }}</span>
       </p>

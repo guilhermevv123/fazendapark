@@ -232,7 +232,11 @@ useHead({ title: 'Vendas' })
       </div>
       <div class="card" data-parte="ingressos-vendidos">
         <p class="rotulo-kpi">Ingressos vendidos</p>
-        <p class="numero-kpi mt-1">{{ data.totais.ingressosVendidos }}</p>
+        <p class="numero-kpi mt-1">{{ data.totais.ingressosContandoCombo ?? data.totais.ingressosVendidos }}</p>
+        <p v-if="data.totais.ingressosContandoCombo != null && data.totais.ingressosContandoCombo !== data.totais.ingressosVendidos"
+           class="mt-1 text-sm text-tinta-suave" data-parte="vendas-de-combo">
+          <strong class="text-tinta">{{ data.totais.ingressosVendidos }} vendas</strong> · cada combo conta as pessoas que leva
+        </p>
         <p class="mt-1 text-sm text-tinta-suave">
           sem cortesia<template v-if="data.totais.cortesias"> · + {{ data.totais.cortesias }} de cortesia</template>
         </p>
@@ -256,7 +260,7 @@ useHead({ title: 'Vendas' })
 
     <!-- lista -->
     <div v-else-if="data" class="card overflow-x-auto p-0">
-      <table class="w-full text-sm">
+      <table class="tabela-cartoes w-full text-sm">
         <thead class="border-b border-linha text-left text-xs uppercase text-tinta-fraca">
           <tr>
             <th class="px-4 py-3 font-medium">Pedido</th>

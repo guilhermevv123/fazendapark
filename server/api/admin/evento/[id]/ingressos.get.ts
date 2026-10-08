@@ -68,6 +68,7 @@ export default defineEventHandler(async (event) => {
       sessoesCobertas: s.sessions_covered,
       lotes: lotes.filter((l) => l.sector_id === s.id).map((l) => {
         const p = precificar(Number(l.price_cents), bps, modo)
+        const tiposDoLote = tipos.filter((t) => t.lot_id === l.id)
         return {
           id: l.id, nome: l.name, descricao: l.description,
           faceCents: Number(l.price_cents),
@@ -75,13 +76,18 @@ export default defineEventHandler(async (event) => {
           totalCents: p.totalCents,
           produtorRecebeCents: p.produtorCents,
           quantidade: l.quantity, vendidos: l.sold, reservados: l.reserved,
+          /**
+           * o vendido contando o que cada ingresso vale em gente (dono, 08/10: "um combo de 10
+           * vale como 10 ingressos"). `vendidos` segue em unidades: é o que o estoque desconta.
+           */
+          vendidosContandoCombo: vendidosEmPessoas(l, tiposDoLote, Number(s.admits ?? 1)),
           disponivel: l.quantity - l.sold - l.reserved,
           minPorCompra: l.min_per_order, maxPorCompra: l.max_per_order,
           canais: l.channels, visivel: l.visible,
           abreEm: l.starts_at, expiraEm: l.expires_at, ordem: l.sort_order,
           // Vendido > 0 é o que trava exclusão e redução de estoque.
           podeApagar: Number(l.sold) === 0 && Number(l.reserved) === 0,
-          tipos: tipos.filter((t) => t.lot_id === l.id).map((t) => {
+          tipos: tiposDoLote.map((t) => {
             const face = faceDoTipo(Number(l.price_cents), Number(t.discount_bps), bps, modo, (t.price_cents == null ? null : Number(t.price_cents)))
             const pp = precificar(face, bps, modo)
             return {
@@ -95,6 +101,8 @@ export default defineEventHandler(async (event) => {
               diasDeUso: limparDiasDeUso(t.dias_de_uso),
               /** pessoas por ingresso deste tipo (048, combo de 10); `null` = a do setor */
               pessoas: t.admits == null ? null : Number(t.admits),
+              /** o vendido deste tipo em gente: combo de 10 com 3 vendidos = 30 */
+              vendidosContandoCombo: Number(t.sold) * Number(t.admits ?? s.admits ?? 1),
               faceCents: pp.faceCents, taxaCents: pp.feeCents, totalCents: pp.totalCents,
               podeApagar: Number(t.sold) === 0,
             }
@@ -104,3 +112,17 @@ export default defineEventHandler(async (event) => {
     })),
   }
 })
+
+/**
+ * O vendido do lote em gente: o vendido do lote (o número de sempre) mais as pessoas A MAIS que
+ * cada combo leva. Sem combo, sai igual a `lote.sold` — mesmo que o contador do tipo e o do lote
+ * não batam por 1 (estorno antigo), o lote sem combo nunca ganha o aviso à toa.
+ */
+function vendidosEmPessoas(lote: any, tiposDoLote: any[], doSetor: number) {
+  let aMais = 0
+  for (const t of tiposDoLote) {
+    if (t.admits == null) continue
+    aMais += Number(t.sold) * (Number(t.admits) - doSetor)
+  }
+  return Math.max(0, Number(lote.sold) * doSetor + aMais)
+}

@@ -393,7 +393,7 @@ useHead({ title: 'Extrato' })
           Por dia de pagamento
         </p>
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[520px] border-collapse text-sm">
+          <table class="tabela-cartoes w-full min-w-[520px] border-collapse text-sm">
             <thead>
               <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
                 <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Dia</th>
@@ -434,7 +434,7 @@ useHead({ title: 'Extrato' })
             pra ver o resto
           </p>
         </div>
-        <table class="w-full min-w-[1080px] border-collapse text-sm">
+        <table class="tabela-cartoes w-full min-w-[1080px] border-collapse text-sm">
           <thead>
             <tr class="border-b border-linha bg-fundo-cinza/60 text-left">
               <th class="titulo px-4 py-2 text-xs font-semibold uppercase tracking-wide text-tinta-rotulo">Pedido</th>
