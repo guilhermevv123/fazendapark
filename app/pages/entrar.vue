@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { destinoDoLogin } from '~/composables/destinoDoLogin'
 import CriarSenha from '~/components/CriarSenha.vue'
+import EsqueciSenha from '~/components/EsqueciSenha.vue'
 /**
  * Tela de login.
  *
@@ -23,6 +24,8 @@ const enviando = ref(false)
 const criandoSenha = ref(route.query.trocar === '1')
 const provisoria = ref('')
 const nome = ref('')
+/** "Esqueci a senha" (051): o link de senha nova por e-mail, sem depender de um master */
+const esqueci = ref(false)
 const destino = () => destinoDoLogin(route.query.de, useRequestURL().origin)
 // `?trocar=1` sem sessão (link copiado, sessão vencida): não há senha a trocar — volta ao login
 onMounted(async () => {
@@ -109,6 +112,8 @@ useHead({ title: 'Entrar' })
       <div class="mx-auto flex w-full max-w-[400px] flex-1 flex-col justify-center py-10">
         <CriarSenha v-if="criandoSenha" :provisoria="provisoria || undefined" :nome="nome"
                     class="animate-rise-in" @pronto="navigateTo(destino())" />
+        <EsqueciSenha v-else-if="esqueci" :email="email" :de="String(route.query.de ?? '/admin')"
+                      class="animate-rise-in" @voltar="esqueci = false" />
         <form v-else class="grid animate-rise-in gap-5" @submit.prevent="entrar">
           <div>
             <h1 class="titulo text-[30px] font-semibold tracking-[-0.02em] text-ink-900">Entrar</h1>
@@ -134,13 +139,10 @@ useHead({ title: 'Entrar' })
             {{ enviando ? 'Entrando…' : 'Entrar' }}
           </button>
 
-          <!-- Sem "recuperar por e-mail" de propósito: não há provedor de
-               e-mail configurado (server/utils/email.ts só simula), e um link
-               que promete e-mail que nunca chega é pior que dizer o caminho
-               que existe de verdade. -->
-          <p class="text-center text-[13px] leading-5 text-ink-500">
-            Esqueceu a senha? Peça a um master da equipe para gerar uma nova em Equipe.
-          </p>
+          <button type="button" class="mx-auto min-h-[44px] px-3 text-[14px] font-semibold text-pool-700 underline-offset-4 hover:underline"
+                  data-parte="esqueci-a-senha" @click="esqueci = true; erro = ''">
+            Esqueci a senha
+          </button>
         </form>
       </div>
 

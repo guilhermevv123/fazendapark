@@ -23,6 +23,7 @@ useHead({
 
 import InstalarPortaria from '~/components/InstalarPortaria.vue'
 import CriarSenha from '~/components/CriarSenha.vue'
+import EsqueciSenha from '~/components/EsqueciSenha.vue'
 import {
   aparelhoDaPortaria, esquecerLoginDaPortaria, eventosGuardadosDaPortaria, filasPendentesDaPortaria,
   guardarEventosDaPortaria, lembrarLoginDaPortaria, loginLembradoDaPortaria, situacaoOfflineDoEvento,
@@ -189,6 +190,8 @@ onBeforeMount(() => {
 })
 // senha provisória da Equipe: o porteiro cria a própria antes de ver os eventos (ver /entrar)
 const provisoria = ref('')
+/** "Esqueci a senha" (051): link de senha nova por e-mail, volta pra portaria */
+const esqueci = ref(false)
 const criandoSenha = computed(() => !!eu.value?.usuario?.trocarSenha)
 async function senhaCriada() {
   provisoria.value = ''
@@ -234,7 +237,10 @@ const leituras = (n: number) => `${n} ${n === 1 ? 'leitura' : 'leituras'}`
     <p v-if="pendentesTotal" class="faixa-aviso mb-4" role="status" data-parte="fila-sem-sessao">
       Há {{ leituras(pendentesTotal) }} guardadas neste aparelho. Entre para enviá-las — nada se perde.
     </p>
-    <form class="card grid gap-5 p-6" data-parte="login-portaria" @submit.prevent="entrar">
+    <div v-if="esqueci" class="card p-6">
+      <EsqueciSenha :email="email" de="/portaria" @voltar="esqueci = false" />
+    </div>
+    <form v-else class="card grid gap-5 p-6" data-parte="login-portaria" @submit.prevent="entrar">
       <div>
         <h1 class="titulo text-[28px] font-semibold tracking-[-0.02em] text-ink-900">Portaria</h1>
         <p class="mt-1 text-[15px] text-ink-500">Entre com o e-mail e a senha do seu acesso.</p>
@@ -252,9 +258,10 @@ const leituras = (n: number) => `${n} ${n === 1 ? 'leitura' : 'leituras'}`
       <button type="submit" class="btn-primario w-full py-3 text-base" :disabled="enviando">
         {{ enviando ? 'Entrando…' : 'Entrar' }}
       </button>
-      <p class="text-center text-[13px] leading-5 text-ink-500">
-        Esqueceu a senha? Peça a um master da equipe para gerar uma nova em Equipe.
-      </p>
+      <button type="button" class="mx-auto min-h-[44px] px-3 text-[14px] font-semibold text-pool-700 underline-offset-4 hover:underline"
+              data-parte="esqueci-a-senha" @click="esqueci = true; erro = ''">
+        Esqueci a senha
+      </button>
     </form>
     <InstalarPortaria />
   </div>

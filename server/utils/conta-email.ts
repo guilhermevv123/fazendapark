@@ -78,7 +78,7 @@ export async function consumirLinkDaConta(token: unknown, finalidade: Finalidade
 /* ------------------------------------------------------------------ os e-mails */
 
 /** A moldura do e-mail da conta: o molde da marca (`email-visual.ts`), igual ao do ingresso. */
-function mensagemDaConta(d: {
+export function mensagemDaConta(d: {
   para: string; nome: string; assunto: string; titulo: string; frase: string
   botao: string; link: string; rodape: string; selo: string
 }): Mensagem {
