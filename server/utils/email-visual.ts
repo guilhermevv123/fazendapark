@@ -94,7 +94,7 @@ ${m.corpo}
       </td></tr>
       <tr><td bgcolor="${COR.uvaEscura}" style="background:${COR.uvaEscura};padding:22px 28px;font-family:${FONTE}">
         <div style="font-size:15px;font-weight:bold;color:${COR.branco}">Conquista Park</div>
-        <div style="font-size:13px;color:${COR.uvaLinha};margin-top:4px">Parque aquático · Entre Gandu e Itamari, Bahia</div>
+        <div style="font-size:13px;color:${COR.uvaLinha};margin-top:4px">Parque aquático · Entre Gandu e Itamaraty, Bahia</div>
         <div style="font-size:13px;margin-top:10px">
           <a href="${escaparNoEmail(site)}" target="_blank" style="color:${COR.sol};text-decoration:none;font-weight:bold">${escaparNoEmail(siteVisivel)}</a>
         </div>
