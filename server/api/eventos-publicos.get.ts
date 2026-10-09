@@ -56,6 +56,7 @@
  */
 import { comCacheDaVitrine } from '../utils/cache-da-vitrine'
 import { q } from '../utils/db'
+import { vendeOnlineAgora } from '../utils/dias-de-uso'
 import type { ModoTaxa } from '../utils/dinheiro'
 import {
   LOTE_DA_VITRINE, menorTotalCents, restaDasVariacoes, restamPorTipo, situacoesDoSetor,
@@ -137,7 +138,8 @@ async function listarEventosPublicos() {
       ORDER BY s.sort_order, l.sort_order`, [ids])
 
   const tipos = await q<any>(
-    `SELECT s.event_id, tt.id, tt.lot_id, tt.kind, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents
+    `SELECT s.event_id, tt.id, tt.lot_id, tt.kind, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents,
+            tt.valid_dates::text[] AS dias
        FROM ticket_types tt
        JOIN lots l ON l.id = tt.lot_id AND ${LOTE_DA_VITRINE}
        JOIN sectors s ON s.id = l.sector_id
@@ -154,13 +156,28 @@ async function listarEventosPublicos() {
   // todas as variações esgotadas não é lote vigente e não vira preço. Sem isto
   // a home dava o evento por esgotado enquanto a página do evento ainda
   // mostrava o lote como disponível.
-  const restaPorLote = restaDasVariacoes(tipos)
-  for (const l of lotes) l.restaNasVariacoes = restaPorLote.get(l.id) ?? null
+  // PRAZO DA VENDA ONLINE (dono, 09/10): o tipo do dia que já começou sai do site — a MESMA régua
+  // da página do evento (`vendeOnlineAgora`). Lote cujas variações saíram todas sai junto; lote sem
+  // variação segue o 1º dia do evento.
+  const doEvento = new Map(abertos.map((e) => [e.id, e]))
+  const vende = (dias: unknown, eventId: string) => {
+    const e = doEvento.get(eventId)
+    return vendeOnlineAgora(dias, e?.starts_at, e?.timezone, agora)
+  }
+  const lotesComTipo = new Set(tipos.map((t) => t.lot_id))
+  const tiposVivos = tipos.filter((t) => vende(t.dias, t.event_id))
+  const lotesComTipoVivo = new Set(tiposVivos.map((t) => t.lot_id))
+  const lotesVivos = lotes.filter((l) => lotesComTipo.has(l.id) ? lotesComTipoVivo.has(l.id) : vende(null, l.event_id))
+  const fechouTudo = new Set(abertos.filter((e) => lotes.some((l) => l.event_id === e.id)
+    && !lotesVivos.some((l) => l.event_id === e.id)).map((e) => e.id))
+
+  const restaPorLote = restaDasVariacoes(tiposVivos)
+  for (const l of lotesVivos) l.restaNasVariacoes = restaPorLote.get(l.id) ?? null
 
   const eventos = abertos.map((e) => {
     // Mesmo agrupamento da página do evento: giro de lote é decisão do setor.
     const porSetor = new Map<string, any[]>()
-    for (const l of lotes) {
+    for (const l of lotesVivos) {
       if (l.event_id !== e.id) continue
       if (!porSetor.has(l.setor_id)) porSetor.set(l.setor_id, [])
       porSetor.get(l.setor_id)!.push(l)
@@ -184,12 +201,13 @@ async function listarEventosPublicos() {
 
     const aPartirDeCents = menorTotalCents({
       lotes: precificaveis,
-      tipos: tipos.filter((t) => t.event_id === e.id),
+      tipos: tiposVivos.filter((t) => t.event_id === e.id),
       feeBps: Number(e.fee_bps),
       modo: e.fee_mode_online as ModoTaxa,
     })
 
-    const situacao = situacaoDoEvento(situacoes)
+    // todos os dias já começaram: a venda online acabou (o resto é na portaria)
+    const situacao = fechouTudo.has(e.id) ? 'encerrado' as const : situacaoDoEvento(situacoes)
 
     return {
       nome: e.nome,

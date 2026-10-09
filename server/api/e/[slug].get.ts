@@ -34,6 +34,7 @@ import { faceDoTipo, precificar, type ModoTaxa } from '../../utils/dinheiro'
 import { cotaDeMeias } from '../../utils/meia-entrada'
 import { pagamentoOnline } from '../../utils/asaas'
 import { TETO_POR_COMPRA } from '../../utils/limite-de-compra'
+import { diaDoCorteOnline, fraseDosDiasDeUso, vendeOnlineAgora } from '../../utils/dias-de-uso'
 
 /** Abaixo disto a vitrine avisa "últimas unidades" — faixa, nunca o número. */
 export const LIMIAR_ULTIMAS = 10
@@ -610,7 +611,7 @@ async function montarVitrine(slug: string) {
   // evento que só leva 6 passam as duas e estouram juntas.
   const maxPorPedido = Number(ev.max_per_order ?? TETO_PADRAO_POR_PEDIDO)
 
-  const linhas = await q<any>(
+  const todasAsLinhas = await q<any>(
     `SELECT s.id AS setor_id, s.name AS setor, s.kind, s.description AS setor_descricao,
             s.max_per_customer AS setor_max_por_cpf,
             ses.id AS sessao_id, ses.title AS sessao, ses.starts_at AS sessao_inicio,
@@ -626,9 +627,10 @@ async function montarVitrine(slug: string) {
       WHERE s.event_id = $1
       ORDER BY s.sort_order, l.sort_order`, [ev.id])
 
-  const tipos = await q<any>(
+  const todosOsTipos = await q<any>(
     `SELECT tt.id, tt.lot_id, tt.name, tt.quantity, tt.sold, tt.discount_bps, tt.price_cents,
-            tt.kind, tt.requires_document, tt.sort_order, tt.max_per_customer
+            tt.kind, tt.requires_document, tt.sort_order, tt.max_per_customer,
+            tt.valid_dates::text[] AS dias
        FROM ticket_types tt
        JOIN lots l ON l.id = tt.lot_id AND ${LOTE_DA_VITRINE}
        JOIN sectors s ON s.id = l.sector_id
@@ -639,9 +641,36 @@ async function montarVitrine(slug: string) {
   // Sem isto a vitrine anunciava meia que o checkout recusa por cota. Entra
   // antes de tudo porque é ele que alimenta as duas contas de baixo.
   const restamDoTipo = restamPorTipo(
-    linhas.map((l: any) => ({ id: l.lote_id, quantity: l.quantity, half_quota_bps: l.half_quota_bps })),
-    tipos)
-  for (const t of tipos) t.restam = restamDoTipo.get(t.id) ?? 0
+    todasAsLinhas.map((l: any) => ({ id: l.lote_id, quantity: l.quantity, half_quota_bps: l.half_quota_bps })),
+    todosOsTipos)
+  for (const t of todosOsTipos) t.restam = restamDoTipo.get(t.id) ?? 0
+
+  // PRAZO DA VENDA ONLINE (dono, 09/10): o ingresso de um dia sai do site à meia-noite que COMEÇA
+  // esse dia — "se o primeiro ingresso é sexta, quinta tem que acabar"; dali em diante, só na
+  // portaria. Tipo sem dia marcado usa o 1º dia do evento. A cota da meia (acima) é contada com
+  // todos os tipos, inclusive os que saíram: a venda deles conta na cota do lote.
+  const fusoDoEvento = ev.timezone || 'America/Bahia'
+  const diasEncerrados = new Set<string>()
+  // Só com a porta do EVENTO aberta: evento fechado (terminou, prazo vencido) segue mostrando os
+  // lotes como "fechado", com a frase da porta — é ela que explica o não.
+  const tipos = todosOsTipos.filter((t: any) => {
+    if (!abertas || vendeOnlineAgora(t.dias, ev.starts_at, fusoDoEvento, agora)) return true
+    const d = diaDoCorteOnline(t.dias, ev.starts_at, fusoDoEvento)
+    if (d) diasEncerrados.add(d)
+    return false
+  })
+  // lote cujas variações saíram todas sai junto (sem isso ele viraria uma linha SEM tipo, vendendo
+  // pelo preço do lote); lote sem variação nenhuma segue a regra do 1º dia do evento
+  const lotesComTipo = new Set(todosOsTipos.map((t: any) => t.lot_id))
+  const lotesComTipoVivo = new Set(tipos.map((t: any) => t.lot_id))
+  const linhas = todasAsLinhas.filter((l: any) => {
+    if (lotesComTipo.has(l.lote_id)) return lotesComTipoVivo.has(l.lote_id)
+    if (!abertas || vendeOnlineAgora(null, ev.starts_at, fusoDoEvento, agora)) return true
+    const d = diaDoCorteOnline(null, ev.starts_at, fusoDoEvento)
+    if (d) diasEncerrados.add(d)
+    return false
+  })
+  const soNaPortaria = diasEncerrados.size ? fraseDosDiasDeUso([...diasEncerrados]) : null
 
   // O teto das variações vai pendurado na linha ANTES de decidir situação: sem
   // ele o lote que só tem prateleira (e nenhuma variação pra vender) trava o
@@ -794,6 +823,8 @@ async function montarVitrine(slug: string) {
       thumb: ev.thumb_url,
       suporte: ev.support_value ? { tipo: ev.support_kind, valor: ev.support_value } : null,
       aPartirDeCents: menorTotalCents({ lotes: paraPreco, tipos, feeBps: bps, modo }),
+      /** "sexta 09/10": dias cuja venda pelo site já encerrou (só na portaria). null = nenhum */
+      soNaPortaria,
     },
     setores: saida,
   }

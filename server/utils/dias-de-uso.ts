@@ -120,3 +120,32 @@ export function conferirDiasDeUso(dias: unknown, evento: DiaDoEvento[]):
   }
   return { ok: true, dias: limpos }
 }
+
+/* ------------------------------------------------- o prazo da venda online (dono, 09/10) */
+
+/**
+ * O dia em que o tipo PARA de vender pelo site: o 1º dia de uso dele; sem dias marcados, o 1º dia
+ * do evento. Dono, 09/10: "se o primeiro ingresso é sexta-feira, quinta-feira tem que acabar ...
+ * se o próximo evento começa quarta, só pode comprar até terça, quando der meia-noite ... depois
+ * é na portaria, presencial". O corte é a meia-noite (fuso do evento) que COMEÇA esse dia.
+ */
+export function diaDoCorteOnline(dias: unknown, inicioDoEvento: Date | string | null | undefined,
+  fuso?: string | null): string | null {
+  const marcados = limparDiasDeUso(dias)
+  if (marcados) return marcados[0]!
+  return inicioDoEvento ? diaDeUsoDe(inicioDoEvento, fuso) : null
+}
+
+/** O site ainda vende este tipo agora? Hoje (no fuso do evento) tem que ser ANTES do dia do corte. */
+export function vendeOnlineAgora(dias: unknown, inicioDoEvento: Date | string | null | undefined,
+  fuso?: string | null, agora: Date = new Date()): boolean {
+  const corte = diaDoCorteOnline(dias, inicioDoEvento, fuso)
+  return !corte || diaDeUsoDe(agora, fuso) < corte
+}
+
+/** "Ingresso de sexta 09/10 agora só na portaria" — a frase do site e do checkout. */
+export function recadoDaVendaOnlineEncerrada(dia: string | null): string {
+  return dia
+    ? `A venda pelo site do ingresso de ${rotuloDoDiaDeUso(dia)} encerrou à meia-noite. Compre na portaria do parque.`
+    : 'A venda deste ingresso pelo site encerrou. Compre na portaria do parque.'
+}

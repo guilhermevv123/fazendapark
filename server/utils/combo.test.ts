@@ -57,3 +57,25 @@ describe('pessoas por dia com as partes', () => {
     expect(r.dias[0]).toMatchObject({ pessoas: 13, emCombo: 10 })
   })
 })
+
+import { diaDoCorteOnline, vendeOnlineAgora } from './dias-de-uso'
+describe('prazo da venda online por dia (dono, 09/10)', () => {
+  // quinta 08/10 23:59 e sexta 09/10 00:00 no fuso do parque (UTC−3)
+  const quinta2359 = new Date('2026-10-09T02:59:00Z')
+  const sexta0000 = new Date('2026-10-09T03:00:00Z')
+  it('o ingresso de sexta vende até quinta 23:59 e sai à meia-noite', () => {
+    expect(vendeOnlineAgora(['2026-10-09'], '2026-10-09T12:00:00Z', 'America/Bahia', quinta2359)).toBe(true)
+    expect(vendeOnlineAgora(['2026-10-09'], '2026-10-09T12:00:00Z', 'America/Bahia', sexta0000)).toBe(false)
+  })
+  it('o de sábado segue vendendo na sexta', () => {
+    expect(vendeOnlineAgora(['2026-10-10'], '2026-10-09T12:00:00Z', 'America/Bahia', sexta0000)).toBe(true)
+  })
+  it('tipo sem dia: o corte é o 1º dia do evento (evento de quarta vende até terça 23:59)', () => {
+    expect(diaDoCorteOnline(null, '2026-10-14T12:00:00Z', 'America/Bahia')).toBe('2026-10-14')
+    expect(vendeOnlineAgora(null, '2026-10-14T12:00:00Z', 'America/Bahia', new Date('2026-10-14T02:59:00Z'))).toBe(true)
+    expect(vendeOnlineAgora(null, '2026-10-14T12:00:00Z', 'America/Bahia', new Date('2026-10-14T03:00:00Z'))).toBe(false)
+  })
+  it('vários dias: o corte é o PRIMEIRO', () => {
+    expect(diaDoCorteOnline(['2026-10-11', '2026-10-10'], null, 'America/Bahia')).toBe('2026-10-10')
+  })
+})

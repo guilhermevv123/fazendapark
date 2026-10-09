@@ -471,16 +471,31 @@ useHead(() => ({
         </span>
       </p>
 
+      <!-- prazo da venda online (dono, 09/10): o dia que já começou só vende na portaria -->
+      <p v-if="data.evento.soNaPortaria && temLotes" class="faixa-aviso mt-4" role="status" data-parte="so-na-portaria">
+        <span class="block font-semibold text-tinta">Ingresso de {{ data.evento.soNaPortaria }}: só na portaria</span>
+        <span class="mt-1 block">A venda pelo site de cada dia encerra à meia-noite em que ele começa. Para esse dia, compre na portaria do parque.</span>
+      </p>
+
       <!-- B30: evento sem lote na vitrine — "em breve", com saída -->
       <section v-if="!temLotes" class="card mt-6 flex flex-col items-center py-10 text-center">
         <span class="grid size-14 place-items-center rounded-2xl bg-pool-50 text-pool-700" aria-hidden="true">
           <IconeMenu nome="ingresso" :tamanho="28" />
         </span>
-        <h2 class="titulo mt-4 text-xl font-semibold text-tinta">Ingressos em breve</h2>
-        <p class="mt-2 max-w-md text-tinta-suave">
-          Os {{ (data.evento.substantivo || 'ingressos').toLowerCase() }} deste evento ainda não foram
-          colocados à venda. Volte mais tarde — ou veja os outros eventos.
-        </p>
+        <template v-if="data.evento.soNaPortaria">
+          <h2 class="titulo mt-4 text-xl font-semibold text-tinta" data-parte="venda-online-encerrada">Venda pelo site encerrada</h2>
+          <p class="mt-2 max-w-md text-tinta-suave">
+            O evento já começou: os {{ (data.evento.substantivo || 'ingressos').toLowerCase() }} agora são
+            vendidos só na portaria do parque.
+          </p>
+        </template>
+        <template v-else>
+          <h2 class="titulo mt-4 text-xl font-semibold text-tinta">Ingressos em breve</h2>
+          <p class="mt-2 max-w-md text-tinta-suave">
+            Os {{ (data.evento.substantivo || 'ingressos').toLowerCase() }} deste evento ainda não foram
+            colocados à venda. Volte mais tarde — ou veja os outros eventos.
+          </p>
+        </template>
         <NuxtLink to="/" class="btn-primario mt-6 px-5">
           Ver outros eventos
         </NuxtLink>

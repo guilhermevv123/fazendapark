@@ -60,6 +60,7 @@ import { pixPeloMercadoPago } from '../utils/mercadopago-conta'
 import { gerarPixDoPedido, type PixDoPedido } from '../utils/mercadopago'
 import { compradorDaConta, contaDaSessaoDoCliente } from '../utils/conta-do-cliente'
 import { TETO_POR_COMPRA } from '../utils/limite-de-compra'
+import { diaDoCorteOnline, recadoDaVendaOnlineEncerrada, vendeOnlineAgora } from '../utils/dias-de-uso'
 
 /**
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa.
@@ -302,7 +303,8 @@ export default defineEventHandler(async (event) => {
   // Limite que não recusa é pior que limite nenhum — o produtor configura,
   // vê na tela e acredita.
   const tipos = tipoIds.length
-    ? await q<any>(`SELECT id, lot_id, name, kind, discount_bps, price_cents, requires_document, max_per_customer
+    ? await q<any>(`SELECT id, lot_id, name, kind, discount_bps, price_cents, requires_document, max_per_customer,
+                           valid_dates::text[] AS dias
                       FROM ticket_types WHERE id = ANY($1::uuid[])`, [tipoIds])
     : []
   const porTipo = new Map(tipos.map((t) => [t.id, t]))
@@ -322,6 +324,18 @@ export default defineEventHandler(async (event) => {
         statusMessage: `Escolha o tipo de ingresso de "${porLote.get(it.lotId)!.name}" `
           + '(inteira, meia-entrada…) antes de pagar.',
         data: { tipo: 'tipo_obrigatorio', lotId: it.lotId } })
+    }
+  }
+
+  // PRAZO DA VENDA ONLINE (dono, 09/10): o ingresso de um dia não vende pelo site depois da
+  // meia-noite que começa esse dia — a MESMA régua da vitrine (`vendeOnlineAgora`). Quem montou a
+  // compra antes da virada e pagou depois leva o não aqui, antes de qualquer reserva ou cobrança.
+  for (const it of dados.itens) {
+    const dias = it.ticketTypeId ? porTipo.get(it.ticketTypeId)?.dias : null
+    if (!vendeOnlineAgora(dias, ev.starts_at, ev.timezone)) {
+      throw createError({ statusCode: 409,
+        statusMessage: recadoDaVendaOnlineEncerrada(diaDoCorteOnline(dias, ev.starts_at, ev.timezone)),
+        data: { tipo: 'venda_online_encerrada', lotId: it.lotId, ticketTypeId: it.ticketTypeId ?? null } })
     }
   }
 

@@ -32,6 +32,7 @@ import { conferirCotaDeMeia, CotaDeMeiaEsgotada } from './meia-entrada'
 import { gerarCodigo } from './ingresso'
 import { faceDoTipo, precificar, type ModoTaxa } from './dinheiro'
 import { LOTE_DA_VITRINE, portaDeVenda } from '../api/e/[slug].get'
+import { vendeOnlineAgora } from './dias-de-uso'
 
 /** O ingresso como o reagendamento precisa ver. */
 /**
@@ -176,7 +177,8 @@ const SQL_OPCOES = `
          e.banner_url, e.max_per_customer,
          s.name AS setor, s.session_id, s.id AS setor_id, s.sort_order,
          l.id AS lote_id, l.name AS lote, l.price_cents,
-         tt.id AS tipo_id, tt.name AS tipo, tt.discount_bps, tt.price_cents AS tipo_price_cents
+         tt.id AS tipo_id, tt.name AS tipo, tt.discount_bps, tt.price_cents AS tipo_price_cents,
+         tt.valid_dates::text[] AS dias
     FROM events e
     JOIN sectors s ON s.event_id = e.id AND s.kind = 'ingresso'
     JOIN lots l ON l.sector_id = s.id AND ${LOTE_DA_VITRINE}
@@ -213,7 +215,9 @@ async function linhasDeOpcoes(i: IngressoParaReagendar, filtro = '', extra: unkn
   const params = [i.orgId, i.eventoId, i.especie, i.descontoBps, i.precoProprio ? i.tipo : null, ...extra]
   const rows = c ? (await c.query(sql, params)).rows : await q<any>(sql, params)
   // A porta do EVENTO (status, fim, prazo de venda) é a mesma função da vitrine e do checkout.
-  return rows.filter((r) => portaDeVenda(r).aberta && totalDaOpcao(r) <= i.pagoCents)
+  // prazo da venda online (09/10): dia que já começou não é destino pelo site
+  return rows.filter((r) => portaDeVenda(r).aberta && vendeOnlineAgora(r.dias, r.starts_at, r.timezone)
+    && totalDaOpcao(r) <= i.pagoCents)
 }
 
 /** Os dias/ingressos pra onde este ingresso pode ir. */
