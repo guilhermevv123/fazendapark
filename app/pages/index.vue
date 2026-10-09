@@ -71,7 +71,7 @@ const destaque = computed(() => eventos.value.find((e) => vende(e.situacao)) ?? 
 const irComprar = computed(() => (destaque.value ? `/e/${destaque.value.slug}` : '/#ingressos'))
 const cidade = computed(() => {
   const e = destaque.value ?? eventos.value[0]
-  return e?.cidade ? `${e.cidade}${e.estado ? `, ${e.estado}` : ''}` : 'Ubatã, BA'
+  return e?.cidade ? `${e.cidade}${e.estado ? `, ${e.estado}` : ''}` : 'Entre Gandu e Itamari, BA'
 })
 
 /**
@@ -244,9 +244,9 @@ const DUVIDAS = [
   },
 ]
 
-useHead({ title: 'Parque aquático em Ubatã, Bahia' })
+useHead({ title: 'Parque aquático entre Gandu e Itamari, Bahia' })
 useSeoMeta({
-  description: 'Toboáguas, piscinas e área infantil em Ubatã, Bahia. Compre o ingresso pelo site e entre com o QR Code.',
+  description: 'Toboáguas, piscinas e área infantil entre Gandu e Itamari, Bahia. Compre o ingresso pelo site e entre com o QR Code.',
 })
 </script>
 

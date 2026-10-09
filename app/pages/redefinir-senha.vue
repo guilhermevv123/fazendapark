@@ -111,7 +111,7 @@ useHead({ title: 'Criar senha nova' })
         </form>
       </div>
 
-      <p class="text-center text-[13px] text-ink-500">Conquista Park · Ubatã, Bahia</p>
+      <p class="text-center text-[13px] text-ink-500">Conquista Park · Entre Gandu e Itamari, Bahia</p>
     </main>
   </div>
 </template>

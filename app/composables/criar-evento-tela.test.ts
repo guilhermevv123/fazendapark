@@ -5,7 +5,7 @@
  *   · EVT-03: os horários valem no FUSO ESCOLHIDO no passo 5 — 20:00 em Manaus é 00:00 UTC do dia
  *     seguinte, qualquer que seja o relógio de quem cria (a expiração do lote também);
  *   · EVT-14: a faixa etária nasce "Livre" (0), como o servidor e o banco;
- *   · EVT-06 → 05/10: o endereço é fixo, o do parque (Ubatã/BA), sem campo pra digitar;
+ *   · EVT-06 → 05/10: o endereço é fixo, o do parque (Entre Gandu e Itamari/BA), sem campo pra digitar;
  *   · EVT-09: toda criação leva uma chave; resposta "repetido" diz que nada nasceu em dobro;
  *   · EVT-10: o rascunho é da PESSOA — quem entra depois no mesmo navegador não herda o do outro,
  *     e o de chave antiga (sem dono) é apagado;
@@ -92,7 +92,7 @@ describe('EVT-14, EVT-06 e EVT-09 — o que o assistente manda', () => {
     expect((tela.find('#idade').element as HTMLSelectElement).value).toBe('0')
     // 05/10: endereço fixo — nenhum campo pra digitar, o card mostra o do parque
     expect(tela.find('#cid').exists()).toBe(false)
-    expect(tela.find('[data-parte="local-fixo"]').text()).toContain('Ubatã/BA')
+    expect(tela.find('[data-parte="local-fixo"]').text()).toContain('Entre Gandu e Itamari/BA')
     await ateOPasso5(tela)
     await tela.find('#inicio').setValue('2031-03-10T20:00')
     await tela.find('#fim').setValue('2031-03-10T23:00')
@@ -100,7 +100,7 @@ describe('EVT-14, EVT-06 e EVT-09 — o que o assistente manda', () => {
     const corpo = corpoDoPost()
     expect(corpo.faixaEtaria).toBe(0)
     expect(corpo.online).toBe(false)
-    expect(corpo.local).toMatchObject({ nome: 'Fazenda Park Nova Conquista', cidade: 'Ubatã', estado: 'BA', cep: '45550-000' })
+    expect(corpo.local).toMatchObject({ nome: 'Fazenda Park Nova Conquista', cidade: 'Entre Gandu e Itamari', estado: 'BA', cep: '45550-000' })
     expect(corpo.chaveDeCriacao).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   })
 

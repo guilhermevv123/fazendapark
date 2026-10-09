@@ -26,7 +26,8 @@ export const subcategoriasDe = (categoria: string | null | undefined) =>
 /**
  * Fazenda Park Nova Conquista — o ponto do Google Maps que o dono mandou
  * (https://maps.app.goo.gl/AWbncf9LsfSvzaT7A → -13.937816, -39.4888029). Zona rural entre Itamari e
- * Gandu, a 2 km da BR-101; o endereço postal é Ubatã-BA, CEP 45550-000.
+ * Gandu, a 2 km da BR-101, CEP 45550-000. Pro cliente a cidade é "Entre Gandu e Itamari" (dono, 09/10:
+ * nada de Ubatã no site).
  */
 export const LOCAL_DO_PARQUE = {
   nome: 'Fazenda Park Nova Conquista',
@@ -34,7 +35,7 @@ export const LOCAL_DO_PARQUE = {
   endereco: 'Zona rural, a 2 km da BR-101 (entre Itamari e Gandu)',
   numero: 's/n',
   bairro: 'Zona rural',
-  cidade: 'Ubatã',
+  cidade: 'Entre Gandu e Itamari',
   estado: 'BA',
   complemento: '',
 } as const
