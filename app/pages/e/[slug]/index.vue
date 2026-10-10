@@ -21,6 +21,7 @@ import {
   pendenciasDoCarrinho, restaurarCarrinho, tetoDaLinha, totaisDoCarrinho,
   type DeclaracaoDeMeia, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
+import { apagarDaAba, gravarNaAba, lerDaAba } from '~/composables/armazenamentoDaAba'
 
 const route = useRoute()
 const slug = String(route.params.slug ?? '')
@@ -288,7 +289,7 @@ const CHAVE_CARRINHO = 'dt:carrinho'
 let restaurado = false
 
 function lerGuardado(): any {
-  try { return JSON.parse(sessionStorage.getItem(CHAVE_CARRINHO) || 'null') } catch { return null }
+  try { return JSON.parse(lerDaAba(CHAVE_CARRINHO) || 'null') } catch { return null }
 }
 
 onMounted(async () => {
@@ -310,17 +311,17 @@ watch([quantidades, declaracoes], () => {
   try {
     if (!linhas.value.length) {
       // esvaziou: some o DESTE evento — o de outro evento não é assunto daqui
-      if (lerGuardado()?.slug === slug) sessionStorage.removeItem(CHAVE_CARRINHO)
+      if (lerGuardado()?.slug === slug) apagarDaAba(CHAVE_CARRINHO)
       return
     }
-    sessionStorage.setItem(CHAVE_CARRINHO, JSON.stringify(
+    gravarNaAba(CHAVE_CARRINHO, JSON.stringify(
       carrinhoParaGuardar(slug, linhas.value, promoter.value, { comDocumento: false })))
   } catch { /* sem armazenamento (aba anônima cheia): o carrinho só não sobrevive ao F5 */ }
 }, { deep: true })
 
 function irParaPagamento() {
   if (!podePagar.value) return
-  sessionStorage.setItem(CHAVE_CARRINHO, JSON.stringify({
+  gravarNaAba(CHAVE_CARRINHO, JSON.stringify({
     ...carrinhoParaGuardar(slug, linhas.value, promoter.value, { comDocumento: true }),
     criadoEm: Date.now(),
   }))

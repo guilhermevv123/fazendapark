@@ -27,6 +27,7 @@ import {
   LIMITES_DO_FORMULARIO as LIMITE, opcoesDeParcela as parcelasPossiveis, situacaoDaCobranca,
   totaisDoCarrinho, VERSAO_DO_CARRINHO, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
+import { apagarDaAba, gravarNaAba, lerDaAba } from '~/composables/armazenamentoDaAba'
 import { cpfEscondido, telefoneLegivel, useContaDoCliente } from '~/composables/contaDoCliente'
 import { conferirCartao, type ConferenciaDoCartao, type DadosDoCartao } from '~/composables/cartao'
 import CartaoDeCredito from '~/components/CartaoDeCredito.vue'
@@ -263,7 +264,7 @@ const rotuloDoBotao = computed(() => {
 })
 
 const lerJson = (chave: string) => {
-  try { return JSON.parse(sessionStorage.getItem(chave) || 'null') } catch { return null }
+  try { return JSON.parse(lerDaAba(chave) || 'null') } catch { return null }
 }
 
 onMounted(() => {
@@ -272,7 +273,7 @@ onMounted(() => {
   // na última tela. Volta pra vitrine, onde ele se refaz em dois cliques.
   const c: Carrinho | null = bruto?.versao === VERSAO_DO_CARRINHO && bruto.slug === slug && bruto.linhas?.length
     ? bruto : null
-  if (bruto && !c) sessionStorage.removeItem(CHAVE_CARRINHO)
+  if (bruto && !c) apagarDaAba(CHAVE_CARRINHO)
 
   // Pedido já criado nesta aba tem prioridade sobre o carrinho: recarregar a
   // página enquanto o PIX não cai é o gesto mais comum que existe aqui, e sem
@@ -293,7 +294,7 @@ onMounted(() => {
       retomarCobranca(p)
       return
     }
-    sessionStorage.removeItem(CHAVE_PEDIDO)
+    apagarDaAba(CHAVE_PEDIDO)
   }
 
   if (!c) return void semCarrinho()
@@ -332,7 +333,7 @@ function retomarCobranca(p: any) {
  */
 function semCarrinho() {
   let pago: any = null
-  try { pago = JSON.parse(sessionStorage.getItem(CHAVE_PAGO) || 'null') }
+  try { pago = JSON.parse(lerDaAba(CHAVE_PAGO) || 'null') }
   catch { /* chave estragada não pode impedir o desvio de acontecer */ }
   navigateTo(destinoSemCarrinho(slug, pago))
 }
@@ -458,7 +459,7 @@ async function pagar(semDeclaracao = false) {
     if (pedidoAnterior.value) {
       if (!(await largarPedido(pedidoAnterior.value.pedido.pedidoId))) return
       pedidoAnterior.value = null
-      sessionStorage.removeItem(CHAVE_PEDIDO)
+      apagarDaAba(CHAVE_PEDIDO)
     }
     // o grátis não escolhe forma nenhuma (o servidor nem chega no gateway); `pix` é só o padrão
     const f: Forma = gratis.value ? 'pix' : forma.value
@@ -488,7 +489,7 @@ async function pagar(semDeclaracao = false) {
     linhasDoPedido.value = carrinho.value.linhas
     emailDoPedido.value = conta.value?.email ?? ''
     conferirOPrecoCobrado(r)
-    sessionStorage.removeItem(CHAVE_CARRINHO)
+    apagarDaAba(CHAVE_CARRINHO)
 
     // Pedido que já nasce pago: total zero não passa por gateway nenhum
     // (checkout.post.ts devolve `status: 'pago'` na hora). Sem carimbo aqui, o
@@ -506,7 +507,7 @@ async function pagar(semDeclaracao = false) {
     // que a etapa de cobrança mostra e que voltam pro carrinho se a pessoa
     // desistir deste pedido pra pagar de outro jeito. Da pessoa, só o e-mail
     // que a tela de "deu certo" cita.
-    sessionStorage.setItem(CHAVE_PEDIDO, JSON.stringify({
+    gravarNaAba(CHAVE_PEDIDO, JSON.stringify({
       slug, pedido: r, email: emailDoPedido.value, cupom: form.cupom.trim(), linhas: carrinho.value?.linhas ?? [],
       criadoEm: Date.now(),
     }))
@@ -659,7 +660,7 @@ async function conferirAgora(id: string) {
  */
 function lembrarPago(r: any) {
   const carimbo = carimboDePago(slug, r, pedido.value?.pedido)
-  if (carimbo) sessionStorage.setItem(CHAVE_PAGO, JSON.stringify(carimbo))
+  if (carimbo) gravarNaAba(CHAVE_PAGO, JSON.stringify(carimbo))
 }
 
 function aplicarEstado(r: any) {
@@ -679,7 +680,7 @@ function aplicarEstado(r: any) {
     return
   }
   if (situacao.value?.final) {
-    sessionStorage.removeItem(CHAVE_PEDIDO)
+    apagarDaAba(CHAVE_PEDIDO)
     return void pararRelogios()
   }
   // `estornado_parcial` é venda de pé (B01): parte do dinheiro voltou e os
@@ -688,7 +689,7 @@ function aplicarEstado(r: any) {
     pedido.value = { ...pedido.value, ...r }
     ingressos.value = r.ingressos ?? []
     etapa.value = 'pago'
-    sessionStorage.removeItem(CHAVE_PEDIDO)
+    apagarDaAba(CHAVE_PEDIDO)
     lembrarPago(r)
     pararRelogios()
   } else if (r.pagoSemIngresso) {
@@ -697,7 +698,7 @@ function aplicarEstado(r: any) {
     // pagou — e mandaria a pessoa comprar de novo, pagando duas vezes.
     erro.value = ''
     pagoSemIngresso.value = true
-    sessionStorage.removeItem(CHAVE_PEDIDO)
+    apagarDaAba(CHAVE_PEDIDO)
     pararRelogios()
   } else if (['expirado', 'cancelado', 'falhou'].includes(r.status)) {
     // O vigia NÃO para no 'expirado'. O PIX da tela pode ter sido pago no
@@ -710,7 +711,7 @@ function aplicarEstado(r: any) {
         + 'leva dois cliques.'
       : 'Esta reserva não está mais valendo e os ingressos voltaram para a venda. '
         + 'Escolha de novo — leva dois cliques.'
-    sessionStorage.removeItem(CHAVE_PEDIDO)
+    apagarDaAba(CHAVE_PEDIDO)
     if (r.status !== 'expirado') return void pararRelogios()
     clearInterval(timerContagem)
     // Uma hora de espera basta: a varredura cancela a cobrança no gateway
@@ -738,14 +739,14 @@ async function trocarPagamento() {
   try {
     if (!(await largarPedido(pedido.value.pedidoId))) return
     pararRelogios()
-    sessionStorage.removeItem(CHAVE_PEDIDO)
+    apagarDaAba(CHAVE_PEDIDO)
     const linhas = linhasDoPedido.value
     if (!linhas.length) return void navigateTo(`/e/${slug}`)
     const c: Carrinho = {
       versao: VERSAO_DO_CARRINHO, slug, linhas, totais: totaisDoCarrinho(linhas),
       criadoEm: Date.now(), promoter: carrinho.value?.promoter ?? null,
     }
-    sessionStorage.setItem(CHAVE_CARRINHO, JSON.stringify(c))
+    gravarNaAba(CHAVE_CARRINHO, JSON.stringify(c))
     carrinho.value = c
     pedido.value = null
     situacao.value = null

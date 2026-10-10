@@ -547,7 +547,7 @@ describe('carimbo de pago: quem nasce pago também precisa ser lembrado', () => 
     const tela = readFileSync(
       new URL('../pages/e/[slug]/pagamento.vue', import.meta.url), 'utf8')
 
-    const gravacoes = tela.match(/sessionStorage\.setItem\(\s*CHAVE_PAGO/g) ?? []
+    const gravacoes = tela.match(/(?:sessionStorage\.setItem|gravarNaAba)\(\s*CHAVE_PAGO/g) ?? []
     expect(gravacoes, 'CHAVE_PAGO tem que ser gravada num lugar só').toHaveLength(1)
 
     const chamadas = tela.match(/\blembrarPago\(/g) ?? []

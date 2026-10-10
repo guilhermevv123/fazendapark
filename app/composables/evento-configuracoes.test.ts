@@ -12,7 +12,7 @@ import { chamadas, limparTela, montarTela } from './.vitest-setup-dom'
 
 const tela = () => import('../pages/admin/evento/[id]/configuracoes.vue')
 const EV = 'ev-config'
-const CONFIG = {"id": "ev-config", "organizacao": "Fazenda Park Nova Conquista", "nome": "CONQUISTA PARK 4ª EDIÇÃO", "slug": "conquista-park-4-edicao", "descricao": "Vem aí uma nova experiência no Conquista Park! Atrações, diversão e momentos inesquecíveis para toda a família.", "status": "ativo", "comecaEm": "2026-10-18T23:09:49.574Z", "terminaEm": "2026-10-19T23:09:49.574Z", "vendaAte": "2026-10-19T23:09:49.574Z", "vendaAteMinutos": null, "esconderFim": false, "classificacao": 14, "substantivo": "Ingressos", "fuso": "America/Bahia", "moeda": "BRL", "online": false, "urlTransmissao": null, "local": "Fazenda Park Nova Conquista", "cep": "45550-000", "endereco": "Zona rural, a 2 km da BR-101 (entre Itamari e Gandu)", "numero": "s/n", "bairro": "Zona rural", "cidade": "Ubatã", "uf": "BA", "complemento": null, "lat": null, "lng": null, "banner": null, "thumb": null, "categoria": "Parques, Passeios e Tours", "subcategorias": ["Infantil", "Gastronomia"], "tags": [], "suporteTipo": "whatsapp", "suporteValor": "(73) 99842-1010", "privado": false, "minutosDeReserva": 20, "agruparPorSetor": true, "giroAutomatico": true, "taxaBps": 1000, "modoTaxaOnline": "repassar", "modoTaxaPdv": "absorver", "maxPorCliente": 20, "criadoEm": "2026-09-27T23:09:49.574Z", "atualizadoEm": "2026-09-27T23:09:49.574Z", "jaVendeu": false, "pedidosPagos": 0, "ingressos": 0}
+const CONFIG = {"id": "ev-config", "organizacao": "Fazenda Park Nova Conquista", "nome": "CONQUISTA PARK 4ª EDIÇÃO", "slug": "conquista-park-4-edicao", "descricao": "Vem aí uma nova experiência no Conquista Park! Atrações, diversão e momentos inesquecíveis para toda a família.", "status": "ativo", "comecaEm": "2026-10-18T23:09:49.574Z", "terminaEm": "2026-10-19T23:09:49.574Z", "vendaAte": "2026-10-19T23:09:49.574Z", "vendaAteMinutos": null, "esconderFim": false, "classificacao": 14, "substantivo": "Ingressos", "fuso": "America/Bahia", "moeda": "BRL", "online": false, "urlTransmissao": null, "local": "Fazenda Park Nova Conquista", "cep": "45550-000", "endereco": "Zona rural, a 2 km da BR-101 (entre Itamaraty e Gandu)", "numero": "s/n", "bairro": "Zona rural", "cidade": "Entre Gandu e Itamaraty", "uf": "BA", "complemento": null, "lat": null, "lng": null, "banner": null, "thumb": null, "categoria": "Parques, Passeios e Tours", "subcategorias": ["Infantil", "Gastronomia"], "tags": [], "suporteTipo": "whatsapp", "suporteValor": "(73) 99842-1010", "privado": false, "minutosDeReserva": 20, "agruparPorSetor": true, "giroAutomatico": true, "taxaBps": 1000, "modoTaxaOnline": "repassar", "modoTaxaPdv": "absorver", "maxPorCliente": 20, "criadoEm": "2026-09-27T23:09:49.574Z", "atualizadoEm": "2026-09-27T23:09:49.574Z", "jaVendeu": false, "pedidosPagos": 0, "ingressos": 0}
 
 async function montar(papel = 'master', config: any = CONFIG) {
   return montarTela(await tela(), {
@@ -107,7 +107,7 @@ describe('categoria pronta e endereço fixo', () => {
     await botao(w, 'Salvar').trigger('click')
     await new Promise((r) => setTimeout(r, 0))
     const corpo = chamadas.find((c) => c.opcoes?.method === 'PATCH')?.opcoes.body
-    expect(corpo).toMatchObject({ cep: '45550-000', cidade: 'Ubatã', bairro: 'Zona rural' })
+    expect(corpo).toMatchObject({ cep: '45550-000', cidade: 'Entre Gandu e Itamaraty', bairro: 'Zona rural' })
     expect(w.find('[data-parte="suporte-fixo"]').text()).toContain('(73) 99842-1010')
   })
 
