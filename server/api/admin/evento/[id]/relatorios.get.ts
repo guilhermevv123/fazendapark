@@ -74,12 +74,13 @@ import { q, q1 } from '../../../../utils/db'
 import { PAGANTE, PEDIDO_VIVO, SQL_LIQUIDO } from '../../../../utils/liquido'
 import { SQL_PUBLICO } from '../../../../utils/catraca'
 import { CANAL_DO_FUNIL, fusoDoEvento } from './dashboard.get'
+import { origensDoEvento } from '../../../../utils/origem-relatorio'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
 
   const ev = await q1<any>(
-    `SELECT id, name, starts_at, ends_at, fee_bps, created_at, timezone
+    `SELECT id, name, slug, starts_at, ends_at, fee_bps, created_at, timezone
        FROM events WHERE id = $1`, [id])
   if (!ev) throw createError({ statusCode: 404, statusMessage: 'Evento não encontrado' })
 
@@ -294,7 +295,11 @@ export default defineEventHandler(async (event) => {
       WHERE o.event_id = $1 AND ${PEDIDO_VIVO('o.')} AND o.paid_at IS NOT NULL
       GROUP BY 1 ORDER BY 1`, [id, ev.starts_at, fuso])
 
+  // de onde vieram as vendas (052): tráfego pago, robô, orgânico, direto — com as visitas
+  const origens = await origensDoEvento(ev, CANAL_DO_FUNIL)
+
   return {
+    origens,
     evento: {
       id: ev.id, nome: ev.name, comeca: ev.starts_at, termina: ev.ends_at,
       criadoEm: ev.created_at, taxaBps: ev.fee_bps,

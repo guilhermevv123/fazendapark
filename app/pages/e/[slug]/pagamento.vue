@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { origemGuardada } from '~/composables/origemDaVisita'
 /**
  * Checkout, em passos (28/09, pedido do dono):
  *
@@ -471,6 +472,8 @@ async function pagar(semDeclaracao = false) {
         cupom: form.cupom.trim() || undefined,
         // B07: a venda que veio pelo link do promoter é dele
         promoter: carrinho.value.promoter || undefined,
+        // 052: de onde a pessoa veio (UTM / clique de anúncio guardado na chegada ao site)
+        origem: origemGuardada(),
         forma: f,
         parcelas: f === 'credito' ? parcelas.value : 1,
         ...(f === 'credito' && usaCartaoNoSite.value ? {

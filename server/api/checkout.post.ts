@@ -61,6 +61,7 @@ import { gerarPixDoPedido, type PixDoPedido } from '../utils/mercadopago'
 import { compradorDaConta, contaDaSessaoDoCliente } from '../utils/conta-do-cliente'
 import { TETO_POR_COMPRA } from '../utils/limite-de-compra'
 import { diaDoCorteOnline, recadoDaVendaOnlineEncerrada, vendeOnlineAgora } from '../utils/dias-de-uso'
+import { OrigemDoPedido } from '../utils/origem'
 
 /**
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa.
@@ -186,6 +187,12 @@ export const Entrada = z.object({
     /** o cartão é de outra pessoa: o CPF dela (o antifraude do banco confere titular e CPF) */
     cpfTitular: z.string().max(14).optional(),
   }).optional(),
+  /**
+   * De onde veio a pessoa (052): a UTM / clique de anúncio que o navegador guardou na chegada ao
+   * site. Revalidada e reclassificada aqui (`utils/origem.ts`); inválida = pedido sem origem, nunca
+   * compra recusada.
+   */
+  origem: z.unknown().optional(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -491,9 +498,9 @@ export default defineEventHandler(async (event) => {
                            face_cents, fee_cents, platform_cents, discount_cents, total_cents,
                            payment_method, installments, promo_code_id, promoter_id, expires_at,
                            cadastro_pendente, customer_account_id,
-                           loyalty_program_id, loyalty_discount_cents)
+                           loyalty_program_id, loyalty_discount_cents, origem)
        VALUES ($1,$2,$3,$4,'aguardando_pagamento','online',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-               $15::jsonb, $16, $17, $18)
+               $15::jsonb, $16, $17, $18, $19::jsonb)
        RETURNING id, code`,
       [ev.org_id, ev.id, cliente.id, codigo,
        total.faceCents, total.feeCents, total.platformCents, total.discountCents, total.totalCents,
@@ -502,7 +509,8 @@ export default defineEventHandler(async (event) => {
        JSON.stringify(cadastroPendente({
          documento, nome: dados.comprador.nome, telefone: dados.comprador.telefone ?? null, cadastro,
        })), conta?.id ?? null,
-       comFidelidade?.programa.id ?? null, comFidelidade ? total.discountCents : 0])
+       comFidelidade?.programa.id ?? null, comFidelidade ? total.discountCents : 0,
+       origemDoPedido(dados.origem)])
 
     for (let i = 0; i < dados.itens.length; i++) {
       const it = dados.itens[i]
@@ -1500,4 +1508,11 @@ function retornoDaFatura(codigo: string): { callback?: { successUrl: string; aut
   const base = baseDoSite()
   if (!base) return {}
   return { callback: { successUrl: `${base}/ingressos/${encodeURIComponent(codigo)}`, autoRedirect: true } }
+}
+
+/** a origem que o navegador mandou, limpa — ou null (sem origem não recusa compra nenhuma) */
+function origemDoPedido(bruta: unknown): string | null {
+  const p = OrigemDoPedido.safeParse(bruta)
+  if (!p.success || (!p.data.ultimo && !p.data.primeiro)) return null
+  return JSON.stringify({ ultimo: p.data.ultimo ?? null, primeiro: p.data.primeiro ?? null })
 }

@@ -207,6 +207,66 @@ useHead({ title: 'Relatórios' })
       </div>
     </div>
 
+    <!-- 052 · De onde vieram as vendas (dono, 11/10: tráfego pago ativo, "não consigo saber de onde
+         está vindo a pessoa"). Visitas e vendas por origem; a conversão é pago ÷ visitante. -->
+    <div v-if="data.origens" class="card mt-4" data-parte="origens">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <p class="rotulo-kpi">De onde vieram as vendas</p>
+        <p class="text-xs text-tinta-fraca">
+          <template v-if="data.origens.rastreioDesde">rastreando desde {{ dataHora(data.origens.rastreioDesde) }}</template>
+          <template v-else>o rastreio começa na primeira visita depois desta atualização</template>
+        </p>
+      </div>
+      <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div v-for="t in data.origens.porTipo" :key="t.tipo" class="rounded-lg border border-linha p-3"
+             :class="t.tipo === 'pago' ? 'border-acao/40 bg-acao/5' : t.tipo === 'robo' ? 'border-ok/40 bg-ok-claro' : ''"
+             :data-origem="t.tipo">
+          <p class="text-sm font-semibold text-tinta">{{ t.rotulo }}</p>
+          <p class="mt-1 text-2xl font-bold tabular-nums text-tinta">{{ reais(t.receitaCents) }}</p>
+          <p class="mt-1 text-xs text-tinta-suave">
+            {{ t.pagos }} {{ t.pagos === 1 ? 'pedido pago' : 'pedidos pagos' }} · {{ t.ingressos }} ingressos
+          </p>
+          <p v-if="t.tipo !== 'sem_registro'" class="mt-0.5 text-xs text-tinta-fraca">
+            {{ t.visitantes }} {{ t.visitantes === 1 ? 'pessoa visitou' : 'pessoas visitaram' }}
+            <template v-if="t.conversaoPct != null"> · conversão {{ t.conversaoPct }}%</template>
+          </p>
+        </div>
+      </div>
+      <div v-if="data.origens.porCampanha.length" class="mt-4 overflow-x-auto">
+        <table class="w-full text-sm" data-parte="origens-campanhas">
+          <thead>
+            <tr class="border-b border-linha text-left text-xs text-tinta-fraca">
+              <th class="py-2 pr-3 font-medium">Origem · campanha · anúncio</th>
+              <th class="py-2 pr-3 text-right font-medium">Visitas</th>
+              <th class="py-2 pr-3 text-right font-medium">Pagos</th>
+              <th class="py-2 pr-3 text-right font-medium">Ingressos</th>
+              <th class="py-2 pr-3 text-right font-medium">Receita</th>
+              <th class="py-2 text-right font-medium">Conv.</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(c, i) in data.origens.porCampanha" :key="i" class="border-b border-linha last:border-0">
+              <td class="py-2 pr-3 text-tinta">
+                <span class="font-medium">{{ [c.fonte, c.meio].filter(Boolean).join(' / ') || c.rotulo }}</span>
+                <span v-if="c.campanha" class="block text-xs text-tinta-suave">{{ c.campanha }}<template v-if="c.conteudo"> · {{ c.conteudo }}</template></span>
+                <span class="block text-[11px] text-tinta-fraca">{{ c.rotulo }}</span>
+              </td>
+              <td class="py-2 pr-3 text-right tabular-nums text-tinta-suave">{{ c.visitantes }}</td>
+              <td class="py-2 pr-3 text-right tabular-nums text-tinta">{{ c.pagos }}</td>
+              <td class="py-2 pr-3 text-right tabular-nums text-tinta-suave">{{ c.ingressos }}</td>
+              <td class="py-2 pr-3 text-right tabular-nums text-tinta">{{ reais(c.receitaCents) }}</td>
+              <td class="py-2 text-right tabular-nums text-tinta-fraca">{{ c.conversaoPct != null ? `${c.conversaoPct}%` : '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-3 text-xs text-tinta-fraca">
+        Vendas do site pela origem guardada quando a pessoa chegou (último link com UTM ou anúncio em 30 dias).
+        "Facebook/Instagram sem UTM" é clique vindo de lá sem etiqueta — pode ser anúncio ou post.
+        Visitas contam o site todo no período de venda deste evento.
+      </p>
+    </div>
+
     <div v-if="serieDias.length" class="card mt-4" data-parte="por-dia">
       <div class="flex items-baseline justify-between">
         <p class="rotulo-kpi">Vendas por dia</p>
