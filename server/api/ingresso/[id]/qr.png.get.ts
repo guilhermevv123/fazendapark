@@ -20,13 +20,17 @@
 import QRCode from 'qrcode'
 import { q1 } from '../../../utils/db'
 import { montarQr } from '../../../utils/ingresso'
+import { codigoDoComboInteiro } from '../../../utils/combo'
 import { PEDIDO_VIVO } from '../../../utils/liquido'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
-  const { pedido, transferencia } = getQuery(event) as { pedido?: string; transferencia?: string }
+  const { pedido, transferencia, combo } = getQuery(event) as { pedido?: string; transferencia?: string; combo?: string }
+  /** `combo=1`: o QR do COMBO INTEIRO (um QR entra o grupo todo) — só pra quem comprou, pelo pedido */
+  const doCombo = combo === '1'
+  if (doCombo && !pedido) throw createError({ statusCode: 400, statusMessage: 'pedido ausente' })
   if (!pedido && !transferencia) {
     throw createError({ statusCode: 400, statusMessage: 'pedido ausente' })
   }
@@ -42,7 +46,7 @@ export default defineEventHandler(async (event) => {
   // e aí quem responde é o 410 de logo abaixo.
   const t = pedido
     ? await q1<any>(
-        `SELECT t.code, t.status, o.event_id,
+        `SELECT t.code, t.status, o.event_id, t.combo_group,
                 EXISTS (SELECT 1 FROM ticket_transfers tr
                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido') AS transferido
            FROM tickets t JOIN orders o ON o.id = t.order_id
@@ -66,9 +70,13 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 410, statusMessage: 'Ingresso transferido para outra pessoa' })
   }
 
+  if (doCombo && (!t.combo_group || t.status !== 'valido')) {
+    throw createError({ statusCode: 404, statusMessage: 'Combo não encontrado' })
+  }
+
   let conteudo: string
   try {
-    conteudo = montarQr(t.code, t.event_id)
+    conteudo = montarQr(doCombo ? codigoDoComboInteiro(t.code) : t.code, t.event_id)
   } catch (e: any) {
     // Sem chave de ingresso configurada (PROD-03): não é o ingresso que está
     // errado, é a instalação. 503 com o que fazer na portaria, não 500 mudo.

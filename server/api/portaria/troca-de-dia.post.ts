@@ -26,7 +26,7 @@ import { diaDeUsoDe, limparDiasDeUso, valeNoDiaDeUso } from '../../utils/dias-de
 import { ehPassaporte, retratoDoPublico, SQL_GRAVA_ENTRADA, SQL_MARCA_ENTRADA, SQL_PUBLICO } from '../../utils/catraca'
 import { conferirTroca, opcoesDeTroca, ROTULO_DA_FORMA, type FormaDeTroca } from '../../utils/troca-de-dia'
 import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../../utils/troca-de-dia-banco'
-import { SQL_PESSOAS_DO_INGRESSO } from '../../utils/combo'
+import { parteDoComboInteiro, SQL_PESSOAS_DO_INGRESSO } from '../../utils/combo'
 
 const Corpo = z.object({
   /** uuid do tablet: é o id da passagem E da troca */
@@ -77,7 +77,9 @@ export default defineEventHandler(async (event) => {
   const qrAntigo = !lido.ok && lido.chaveAposentada === true && !!lido.code
   if (!lido.ok && lido.motivo === 'assinatura' && !qrAntigo) recusar(400, 'QR inválido.')
   if ((lido.ok || qrAntigo) && lido.eventId !== eventId) recusar(400, 'Ingresso é de outro evento.')
-  const codigo = lido.ok || qrAntigo ? lido.code! : qr.trim().toUpperCase()
+  const codigoDoQr = lido.ok || qrAntigo ? lido.code! : qr.trim().toUpperCase()
+  // QR do combo inteiro (`…-COMBO`): vem SEMPRE com a parte de cada pessoa; o código é o da parte
+  const codigo = parteDoCombo ? parteDoComboInteiro(codigoDoQr) ?? codigoDoQr : codigoDoQr
 
   const ingresso = await q1<any>(
     `SELECT t.id, t.status, t.ticket_type_id, tt.name AS tipo, s.sessions_covered,
@@ -88,7 +90,9 @@ export default defineEventHandler(async (event) => {
        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
       WHERE t.org_id = $2 AND t.event_id = $3 AND ${parteDoCombo
         ? `t.combo_seq = $4 AND t.combo_group =
-             (SELECT b.combo_group FROM tickets b WHERE b.code = $1 AND b.org_id = $2)`
+             (SELECT b.combo_group FROM tickets b WHERE b.code = $1 AND b.org_id = $2)
+             -- a parte transferida é do destinatário: troca pelo código dele
+             AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr WHERE tr.ticket_id = t.id AND tr.status = 'concluido')`
         : 't.code = $1'}`, parteDoCombo ? [codigo, orgId, eventId, parteDoCombo] : [codigo, orgId, eventId])
   if (!ingresso) recusar(404, 'Ingresso não encontrado neste evento.')
   if (ingresso.status === 'cancelado') recusar(409, 'Ingresso cancelado — não dá pra trocar o dia.')

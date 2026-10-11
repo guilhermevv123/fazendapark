@@ -79,3 +79,33 @@ describe('prazo da venda online por dia (dono, 09/10)', () => {
     expect(diaDoCorteOnline(['2026-10-11', '2026-10-10'], null, 'America/Bahia')).toBe('2026-10-10')
   })
 })
+
+// portaria, 10/10: "um QR Code só pra ler os 10 ... quando lê, lê automaticamente tudo"
+describe('QR do combo inteiro', () => {
+  it('o código do grupo é o da parte + -COMBO, e volta pra parte (digitado em minúscula também)', async () => {
+    const { codigoDoComboInteiro, parteDoComboInteiro } = await import('./combo')
+    expect(codigoDoComboInteiro('ING-ABCD-EFGH')).toBe('ING-ABCD-EFGH-COMBO')
+    expect(parteDoComboInteiro('ING-ABCD-EFGH-COMBO')).toBe('ING-ABCD-EFGH')
+    expect(parteDoComboInteiro(' ing-abcd-efgh-combo ')).toBe('ING-ABCD-EFGH')
+    expect(parteDoComboInteiro('ING-ABCD-EFGH')).toBeNull()
+    expect(parteDoComboInteiro('-COMBO')).toBeNull()
+    expect(parteDoComboInteiro(null)).toBeNull()
+  })
+
+  it('o pedido ganha UM QR por combo com 2+ pessoas ainda pra entrar, na frente da pessoa 1', async () => {
+    const { combosDoPedido } = await import('./combo')
+    const parte = (g: string, k: number, extra: any = {}) =>
+      ({ id: `${g}${k}`, code: `CON-${g}${k}-AAAA`, status: 'valido', combo_group: g, combo_seq: k, combo_size: 3, ...extra })
+    const r = combosDoPedido([
+      { id: 'solta', code: 'ING-SOLT-AAAA', status: 'valido' },
+      parte('a', 1, { status: 'usado' }), parte('a', 2), parte('a', 3),
+      parte('b', 1), parte('b', 2, { transferido: true }), parte('b', 3, { status: 'usado' }),
+      parte('c', 1), parte('c', 2), parte('c', 3, { status: 'cancelado' }),
+    ])
+    // a: 2 restam, começa pela 2; b: só 1 resta (a outra é do amigo) = sem QR do grupo; c: 2 restam
+    expect(r).toEqual([
+      { grupo: 'a', tamanho: 3, restam: 2, ticketId: 'a2', codigoDaParte: 'CON-a2-AAAA', codigo: 'CON-a2-AAAA-COMBO', antesDe: 'a1' },
+      { grupo: 'c', tamanho: 3, restam: 2, ticketId: 'c1', codigoDaParte: 'CON-c1-AAAA', codigo: 'CON-c1-AAAA-COMBO', antesDe: 'c1' },
+    ])
+  })
+})

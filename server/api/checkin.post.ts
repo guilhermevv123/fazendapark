@@ -29,7 +29,7 @@ import { lerQr, MENSAGEM_CHECKIN, type ResultadoCheckin } from '../utils/ingress
 import { diaDeUsoDe, limparDiasDeUso, mensagemForaDoDiaDeUso, valeNoDiaDeUso } from '../utils/dias-de-uso'
 import { explicarErro } from './admin/evento/index.post'
 import { opcoesDeTroca } from '../utils/troca-de-dia'
-import { SQL_PESSOAS_DO_INGRESSO } from '../utils/combo'
+import { parteDoComboInteiro, SQL_PESSOAS_DO_INGRESSO } from '../utils/combo'
 import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../utils/troca-de-dia-banco'
 
 /** os campos com o nome da tela: a recusa diz O QUE corrigir (ADM-36), não "Dados inválidos" */
@@ -73,16 +73,23 @@ export default defineEventHandler(async (event) => {
   // combo (050): toda resposta sobre uma parte diz quem do combo já entrou — DEPOIS da decisão
   const combo = ctx.comboGrupo && resposta && typeof resposta === 'object'
     ? await comboDoIngresso(ctx.comboGrupo, ctx.comboSeq) : null
-  const r = combo ? { ...resposta, combo } : resposta
+  const r = combo ? { ...resposta, combo, ...(ctx.comboInteiro ? { comboInteiro: true } : {}) } : resposta
   return ctx.qrAntigo && r && typeof r === 'object'
     ? { ...r, qrAntigo: true, aviso: AVISO_QR_ANTIGO }
     : r
 })
 
-/** as partes do combo, na ordem, com o estado de cada uma: "9 de 10 entraram" */
+/**
+ * as partes do combo, na ordem, com o estado de cada uma: "9 de 10 entraram". A parte TRANSFERIDA
+ * pra outra pessoa sai como 'transferido': quem entra com ela é o destinatário, pelo código dele —
+ * nem o QR do combo inteiro nem "entrar os outros" a liberam.
+ */
 export async function comboDoIngresso(grupo: string, seq: number) {
   const partes = await q<{ seq: number; status: string }>(
-    `SELECT combo_seq AS seq, status FROM tickets WHERE combo_group = $1 ORDER BY combo_seq`, [grupo])
+    `SELECT t.combo_seq AS seq,
+            CASE WHEN t.status = 'valido' AND EXISTS (SELECT 1 FROM ticket_transfers tr WHERE tr.ticket_id = t.id AND tr.status = 'concluido') THEN 'transferido'
+                 ELSE t.status END AS status
+       FROM tickets t WHERE t.combo_group = $1 ORDER BY t.combo_seq`, [grupo])
   return { seq: Number(seq), tamanho: partes.length,
            partes: partes.map((p) => ({ seq: Number(p.seq), status: p.status })) }
 }
@@ -171,7 +178,7 @@ async function decidir(event: H3Event) {
   // chave aposentada: o código lido vale como o digitado (ver AVISO_QR_ANTIGO, acima)
   const qrAntigo = !lido.ok && lido.chaveAposentada === true && !!lido.code
   if (qrAntigo) (event.context as any).qrAntigo = true
-  const codigo = lido.ok || qrAntigo ? lido.code! : qr.trim().toUpperCase()
+  const codigoDoQr = lido.ok || qrAntigo ? lido.code! : qr.trim().toUpperCase()
 
   if (!lido.ok && lido.motivo === 'assinatura' && !qrAntigo) {
     // Formato certo, assinatura errada = alguém fabricou. Isso é o achado mais
@@ -180,6 +187,30 @@ async function decidir(event: H3Event) {
   }
   if ((lido.ok || qrAntigo) && lido.eventId !== eventId) {
     return registrar('evento_errado', null, qr)
+  }
+
+  // QR do COMBO INTEIRO (`<código de uma parte>-COMBO`): a porta libera a primeira parte que ainda
+  // não entrou, pelo MESMO caminho da "pessoa k deste combo" — dia, sessão, troca, trava e livro
+  // iguais —, e a resposta leva `comboInteiro` pra tela liberar as outras na mesma leitura.
+  // Todas já entraram = a parte 1, que responde "já entrou" com o "10 de 10 entraram".
+  let codigo = codigoDoQr
+  let parte = parteDoCombo
+  const daParte = parteDoComboInteiro(codigoDoQr)
+  if (daParte) {
+    const grupo = await q1<{ combo_group: string | null; livre: number | null; proprio: boolean }>(
+      // `proprio`: existe ingresso com o código EXATO (código antigo/manual que termina em -COMBO) —
+      // aí ele é ingresso comum, não o QR do grupo
+      `SELECT b.combo_group,
+              EXISTS (SELECT 1 FROM tickets p WHERE p.code = $3 AND p.org_id = $2) AS proprio,
+              (SELECT min(x.combo_seq) FROM tickets x
+                WHERE x.combo_group = b.combo_group AND x.status = 'valido'
+                  AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr WHERE tr.ticket_id = x.id AND tr.status = 'concluido'))::int AS livre
+         FROM tickets b WHERE b.code = $1 AND b.org_id = $2`, [daParte, orgDaSessao, codigoDoQr])
+    if (grupo?.combo_group && !grupo.proprio) {
+      codigo = daParte
+      parte = parteDoCombo ?? grupo.livre ?? 1;
+      (event.context as any).comboInteiro = true
+    }
   }
 
   const ingresso = await q1<any>(
@@ -213,11 +244,13 @@ async function decidir(event: H3Event) {
        JOIN events ev ON ev.id = t.event_id
        LEFT JOIN ticket_types tt ON tt.id = t.ticket_type_id
        LEFT JOIN event_sessions es ON es.id = t.session_id
-      WHERE ${parteDoCombo
+      WHERE ${parte
         ? `t.org_id = $2 AND t.combo_seq = $3 AND t.combo_group =
-             (SELECT b.combo_group FROM tickets b WHERE b.code = $1 AND b.org_id = $2)`
+             (SELECT b.combo_group FROM tickets b WHERE b.code = $1 AND b.org_id = $2)
+             -- a parte transferida é do destinatário: entra pelo código dele, não pelo do combo
+             AND NOT EXISTS (SELECT 1 FROM ticket_transfers tr WHERE tr.ticket_id = t.id AND tr.status = 'concluido')`
         : 't.code = $1 AND t.org_id = $2'}`,
-    parteDoCombo ? [codigo, orgDaSessao, parteDoCombo] : [codigo, orgDaSessao])
+    parte ? [codigo, orgDaSessao, parte] : [codigo, orgDaSessao])
   // O `org_id` no WHERE é o que separa "ingresso de outro evento MEU"
   // (evento_errado, mensagem útil pro público) de "ingresso de outra
   // empresa" — que aqui simplesmente não existe.

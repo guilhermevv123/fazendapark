@@ -56,7 +56,7 @@ import { lerQr } from '../../utils/ingresso'
 import { diaDeUsoDe, limparDiasDeUso } from '../../utils/dias-de-uso'
 import { opcoesDeTroca, type TipoParaTroca } from '../../utils/troca-de-dia'
 import { pagoDoIngressoNaTroca, SQL_PAGO_DO_INGRESSO, tiposDaTrocaDeDia } from '../../utils/troca-de-dia-banco'
-import { SQL_PESSOAS_DO_INGRESSO } from '../../utils/combo'
+import { parteDoComboInteiro, SQL_PESSOAS_DO_INGRESSO } from '../../utils/combo'
 import {
   chaveDoCodigo, conferirRelogio, ehPassaporte, LIMITE_FILA, meiaDoIngresso, MENSAGEM_DA_FILA,
   MENSAGEM_DE_RELOGIO, novoSalDaLista, numeroParaALista,
@@ -197,7 +197,9 @@ export default defineEventHandler(async (event) => {
     // troca, não QR fabricado: o código de dentro vale como o digitado — o mesmo do leitor online
     // (`AVISO_QR_ANTIGO` em api/checkin.post.ts)
     const qrAntigo = !lido.ok && lido.chaveAposentada === true && !!lido.code
-    const codigo = lido.ok || qrAntigo ? lido.code! : item.qr.trim().toUpperCase()
+    const codigoDoQr = lido.ok || qrAntigo ? lido.code! : item.qr.trim().toUpperCase()
+    // QR do combo inteiro (`…-COMBO`): a passagem traz SEMPRE a parte; o código é o da parte
+    const codigo = item.parte ? parteDoComboInteiro(codigoDoQr) ?? codigoDoQr : codigoDoQr
 
     // A hora do aparelho passa pela cerca ANTES de virar linha: o que é
     // recusado é o INSTANTE, nunca a passagem (ver a nota em utils/catraca.ts).
@@ -430,6 +432,9 @@ async function listaDoEvento(eventId: string, orgId: string) {
             COALESCE(tt.admits, s.admits, 1)::int AS pessoas_do_tipo,
             -- combo (050): sem rede o portão diz "pessoa 3 de 10" e libera as outras partes do grupo
             t.combo_group, t.combo_seq, t.combo_size,
+            -- a parte transferida não entra pelo QR do combo nem por "entrar os outros" (sem rede também)
+            (t.combo_group IS NOT NULL AND EXISTS (SELECT 1 FROM ticket_transfers tr
+               WHERE tr.ticket_id = t.id AND tr.status = 'concluido')) AS transferida,
             l.name AS lote, tt.name AS tipo, tt.kind AS especie,
             t.half_reason, t.half_document, t.half_document_required,
             es.id AS sessao_id, es.starts_at, es.ends_at,
@@ -484,7 +489,8 @@ async function listaDoEvento(eventId: string, orgId: string) {
         pagoCents: pagoDoIngressoNaTroca(t.pago_cents, t.ticket_type_id, tiposDaTroca,
           Number(t.admits ?? 1), Number(t.pessoas_do_tipo)) } : {}),
       ...(t.combo_group ? { combo: { grupo: t.combo_group, seq: Number(t.combo_seq),
-                                     tamanho: Number(t.combo_size) } } : {}),
+                                     tamanho: Number(t.combo_size),
+                                     ...(t.transferida ? { transferida: true } : {}) } } : {}),
       // só no passaporte de vários dias (ADM-04): quantos cobre, quais dias já usou, em quais vale
       ...(Number(t.sessions_covered ?? 1) > 1
         ? { diasCobertos: Number(t.sessions_covered), diasUsados: t.dias_usados ?? [],

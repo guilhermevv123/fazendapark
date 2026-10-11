@@ -13,6 +13,7 @@ import {
   FORMAS_DE_TROCA, opcoesDeTroca, reaisDaTroca, ROTULO_DA_FORMA,
   type FormaDeTroca, type OpcaoDeTroca, type TipoParaTroca,
 } from '~~/server/utils/troca-de-dia'
+import { parteDoComboInteiro } from '~~/server/utils/combo'
 
 /**
  * Este papel pode ler o log de leituras (`/checkins`)? A MESMA grade que tranca a rota no servidor
@@ -62,6 +63,8 @@ export type Resposta = {
   trocaFeita?: { tipo: string; cobradoCents: number; forma: FormaDeTroca }
   /** combo (050): esta é a pessoa `seq` de `tamanho`, e o estado de cada parte do combo */
   combo?: ComboDaPorta
+  /** foi lido o QR do COMBO INTEIRO (`…-COMBO`): a porta libera todas as partes que faltam de uma vez */
+  comboInteiro?: boolean
 }
 
 type ComboDaPorta = { seq: number; tamanho: number; partes: { seq: number; status: string }[] }
@@ -460,7 +463,7 @@ type IngressoLocal = {
   /** troca de dia sem rede (049): o tipo comprado e quanto custou a face */
   tipoId?: string | null; pagoCents?: number; pessoasDoTipo?: number
   /** combo (050): a parte `seq` de `tamanho` do grupo — sem rede o portão libera as irmãs */
-  combo?: { grupo: string; seq: number; tamanho: number }
+  combo?: { grupo: string; seq: number; tamanho: number; transferida?: boolean }
   /** marcado por ESTE aparelho enquanto estava sem rede */
   usadoAqui?: { em: string; gate: string | null }
 } & PassaporteLocal
@@ -755,7 +758,11 @@ async function registrarWorker() {
  * O ingresso da lista deste aparelho — o do QR, ou (combo, 050) a parte `parte` do mesmo combo do QR.
  */
 function ingressoLocalDe(bruto: string, parte?: number): IngressoLocal | undefined {
-  const t = mapa.value.get(chaveLocal(codigoDoQr(bruto).codigo))
+  const lido = codigoDoQr(bruto).codigo
+  // QR do combo inteiro: a chave é a do código da parte que veio dentro dele (código antigo que
+  // termina em -COMBO e está na lista continua sendo ele mesmo)
+  const daParte = parteDoComboInteiro(lido)
+  const t = mapa.value.get(chaveLocal(lido)) ?? (daParte ? mapa.value.get(chaveLocal(daParte)) : undefined)
   if (!parte) return t
   if (!t?.combo) return undefined
   return lista.value.find((x) => x.combo?.grupo === t.combo!.grupo && x.combo.seq === parte)
@@ -765,17 +772,31 @@ function ingressoLocalDe(bruto: string, parte?: number): IngressoLocal | undefin
 function comboLocal(t: IngressoLocal): ComboDaPorta | undefined {
   if (!t.combo) return undefined
   const partes = lista.value.filter((x) => x.combo?.grupo === t.combo!.grupo)
-    .map((x) => ({ seq: x.combo!.seq, status: x.usadoAqui && x.status === 'valido' ? 'usado' : x.status }))
+    .map((x) => ({ seq: x.combo!.seq,
+                   status: x.combo!.transferida && x.status === 'valido' && x !== t ? 'transferido'
+                     : x.usadoAqui && x.status === 'valido' ? 'usado' : x.status }))
     .sort((a, b) => a.seq - b.seq)
   return { seq: t.combo.seq, tamanho: t.combo.tamanho, partes }
 }
 
 function validarLocal(bruto: string, idPassagem: string = novoId(),
                       consultar: boolean = apenasConsultar.value, parte?: number): Resposta {
+  // QR do combo inteiro sem parte escolhida: a primeira que ainda não entrou (todas foram = a 1,
+  // que responde "já entrou") — a mesma escolha do servidor
+  const lido = codigoDoQr(bruto).codigo
+  const inteiro = !!parteDoComboInteiro(lido) && !mapa.value.get(chaveLocal(lido))
+  if (inteiro && !parte) {
+    const base = ingressoLocalDe(bruto)
+    if (base?.combo) {
+      parte = lista.value.filter((x) => x.combo?.grupo === base.combo!.grupo && x.status === 'valido' && !x.usadoAqui
+                                       && !x.combo.transferida)
+        .map((x) => x.combo!.seq).sort((a, b) => a - b)[0] ?? 1
+    }
+  }
   const r = validarLocalSemCombo(bruto, idPassagem, consultar, parte)
   const t = ingressoLocalDe(bruto, parte)
   const combo = t ? comboLocal(t) : undefined
-  return combo ? { ...r, combo } : r
+  return combo ? { ...r, combo, ...(inteiro ? { comboInteiro: true } : {}) } : r
 }
 
 function validarLocalSemCombo(bruto: string, idPassagem: string, consultar: boolean, parte?: number): Resposta {
@@ -990,6 +1011,12 @@ async function ler() {
       ultimoBruto.value = c
       historico.value.unshift({ ...ultima.value, codigo: c, quando: new Date() })
       historico.value = historico.value.slice(0, 12)
+      // QR do combo inteiro (portaria, 10/10): "quando lê, lê automaticamente tudo" — a primeira
+      // parte entrou acima; as outras que faltam entram agora, sem toque, cada uma com a sua passagem
+      if (ultima.value.comboInteiro && ultima.value.ok && !ultima.value.consulta && partesQueFaltam.value.length) {
+        comboQuantas.value = partesQueFaltam.value.length
+        await entrarMaisDoCombo({ inteiro: true })
+      }
     }
   } finally {
     if (consultar) apenasConsultar.value = false
@@ -1217,7 +1244,8 @@ watch(ultima, () => {
   comboAberto.value = false
   comboErro.value = ''
   comboQuantas.value = partesQueFaltam.value.length || 1
-  trocaQuantas.value = 1
+  // QR do combo inteiro fora do dia: a troca já vem com o grupo todo (dá pra diminuir)
+  trocaQuantas.value = ultima.value?.comboInteiro ? Math.max(1, partesDaTroca.value.length) : 1
 })
 
 function mudarQuantas(alvo: 'combo' | 'troca', passo: number) {
@@ -1229,11 +1257,18 @@ function mudarQuantas(alvo: 'combo' | 'troca', passo: number) {
   }
 }
 
-async function entrarMaisDoCombo() {
+/**
+ * Libera as próximas `quantas` partes do combo. `inteiro`: veio do QR do combo inteiro — a primeira
+ * parte já entrou na leitura, e a frase final conta o grupo todo ("Combo de 10: 10 pessoas liberadas").
+ * `todas`: o botão de um toque, "Entrar os outros N agora".
+ */
+async function entrarMaisDoCombo(modo: { inteiro?: boolean; todas?: boolean } = {}) {
   const r0 = ultima.value
   if (!r0?.combo || comboEntrando.value) return
   const bruto = ultimoBruto.value
+  if (modo.todas) comboQuantas.value = partesQueFaltam.value.length
   const partes = partesQueFaltam.value.slice(0, comboQuantas.value)
+  const jaLiberadas = modo.inteiro ? 1 : 0
   comboEntrando.value = true
   comboErro.value = ''
   let liberadas = 0
@@ -1266,17 +1301,23 @@ async function entrarMaisDoCombo() {
       else recusadas++
     }
     if (ultimaResp) {
+      const total = liberadas + jaLiberadas
+      const sufixo = (recusadas ? ` · ${recusadas} recusada${recusadas === 1 ? '' : 's'} (já usadas ou fora da lista)` : '')
+        + (ultimaResp.local ? ' · sem rede' : '')
       ultima.value = {
         ...ultimaResp,
-        ok: liberadas > 0, resultado: liberadas > 0 ? 'ok' : ultimaResp.resultado,
-        mensagem: liberadas > 0
-          ? `Mais ${liberadas} ${liberadas === 1 ? 'pessoa' : 'pessoas'} deste combo liberada${liberadas === 1 ? '' : 's'}`
-            + (recusadas ? ` · ${recusadas} recusada${recusadas === 1 ? '' : 's'} (já usadas ou fora da lista)` : '')
-            + (ultimaResp.local ? ' · sem rede' : '')
-          : ultimaResp.mensagem,
-        pessoas: liberadas, ingresso: r0.ingresso,
+        ok: total > 0, resultado: total > 0 ? 'ok' : ultimaResp.resultado,
+        mensagem: modo.inteiro
+          ? `Combo de ${r0.combo.tamanho}: ${total} ${total === 1 ? 'pessoa liberada' : 'pessoas liberadas'}` + sufixo
+          : liberadas > 0
+            ? `Mais ${liberadas} ${liberadas === 1 ? 'pessoa' : 'pessoas'} deste combo liberada${liberadas === 1 ? '' : 's'}` + sufixo
+            : ultimaResp.mensagem,
+        pessoas: total, ingresso: r0.ingresso,
+        ...(modo.inteiro ? { comboInteiro: true } : {}),
       }
       if (liberadas && !ultima.value.local) refresh()
+      // o QR do combo inteiro é UMA leitura no histórico: a linha da primeira parte vira a do grupo
+      if (modo.inteiro) historico.value.shift()
       historico.value.unshift({ ...ultima.value, codigo: bruto, quando: new Date() })
       historico.value = historico.value.slice(0, 12)
       ultimoBruto.value = bruto
@@ -1937,16 +1978,33 @@ useHead({
       </p>
 
       <!-- combo (050): cada pessoa é um ingresso — quem do combo já entrou -->
-      <p v-if="resumoDoCombo" class="mt-3 rounded-lg bg-white/15 px-3 py-2 text-base font-semibold" data-parte="combo">
+      <p v-if="resumoDoCombo && ultima.comboInteiro" class="mt-3 rounded-lg bg-white/15 px-3 py-2 text-xl font-bold"
+         data-parte="combo">
+        QR do combo · combo de {{ resumoDoCombo.tamanho }} pessoas ·
+        {{ resumoDoCombo.entraram }} {{ resumoDoCombo.entraram === 1 ? 'entrou' : 'entraram' }}
+        <template v-if="resumoDoCombo.faltam"> · faltam {{ resumoDoCombo.faltam }}</template>
+      </p>
+      <p v-else-if="resumoDoCombo" class="mt-3 rounded-lg bg-white/15 px-3 py-2 text-base font-semibold" data-parte="combo">
         Combo · pessoa {{ resumoDoCombo.seq }} de {{ resumoDoCombo.tamanho }} ·
         {{ resumoDoCombo.entraram }} {{ resumoDoCombo.entraram === 1 ? 'entrou' : 'entraram' }} ·
         faltam {{ resumoDoCombo.faltam }}
       </p>
       <div v-if="podeEntrarMais" class="mt-4 rounded-lg bg-white p-4 text-left text-tinta" data-parte="combo-mais">
-        <button v-if="!comboAberto" type="button" class="btn-primario min-h-[52px] w-full text-lg"
-                data-parte="abrir-combo-mais" @click="comboAberto = true">
-          Entrar mais pessoas deste combo ({{ partesQueFaltam.length }})
-        </button>
+        <template v-if="!comboAberto">
+          <!-- um toque: o grupo chegou junto com um celular só (portaria, 10/10) -->
+          <button type="button" class="btn-primario min-h-[56px] w-full text-lg" :disabled="comboEntrando"
+                  data-parte="entrar-todos-do-combo" @click="entrarMaisDoCombo({ todas: true })">
+            <template v-if="comboEntrando">Liberando…</template>
+            <template v-else-if="partesQueFaltam.length === 1">Entrar a outra pessoa deste combo agora</template>
+            <template v-else>Entrar os outros {{ partesQueFaltam.length }} deste combo agora</template>
+          </button>
+          <p v-if="comboErro" class="mt-3 rounded-[6px] bg-erro-claro px-3 py-2 text-sm font-semibold text-erro"
+             role="alert" data-parte="combo-erro">{{ comboErro }}</p>
+          <button v-if="partesQueFaltam.length > 1" type="button" class="btn-secundario mt-2 min-h-[48px] w-full text-base"
+                  :disabled="comboEntrando" data-parte="abrir-combo-mais" @click="comboAberto = true">
+            Entrou menos gente? Escolher quantas
+          </button>
+        </template>
         <template v-else>
           <p class="text-base font-semibold">Quantas pessoas deste combo estão entrando agora?</p>
           <div class="mt-3 flex items-center justify-center gap-3">
@@ -1965,7 +2023,7 @@ useHead({
             <button type="button" class="btn-secundario min-h-[52px] text-base" :disabled="comboEntrando"
                     data-parte="cancelar-combo-mais" @click="comboAberto = false">Voltar</button>
             <button type="button" class="btn-primario min-h-[52px] text-base" :disabled="comboEntrando"
-                    data-parte="confirmar-combo-mais" @click="entrarMaisDoCombo">
+                    data-parte="confirmar-combo-mais" @click="entrarMaisDoCombo()">
               <template v-if="comboEntrando">Liberando…</template>
               <template v-else>Liberar {{ comboQuantas }}</template>
             </button>

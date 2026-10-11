@@ -12,6 +12,9 @@
  *  4. SEM REDE a fila sobe as partes pelo QR lido + `parte`, cada uma com 1 pessoa no livro;
  *  5. a lista do tablet leva o grupo, a parte e as pessoas do tipo;
  *  6. a parte de combo de outro dia troca pagando a FRAÇÃO (1/10 do combo de hoje − 1/10 do pago).
+ *  7. QR do COMBO INTEIRO (portaria, 10/10): `<código>-COMBO` (assinado ou digitado) libera a primeira
+ *     parte livre e avisa `comboInteiro`; as outras entram pela parte; lido de novo, "já entrou";
+ *     parte TRANSFERIDA não entra pelo grupo; o pedido mostra o QR do combo e o PNG dele abre.
  *
  * Fixtura desta corrida (marca de `scripts/test-setup.ts`), apagada no fim. Sem servidor, PULA.
  */
@@ -211,6 +214,62 @@ describe('combo vira um ingresso por pessoa (050)', () => {
     expect(doCombo[0]).toMatchObject({ pessoas: 1, combo: { tamanho: 10 } })
     expect(doCombo.find((i) => i.tipoId === T_COMBO_OUTRO)).toMatchObject({ pessoasDoTipo: 10, pagoCents: 1600 })
     expect(itens.filter((i) => !i.combo)).toHaveLength(1)
+  })
+
+  it('QR do COMBO INTEIRO: uma leitura começa pela 1ª livre; as outras entram; a transferida fica de fora', async (ctx) => {
+    seForaDoArPula(ctx, sonda)
+    const { montarQr } = await import('../utils/ingresso')
+    const { codigoDoComboInteiro } = await import('../utils/combo')
+    const todas = (await partes(pedidoId)).filter((t: any) => t.combo_group)
+    const grupos = [...new Set(todas.map((t: any) => t.combo_group))]
+    // o combo intocado (o outro já tem 5 dentro, dos testes de cima)
+    const ts = todas.filter((t: any) => t.combo_group === grupos.find((g) => todas.every((x: any) =>
+      x.combo_group !== g || x.status === 'valido')))
+    expect(ts).toHaveLength(10)
+    // a pessoa 4 foi passada pra um amigo (transferência aceita): é dele, entra pelo código dele
+    await sql(`INSERT INTO ticket_transfers (org_id, event_id, ticket_id, para_nome, para_email, status, code, accepted_at)
+               VALUES ($1,$2,$3,'Amigo do Combo','amigo.combo@combo.invalido','concluido',$4, now())`,
+      [ORG, EVENTO, ts[3].id, `TRF-${MARCA_MAIUSCULA}`])
+
+    // o pedido mostra o QR do combo: 9 pessoas (a transferida fora), na frente da pessoa 1
+    const pg = await fetch(`${BASE}/api/pedido/PED-ZZC-${MARCA_MAIUSCULA}`).then((r) => r.json()) as any
+    const doGrupo = pg.combos.find((c: any) => c.antesDe === ts[0].id)
+    expect(doGrupo).toMatchObject({ ticketId: ts[0].id, codigo: `${ts[0].code}-COMBO`, tamanho: 10, restam: 9 })
+    const png = await fetch(`${BASE}/api/ingresso/${ts[0].id}/qr.png?pedido=PED-ZZC-${MARCA_MAIUSCULA}&combo=1`)
+    expect(png.status).toBe(200)
+    expect(png.headers.get('content-type')).toBe('image/png')
+    const solta = (await partes(pedidoId)).find((t: any) => !t.combo_group)
+    const semCombo = await fetch(`${BASE}/api/ingresso/${solta.id}/qr.png?pedido=PED-ZZC-${MARCA_MAIUSCULA}&combo=1`)
+    expect(semCombo.status, 'ingresso solto não tem QR de combo').toBe(404)
+
+    // o QR assinado, feito do código da pessoa 7: começa pela pessoa 1 (a primeira livre)
+    const qrDoGrupo = montarQr(codigoDoComboInteiro(ts[6].code), EVENTO)
+    const r = await ler(qrDoGrupo)
+    expect(r.corpo).toMatchObject({ ok: true, resultado: 'ok', pessoas: 1, comboInteiro: true })
+    expect(r.corpo.combo).toMatchObject({ seq: 1, tamanho: 10 })
+    expect(r.corpo.combo.partes.find((p: any) => p.seq === 4).status, 'a transferida aparece como tal').toBe('transferido')
+    // a tela manda as outras pela parte — com o MESMO QR do grupo
+    for (const k of [2, 3, 5, 6, 7, 8, 9, 10]) {
+      const x = await ler(qrDoGrupo, { parteDoCombo: k })
+      expect(x.corpo, `pessoa ${k}`).toMatchObject({ ok: true, pessoas: 1, comboInteiro: true })
+    }
+    const pelaTransferida = await ler(qrDoGrupo, { parteDoCombo: 4 })
+    expect(pelaTransferida.corpo, 'o grupo levou a parte do amigo').toMatchObject({ ok: false, resultado: 'invalido' })
+    const estados = await sql(`SELECT combo_seq, status FROM tickets WHERE combo_group = $1 ORDER BY combo_seq`, [ts[0].combo_group])
+    expect(estados.filter((e: any) => e.status === 'usado').map((e: any) => e.combo_seq)).toEqual([1, 2, 3, 5, 6, 7, 8, 9, 10])
+
+    // lido de novo (digitado, sem assinatura): ninguém passa duas vezes
+    const deNovo = await ler(`${ts[0].code}-combo`)
+    expect(deNovo.corpo).toMatchObject({ ok: false, resultado: 'ja_usado', comboInteiro: true })
+    // o amigo entra pelo código DELE
+    const amigo = await ler(ts[3].code)
+    expect(amigo.corpo).toMatchObject({ ok: true, resultado: 'ok', pessoas: 1 })
+    const livro = await um(`SELECT sum(e.people)::int AS p FROM entries e JOIN tickets t ON t.id = e.ticket_id
+                             WHERE t.combo_group = $1`, [ts[0].combo_group])
+    expect(livro.p, 'pessoas no livro do combo').toBe(10)
+    // QR de combo com código que não existe = inválido, sem queimar nada
+    const falso = await ler('ING-ZZZZ-ZZZZ-COMBO')
+    expect(falso.corpo).toMatchObject({ ok: false, resultado: 'invalido' })
   })
 
   it('parte de combo de outro dia troca pagando a FRAÇÃO: R$ 250/10 − R$ 160/10 = R$ 9,00', async (ctx) => {

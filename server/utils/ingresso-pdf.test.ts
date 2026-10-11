@@ -24,6 +24,15 @@ describe('PDF dos ingressos', () => {
     expect(doc.getTitle()).toContain('Domingo de Sol')
   })
 
+  // portaria, 10/10: o QR do combo inteiro vai na frente e NÃO tira página de ninguém
+  it('com o QR do combo: uma página a mais, e nenhuma pessoa do combo fica de fora', async () => {
+    const partes = [1, 2, 3].map((k) => ({ codigo: `CON-CMB${k}-AAAA`, qr: `v1.qr.${k}`, tipo: 'Combo', pessoaDoCombo: `pessoa ${k} de 3` }))
+    const bytes = await montarPdfDosIngressos({ ...base, ingressos: [
+      { codigo: 'CON-CMB1-AAAA-COMBO', qr: 'v1.qr.combo', tipo: 'QR do combo · 3 pessoas', combo: true,
+        pessoaDoCombo: 'entram as 3 pessoas de uma vez' }, ...partes] })
+    expect((await PDFDocument.load(bytes)).getPageCount()).toBe(4)
+  })
+
   it('emoji, aspas tortas e travessão não derrubam o PDF', () => {
     expect(latin1('Sol 🌞 — “x” ‘y’…')).toBe('Sol - "x" \'y\'...')
     expect(latin1('Conceição Ávila')).toBe('Conceição Ávila')

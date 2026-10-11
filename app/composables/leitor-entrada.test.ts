@@ -853,12 +853,61 @@ describe('combo: um ingresso por pessoa na porta (050)', () => {
     expect(f[1]).toMatchObject({ qr: 'CON-CMB1-AAAA', parte: 2 })
     expect(f[0].id).not.toBe(f[1].id)
 
-    // a mesma parte não passa de novo: o que falta é só a 3
-    await clicar(t, '[data-parte="abrir-combo-mais"]')
-    expect(t.find('[data-parte="combo-quantas"]').text()).toBe('1')
-    await clicar(t, '[data-parte="confirmar-combo-mais"]')
+    // a mesma parte não passa de novo: o que falta é só a 3 — um toque, sem escolher quantas
+    expect(t.find('[data-parte="abrir-combo-mais"]').exists(), 'escolher quantas com uma pessoa só faltando').toBe(false)
+    expect(texto(t, '[data-parte="entrar-todos-do-combo"]')).toContain('Entrar a outra pessoa deste combo agora')
+    await clicar(t, '[data-parte="entrar-todos-do-combo"]')
     expect(fila().map((x: any) => x.parte)).toEqual([undefined, 2, 3])
-    expect(t.find('[data-parte="abrir-combo-mais"]').exists(), 'oferece mais com o combo inteiro dentro').toBe(false)
+    expect(t.find('[data-parte="entrar-todos-do-combo"]').exists(), 'oferece mais com o combo inteiro dentro').toBe(false)
+  })
+
+  // portaria, 10/10: "um QR Code só pra ler os 10 ... quando lê, lê automaticamente tudo"
+  it('SEM REDE: um toque em "Entrar os outros 2 agora" libera o resto do combo', async () => {
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista(hoje(), COMBO_HOJE))
+    await lerCodigo(t, 'CON-CMB1-AAAA')
+    expect(texto(t, '[data-parte="entrar-todos-do-combo"]')).toContain('Entrar os outros 2 deste combo agora')
+    await clicar(t, '[data-parte="entrar-todos-do-combo"]')
+    expect(t.text()).toContain('Mais 2 pessoas deste combo liberadas')
+    expect(fila().map((x: any) => x.parte)).toEqual([undefined, 2, 3])
+  })
+
+  it('SEM REDE: o QR do COMBO INTEIRO entra o grupo todo numa leitura só, sem toque', async () => {
+    const t = await abrirLeitor(new TypeError('Failed to fetch'), comLista(hoje(), COMBO_HOJE))
+    // o código de QUALQUER parte + "-COMBO": começa pela primeira que não entrou
+    await lerCodigo(t, 'CON-CMB2-AAAA-COMBO')
+    for (let k = 0; k < 6; k++) await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+    expect(t.find('[data-parte="veredito"]').text()).toBe('PODE ENTRAR')
+    expect(t.text()).toContain('Combo de 3: 3 pessoas liberadas')
+    expect(texto(t, '[data-parte="combo"]')).toContain('QR do combo · combo de 3 pessoas · 3 entraram')
+    expect(t.find('[data-parte="entrar-todos-do-combo"]').exists()).toBe(false)
+    const f = fila()
+    expect(f.map((x: any) => x.parte)).toEqual([1, 2, 3])
+    for (const x of f) expect(x.qr).toBe('CON-CMB2-AAAA-COMBO')
+    expect(new Set(f.map((x: any) => x.id)).size, 'id repetido entre pessoas').toBe(3)
+
+    // lido de novo: ninguém passa duas vezes
+    await lerCodigo(t, 'CON-CMB2-AAAA-COMBO')
+    for (let k = 0; k < 6; k++) await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+    expect(t.find('[data-parte="veredito"]').text()).not.toBe('PODE ENTRAR')
+    expect(fila()).toHaveLength(3)
+  })
+
+  it('COM REDE: o QR do combo inteiro manda as outras partes ao servidor sozinho', async () => {
+    const combo = { seq: 1, tamanho: 3, partes: [{ seq: 1, status: 'usado' }, { seq: 2, status: 'valido' }, { seq: 3, status: 'valido' }] }
+    const t = await abrirLeitor({ ok: true, resultado: 'ok', mensagem: 'ok', pessoas: 1, combo, comboInteiro: true,
+      ingresso: { titular: 'Família', setor: 'Geral', lote: '1º lote', tipo: 'COMBO' } })
+    await lerCodigo(t, 'CON-CMB1-BBBB-COMBO')
+    for (let k = 0; k < 6; k++) await new Promise((r) => setTimeout(r, 0))
+    await t.vm.$nextTick()
+    const enviadas = chamadas.filter((c) => c.url === '/api/checkin').map((c) => c.opcoes.body)
+    expect(enviadas).toHaveLength(3)
+    expect(enviadas[0].parteDoCombo).toBeUndefined()
+    expect(enviadas[1]).toMatchObject({ qr: 'CON-CMB1-BBBB-COMBO', parteDoCombo: 2, apenasConsultar: false })
+    expect(enviadas[2]).toMatchObject({ parteDoCombo: 3 })
+    expect(new Set(enviadas.map((b: any) => b.entradaId)).size).toBe(3)
+    expect(t.text()).toContain('Combo de 3: 3 pessoas liberadas')
   })
 
   it('COM REDE: cada pessoa a mais vai ao servidor pela parte, com o seu id', async () => {

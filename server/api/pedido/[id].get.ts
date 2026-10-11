@@ -47,7 +47,7 @@ import { conferirFreio, marcarNoFreio } from '../../utils/sessao'
 import { qrCodePix } from '../../utils/asaas'
 import { garantirCupomDeConsumacao } from '../../utils/cupom-consumacao'
 import { diaNoFusoDaFidelidade, programaDeFidelidadeDaOrg } from '../../utils/fidelidade'
-import { rotuloDaParte } from '../../utils/combo'
+import { combosDoPedido, rotuloDaParte } from '../../utils/combo'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -129,7 +129,7 @@ export default defineEventHandler(async (event) => {
   // cancela ingresso nenhum (o valor devolvido não diz qual). Recortar por
   // 'pago' sumia com os ingressos que continuavam valendo — a tela dizia "ainda
   // não foi pago" e o PNG do QR dava 404, com a portaria aceitando o código.
-  const ingressos = o.vivo
+  const linhasDosIngressos: any[] = o.vivo
     ? (await q<any>(
         // `transferido`: o ingresso segue ligado a ESTE pedido (é o pedido de
         // quem comprou), mas passou pra outra pessoa por transferência aceita.
@@ -141,7 +141,7 @@ export default defineEventHandler(async (event) => {
                 EXISTS (SELECT 1 FROM ticket_transfers tr
                          WHERE tr.ticket_id = t.id AND tr.status = 'concluido') AS transferido,
                 l.name AS lote, s.name AS setor, tt.name AS tipo,
-                tt.valid_dates::text[] AS dias_de_uso, t.combo_seq, t.combo_size,
+                tt.valid_dates::text[] AS dias_de_uso, t.combo_seq, t.combo_size, t.combo_group,
                 ses.title AS sessao, ses.starts_at AS sessao_inicio,
                 -- reagendado pelo cliente (036): o pedido novo que substituiu este ingresso
                 (SELECT o2.code FROM orders o2 WHERE o2.rescheduled_from_ticket_id = t.id) AS reagendado_para
@@ -153,6 +153,8 @@ export default defineEventHandler(async (event) => {
           WHERE t.order_id = $1
           -- as partes de um combo (050) em ordem, pessoa 1 a 10 (todas nascem no mesmo instante)
           ORDER BY s.sort_order, t.issued_at, t.combo_group NULLS FIRST, t.combo_seq, t.code`, [o.id]))
+    : []
+  const ingressos = linhasDosIngressos
         .map((t) => {
           const status = t.transferido && t.status === 'valido' ? 'transferido' : t.status
           // QR (e o código legível, que a portaria aceita digitado) só pro
@@ -180,7 +182,11 @@ export default defineEventHandler(async (event) => {
             qr: entra ? qrOuNada(t.code, o.event_id) : null,
           }
         })
-    : []
+  // QR do COMBO INTEIRO (portaria, 10/10): um QR entra o grupo todo. Só aparece com a assinatura
+  // de pé (sem chave não há QR nenhum) e com 2+ pessoas do combo ainda pra entrar.
+  const combos = combosDoPedido(linhasDosIngressos)
+    .filter((c) => qrOuNada(c.codigo, o.event_id))
+    .map((c) => ({ antesDe: c.antesDe, ticketId: c.ticketId, codigo: c.codigo, tamanho: c.tamanho, restam: c.restam }))
 
   // PIX pago depois do prazo e sem lugar pra refazer a reserva (ver
   // `emissao.ts`). O pedido segue 'expirado', mas ENTROU dinheiro: a tela não
@@ -257,6 +263,7 @@ export default defineEventHandler(async (event) => {
         }
       : null,
     ingressos,
+    combos,
     pagoSemIngresso,
   }
 })

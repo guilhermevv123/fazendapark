@@ -428,6 +428,8 @@ export interface IngressoNoEmail {
   sessao?: string | null
   titular?: string | null
   qrPng?: Buffer | null
+  /** o QR do COMBO INTEIRO (um QR entra o grupo todo): não conta como mais um ingresso */
+  combo?: boolean
 }
 
 export interface DadosConfirmacao {
@@ -488,9 +490,13 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
   const substantivo = d.substantivo || 'Ingressos'
   const assunto = `${substantivo} confirmados — ${d.eventoNome} (pedido ${d.pedido})`
 
-  const linhasTexto = d.ingressos.map((t, i) => {
+  // o QR do combo inteiro vai junto, mas não é mais um ingresso: a contagem e a numeração são das pessoas
+  const pessoas = d.ingressos.filter((t) => !t.combo)
+  const numero = (t: IngressoNoEmail) => pessoas.indexOf(t) + 1
+  const linhasTexto = d.ingressos.map((t) => {
     const onde = [t.setor, t.lote, t.tipo].filter(Boolean).join(' · ')
-    return `  ${i + 1}. ${t.codigo}${onde ? `  (${onde})` : ''}`
+    return t.combo ? `  QR do combo: ${t.codigo}${onde ? `  (${onde})` : ''}`
+      : `  ${numero(t)}. ${t.codigo}${onde ? `  (${onde})` : ''}`
   })
 
   const texto = [
@@ -503,7 +509,7 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
     d.local ?? '',
     '',
     `Pedido ${d.pedido} · ${d.totalCents === 0 ? 'Grátis' : reais(d.totalCents)}`,
-    `${d.ingressos.length} ${d.ingressos.length === 1 ? 'ingresso' : 'ingressos'}:`,
+    `${pessoas.length} ${pessoas.length === 1 ? 'ingresso' : 'ingressos'}:`,
     ...linhasTexto,
     '',
     ...(d.linkIngressos
@@ -521,11 +527,11 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
   ].filter((l) => l !== null).join('\n')
 
   const gratis = d.totalCents === 0
-  const varios = d.ingressos.length !== 1
+  const varios = pessoas.length !== 1
   const e = escaparNoEmail
   const dataDoEvento = d.eventoInicio ? quando(d.eventoInicio, d.fuso) : ''
 
-  const blocos = d.ingressos.map((t, i) => {
+  const blocos = d.ingressos.map((t) => {
     let qr = ''
     if (t.qrPng) {
       const cid = `qr-${t.codigo.replace(/[^a-zA-Z0-9]/g, '')}@diamond-tickets`
@@ -539,7 +545,7 @@ export function montarConfirmacao(d: DadosConfirmacao): Mensagem {
                style="margin-top:16px;border:2px solid ${COR.uvaLinha};border-radius:8px;border-collapse:separate">
           <tr><td bgcolor="${COR.uva}" style="background:${COR.uva};padding:12px 16px;border-radius:6px 6px 0 0;
                      font-family:${FONTE};font-size:12px;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;color:#ffffff">
-            ${e(t.tipo || 'Ingresso')} &nbsp;·&nbsp; ${i + 1} de ${d.ingressos.length}
+            ${e(t.tipo || 'Ingresso')}${t.combo ? '' : ` &nbsp;·&nbsp; ${numero(t)} de ${pessoas.length}`}
           </td></tr>
           <tr><td align="center" style="padding:22px 16px 8px">${qr}</td></tr>
           <tr><td align="center" style="padding:6px 16px 18px;font-family:${FONTE}">

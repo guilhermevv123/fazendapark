@@ -79,6 +79,8 @@ const podeTrocar = (t: any) => t.status === 'valido' && !t.cortesia
  * próprio celular (ver `composables/ingressoImagem.ts`).
  */
 const comQr = computed(() => (data.value?.ingressos ?? []).filter((t: any) => t.qr))
+/** QR do combo inteiro (portaria, 10/10): os cartões de combo que vêm antes deste ingresso */
+const combosAntesDe = (id: string) => (data.value?.combos ?? []).filter((c: any) => c.antesDe === id)
 const linkDoPdf = computed(() => `/api/pedido/${encodeURIComponent(data.value?.pedido ?? code)}/ingressos.pdf`)
 const salvandoImagem = ref(false)
 const recadoDaImagem = ref('')
@@ -91,11 +93,17 @@ async function salvarImagem() {
     const r = await salvarIngressosComoImagem(
       { evento: ev.nome, local: ev.local ?? null, pedido: data.value.pedido,
         volteMais: data.value.fidelidade?.nome ?? null },
-      comQr.value.map((t: any) => ({
-        codigo: t.codigo, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.titular, diasDeUso: t.diasDeUso ?? null,
-        pessoaDoCombo: t.pessoaDoCombo ?? null,
-        qrUrl: `/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.value.pedido)}`,
-      })))
+      comQr.value.flatMap((t: any) => [
+        // o QR do combo inteiro sai na frente das pessoas do combo, igual na tela
+        ...combosAntesDe(t.id).map((c: any) => ({
+          codigo: c.codigo, tipo: `QR do combo · ${c.tamanho} pessoas`, setor: t.setor, lote: t.lote, titular: null,
+          diasDeUso: t.diasDeUso ?? null, pessoaDoCombo: `entram as ${c.restam} pessoas de uma vez`,
+          qrUrl: `/api/ingresso/${c.ticketId}/qr.png?pedido=${encodeURIComponent(data.value!.pedido)}&combo=1`,
+        })),
+        { codigo: t.codigo, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.titular, diasDeUso: t.diasDeUso ?? null,
+          pessoaDoCombo: t.pessoaDoCombo ?? null,
+          qrUrl: `/api/ingresso/${t.id}/qr.png?pedido=${encodeURIComponent(data.value!.pedido)}` },
+      ]))
     if (r === 'baixado') recadoDaImagem.value = comQr.value.length > 1 ? 'Imagens baixadas.' : 'Imagem baixada.'
   } catch (e) {
     console.error('[ingresso] não deu pra gerar a imagem', e)
@@ -387,7 +395,34 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
                as informações embaixo. Usado/cancelado/transferido: o QR some e o aviso fica no lugar dele. -->
           <!-- Volte Mais (042): o ingresso do RETORNO tem outra cara — moldura de sol e a faixa
                "Cliente Volte Mais" — pra portaria e o cliente verem de longe que ele é da casa. -->
-          <article v-for="(t, i) in data.ingressos" :key="t.id" data-parte="bilhete"
+          <template v-for="(t, i) in data.ingressos" :key="t.id">
+          <!-- QR do COMBO INTEIRO (portaria, 10/10): "um QR Code só pra ler os 10". Vem antes das pessoas
+               do combo; cada pessoa segue com o seu QR, pra quem chegar separado. -->
+          <article v-for="c in combosAntesDe(t.id)" :key="`combo-${c.ticketId}`" data-parte="qr-do-combo"
+                   class="mx-auto w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-card ring-4 ring-pool-500 print:break-inside-avoid print:shadow-none">
+            <div class="bg-gradient-to-br from-pool-600 via-pool-700 to-grape-700 px-5 py-4 text-white">
+              <p class="text-xs font-bold uppercase tracking-[0.14em] text-white/80">{{ data.evento.nome }}</p>
+              <p class="titulo mt-1 text-2xl font-bold leading-tight" data-parte="titulo-do-combo">
+                QR do combo · {{ c.tamanho }} pessoas
+              </p>
+              <p class="mt-1 text-sm font-semibold text-white/90">
+                Um QR só: na entrada, entram
+                <template v-if="c.restam === c.tamanho">as {{ c.restam }} pessoas</template>
+                <template v-else>as {{ c.restam }} pessoas que ainda não entraram</template>
+                de uma vez.
+              </p>
+            </div>
+            <div class="flex flex-col items-center px-6 pb-5 pt-5">
+              <img :src="`/api/ingresso/${c.ticketId}/qr.png?pedido=${encodeURIComponent(data.pedido)}&combo=1`"
+                   :alt="`QR do combo de ${c.tamanho} pessoas`"
+                   class="h-64 w-64 rounded-2xl border border-linha bg-white p-2" loading="eager" decoding="async">
+              <p class="mt-3 font-mono text-base font-semibold tracking-wider text-tinta" data-parte="codigo-do-combo">{{ c.codigo }}</p>
+              <p class="mt-3 text-center text-sm text-tinta-suave">
+                Vai chegar separado? Cada pessoa tem o seu ingresso logo abaixo — mande pra ela.
+              </p>
+            </div>
+          </article>
+          <article data-parte="bilhete"
                    :data-volte-mais="data.fidelidade ? '' : undefined"
                    class="mx-auto w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-card print:break-inside-avoid print:shadow-none"
                    :class="data.fidelidade ? 'ring-4 ring-sun-400' : 'ring-1 ring-ink-200/70'">
@@ -513,6 +548,7 @@ useHead(() => ({ title: data.value ? `Pedido ${data.value.pedido}` : 'Meus ingre
               </NuxtLink>
             </div>
           </article>
+          </template>
 
           <!-- Volte Mais (042): o cupom do bar vem DEPOIS dos ingressos (a portaria vem primeiro) -->
           <CupomDeConsumacao v-if="data.cupomConsumacao && data.fidelidade"

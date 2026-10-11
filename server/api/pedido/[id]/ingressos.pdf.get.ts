@@ -12,7 +12,7 @@ import { montarQr } from '../../../utils/ingresso'
 import { montarPdfDosIngressos } from '../../../utils/ingresso-pdf'
 import { PEDIDO_VIVO } from '../../../utils/liquido'
 import { conferirFreio, marcarNoFreio } from '../../../utils/sessao'
-import { rotuloDaParte } from '../../../utils/combo'
+import { combosDoPedido, rotuloDaParte } from '../../../utils/combo'
 
 const CODIGO = /^[A-Z0-9-]{6,40}$/i
 
@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Pedido não encontrado' })
   }
   const ingressos = await q<any>(
-    `SELECT t.code, t.holder_name, l.name AS lote, s.name AS setor, tt.name AS tipo, ses.title AS sessao,
+    `SELECT t.id, t.code, t.status, t.combo_group, t.holder_name, l.name AS lote, s.name AS setor, tt.name AS tipo, ses.title AS sessao,
             tt.valid_dates::text[] AS dias_de_uso, t.combo_seq, t.combo_size
        FROM tickets t
        JOIN lots l ON l.id = t.lot_id
@@ -46,9 +46,15 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 410, statusMessage: 'Este pedido não tem ingresso válido para baixar.' })
   }
 
-  let comQr: { code: string; qr: string; t: any }[]
+  // QR do COMBO INTEIRO (portaria, 10/10): sai na frente das pessoas do combo, como na tela
+  const combos = combosDoPedido(ingressos)
+  let comQr: { code: string; qr: string; t: any; combo?: { tamanho: number; restam: number } }[]
   try {
-    comQr = ingressos.map((t) => ({ code: t.code, qr: montarQr(t.code, o.event_id), t }))
+    comQr = ingressos.flatMap((t) => [
+      ...combos.filter((c) => c.antesDe === t.id).map((c) => ({
+        code: c.codigo, qr: montarQr(c.codigo, o.event_id), t, combo: { tamanho: c.tamanho, restam: c.restam } })),
+      { code: t.code, qr: montarQr(t.code, o.event_id), t },
+    ])
   } catch (e: any) {
     console.error(`[ingressos.pdf] ${e?.message ?? e}`)
     throw createError({ statusCode: 503,
@@ -58,10 +64,12 @@ export default defineEventHandler(async (event) => {
   const local = [o.venue_name, [o.city, o.state].filter(Boolean).join('/')].filter(Boolean).join(' · ')
   const bytes = await montarPdfDosIngressos({
     evento: o.evento, local: local || null, pedido: o.code,
-    ingressos: comQr.map(({ code, qr, t }) => ({
-      codigo: code, qr, tipo: t.tipo, setor: t.setor, lote: t.lote, titular: t.holder_name, sessao: t.sessao,
+    ingressos: comQr.map(({ code, qr, t, combo }) => ({
+      codigo: code, qr, tipo: combo ? `QR do combo · ${combo.tamanho} pessoas` : t.tipo, setor: t.setor, lote: t.lote,
+      titular: combo ? null : t.holder_name, sessao: t.sessao,
       diasDeUso: fraseDosDiasDeUso(t.dias_de_uso) || null,
-      pessoaDoCombo: rotuloDaParte(t.combo_seq, t.combo_size),
+      pessoaDoCombo: combo ? `entram as ${combo.restam} pessoas de uma vez` : rotuloDaParte(t.combo_seq, t.combo_size),
+      ...(combo ? { combo: true } : {}),
     })),
   })
   setHeader(event, 'Content-Type', 'application/pdf')

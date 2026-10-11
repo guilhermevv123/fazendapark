@@ -27,6 +27,8 @@ export interface IngressoNoPdf {
   diasDeUso?: string | null
   /** combo (050): "pessoa 3 de 10" */
   pessoaDoCombo?: string | null
+  /** o QR do COMBO INTEIRO (um QR entra o grupo todo): não conta como mais um ingresso */
+  combo?: boolean
 }
 
 export interface PdfDosIngressos {
@@ -95,8 +97,10 @@ export async function montarPdfDosIngressos(d: PdfDosIngressos): Promise<Uint8Ar
   const mono = await pdf.embedFont(StandardFonts.CourierBold)
   const logo = await pdf.embedPng(Buffer.from(LOGO_EMAIL.png, 'base64'))
 
-  const total = d.ingressos.length
-  for (let i = 0; i < total; i++) {
+  // o QR do combo inteiro vai junto, mas a numeração é das pessoas: "2 de 10", não "3 de 11"
+  const pessoas = d.ingressos.filter((t) => !t.combo)
+  const total = pessoas.length
+  for (let i = 0; i < d.ingressos.length; i++) {
     const t = d.ingressos[i]
     const p = pdf.addPage([L, A])
     let y = A
@@ -129,7 +133,8 @@ export async function montarPdfDosIngressos(d: PdfDosIngressos): Promise<Uint8Ar
     p.drawRectangle({ x: M, y: baseCartao, width: L - 2 * M, height: altCartao, color: rgb(1, 1, 1),
       borderColor: LINHA, borderWidth: 1 })
     p.drawRectangle({ x: M, y: topoCartao - cabecalho, width: L - 2 * M, height: cabecalho, color: UVA })
-    const rotulo = latin1(`${(t.tipo || 'Ingresso').toUpperCase()}  ·  ${i + 1} de ${total}`)
+    const rotulo = latin1(t.combo ? (t.tipo || 'QR do combo').toUpperCase()
+      : `${(t.tipo || 'Ingresso').toUpperCase()}  ·  ${pessoas.indexOf(t) + 1} de ${total}`)
     centro(p, rotulo, topoCartao - cabecalho + 9, negrito, 10.5, rgb(1, 1, 1))
 
     // QR

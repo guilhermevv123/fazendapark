@@ -45,6 +45,7 @@ import QRCode from 'qrcode'
 import type { PoolClient, Pool } from 'pg'
 import { db, q, q1 } from './db'
 import { montarQr } from './ingresso'
+import { combosDoPedido } from './combo'
 import { PEDIDO_VIVO } from './liquido'
 import { garantirCupomDeConsumacao } from './cupom-consumacao'
 import { diaNoFusoDaFidelidade, programaDeFidelidadeDaOrg } from './fidelidade'
@@ -211,7 +212,7 @@ export async function montarMensagemDoPedido(
   // (o primeiro que chegasse), que é exatamente o que a troca de código no
   // aceite existe pra impedir.
   const ingressos = await q<any>(
-    `SELECT t.id, t.code, t.status, t.holder_name,
+    `SELECT t.id, t.code, t.status, t.holder_name, t.combo_group, t.combo_seq, t.combo_size,
             s.name AS setor, l.name AS lote, tt.name AS tipo,
             ses.title AS sessao, ses.starts_at AS sessao_inicio
        FROM tickets t
@@ -237,7 +238,18 @@ export async function montarMensagemDoPedido(
   }
 
   const comQr: IngressoNoEmail[] = []
+  // QR do COMBO INTEIRO (portaria, 10/10): um QR entra o grupo todo — vai na frente das pessoas
+  const combos = combosDoPedido(ingressos)
   for (const t of ingressos) {
+    for (const c of combos.filter((x) => x.antesDe === t.id)) {
+      comQr.push({
+        id: `${t.id}-combo`, codigo: c.codigo, setor: t.setor, lote: t.lote,
+        tipo: `QR do combo · ${c.tamanho} pessoas (entram as ${c.restam} de uma vez)`,
+        sessao: t.sessao ?? (t.sessao_inicio ? diaDaSessao(t.sessao_inicio, o.timezone) : null),
+        titular: null, combo: true,
+        qrPng: await QRCode.toBuffer(montarQr(c.codigo, o.event_id), { margin: 1, width: 360, errorCorrectionLevel: 'M' }),
+      })
+    }
     comQr.push({
       id: t.id,
       codigo: t.code,
