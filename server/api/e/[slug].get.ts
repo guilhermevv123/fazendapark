@@ -34,7 +34,7 @@ import { faceDoTipo, precificar, type ModoTaxa } from '../../utils/dinheiro'
 import { cotaDeMeias } from '../../utils/meia-entrada'
 import { pagamentoOnline } from '../../utils/asaas'
 import { TETO_POR_COMPRA } from '../../utils/limite-de-compra'
-import { diaDoCorteOnline, fraseDosDiasDeUso, vendeOnlineAgora } from '../../utils/dias-de-uso'
+import { diaDeUsoDe, diaDoCorteOnline, fraseDosDiasDeUso, vendeOnlineAgora } from '../../utils/dias-de-uso'
 
 /** Abaixo disto a vitrine avisa "últimas unidades" — faixa, nunca o número. */
 export const LIMIAR_ULTIMAS = 10
@@ -125,15 +125,33 @@ export function fimDasVendas(ev: EventoParaVenda): Date | null {
   if (ev.sales_end_minutes_after != null) {
     return new Date(new Date(ev.starts_at).getTime() + Number(ev.sales_end_minutes_after) * 60_000)
   }
-  // Regra do dono (28/09): sem encerramento escolhido, o site vende até UM DIA antes do término —
-  // evento de 15 a 20 vende até o dia 19. Antes disso o "em branco" gravava "fecha no início", e
-  // o evento criado com início já passado nascia com as vendas encerradas (e sumia do site).
-  if (ev.ends_at) return new Date(new Date(ev.ends_at).getTime() - VENDA_PARA_ANTES_DO_FIM_MS)
+  // Regra do dono (28/09): sem encerramento escolhido, o site vende até a VÉSPERA do último dia —
+  // evento de 15 a 20 vende o dia 19 INTEIRO. E a de 09/10: cada dia sai do site à meia-noite que
+  // o começa ("só pode comprar até terça, quando der meia-noite"). As duas dizem a mesma coisa: o
+  // site fecha à MEIA-NOITE (no fuso do evento) que começa o último dia. Até 11/10 a conta era
+  // "término − 24h": evento terminando segunda 17h fechou o site DOMINGO às 17h, com o ingresso de
+  // segunda ainda à venda pela regra do dia — o cliente viu "não tem ingressos disponíveis".
+  if (ev.ends_at) {
+    const fuso = ev.timezone || 'America/Bahia'
+    return meiaNoiteNoFuso(diaDeUsoDe(ev.ends_at, fuso), fuso)
+  }
   return null
 }
 
-/** Quanto antes do término do evento o site para de vender, quando o painel não diz outra coisa. */
-export const VENDA_PARA_ANTES_DO_FIM_MS = 24 * 3600_000
+/** O instante da meia-noite que COMEÇA o dia `dia` ('AAAA-MM-DD') no fuso dado. */
+export function meiaNoiteNoFuso(dia: string, fuso: string): Date {
+  const formato = new Intl.DateTimeFormat('en-US', { timeZone: fuso, hourCycle: 'h23', year: 'numeric',
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  // quanto o relógio do fuso está à frente do UTC naquele instante (negativo no Brasil)
+  const adiantamento = (d: Date) => {
+    const p = Object.fromEntries(formato.formatToParts(d).map((x) => [x.type, x.value]))
+    return Date.UTC(+p.year!, +p.month! - 1, +p.day!, +p.hour!, +p.minute!, +p.second!) - d.getTime()
+  }
+  const relogio = new Date(`${dia}T00:00:00Z`).getTime()
+  // duas voltas: a segunda acerta o dia em que o fuso troca de horário de verão
+  const primeira = relogio - adiantamento(new Date(relogio))
+  return new Date(relogio - adiantamento(new Date(primeira)))
+}
 
 /** Por que a porta está fechada. Vocabulário interno, nunca sai na resposta. */
 export type MotivoDeFechamento =

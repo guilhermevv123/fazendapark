@@ -368,7 +368,7 @@ const fimCampo = computed({
   get: () => juntar(f.fimData, f.fimHora),
   set: (v: string) => { const [d, h] = (v || '').split('T'); f.fimData = d || ''; if (h) f.fimHora = h.slice(0, 5) },
 })
-/** preenchido = encerra nessa data; em branco = o site vende até 1 dia antes do término (`fimDasVendas`) */
+/** preenchido = encerra nessa data; em branco = o site vende até a meia-noite que começa o último dia (`fimDasVendas`) */
 const encerraCampo = computed({
   get: () => f.encerramento === 'data' ? juntar(f.encerraData, f.encerraHora) : '',
   set: (v: string) => {
@@ -1061,7 +1061,7 @@ useHead({ title: 'Criar evento' })
         <div class="mt-2 max-w-sm">
           <label for="encerra" class="rotulo">Data de encerramento das vendas</label>
           <input id="encerra" v-model="encerraCampo" type="datetime-local" class="campo">
-          <p class="mt-1 text-[12.5px] text-tinta-suave">Em branco: o site vende até 1 dia antes do término do evento. A bilheteria não para.</p>
+          <p class="mt-1 text-[12.5px] text-tinta-suave">Em branco: o site vende até a véspera do último dia (fecha à meia-noite). A bilheteria não para.</p>
         </div>
 
         <!-- dias de uso na catraca (047): o "SEXTA" não passa no domingo -->
