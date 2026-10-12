@@ -9,6 +9,10 @@
  *   página deste evento — o link do anúncio costuma apontar pra home.
  * - Pedido sem origem de ANTES do rastreio começar vira "sem registro (antes do rastreio)", não
  *   "direto": seria mentir que veio direto.
+ * - Facebook/Instagram SEM UTM (`meta_sem_utm`) SOMA em tráfego pago (dono, 11/10: "esse Facebook e
+ *   Instagram sem UTM é venda de tráfego pago" — os anúncios rodaram sem UTM e o gestor confirmou
+ *   comprador por comprador). A linha da campanha continua dizendo "sem UTM"; o link da bio tem
+ *   UTM própria (`ig`/`social`) e segue orgânico.
  */
 import { q, q1 } from './db'
 import { PEDIDO_VIVO } from './liquido'
@@ -20,7 +24,8 @@ const ROTULO: Record<TipoNoRelatorio, string> = {
   ...ROTULO_DA_ORIGEM,
   sem_registro: 'Sem registro (antes do rastreio)',
 }
-const ORDEM: TipoNoRelatorio[] = ['pago', 'robo', 'meta_sem_utm', 'organico', 'direto', 'sem_registro']
+const ORDEM: TipoNoRelatorio[] = ['pago', 'robo', 'organico', 'direto', 'sem_registro']
+const ROTULO_SEM_UTM = 'Tráfego pago · Facebook/Instagram sem UTM'
 
 export interface LinhaDeOrigem {
   tipo: TipoNoRelatorio; rotulo: string
@@ -71,8 +76,9 @@ export async function origensDoEvento(
     const k = chave(r)
     let l = linhas.get(k)
     if (!l) {
-      const tipo = (ORDEM.includes(r.tipo) ? r.tipo : 'direto') as TipoNoRelatorio
-      l = { tipo, rotulo: ROTULO[tipo], fonte: r.fonte ?? null, meio: r.meio ?? null, campanha: r.campanha ?? null,
+      const semUtm = r.tipo === 'meta_sem_utm'
+      const tipo = (semUtm ? 'pago' : ORDEM.includes(r.tipo) ? r.tipo : 'direto') as TipoNoRelatorio
+      l = { tipo, rotulo: semUtm ? ROTULO_SEM_UTM : ROTULO[tipo], fonte: r.fonte ?? (semUtm ? 'facebook/instagram' : null), meio: r.meio ?? null, campanha: r.campanha ?? null,
             conteudo: r.conteudo ?? null, visitas: 0, visitantes: 0, pedidos: 0, pagos: 0, ingressos: 0,
             receitaCents: 0, conversaoPct: null }
       linhas.set(k, l)

@@ -110,11 +110,15 @@ describe('de onde veio a venda (052)', () => {
     expect(robo.status).toBe(200)
     const torta = await comprar({ ultimo: { clique: 'inventado' } })
     expect(torta.status, 'origem torta derrubou a compra').toBe(200)
+    // anúncio rodando SEM UTM: só o fbclid chega (dono 11/10: conta como tráfego pago no relatório)
+    const semUtm = await comprar({ ultimo: { clique: 'fbclid', referencia: 'l.instagram.com', em: new Date().toISOString() } })
+    expect(semUtm.status).toBe(200)
     const pedidos = await sql(`SELECT origem FROM orders WHERE event_id = $1 ORDER BY created_at`, [EVENTO])
     expect(pedidos[0].origem.ultimo).toMatchObject({ tipo: 'pago', campanha: `zz-campanha-${M}`, clique: 'fbclid' })
     expect(pedidos[0].origem.primeiro).toMatchObject({ tipo: 'organico', fonte: 'instagram' })
     expect(pedidos[1].origem.ultimo.tipo).toBe('robo')
     expect(pedidos[2].origem).toBeNull()
+    expect(pedidos[3].origem.ultimo.tipo).toBe('meta_sem_utm')
     // pagos pelo caminho de verdade (o relatório conta pedido vivo e os ingressos emitidos)
     const { emitirIngressos } = await import('../utils/emissao')
     for (const p of await sql(`SELECT id FROM orders WHERE event_id = $1`, [EVENTO])) {
@@ -122,13 +126,16 @@ describe('de onde veio a venda (052)', () => {
     }
   })
 
-  it('a aba Relatórios separa pago, robô e direto, por campanha, com visitas e conversão', async (ctx) => {
+  it('a aba Relatórios separa pago (com e sem UTM), robô e direto, por campanha, com visitas e conversão', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const r = await fetch(`${BASE}/api/admin/evento/${EVENTO}/relatorios`, { headers: { cookie } })
     expect(r.status).toBe(200)
     const { origens } = await r.json() as any
     const tipo = (t: string) => origens.porTipo.find((x: any) => x.tipo === t)
-    expect(tipo('pago')).toMatchObject({ pagos: 1, ingressos: 2, receitaCents: 4000 })
+    // o anúncio com UTM + o Facebook/Instagram sem UTM somam em tráfego pago; não há grupo à parte
+    expect(tipo('pago')).toMatchObject({ pagos: 2, ingressos: 4, receitaCents: 8000 })
+    expect(tipo('meta_sem_utm')).toBeUndefined()
+    expect(origens.porCampanha.find((c: any) => c.rotulo.includes('sem UTM'))).toMatchObject({ tipo: 'pago', pagos: 1 })
     expect(tipo('pago').visitantes).toBeGreaterThanOrEqual(2)
     expect(tipo('robo')).toMatchObject({ pagos: 1, ingressos: 2, receitaCents: 4000 })
     expect(tipo('direto')).toMatchObject({ pagos: 1 })

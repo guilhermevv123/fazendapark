@@ -16,7 +16,8 @@
  *
  * `fbclid` SOZINHO não é prova de anúncio: o Facebook e o Instagram põem esse código em QUALQUER
  * link clicado dentro deles (bio, story, post orgânico). Vira `meta_sem_utm` — "veio do Facebook/
- * Instagram, sem UTM: pode ser anúncio ou orgânico". Com a UTM no anúncio, a dúvida some.
+ * Instagram, sem UTM: pode ser anúncio ou orgânico". Com a UTM no anúncio, a dúvida some. O RELATÓRIO
+ * soma esse tipo em tráfego pago (decisão do dono, 11/10 — ver `origem-relatorio.ts`).
  */
 import { z } from 'zod'
 
@@ -41,7 +42,7 @@ export interface Origem {
 export const ROTULO_DA_ORIGEM: Record<TipoDaOrigem, string> = {
   pago: 'Tráfego pago',
   robo: 'Robô (WhatsApp / Instagram)',
-  meta_sem_utm: 'Facebook/Instagram sem UTM',
+  meta_sem_utm: 'Tráfego pago · Facebook/Instagram sem UTM',
   organico: 'Orgânico / indicação',
   direto: 'Direto (sem origem)',
 }
