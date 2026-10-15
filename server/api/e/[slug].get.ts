@@ -82,6 +82,13 @@ export interface LoteParaSituacao {
    */
   sort_order?: number | null
   /**
+   * Nome do lote — `name` (consulta crua) ou `lote` (a vitrine). Só serve pra
+   * dizer de QUE PRODUTO o lote é: ver `chaveDoProduto`. Sem nenhum dos dois,
+   * o lote entra no mesmo giro dos vizinhos (comportamento antigo).
+   */
+  name?: string | null
+  lote?: string | null
+  /**
    * Soma do que sobrou nas VARIAÇÕES do lote (inteira, meia...), ou `null`
    * quando o lote não tem variação nenhuma. Ver `restaNoLote`.
    */
@@ -402,16 +409,53 @@ export function situacoesDoSetor(
   // que a home faz, e assim ela não muda de comportamento por causa daqui.
   const ordens = lotes.map((l, i) => (l.sort_order == null ? i : Number(l.sort_order)))
 
-  // O vigente é o comprável de MENOR ordem, não o primeiro da lista: assim a
-  // resposta não depende de a consulta ter vindo ordenada.
-  let vigente = -1
-  for (let i = 0; i < sozinhos.length; i++) {
-    if (compravel(sozinhos[i]!) && (vigente < 0 || ordens[i]! < ordens[vigente]!)) vigente = i
-  }
-  if (vigente < 0) return sozinhos
+  // O giro é POR PRODUTO: "1º lote / 2º lote" do mesmo ingresso giram entre si,
+  // mas "Entrada sábado", "Entrada domingo" e "Combo 10 pessoas" são coisas
+  // diferentes que moram no mesmo setor e cada uma vende por si. Sem isso, o
+  // 1º da fila (Sábado) deixava os outros três "em breve" para sempre.
+  const chaves = lotes.map(chaveDoProduto)
+  const saida = [...sozinhos]
+  for (const chave of new Set(chaves)) {
+    const doProduto = sozinhos.map((_, i) => i).filter((i) => chaves[i] === chave)
 
-  const ordemVigente = ordens[vigente]!
-  return sozinhos.map((s, i) => (compravel(s) && ordens[i]! > ordemVigente ? 'em_breve' : s))
+    // O vigente é o comprável de MENOR ordem, não o primeiro da lista: assim a
+    // resposta não depende de a consulta ter vindo ordenada.
+    let vigente = -1
+    for (const i of doProduto) {
+      if (compravel(sozinhos[i]!) && (vigente < 0 || ordens[i]! < ordens[vigente]!)) vigente = i
+    }
+    if (vigente < 0) continue
+
+    for (const i of doProduto) {
+      if (compravel(sozinhos[i]!) && ordens[i]! > ordens[vigente]!) saida[i] = 'em_breve'
+    }
+  }
+  return saida
+}
+
+/**
+ * De que PRODUTO é o lote: o nome sem a parte que só diz "qual lote".
+ *
+ *     "1º LOTE" · "2º lote" · "Lote 3"              → ""            (um produto só)
+ *     "ENTRADA INDIVIDUAL SÁBADO"                    → "entrada individual sabado"
+ *     "Pista - 1º lote" · "Pista - 2º lote"          → "pista"
+ *
+ * Lotes só giram entre si quando a chave é igual. Na dúvida (nomes que não
+ * seguem o padrão) cada lote vira o seu próprio produto e vende por si — o erro
+ * possível é um 2º lote abrir antes da hora, nunca um ingresso ficar escondido.
+ * Sem nome nenhum, todos caem na mesma chave: comportamento antigo.
+ */
+export function chaveDoProduto(l: Pick<LoteParaSituacao, 'name' | 'lote'>): string {
+  const nome = l.name ?? l.lote
+  if (nome == null) return ''
+  return String(nome)
+    .normalize('NFD').replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/\b(primeiro|segundo|terceiro|quarto|quinto|unico|ultimo)\b/g, ' ')
+    .replace(/\b\d+\s*(?:º|°|o|a|ª)?(?![a-z0-9])/g, ' ')
+    .replace(/\blotes?\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
 }
 
 export interface LotePrecificavel {

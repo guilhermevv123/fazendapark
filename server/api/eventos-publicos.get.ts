@@ -131,7 +131,7 @@ async function listarEventosPublicos() {
   const lotes = await q<any>(
     `SELECT s.event_id, s.id AS setor_id, l.id, l.price_cents,
             l.quantity, l.sold, l.reserved, l.starts_at, l.expires_at,
-            l.sort_order, l.half_quota_bps
+            l.sort_order, l.half_quota_bps, l.name
        FROM sectors s
        JOIN lots l ON l.sector_id = s.id AND ${LOTE_DA_VITRINE}
       WHERE s.event_id = ANY($1::uuid[])
