@@ -26,6 +26,8 @@ export default defineEventHandler(async (event) => {
     ingresso: {
       id: i.id, codigo: i.codigo, pedido: i.pedido, evento: i.evento, inicio: i.eventoInicio, fuso: i.fuso,
       setor: i.setor, lote: i.lote, tipo: i.tipo, pagoCents: i.pagoCents,
+      // o DIA do ingresso (047): num evento de vários dias, não é o início do evento
+      dia: i.diasDeUso?.length ? `${i.diasDeUso[0]}T12:00:00Z` : i.eventoInicio,
     },
     motivo,
     opcoes: motivo ? [] : await opcoesDeReagendamento(i),

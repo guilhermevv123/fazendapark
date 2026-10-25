@@ -3,9 +3,12 @@
  * servidor (sem HTTP: só o banco da suíte).
  *
  * O que cada caso trava:
- *   · as opções: outro dia do MESMO parque, publicado, no futuro, mesmo tipo, que não custe
- *     mais do que foi pago — rascunho, dia mais caro, meia e promocional (pra quem tem inteira), o próprio
- *     dia, lote esgotado e evento de outro parque ficam de fora;
+ *   · as opções: outro dia do MESMO parque, publicado, no futuro, mesmo tipo — rascunho, meia e
+ *     promocional (pra quem tem inteira), o próprio dia, lote esgotado e evento de outro parque
+ *     ficam de fora; o dia mais caro aparece com a diferença (dono, 24/10);
+ *   · "o dia começou" é o dia de uso do tipo, não o início do evento; dia fechado pelo parque
+ *     (053) segue reagendável;
+ *   · troca com diferença: crédito = o que foi pago; o antigo só morre na emissão do pago;
  *   · ingresso de outra conta não aparece (nem existe, pra quem pergunta);
  *   · a troca: pedido novo R$ 0,00 no dia novo, na mesma conta, ligado ao ingresso antigo; o
  *     antigo vira cancelado (o QR morre); estoque sai de um lote e volta pro outro; rastro;
@@ -23,8 +26,9 @@ const { db, q, q1 } = await import('./db')
 const {
   ingressoDaContaParaReagendar, motivoSemReagendamento, opcoesDeReagendamento,
   reagendarIngressoDoCliente, RecusaDoReagendamento,
-  reagendamentoLigado,
+  reagendamentoLigado, prepararTrocaComDiferenca,
 } = await import('./reagendamento')
+const { emitirIngressos } = await import('./emissao')
 
 const MARCA = `zzreag${Date.now().toString(36)}`
 let orgId = '', outraOrg = '', conta = '', outraConta = ''
@@ -98,7 +102,7 @@ beforeAll(async () => {
 
   let x = await loteCom(ev.a, 'A', 3000); lote.a = x.l; tipo.aInteira = x.inteira; tipo.aMeia = x.meia
   x = await loteCom(ev.b, 'B', 3000); lote.b = x.l; tipo.bInteira = x.inteira; tipo.bMeia = x.meia; tipo.bCrianca = x.crianca
-  x = await loteCom(ev.caro, 'Caro', 5000); lote.caro = x.l; tipo.caroInteira = x.inteira
+  x = await loteCom(ev.caro, 'Caro', 5000); lote.caro = x.l; tipo.caroInteira = x.inteira; tipo.caroMeia = x.meia
   x = await loteCom(ev.rascunho, 'Rascunho', 1000); tipo.rascunhoInteira = x.inteira
   x = await loteCom(ev.esgotado, 'Esgotado', 1000, 1)
   await q(`UPDATE lots SET sold = 1 WHERE id = $1`, [x.l])
@@ -110,7 +114,7 @@ afterAll(async () => {
   const pedidos = `SELECT id FROM orders WHERE org_id = ANY($1::uuid[])`
   const orgs = [orgId, outraOrg]
   await q(`DELETE FROM email_queue WHERE order_id IN (${pedidos})`, [orgs]).catch(() => {})
-  await q(`UPDATE orders SET rescheduled_from_ticket_id = NULL WHERE org_id = ANY($1::uuid[])`, [orgs])
+  await q(`UPDATE orders SET rescheduled_from_ticket_id = NULL, swap_from_ticket_id = NULL WHERE org_id = ANY($1::uuid[])`, [orgs])
   await q(`DELETE FROM tickets WHERE order_id IN (${pedidos})`, [orgs])
   await q(`DELETE FROM order_items WHERE order_id IN (${pedidos})`, [orgs])
   await q(`DELETE FROM orders WHERE org_id = ANY($1::uuid[])`, [orgs])
@@ -120,16 +124,17 @@ afterAll(async () => {
 })
 
 describe('reagendamento · opções', () => {
-  it('só outro dia do mesmo parque, publicado, futuro, mesmo tipo e sem custar mais', async () => {
+  it('só outro dia do mesmo parque, publicado, futuro e mesmo tipo; o mais caro com a diferença', async () => {
     const id = await ingressoPago(conta)
     const i = (await ingressoDaContaParaReagendar(conta, id))!
     expect(motivoSemReagendamento(i)).toBeNull()
     const opcoes = await opcoesDeReagendamento(i)
     const eventos = new Set(opcoes.map((o) => o.eventoId))
-    expect([...eventos]).toEqual([ev.b])            // só o dia B
-    expect(opcoes.map((o) => o.tipoId)).toEqual([tipo.bInteira]) // inteira → só inteira
-    expect(opcoes[0]!.totalCents).toBe(3000)
-    for (const fora of [ev.a, ev.caro, ev.rascunho, ev.esgotado, ev.outroParque, ev.passou]) {
+    expect([...eventos]).toEqual([ev.b, ev.caro])    // o dia B e o dia mais caro
+    expect(opcoes.map((o) => o.tipoId)).toEqual([tipo.bInteira, tipo.caroInteira]) // inteira → só inteira
+    // pagou 30: o de 30 troca sem custo; o de 50 pede mais 20 (dono, 24/10)
+    expect(opcoes.map((o) => [o.totalCents, o.diferencaCents])).toEqual([[3000, 0], [5000, 2000]])
+    for (const fora of [ev.a, ev.rascunho, ev.esgotado, ev.outroParque, ev.passou]) {
       expect(eventos.has(fora!), `evento ${fora} não devia aparecer`).toBe(false)
     }
   })
@@ -145,6 +150,31 @@ describe('reagendamento · opções', () => {
     const id = await ingressoPago(conta, ev.passou, lote.passou, tipo.passouInteira)
     const i = (await ingressoDaContaParaReagendar(conta, id))!
     expect(motivoSemReagendamento(i)).toMatch(/já começou/)
+  })
+
+  it('evento de vários dias: vale o DIA do ingresso, não o início do evento', async () => {
+    // o evento começou ontem (sexta); o ingresso é do dia de uso de daqui a 2 dias (domingo)
+    const fds = await evento('fds', -1)
+    const x = await loteCom(fds, 'Fds', 3000)
+    const domingo = (await q1<any>(`SELECT (now() AT TIME ZONE 'America/Sao_Paulo')::date + 2 AS d`))!.d
+    await q(`UPDATE ticket_types SET valid_dates = ARRAY[$2::date] WHERE id = $1`, [x.inteira, domingo])
+    const id = await ingressoPago(conta, fds, x.l, x.inteira)
+    expect(motivoSemReagendamento((await ingressoDaContaParaReagendar(conta, id))!)).toBeNull()
+
+    // o mesmo ingresso com dia de uso HOJE: o dia já começou
+    const hoje = (await q1<any>(`SELECT (now() AT TIME ZONE 'America/Sao_Paulo')::date AS d`))!.d
+    await q(`UPDATE ticket_types SET valid_dates = ARRAY[$2::date] WHERE id = $1`, [x.inteira, hoje])
+    expect(motivoSemReagendamento((await ingressoDaContaParaReagendar(conta, id))!)).toMatch(/já começou/)
+  })
+
+  it('dia que o parque fechou (053) segue reagendável depois de passado, até o prazo', async () => {
+    const id = await ingressoPago(conta, ev.passou, lote.passou, tipo.passouInteira)
+    await q(`UPDATE tickets SET reschedulable_until = now() + interval '30 days' WHERE id = $1`, [id])
+    const i = (await ingressoDaContaParaReagendar(conta, id))!
+    expect(motivoSemReagendamento(i)).toBeNull()
+    expect((await opcoesDeReagendamento(i)).map((o) => o.eventoId)).toContain(ev.b)
+    await q(`UPDATE tickets SET reschedulable_until = now() - interval '1 minute' WHERE id = $1`, [id])
+    expect(motivoSemReagendamento((await ingressoDaContaParaReagendar(conta, id))!)).toMatch(/já começou/)
   })
 })
 
@@ -186,7 +216,7 @@ describe('reagendamento · a troca', () => {
       .rejects.toMatchObject({ status: 409 })
   })
 
-  it('destino fora das regras (mais caro, outro tipo) é recusado', async () => {
+  it('destino fora das regras (mais caro sem pagar a diferença, outro tipo) é recusado', async () => {
     const id = await ingressoPago(conta)
     for (const destino of [
       { loteId: lote.caro!, tipoId: tipo.caroInteira! },
@@ -222,7 +252,8 @@ describe('reagendamento · a troca', () => {
 
     const i = (await ingressoDaContaParaReagendar(conta, id))!
     const opcoes = await opcoesDeReagendamento(i)
-    expect(opcoes.map((o) => o.tipoId)).toEqual([tipo.bMeia]) // meia → só meia
+    // meia → só meia: a do dia B, e a do dia mais caro com a diferença
+    expect(opcoes.map((o) => o.tipoId)).toEqual([tipo.bMeia, tipo.caroMeia])
 
     const r = await reagendarIngressoDoCliente(conta, id, { loteId: lote.b!, tipoId: tipo.bMeia! })
     const novo = (await q1<any>(`SELECT half_reason, half_document FROM tickets WHERE id = $1`, [r.ingresso]))!
@@ -265,11 +296,57 @@ describe('reagendamento · a troca', () => {
   })
 })
 
+describe('reagendamento · troca com diferença (dono, 24/10)', () => {
+  it('crédito = o que foi pago; troca sem diferença não passa por aqui', async () => {
+    const id = await ingressoPago(conta)
+    const t = await prepararTrocaComDiferenca(conta, id, { loteId: lote.caro!, tipoId: tipo.caroInteira! })
+    expect(t.creditoCents).toBe(3000)
+    await expect(prepararTrocaComDiferenca(conta, id, { loteId: lote.b!, tipoId: tipo.bInteira! }))
+      .rejects.toMatchObject({ status: 409 })
+    await expect(prepararTrocaComDiferenca(outraConta, id, { loteId: lote.caro!, tipoId: tipo.caroInteira! }))
+      .rejects.toMatchObject({ status: 404 })
+  })
+
+  it('pago a diferença: o novo nasce, o antigo morre, a troca fica registrada', async () => {
+    const id = await ingressoPago(conta)
+    await q(`UPDATE tickets SET holder_name = 'Maria Titular' WHERE id = $1`, [id])
+    const antes = { a: await sold('lots', lote.a!), ta: await sold('ticket_types', tipo.aInteira!) }
+    // o pedido como o checkout grava: R$ 50 menos R$ 30 de crédito, esperando o Pix
+    const pedido = (await q1<any>(
+      `INSERT INTO orders (org_id, event_id, code, status, channel, face_cents, fee_cents, platform_cents,
+                           discount_cents, total_cents, customer_account_id, swap_from_ticket_id, expires_at)
+       VALUES ($1,$2,$3,'aguardando_pagamento','online',5000,0,0,3000,2000,$4,$5, now() + interval '15 minutes')
+       RETURNING id, code`,
+      [orgId, ev.caro, `PED-D${Date.now().toString(36).toUpperCase()}`, conta, id]))!
+    await q(`INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity, unit_face_cents, unit_fee_cents, unit_total_cents)
+             VALUES ($1,$2,$3,1,5000,0,5000)`, [pedido.id, lote.caro, tipo.caroInteira])
+    await q(`UPDATE lots SET reserved = reserved + 1 WHERE id = $1`, [lote.caro])
+    await q(`UPDATE ticket_types SET sold = sold + 1 WHERE id = $1`, [tipo.caroInteira])
+
+    // enquanto o Pix não cai: o antigo vale, e não abre uma segunda troca
+    expect((await q1<any>(`SELECT status FROM tickets WHERE id = $1`, [id]))!.status).toBe('valido')
+    await expect(prepararTrocaComDiferenca(conta, id, { loteId: lote.caro!, tipoId: tipo.caroInteira! }))
+      .rejects.toMatchObject({ status: 409 })
+
+    const r = await emitirIngressos(pedido.id)
+    expect(r.emitiu).toBe(true)
+    const velho = (await q1<any>(`SELECT status FROM tickets WHERE id = $1`, [id]))!
+    expect(velho.status).toBe('cancelado')
+    const novo = (await q1<any>(
+      `SELECT o.rescheduled_from_ticket_id, t.holder_name, t.status FROM orders o JOIN tickets t ON t.order_id = o.id
+        WHERE o.id = $1`, [pedido.id]))!
+    expect(novo).toMatchObject({ rescheduled_from_ticket_id: id, holder_name: 'Maria Titular', status: 'valido' })
+    expect(await sold('lots', lote.a!)).toBe(antes.a - 1)
+    expect(await sold('ticket_types', tipo.aInteira!)).toBe(antes.ta - 1)
+    // trocado, o antigo não reagenda de novo
+    expect(motivoSemReagendamento((await ingressoDaContaParaReagendar(conta, id))!)).not.toBeNull()
+  })
+})
+
 describe('reagendamento · interruptor (dono, 05/10: "em manutenção")', () => {
-  it('desligado por padrão; só REAGENDAR_LIGADO=1 liga', () => {
-    expect(reagendamentoLigado({})).toBe(false)
-    expect(reagendamentoLigado({ REAGENDAR_LIGADO: '0' })).toBe(false)
-    expect(reagendamentoLigado({ REAGENDAR_LIGADO: 'true' })).toBe(false)
+  it('ligado por padrão (dono, 24/10); só REAGENDAR_LIGADO=0 desliga', () => {
+    expect(reagendamentoLigado({})).toBe(true)
     expect(reagendamentoLigado({ REAGENDAR_LIGADO: '1' })).toBe(true)
+    expect(reagendamentoLigado({ REAGENDAR_LIGADO: '0' })).toBe(false)
   })
 })

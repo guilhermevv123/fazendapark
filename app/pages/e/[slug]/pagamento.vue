@@ -48,6 +48,8 @@ interface Carrinho {
   criadoEm?: number
   /** o código do link do promoter (B07) */
   promoter?: string | null
+  /** troca de dia com diferença (053): o ingresso trocado e o que já foi pago nele (vira desconto) */
+  troca?: { ingressoId: string; codigo: string; creditoCents: number } | null
 }
 
 const CHAVE_CARRINHO = 'dt:carrinho'
@@ -211,7 +213,7 @@ type PreviaDaFidelidade = {
 const fidelidade = ref<PreviaDaFidelidade | null>(null)
 async function conferirFidelidade() {
   fidelidade.value = null
-  if (!conta.value || !carrinho.value?.linhas?.length) return
+  if (!conta.value || !carrinho.value?.linhas?.length || carrinho.value.troca) return
   try {
     fidelidade.value = await $fetch<PreviaDaFidelidade>('/api/fidelidade/previa', {
       method: 'POST', body: { eventSlug: slug, itens: itensDoCheckout(carrinho.value.linhas) },
@@ -226,7 +228,8 @@ const dataCurta = (iso?: string | null) => (iso ? iso.split('-').reverse().join(
 
 const totalACobrar = computed(() => {
   const total = carrinho.value?.totais.total ?? 0
-  const desconto = cupom.estado === 'vale' ? Number(cupom.descontoCents ?? 0)
+  const desconto = carrinho.value?.troca ? Number(carrinho.value.troca.creditoCents)
+    : cupom.estado === 'vale' ? Number(cupom.descontoCents ?? 0)
     : fidelidadeVale.value ? Number(fidelidade.value?.descontoCents ?? 0) : 0
   return Math.max(0, total - desconto)
 })
@@ -474,6 +477,8 @@ async function pagar(semDeclaracao = false) {
         promoter: carrinho.value.promoter || undefined,
         // 052: de onde a pessoa veio (UTM / clique de anúncio guardado na chegada ao site)
         origem: origemGuardada(),
+        // troca de dia com diferença (053): o servidor confere o ingresso e desconta o que já foi pago
+        reagendarDe: carrinho.value.troca?.ingressoId || undefined,
         forma: f,
         parcelas: f === 'credito' ? parcelas.value : 1,
         ...(f === 'credito' && usaCartaoNoSite.value ? {
@@ -861,15 +866,22 @@ useHead({ title: 'Pagamento' })
               </span>
             </li>
           </ul>
+          <p v-if="carrinho.troca" class="mt-2 flex justify-between gap-3 text-sm" data-parte="credito-da-troca">
+            <span class="text-tinta-corpo">Já pago no ingresso {{ carrinho.troca.codigo }}</span>
+            <span class="shrink-0 tabular-nums text-pool-700">− {{ reais(carrinho.troca.creditoCents) }}</span>
+          </p>
           <div class="mt-3 flex items-baseline justify-between border-t border-linha pt-3">
             <span class="text-tinta-corpo">
               {{ nIngressos }} {{ nIngressos === 1 ? 'ingresso' : 'ingressos' }}
             </span>
             <span class="titulo text-2xl font-bold tabular-nums text-tinta">
-              {{ carrinho.totais.total ? reais(carrinho.totais.total) : 'Grátis' }}
+              {{ carrinho.troca ? reais(totalACobrar) : carrinho.totais.total ? reais(carrinho.totais.total) : 'Grátis' }}
             </span>
           </div>
-          <p v-if="carrinho.totais.taxa" class="mt-1 text-right text-xs text-tinta-fraca">
+          <p v-if="carrinho.troca" class="mt-1 text-right text-xs text-tinta-fraca">
+            Diferença da troca de dia. O ingresso atual é cancelado quando o pagamento for confirmado.
+          </p>
+          <p v-else-if="carrinho.totais.taxa" class="mt-1 text-right text-xs text-tinta-fraca">
             {{ reais(carrinho.totais.face) }} de ingressos + {{ reais(carrinho.totais.taxa) }} de taxa de serviço
           </p>
         </div>

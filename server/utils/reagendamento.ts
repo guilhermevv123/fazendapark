@@ -13,12 +13,16 @@
  * Regras (as mesmas pra tela e pra rota — a tela só pergunta, quem decide é
  * `motivoSemReagendamento` + `opcoesDeReagendamento` aqui):
  *   · só o dono: o pedido tem de ser DESTA conta (`orders.customer_account_id`);
- *   · só ingresso válido, de pedido pago, antes de o evento começar;
+ *   · só ingresso válido, de pedido pago, antes de o DIA DO INGRESSO começar (o dia de uso do
+ *     tipo, 047 — num evento de sexta a domingo, o de domingo não trava na sexta). Dia que o
+ *     PARQUE fechou (`tickets.reschedulable_until`, 053) segue reagendável depois de passado;
  *   · convite (cortesia), passaporte e ingresso transferido ficam de fora;
  *   · destino: evento do mesmo parque, publicado, com venda aberta, no futuro,
- *     no MESMO tipo e desconto (inteira↔inteira, meia↔meia, criança↔criança) e que não custe MAIS do que
- *     a pessoa pagou por aquele ingresso — não se cobra diferença nem se
- *     devolve troco;
+ *     no MESMO tipo e desconto (inteira↔inteira, meia↔meia, criança↔criança);
+ *   · preço (dono, 24/10): destino que custa IGUAL ou MENOS troca direto e sem troco ("pagou 30,
+ *     vai no de 20, pronto, a gente não devolve 10"). Destino que custa MAIS aparece com a
+ *     diferença e só troca pagando ela, pelo checkout de sempre (`prepararTrocaComDiferenca`):
+ *     o ingresso antigo morre na emissão, quando a diferença é paga (`encerrarIngressoTrocado`);
  *   · o estoque sai pelo `reservar()` de sempre (porta do lote, trava, faxina
  *     de carrinho vencido) e a meia confere a cota legal do lote novo.
  *
@@ -32,16 +36,17 @@ import { conferirCotaDeMeia, CotaDeMeiaEsgotada } from './meia-entrada'
 import { gerarCodigo } from './ingresso'
 import { faceDoTipo, precificar, type ModoTaxa } from './dinheiro'
 import { LOTE_DA_VITRINE, portaDeVenda } from '../api/e/[slug].get'
-import { vendeOnlineAgora } from './dias-de-uso'
+import { limparDiasDeUso, vendeOnlineAgora } from './dias-de-uso'
 
 /** O ingresso como o reagendamento precisa ver. */
 /**
- * Reagendamento pelo site LIGADO? (dono, 05/10: "quando a pessoa clicar vai aparecer em manutenção").
- * Desligado por padrão; religa com `REAGENDAR_LIGADO=1` no ambiente, sem mexer em código. A trava é
- * no SERVIDOR (as duas rotas), não só na tela: o botão escondido não impede quem chama a rota direto.
+ * Reagendamento pelo site LIGADO? Ficou em manutenção de 05/10 a 24/10 (dono); em 24/10 (domingo
+ * fechado na eleição) o dono mandou religar: quem comprou remarca pela conta. Ligado por padrão;
+ * `REAGENDAR_LIGADO=0` no ambiente volta pra manutenção, sem mexer em código. A trava é no SERVIDOR
+ * (as duas rotas), não só na tela: o botão escondido não impede quem chama a rota direto.
  */
 export function reagendamentoLigado(env: Record<string, string | undefined> = process.env): boolean {
-  return env.REAGENDAR_LIGADO === '1'
+  return env.REAGENDAR_LIGADO !== '0'
 }
 
 export const RECADO_REAGENDAMENTO_EM_MANUTENCAO =
@@ -70,6 +75,10 @@ export interface IngressoParaReagendar {
   precoProprio: boolean
   /** combo (050): parte de combo ou combo antigo de um ingresso só — não reagenda pelo site */
   combo: boolean
+  /** dias de uso do tipo (047): o "dia do ingresso". Sem dias, vale o início do evento */
+  diasDeUso: string[] | null
+  /** o parque fechou o dia (053): reagendável até aqui mesmo com o dia já passado */
+  reagendavelAte: string | null
   pedidoId: string
   pedido: string
   pedidoStatus: string
@@ -95,7 +104,8 @@ const SQL_INGRESSO = `
          l.name AS lote, s.name AS setor, s.kind AS setor_kind,
          tt.name AS tipo, COALESCE(tt.kind, 'inteira') AS especie, COALESCE(tt.discount_bps, 0) AS desconto,
          tt.price_cents IS NOT NULL AS preco_proprio,
-         (t.combo_group IS NOT NULL OR COALESCE(tt.admits, 1) > 1) AS combo
+         (t.combo_group IS NOT NULL OR COALESCE(tt.admits, 1) > 1) AS combo,
+         tt.valid_dates::text[] AS dias_de_uso, t.reschedulable_until
     FROM tickets t
     JOIN orders o ON o.id = t.order_id
     JOIN events e ON e.id = t.event_id
@@ -113,6 +123,8 @@ function paraIngresso(r: any): IngressoParaReagendar {
     loteId: r.lot_id, lote: r.lote, setor: r.setor, setorTipo: r.setor_kind,
     tipoId: r.ticket_type_id, tipo: r.tipo, especie: r.especie, descontoBps: Number(r.desconto), precoProprio: r.preco_proprio === true,
     combo: r.combo === true,
+    diasDeUso: limparDiasDeUso(r.dias_de_uso),
+    reagendavelAte: r.reschedulable_until ? new Date(r.reschedulable_until).toISOString() : null,
     pedidoId: r.order_id, pedido: r.order_code, pedidoStatus: r.order_status, canal: r.channel,
     orgId: r.org_id, contaId: r.customer_account_id, clienteId: r.customer_id,
     pagoCents: Number(r.pago_cents),
@@ -149,10 +161,27 @@ export function motivoSemReagendamento(i: IngressoParaReagendar, agora = new Dat
   if (i.setorTipo === 'passaporte') {
     return 'Passaporte vale por mais de um dia e não é reagendado pelo site. Fale com o parque.'
   }
-  if (new Date(i.eventoInicio) <= agora) {
+  if (!diaFechadoPeloParque(i, agora) && diaDoIngressoComecou(i, agora)) {
     return 'O dia deste ingresso já começou — não dá mais pra reagendar.'
   }
   return null
+}
+
+/** O parque fechou o dia deste ingresso (053) e a janela pra trocar ainda está aberta. */
+export function diaFechadoPeloParque(i: Pick<IngressoParaReagendar, 'reagendavelAte'>, agora = new Date()): boolean {
+  return !!i.reagendavelAte && new Date(i.reagendavelAte).getTime() > agora.getTime()
+}
+
+/**
+ * O dia DO INGRESSO começou? Com dia de uso no tipo, é a meia-noite (fuso do evento) que abre
+ * esse dia — a mesma régua da venda online (`vendeOnlineAgora`). Sem dia marcado, o início do
+ * evento, como sempre foi.
+ */
+export function diaDoIngressoComecou(
+  i: Pick<IngressoParaReagendar, 'diasDeUso' | 'eventoInicio' | 'fuso'>, agora = new Date(),
+): boolean {
+  if (i.diasDeUso?.length) return !vendeOnlineAgora(i.diasDeUso, i.eventoInicio, i.fuso, agora)
+  return new Date(i.eventoInicio).getTime() <= agora.getTime()
 }
 
 /** Uma opção de troca: um tipo de ingresso num lote de outro dia. */
@@ -169,6 +198,8 @@ export interface OpcaoDeReagendamento {
   tipoId: string
   tipo: string
   totalCents: number
+  /** quanto falta pagar pra trocar por este (0 = troca direta, sem troco) */
+  diferencaCents: number
 }
 
 const SQL_OPCOES = `
@@ -202,11 +233,13 @@ function totalDaOpcao(r: any): number {
     .totalCents
 }
 
-function paraOpcao(r: any): OpcaoDeReagendamento {
+function paraOpcao(r: any, pagoCents: number): OpcaoDeReagendamento {
+  const totalCents = totalDaOpcao(r)
   return {
     eventoId: r.evento_id, evento: r.evento, slug: r.slug, inicio: r.starts_at, fuso: r.timezone,
     banner: r.banner_url, setor: r.setor, loteId: r.lote_id, lote: r.lote,
-    tipoId: r.tipo_id, tipo: r.tipo, totalCents: totalDaOpcao(r),
+    tipoId: r.tipo_id, tipo: r.tipo, totalCents,
+    diferencaCents: Math.max(0, totalCents - pagoCents),
   }
 }
 
@@ -215,14 +248,14 @@ async function linhasDeOpcoes(i: IngressoParaReagendar, filtro = '', extra: unkn
   const params = [i.orgId, i.eventoId, i.especie, i.descontoBps, i.precoProprio ? i.tipo : null, ...extra]
   const rows = c ? (await c.query(sql, params)).rows : await q<any>(sql, params)
   // A porta do EVENTO (status, fim, prazo de venda) é a mesma função da vitrine e do checkout.
-  // prazo da venda online (09/10): dia que já começou não é destino pelo site
-  return rows.filter((r) => portaDeVenda(r).aberta && vendeOnlineAgora(r.dias, r.starts_at, r.timezone)
-    && totalDaOpcao(r) <= i.pagoCents)
+  // prazo da venda online (09/10): dia que já começou não é destino pelo site.
+  // Mais caro também entra (dono, 24/10): aparece com a diferença, e só troca pagando ela.
+  return rows.filter((r) => portaDeVenda(r).aberta && vendeOnlineAgora(r.dias, r.starts_at, r.timezone))
 }
 
 /** Os dias/ingressos pra onde este ingresso pode ir. */
 export async function opcoesDeReagendamento(i: IngressoParaReagendar): Promise<OpcaoDeReagendamento[]> {
-  return (await linhasDeOpcoes(i)).map(paraOpcao)
+  return (await linhasDeOpcoes(i)).map((r) => paraOpcao(r, i.pagoCents))
 }
 
 /** Recusa com a frase pro cliente e o status HTTP. */
@@ -248,6 +281,11 @@ export async function reagendarIngressoDoCliente(
       throw new RecusaDoReagendamento(409,
         'Essa opção não está mais disponível para troca. Escolha outro dia ou ingresso.')
     }
+    // a troca sem custo é só pra igual ou mais barato; a mais cara passa pelo checkout (diferença)
+    if (totalDaOpcao(d) > i.pagoCents) {
+      throw new RecusaDoReagendamento(409, 'Essa troca tem diferença a pagar. Escolha de novo para pagar a diferença.')
+    }
+    await recusarSeTrocaPendente(c, i.id)
 
     // Limite por cliente do evento novo (o mesmo que o checkout respeita).
     if (d.max_per_customer != null) {
@@ -345,4 +383,44 @@ export async function reagendarIngressoDoCliente(
 
     return { pedido: pedido.code as string, ingresso: novo.id as string }
   })
+}
+
+/**
+ * Troca com DIFERENÇA a pagar (dono, 24/10: "se ele quer ir para o de 50, ele tem que pagar mais
+ * 20"). O checkout chama duas vezes: fora da transação (sem `c`), pra recusar cedo e ler a meia do
+ * ingresso antigo; e dentro dela (com `c`), com o ingresso travado, pra decidir de verdade. Devolve
+ * o crédito — o que a pessoa pagou pelo ingresso antigo, que entra como desconto na face.
+ *
+ * O ingresso antigo NÃO morre aqui: Pix pode nunca ser pago. Ele morre na emissão
+ * (`encerrarIngressoTrocado`), quando o dinheiro entra.
+ */
+export async function prepararTrocaComDiferenca(
+  contaId: string, ingressoId: string, destino: { loteId: string; tipoId: string | null }, c?: PoolClient,
+): Promise<{ ingresso: IngressoParaReagendar; creditoCents: number }> {
+  const i = await ingressoDaContaParaReagendar(contaId, ingressoId, c)
+  if (!i) throw new RecusaDoReagendamento(404, 'Ingresso não encontrado na sua conta.')
+  const motivo = motivoSemReagendamento(i)
+  if (motivo) throw new RecusaDoReagendamento(409, motivo)
+  if (!destino.tipoId) throw new RecusaDoReagendamento(409, 'Escolha o ingresso do outro dia para trocar.')
+  const [d] = await linhasDeOpcoes(i, 'AND l.id = $6 AND tt.id = $7', [destino.loteId, destino.tipoId], c)
+  if (!d) {
+    throw new RecusaDoReagendamento(409, 'Essa opção não está mais disponível para troca. Escolha outro dia ou ingresso.')
+  }
+  if (totalDaOpcao(d) <= i.pagoCents) {
+    throw new RecusaDoReagendamento(409, 'Essa troca não tem diferença a pagar: faça pela tela de reagendar, sem custo.')
+  }
+  await recusarSeTrocaPendente(c, i.id)
+  return { ingresso: i, creditoCents: i.pagoCents }
+}
+
+/** Já tem uma troca com diferença esperando pagamento pra este ingresso? Então não abre outra. */
+async function recusarSeTrocaPendente(c: PoolClient | undefined, ingressoId: string): Promise<void> {
+  const sql = `SELECT code FROM orders WHERE swap_from_ticket_id = $1
+                  AND status IN ('aguardando_pagamento', 'em_analise') AND (expires_at IS NULL OR expires_at > now())
+                LIMIT 1`
+  const r = c ? (await c.query(sql, [ingressoId])).rows[0] : await q1<any>(sql, [ingressoId])
+  if (r) {
+    throw new RecusaDoReagendamento(409,
+      `Este ingresso já tem uma troca esperando pagamento (pedido ${r.code}). Pague ou espere ela vencer.`)
+  }
 }

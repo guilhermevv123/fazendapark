@@ -62,6 +62,15 @@ import { compradorDaConta, contaDaSessaoDoCliente } from '../utils/conta-do-clie
 import { TETO_POR_COMPRA } from '../utils/limite-de-compra'
 import { diaDoCorteOnline, recadoDaVendaOnlineEncerrada, vendeOnlineAgora } from '../utils/dias-de-uso'
 import { OrigemDoPedido } from '../utils/origem'
+import { prepararTrocaComDiferenca, RecusaDoReagendamento } from '../utils/reagendamento'
+
+/** A recusa da troca com a frase pro cliente; o resto segue como erro. */
+function recusaDaTroca(e: unknown): never {
+  if (e instanceof RecusaDoReagendamento) {
+    throw createError({ statusCode: e.status, statusMessage: e.message, data: { tipo: 'troca' } })
+  }
+  throw e
+}
 
 /**
  * Quantos ingressos cabem num pedido quando o evento não disser outra coisa.
@@ -193,6 +202,12 @@ export const Entrada = z.object({
    * compra recusada.
    */
   origem: z.unknown().optional(),
+  /**
+   * Troca de dia COM diferença (053, dono 24/10): o ingresso da conta que este pedido substitui. O
+   * que a pessoa pagou nele vira desconto, e ele só é cancelado quando este pedido for pago.
+   * Regras em `server/utils/reagendamento.ts` (`prepararTrocaComDiferenca`).
+   */
+  reagendarDe: z.string().uuid().optional(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -248,6 +263,25 @@ export default defineEventHandler(async (event) => {
         data: { tipo: 'cadastro', campo: e.campo } })
     }
     throw e
+  }
+
+  // Troca com diferença: só a conta logada, um ingresso, sem cupom/promoter. Conferida aqui, sem
+  // trava, pra recusar cedo e herdar a meia do ingresso antigo; decidida de novo na transação.
+  let troca: Awaited<ReturnType<typeof prepararTrocaComDiferenca>> | null = null
+  if (dados.reagendarDe) {
+    if (!conta) {
+      throw createError({ statusCode: 401, statusMessage: 'Entre na sua conta para reagendar.', data: { tipo: 'conta' } })
+    }
+    if (dados.itens.length !== 1 || dados.itens[0]!.quantidade !== 1 || dados.cupom) {
+      throw createError({ statusCode: 400, statusMessage: 'A troca de dia é de um ingresso por outro, sem cupom.' })
+    }
+    troca = await prepararTrocaComDiferenca(conta.id, dados.reagendarDe,
+      { loteId: dados.itens[0]!.lotId, tipoId: dados.itens[0]!.ticketTypeId ?? null }).catch(recusaDaTroca)
+    // a meia vai como foi declarada no ingresso antigo: a pessoa não declara de novo
+    if (troca.ingresso.meia.motivo) {
+      dados.itens[0]!.meia = { motivo: troca.ingresso.meia.motivo, documento: troca.ingresso.meia.documento ?? undefined }
+    }
+    dados.promoter = undefined
   }
 
   // ------------------------------------------------------------- 1. evento
@@ -424,12 +458,20 @@ export default defineEventHandler(async (event) => {
   const pedido = await tx(async (c) => {
     await conferirTetoPorDocumento(c, ev, dados.itens, documento, porLote, porTipo, linhas)
 
+    // Troca com diferença: agora com o ingresso antigo travado (CPF → ingresso → lotes, a mesma
+    // ordem da troca sem custo, que trava ingresso → lotes)
+    const credito = troca
+      ? (await prepararTrocaComDiferenca(conta!.id, dados.reagendarDe!,
+          { loteId: dados.itens[0]!.lotId, tipoId: dados.itens[0]!.ticketTypeId ?? null }, c)).creditoCents
+      : 0
+
     // Volte Mais (037): o desconto de fidelidade é decidido AQUI, com a trava do CPF no programa
     // na mão — duas abas do mesmo cliente não gastam o mesmo retorno. Só com a CONTA na sessão (o
     // CPF é o dela, não o do corpo) e sem cupom (não acumulam). A regra inteira mora em
     // utils/fidelidade.ts; aqui só entram as linhas com a face JÁ do tipo (meia não recebe).
     let fidelidade: BeneficioNoPedido | null = null
-    if (conta) {
+    // a troca já leva o crédito do ingresso antigo: não acumula com o Volte Mais
+    if (conta && !troca) {
       await travarCpfNaFidelidade(c, ev.org_id, documento)
       fidelidade = await beneficioDeFidelidade(c, {
         orgId: ev.org_id, evento: { id: ev.id, inicio: ev.starts_at, fuso: ev.timezone }, documento,
@@ -482,9 +524,12 @@ export default defineEventHandler(async (event) => {
       : null
 
     // Fidelidade e cupom não acumulam (o benefício nem é calculado com cupom): um OU outro.
-    const total = comFidelidade
-      ? somarPedido(linhas, Number(ev.fee_bps), modo, { kind: 'fixo', value: comFidelidade.cents })
-      : aplicarCupom(linhas, Number(ev.fee_bps), modo, cupom)
+    // Troca: o que foi pago no ingresso antigo sai da face (nunca da taxa, a régua do desconto).
+    const total = troca
+      ? somarPedido(linhas, Number(ev.fee_bps), modo, { kind: 'fixo', value: credito })
+      : comFidelidade
+        ? somarPedido(linhas, Number(ev.fee_bps), modo, { kind: 'fixo', value: comFidelidade.cents })
+        : aplicarCupom(linhas, Number(ev.fee_bps), modo, cupom)
     // Sobre o total JÁ com cupom: é ele que o gateway parcela.
     const parcelas = parcelasDoPedido(dados.forma, dados.parcelas, total.totalCents)
 
@@ -498,9 +543,9 @@ export default defineEventHandler(async (event) => {
                            face_cents, fee_cents, platform_cents, discount_cents, total_cents,
                            payment_method, installments, promo_code_id, promoter_id, expires_at,
                            cadastro_pendente, customer_account_id,
-                           loyalty_program_id, loyalty_discount_cents, origem)
+                           loyalty_program_id, loyalty_discount_cents, origem, swap_from_ticket_id)
        VALUES ($1,$2,$3,$4,'aguardando_pagamento','online',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-               $15::jsonb, $16, $17, $18, $19::jsonb)
+               $15::jsonb, $16, $17, $18, $19::jsonb, $20)
        RETURNING id, code`,
       [ev.org_id, ev.id, cliente.id, codigo,
        total.faceCents, total.feeCents, total.platformCents, total.discountCents, total.totalCents,
@@ -510,7 +555,7 @@ export default defineEventHandler(async (event) => {
          documento, nome: dados.comprador.nome, telefone: dados.comprador.telefone ?? null, cadastro,
        })), conta?.id ?? null,
        comFidelidade?.programa.id ?? null, comFidelidade ? total.discountCents : 0,
-       origemDoPedido(dados.origem)])
+       origemDoPedido(dados.origem), troca ? dados.reagendarDe : null])
 
     for (let i = 0; i < dados.itens.length; i++) {
       const it = dados.itens[i]
@@ -542,6 +587,7 @@ export default defineEventHandler(async (event) => {
                    consumacaoBps: comFidelidade.programa.consumacao_bps }
                : null }
   }).catch((e) => {
+    if (e instanceof RecusaDoReagendamento) recusaDaTroca(e)
     if (e instanceof CupomRecusado) {
       // código que não existe é o sinal de dicionário (B04)
       if (e.motivo === 'inexistente') marcarNoFreio(event, 'cupom_errado')

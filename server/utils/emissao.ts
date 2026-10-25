@@ -15,6 +15,7 @@ import { tx } from './db'
 import { randomUUID } from 'node:crypto'
 import { gerarCodigo } from './ingresso'
 import { partesPorUnidade } from './combo'
+import { encerrarIngressoTrocado } from './troca-paga'
 import {
   conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, motivoValido,
 } from './meia-entrada'
@@ -419,6 +420,9 @@ export async function emitirNaTransacao(
       if (semMotivo) meiasSemMotivo++
     }
   }
+
+  // Troca com diferença (053): pago o que faltava, o ingresso antigo morre AQUI, junto com o novo.
+  if (pedido.swap_from_ticket_id) await encerrarIngressoTrocado(c, pedido)
 
   // `canceled_at` sai junto quando a reserva foi refeita: a expiração o
   // carimbou, e pedido pago com data de cancelamento é o relatório lendo um

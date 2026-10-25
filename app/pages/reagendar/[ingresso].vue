@@ -4,12 +4,15 @@
  * venda e troca o dela. Chega aqui pelo botão "Reagendar" do bilhete (`/ingressos/<pedido>`).
  *
  * Só com a conta logada, e só ingresso DESTA conta — a rota recusa o resto. As regras (mesmo
- * tipo, não custar mais do que foi pago, antes de o dia começar…) moram em
- * `server/utils/reagendamento.ts`; a tela só mostra o que a rota devolveu.
+ * tipo, antes de o dia começar…) moram em `server/utils/reagendamento.ts`; a tela só mostra o que
+ * a rota devolveu. Preço (dono, 24/10): igual ou mais barato troca sem custo e sem troco; mais caro
+ * vai pro pagamento de sempre só com a diferença (o ingresso atual cai quando ela for paga).
  */
 import { dataNoFuso } from '~/composables/carrinhoDaVitrine'
 import { useContaDoCliente } from '~/composables/contaDoCliente'
-import { diaDaSemana } from '~/composables/formato'
+import { diaDaSemana, reais } from '~/composables/formato'
+import { gravarNaAba } from '~/composables/armazenamentoDaAba'
+import { VERSAO_DO_CARRINHO } from '~/composables/carrinhoDaVitrine'
 
 const route = useRoute()
 const ingressoId = String(route.params.ingresso ?? '')
@@ -77,8 +80,27 @@ const confirmando = ref(false)
 const enviando = ref(false)
 const erroTroca = ref<string | null>(null)
 
+/**
+ * Troca com diferença: monta o carrinho de UMA linha, com o ingresso atual como crédito, e segue
+ * pro pagamento do evento escolhido. Os valores aqui são só pra tela: quem cobra é o checkout.
+ */
+function pagarDiferenca(o: any) {
+  const linha = {
+    loteId: o.loteId, tipoId: o.tipoId, quantidade: 1, nome: o.tipo, setor: o.setor, lote: o.lote,
+    unitFaceCents: o.totalCents, unitTaxaCents: 0, unitTotalCents: o.totalCents,
+    pedeMeia: false, declaracao: null,
+  }
+  gravarNaAba('dt:carrinho', JSON.stringify({
+    versao: VERSAO_DO_CARRINHO, slug: o.slug, linhas: [linha], criadoEm: Date.now(),
+    totais: { face: o.totalCents, taxa: 0, total: o.totalCents, n: 1 },
+    troca: { ingressoId, codigo: dados.value.ingresso.codigo, creditoCents: o.totalCents - o.diferencaCents },
+  }))
+  return navigateTo(`/e/${encodeURIComponent(o.slug)}/pagamento`)
+}
+
 async function trocar() {
   if (!escolha.value || enviando.value) return
+  if (escolhida.value?.diferencaCents > 0) return void pagarDiferenca(escolhida.value)
   enviando.value = true
   erroTroca.value = null
   try {
@@ -115,7 +137,9 @@ useHead({ title: 'Reagendar ingresso' })
         ← Voltar para o ingresso
       </NuxtLink>
       <h1 class="titulo mt-2 text-2xl font-semibold text-tinta sm:text-3xl">Reagendar ingresso</h1>
-      <p v-if="!manutencao" class="mt-1 text-tinta-suave">Escolha outro dia. O ingresso atual é trocado pelo novo, sem custo.</p>
+      <p v-if="!manutencao" class="mt-1 text-tinta-suave">
+        Escolha outro dia. Se for mais barato ou igual, a troca é sem custo. Se for mais caro, você paga só a diferença.
+      </p>
 
       <p v-if="carregando" class="mt-8 text-tinta-suave" role="status">Carregando os dias disponíveis…</p>
 
@@ -147,7 +171,7 @@ useHead({ title: 'Reagendar ingresso' })
           <p class="rotulo">Seu ingresso</p>
           <p class="titulo mt-1 text-lg font-semibold text-tinta">{{ dados.ingresso.evento }}</p>
           <p class="text-sm text-tinta-suave">
-            {{ semana(dados.ingresso.inicio, dados.ingresso.fuso) }}, {{ dataNoFuso(dados.ingresso.inicio, dados.ingresso.fuso) }}
+            {{ semana(dados.ingresso.dia, dados.ingresso.fuso) }}, {{ dataNoFuso(dados.ingresso.dia, dados.ingresso.fuso) }}
           </p>
           <p class="mt-1 text-sm text-tinta-corpo">
             {{ dados.ingresso.tipo ?? 'Ingresso' }} · {{ dados.ingresso.setor }}
@@ -183,7 +207,10 @@ useHead({ title: 'Reagendar ingresso' })
                   <span class="block font-semibold text-tinta">{{ o.tipo }}</span>
                   <span class="block text-sm text-tinta-suave">{{ o.setor }} · {{ o.lote }}</span>
                 </span>
-                <span class="selo-ok shrink-0">Sem custo</span>
+                <span v-if="o.diferencaCents > 0" class="shrink-0 text-sm font-semibold tabular-nums text-tinta">
+                  + {{ reais(o.diferencaCents) }}
+                </span>
+                <span v-else class="selo-ok shrink-0">Sem custo</span>
               </label>
             </div>
           </section>
@@ -193,16 +220,21 @@ useHead({ title: 'Reagendar ingresso' })
             <div v-if="confirmando && escolhida" class="card" role="alertdialog" aria-labelledby="confirma-troca">
               <p id="confirma-troca" class="font-semibold text-tinta">Confirmar a troca?</p>
               <p class="mt-1 text-sm text-tinta-corpo">
-                O ingresso de <strong>{{ dataNoFuso(dados.ingresso.inicio, dados.ingresso.fuso) }}</strong> será cancelado
+                O ingresso de <strong>{{ dataNoFuso(dados.ingresso.dia, dados.ingresso.fuso) }}</strong> será cancelado
                 e você recebe um novo para <strong>{{ semana(escolhida.inicio, escolhida.fuso) }}, {{ dataNoFuso(escolhida.inicio, escolhida.fuso) }}</strong>
-                ({{ escolhida.tipo }}). O QR antigo deixa de valer. A troca não pode ser desfeita.
+                ({{ escolhida.tipo }}).
+                <template v-if="escolhida.diferencaCents > 0">
+                  Você paga só a diferença de <strong>{{ reais(escolhida.diferencaCents) }}</strong>. O ingresso atual
+                  continua valendo até o pagamento ser confirmado.
+                </template>
+                <template v-else>O QR antigo deixa de valer. A troca não pode ser desfeita.</template>
               </p>
               <div class="mt-3 grid grid-cols-2 gap-2">
                 <button type="button" class="btn-secundario justify-center" :disabled="enviando" @click="confirmando = false">
                   Voltar
                 </button>
                 <button type="button" class="btn-primario justify-center" :disabled="enviando" @click="trocar()">
-                  {{ enviando ? 'Trocando…' : 'Confirmar troca' }}
+                  {{ enviando ? 'Trocando…' : escolhida.diferencaCents > 0 ? `Pagar ${reais(escolhida.diferencaCents)}` : 'Confirmar troca' }}
                 </button>
               </div>
             </div>
