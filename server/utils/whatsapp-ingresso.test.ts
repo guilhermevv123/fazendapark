@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 const { db, q, q1 } = await import('./db')
 const { montarMensagemDoWhatsapp, processarUmWhatsapp } = await import('./whatsapp-ingresso')
+const { enfileirarAvisoDeNovaData, montarAvisoDeNovaData } = await import('./aviso-nova-data')
 
 const MARCA = `zzwa${Date.now().toString(36)}`
 let orgId = '', eventoId = '', loteId = '', tipoId = '', setorId = ''
@@ -169,5 +170,53 @@ describe('o envio', () => {
     expect(chamou).toBe(false)
     expect(r?.status).toBe('falhou')
     expect((await linhas(p.id))[0].last_error).toMatch(/venceu/)
+  })
+})
+
+describe('aviso de data nova (dono, 27/10/2026)', () => {
+  it('o texto diz a data nova, que o ingresso vale e o link; só o fim mudou vira "horário atualizado"', () => {
+    const base = { nome: 'MARIA souza', evento: 'Conquista Park 9ª', pedido: 'PED-AB12', fuso: 'America/Bahia',
+      link: 'https://www.conquistapark.com.br/ingressos/PED-AB12' }
+    const m = montarAvisoDeNovaData({ ...base, deInicio: '2026-10-29T12:00:00Z',
+      paraInicio: '2026-10-30T12:00:00Z', paraFim: '2026-11-02T20:00:00Z' })
+    expect(m.whatsapp).toContain('Olá, Maria!')
+    expect(m.whatsapp).toContain('A data do *Conquista Park 9ª* mudou: agora é de *30 de outubro, 09:00* até *02 de novembro, 17:00*.')
+    expect(m.whatsapp).toContain('continua valendo')
+    expect(m.whatsapp.split(String.fromCharCode(10))).toContain(base.link)
+    expect(m.assunto).toBe('Nova data: Conquista Park 9ª — pedido PED-AB12')
+    expect(m.html).toContain('<b>30 de outubro, 09:00</b>')
+    expect(m.texto).not.toContain('*')
+
+    const fim = montarAvisoDeNovaData({ ...base, deInicio: '2026-10-30T12:00:00Z',
+      paraInicio: '2026-10-30T12:00:00Z', paraFim: '2026-11-02T20:00:00Z' })
+    expect(fim.whatsapp).toContain('O horário do *Conquista Park 9ª* foi atualizado')
+    expect(fim.assunto).toMatch(/^Horário atualizado: /)
+  })
+
+  it('enfileira por compra viva e a fila manda o texto gravado, com o carimbo da Sofia', async () => {
+    // trava: o trabalhador mandaria o texto do INGRESSO (montado na hora) em vez do aviso
+    const p = await pedidoPago(await conta('73998605623'))
+    const ev = (await q1<any>(`SELECT starts_at, ends_at FROM events WHERE id = $1`, [eventoId]))!
+    const c = await db().connect()
+    let r: any
+    try {
+      r = await enfileirarAvisoDeNovaData(c, { eventId: eventoId, deInicio: ev.starts_at,
+        paraInicio: new Date(new Date(ev.starts_at).getTime() + 86_400_000), paraFim: ev.ends_at,
+        base: 'https://www.conquistapark.com.br' })
+    } finally { c.release() }
+    expect(r.compras).toBeGreaterThanOrEqual(1)
+    const [aviso] = (await linhas(p.id)).filter((l) => l.kind === 'aviso_nova_data')
+    expect(aviso.to_phone).toBe('5573998605623')
+    const mail = await q1<any>(`SELECT subject, body_html FROM email_sends WHERE order_id = $1 AND kind = 'aviso_nova_data'`, [p.id])
+    expect(mail!.subject).toBe(`Nova data: Domingo em Família — pedido ${p.code}`)
+
+    // o ingresso automático sai da frente: aqui só interessa o aviso
+    await q(`UPDATE whatsapp_sends SET status = 'enviado' WHERE order_id = $1 AND kind = 'ingresso'`, [p.id])
+    const corpos: any[] = []
+    const res = await processarDoPedido(p.id, async (cp: any) => { corpos.push(cp); return { id: 'MSG-AV' } })
+    expect(res?.status).toBe('enviado')
+    expect(corpos[0]).toMatchObject({ number: '5573998605623', track_source: 'sofia', track_id: `nova-data:${p.code}` })
+    expect(corpos[0].text).toBe(aviso.body_text)
+    expect(corpos[0].text).toContain('A data do *Domingo em Família* mudou')
   })
 })

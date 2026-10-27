@@ -152,6 +152,15 @@ const NUMERICOS_OBRIGATORIOS: Record<string, string> = {
   taxaBps: 'Preencha o percentual da "Taxa de serviço" (0 se não cobrar).',
 }
 
+/**
+ * Data mudada com venda feita (dono, 27/10/2026: "deixe editável mesmo depois de publicado"):
+ * o servidor manda a data nova pra cada comprador por WhatsApp e e-mail. Fica fora do `f` de
+ * propósito — marcar/desmarcar não é mudança do evento.
+ */
+const avisarCompradores = ref(true)
+const mexeuNaData = computed(() => !!data.value?.jaVendeu
+  && (f.comecaEm !== original.value.comecaEm || f.terminaEm !== original.value.terminaEm))
+
 async function salvar() {
   erro.value = ''
   aviso.value = ''
@@ -172,16 +181,21 @@ async function salvar() {
     } else corpo[k] = f[k]
   }
   if (!Object.keys(corpo).length) return
+  if (mexeuNaData.value) corpo.avisarCompradores = avisarCompradores.value
 
   salvando.value = true
   try {
-    await $fetch(`/api/admin/evento/${id}/configuracoes`, { method: 'PATCH', body: corpo })
+    const r = await $fetch<any>(`/api/admin/evento/${id}/configuracoes`, { method: 'PATCH', body: corpo })
     await refresh()
     // o `refresh()` do Nuxt 4 não lança: gravou, e só a releitura falhou
     if (falha.value) erro.value = 'Salvo, mas a tela não recarregou. Atualize a página para ver como ficou.'
     else {
-      aviso.value = 'Salvo.'
-      setTimeout(() => { aviso.value = '' }, 2500)
+      const a = r?.aviso
+      aviso.value = a?.compras
+        ? `Salvo. A data nova vai para ${a.compras} ${a.compras === 1 ? 'compra' : 'compras'}: `
+          + `${a.whatsapp} por WhatsApp e ${a.email} por e-mail.`
+        : 'Salvo.'
+      setTimeout(() => { aviso.value = '' }, a?.compras ? 8000 : 2500)
     }
   } catch (e: any) {
     erro.value = e?.data?.statusMessage || 'Não foi possível salvar.'
@@ -513,20 +527,24 @@ async function adiarEvento() {
         <section class="card">
           <h2 class="titulo text-base font-semibold text-tinta">Datas e horários</h2>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
-            <!-- Com venda feita a data não muda por aqui: quem comprou não
-                 ficaria sabendo. O servidor recusa do mesmo jeito (409). -->
-            <p v-if="data.jaVendeu" class="text-xs text-alerta sm:col-span-2">
-              Com ingressos vendidos, mude a data por <a href="#cancelamento" class="underline">Adiar evento</a>
-              — os compradores são avisados.
-            </p>
             <div>
               <label class="rotulo">Começa em</label>
-              <input v-model="f.comecaEm" type="datetime-local" class="campo" :disabled="data.jaVendeu">
+              <input v-model="f.comecaEm" type="datetime-local" class="campo">
             </div>
             <div>
               <label class="rotulo">Termina em</label>
-              <input v-model="f.terminaEm" type="datetime-local" class="campo" :disabled="data.jaVendeu">
+              <input v-model="f.terminaEm" type="datetime-local" class="campo">
             </div>
+            <!-- Com venda feita, a data muda e quem comprou recebe a data nova (o servidor
+                 enfileira o aviso na mesma gravação). -->
+            <label v-if="mexeuNaData" class="flex items-start gap-2 rounded-card border border-alerta bg-alerta-claro p-3 text-sm text-tinta sm:col-span-2"
+                   data-parte="avisar-compradores">
+              <input v-model="avisarCompradores" type="checkbox" class="mt-0.5 h-4 w-4 accent-acao">
+              <span>
+                Avisar quem já comprou ({{ data.pedidosPagos }} {{ data.pedidosPagos === 1 ? 'compra' : 'compras' }})
+                pelo WhatsApp e por e-mail com a data nova. O ingresso continua valendo.
+              </span>
+            </label>
             <div>
               <label class="rotulo">Venda encerra em (data fixa)</label>
               <input v-model="f.vendaAte" type="datetime-local" class="campo" @input="escolheuData">

@@ -26,12 +26,19 @@
  *   já morreu; reabrir a venda venderia um evento sem ninguém dentro.
  * - **publicar exige ingresso.** Sem lote visível, a página abre sem nada
  *   pra vender.
- * - **com venda feita, a data não muda por aqui.** Quem comprou pro dia 10 e
- *   não foi avisado chega no portão no dia 10. Adiar é o caminho que avisa.
+ * - **com venda feita, a data muda e quem comprou é avisado** (dono, 27/10/2026:
+ *   "deixe editável mesmo depois de publicado"). Antes a data travava na
+ *   primeira venda; agora cada compra viva ganha um aviso da data nova nas
+ *   filas de WhatsApp e e-mail (`aviso-nova-data.ts`), e as sessões andam
+ *   junto com o início, como no adiamento. Adiar continua sendo o caminho
+ *   que abre a escolha "data nova ou dinheiro de volta".
  */
 import { z } from 'zod'
 import { autorDaRequisicao, registrarAuditoria } from '../../../../utils/auditoria'
+import { enfileirarAvisoDeNovaData } from '../../../../utils/aviso-nova-data'
+import { SQL_DESLOCA_DIAS_DE_USO, SQL_DESLOCA_SESSOES } from '../../../../utils/cancelamento'
 import { q1, tx } from '../../../../utils/db'
+import { baseDoSite } from '../../../../utils/envio'
 import { explicarErro } from '../index.post'
 
 /**
@@ -87,6 +94,8 @@ const Entrada = z.object({
   modoTaxaOnline: z.enum(['repassar', 'absorver']).optional(),
   modoTaxaPdv: z.enum(['repassar', 'absorver']).optional(),
   maxPorCliente: z.number().int().min(1).max(200).nullish(),
+  /** com venda feita e data mudada: manda a data nova pra quem comprou (padrão: sim) */
+  avisarCompradores: z.boolean().optional(),
 })
 
 const COLUNA: Record<string, string> = {
@@ -183,18 +192,17 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // Data mexida com venda feita: o comprador não fica sabendo e chega no dia
-  // velho. Compara o INSTANTE, não o texto — a tela pode mandar o mesmo
-  // horário em outro formato.
+  // Data mexida com venda feita: muda, e quem comprou recebe a data nova (lá
+  // embaixo, na mesma transação). Compara o INSTANTE, não o texto — a tela
+  // pode mandar o mesmo horário em outro formato, e isso não é mudança.
   const mexeNaData = (novo: string | undefined, velho: string | Date) =>
     novo !== undefined && new Date(novo).getTime() !== new Date(velho).getTime()
-  if (atual.vendidos > 0
-      && (mexeNaData(campos.comecaEm, atual.starts_at) || mexeNaData(campos.terminaEm, atual.ends_at))) {
-    throw createError({
-      statusCode: 409,
-      statusMessage: 'Com ingressos vendidos, mude a data por Adiar evento — os compradores são avisados.',
-    })
-  }
+  const mudouInicio = mexeNaData(campos.comecaEm, atual.starts_at)
+  const mudouData = mudouInicio || mexeNaData(campos.terminaEm, atual.ends_at)
+  if (!mudouInicio) delete campos.comecaEm
+  if (!mexeNaData(campos.terminaEm, atual.ends_at)) delete campos.terminaEm
+  const avisar = campos.avisarCompradores !== false
+  delete campos.avisarCompradores
 
   if (campos.slug && campos.slug !== atual.slug && atual.vendidos > 0) {
     throw createError({
@@ -241,15 +249,36 @@ export default defineEventHandler(async (event) => {
     try {
       const { rows } = await c.query(
         `UPDATE events SET ${set.join(', ')}, updated_at = now()
-          WHERE id = $1 RETURNING id, slug, status`, par)
+          WHERE id = $1 RETURNING id, slug, status, starts_at, ends_at`, par)
+
+      // As sessões andam junto com o início, pelo mesmo deslocamento — senão o
+      // ingresso fica preso a uma sessão do dia velho e a portaria recusa no
+      // dia certo (a mesma lição do adiamento, `remarcar.post.ts`).
+      if (mudouInicio) {
+        const deslocamentoMs = new Date(rows[0].starts_at).getTime() - new Date(atual.starts_at).getTime()
+        await c.query(SQL_DESLOCA_SESSOES, [id, `${deslocamentoMs} milliseconds`])
+        await c.query(SQL_DESLOCA_DIAS_DE_USO, [id, rows[0].starts_at, atual.starts_at])
+      }
+
+      let aviso: { compras: number; whatsapp: number; email: number } | null = null
+      if (mudouData && atual.vendidos > 0 && avisar) {
+        aviso = await enfileirarAvisoDeNovaData(c, {
+          eventId: id!, deInicio: atual.starts_at,
+          paraInicio: rows[0].starts_at, paraFim: rows[0].ends_at,
+          base: baseDoSite(), pedidoPor: autorDaRequisicao(event).usuarioId,
+        })
+      }
+
       await registrarAuditoria({
         autor: autorDaRequisicao(event),
         entidade: 'evento',
         entidadeId: id!,
         acao: 'editado',
-        depois: campos,
+        depois: mudouData
+          ? { ...campos, dataAntes: { comecaEm: atual.starts_at, terminaEm: atual.ends_at }, aviso }
+          : campos,
       }, c)
-      return { ok: true, evento: rows[0] }
+      return { ok: true, evento: rows[0], aviso }
     } catch (e: any) {
       // 23505 = unique_violation. O slug é o único campo aqui com índice
       // único, e "já existe" é informação do usuário, não erro de servidor.

@@ -78,7 +78,11 @@ beforeAll(async () => {
 afterAll(async () => {
   if (sonda.noAr) {
     const ids = `SELECT id FROM events WHERE name LIKE '${MARCA}%'`
+    await q(`DELETE FROM whatsapp_sends WHERE event_id IN (${ids})`)
+    await q(`DELETE FROM email_sends WHERE event_id IN (${ids})`)
+    await q(`DELETE FROM tickets WHERE event_id IN (${ids})`)
     await q(`DELETE FROM orders WHERE event_id IN (${ids})`)
+    await q(`DELETE FROM customers WHERE email LIKE 'zzqa-%@teste.com'`)
     await q(`DELETE FROM events WHERE id IN (${ids})`)
   }
   await db().end()
@@ -314,30 +318,63 @@ describe('Situação: cancelar e adiar só pelos botões próprios', () => {
 })
 
 /* ================================ 9. data com venda feita =============== */
-describe('com venda feita a data só muda pelo adiamento', () => {
-  it('pedido pago: mudar comecaEm dá 409 com a frase; sem pedido, passa', async (ctx) => {
+describe('com venda feita a data muda e avisa quem comprou', () => {
+  it('pedido pago: a data muda e o aviso entra nas duas filas; sem pedido, passa', async (ctx) => {
     seForaDoArPula(ctx, sonda)
     const semVenda = await criar()
     const livre = await chamar('PATCH', `/api/admin/evento/${semVenda.id}/configuracoes`,
       { comecaEm: '2031-03-10T21:00:00.000Z' })
     expect(livre.status, JSON.stringify(livre.corpo)).toBe(200)
 
+    // Dono, 27/10/2026: "deixe editável mesmo depois de publicado". Com venda feita a data
+    // muda, e a compra com ingresso válido ganha o aviso da data nova nas duas filas.
     const comVenda = await criar()
-    await q(`INSERT INTO orders (org_id, event_id, code, status, channel, face_cents, fee_cents,
-                                 platform_cents, discount_cents, total_cents, paid_at)
-             VALUES ($1,$2,$3,'pago','online',5000,500,500,0,5500, now())`,
-      [orgId, comVenda.id, `ZZQA-${randomUUID().slice(0, 8)}`])
+    const [lote] = await lotesDo(comVenda.id)
+    const cliente = await q1<any>(
+      `INSERT INTO customers (org_id, name, email, phone) VALUES ($1,'Maria Teste',$2,'73999990000') RETURNING id`,
+      [orgId, `zzqa-${randomUUID().slice(0, 8)}@teste.com`])
+    const pedido = await q1<any>(
+      `INSERT INTO orders (org_id, event_id, customer_id, code, status, channel, face_cents, fee_cents,
+                           platform_cents, discount_cents, total_cents, paid_at)
+       VALUES ($1,$2,$3,$4,'pago','online',5000,500,500,0,5500, now() - interval '3 days') RETURNING id`,
+      [orgId, comVenda.id, cliente!.id, `ZZQA-${randomUUID().slice(0, 8)}`])
+    await q(`INSERT INTO tickets (org_id, event_id, order_id, sector_id, lot_id, code, qr_secret, status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'valido')`,
+      [orgId, comVenda.id, pedido!.id, lote.sector_id, lote.id, `ZZQA-T-${randomUUID().slice(0, 8)}`, randomUUID()])
+    // tipo marcado no dia do início velho: tem que ir junto pro dia novo, senão a portaria barra
+    const tipo = await q1<any>(
+      `INSERT INTO ticket_types (lot_id, name, quantity, valid_dates)
+       SELECT $1, 'ZZQA SEXTA', 10, ARRAY[(e.starts_at AT TIME ZONE 'America/Bahia')::date]
+         FROM events e WHERE e.id = $2 RETURNING id`, [lote.id, comVenda.id])
     const rota = `/api/admin/evento/${comVenda.id}/configuracoes`
     const r = await chamar('PATCH', rota, { comecaEm: '2031-03-10T21:00:00.000Z' })
-    expect(r.status).toBe(409)
-    expect(r.corpo.statusMessage)
-      .toBe('Com ingressos vendidos, mude a data por Adiar evento — os compradores são avisados.')
+    expect(r.status, JSON.stringify(r.corpo)).toBe(200)
+    expect(r.corpo.aviso).toEqual({ compras: 1, whatsapp: 1, email: 1 })
     const ev = await q1<any>(`SELECT starts_at FROM events WHERE id = $1`, [comVenda.id])
-    expect(new Date(ev!.starts_at).toISOString()).toBe('2031-03-10T20:00:00.000Z')
+    expect(new Date(ev!.starts_at).toISOString()).toBe('2031-03-10T21:00:00.000Z')
+    const diasDoTipo = async () => (await q1<any>(
+      `SELECT valid_dates::text[] AS d FROM ticket_types WHERE id = $1`, [tipo!.id]))!.d
+    expect(await diasDoTipo()).toEqual(['2031-03-10'])
+    const zap = await q1<any>(
+      `SELECT to_phone, body_text FROM whatsapp_sends WHERE order_id = $1 AND kind = 'aviso_nova_data'`, [pedido!.id])
+    expect(zap!.to_phone).toBe('5573999990000')
+    expect(zap!.body_text).toContain('A data do *')
+    const mail = await q1<any>(
+      `SELECT subject FROM email_sends WHERE order_id = $1 AND kind = 'aviso_nova_data'`, [pedido!.id])
+    expect(mail!.subject).toMatch(/^Nova data: /)
+
+    // desmarcar "avisar quem já comprou" muda a data sem mandar nada
+    const calado = await chamar('PATCH', rota, { comecaEm: '2031-03-10T22:00:00.000Z', avisarCompradores: false })
+    expect(calado.status, JSON.stringify(calado.corpo)).toBe(200)
+    expect(calado.corpo.aviso).toBeNull()
+    expect(await diasDoTipo()).toEqual(['2031-03-10']) // só a hora mudou: o dia fica
+    const n = await q1<any>(`SELECT count(*)::int AS n FROM whatsapp_sends WHERE order_id = $1 AND kind = 'aviso_nova_data'`, [pedido!.id])
+    expect(n!.n).toBe(1)
 
     // a mesma data (outro formato) não é mudança
-    const igual = await chamar('PATCH', rota, { comecaEm: '2031-03-10T17:00:00-03:00', nome: `${MARCA} renomeado` })
+    const igual = await chamar('PATCH', rota, { comecaEm: '2031-03-10T19:00:00-03:00', nome: `${MARCA} renomeado` })
     expect(igual.status, JSON.stringify(igual.corpo)).toBe(200)
+    expect(igual.corpo.aviso).toBeNull()
   })
 })
 

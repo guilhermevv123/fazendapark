@@ -64,6 +64,7 @@ export function montarMensagemDoWhatsapp(d: DadosDoWhatsapp): string {
 
 interface LinhaDoWhatsapp {
   id: string; order_id: string; to_phone: string; to_name: string | null; attempts: number; max_attempts: number
+  kind: string; body_text: string | null
 }
 
 /** Reserva a próxima linha pronta (e devolve à fila a que ficou presa em 'enviando'). */
@@ -75,7 +76,7 @@ async function reservarWhatsapp(): Promise<LinhaDoWhatsapp | null> {
       WHERE id = (SELECT id FROM whatsapp_sends
                    WHERE status = 'na_fila' AND available_at <= now()
                    ORDER BY available_at FOR UPDATE SKIP LOCKED LIMIT 1)
-      RETURNING id, order_id, to_phone, to_name, attempts, max_attempts`)
+      RETURNING id, order_id, to_phone, to_name, attempts, max_attempts, kind, body_text`)
 }
 
 async function dadosDoPedidoParaWhatsapp(orderId: string) {
@@ -116,14 +117,18 @@ export async function processarUmWhatsapp(
   if (!p || !base) return fim('falhou', !p ? 'pedido não encontrado' : 'site sem PUBLIC_BASE_URL: o link não tem pra onde apontar')
   if (!p.quantidade) return fim('falhou', 'pedido sem ingresso válido')
 
-  const texto = montarMensagemDoWhatsapp({
+  // Aviso de data nova: o texto foi montado quando a data mudou (aviso-nova-data.ts) e vai
+  // como está. O ingresso é montado agora, com a data de agora.
+  const aviso = linha.kind === 'aviso_nova_data'
+  if (aviso && !linha.body_text) return fim('falhou', 'aviso sem texto gravado')
+  const texto = aviso ? linha.body_text! : montarMensagemDoWhatsapp({
     nome: linha.to_name, evento: p.evento, inicio: p.starts_at, fuso: p.timezone, pedido: p.code,
     quantidade: p.quantidade, link: `${base}/ingressos/${encodeURIComponent(p.code)}`,
   })
   try {
     const r = await enviar({
       number: linha.to_phone, text: texto, linkPreview: true,
-      track_source: 'sofia', track_id: `ingresso:${p.code}`,
+      track_source: 'sofia', track_id: `${aviso ? 'nova-data' : 'ingresso'}:${p.code}`,
     })
     return fim('enviado', null, { texto, msg: r?.id ?? null })
   } catch (e: any) {

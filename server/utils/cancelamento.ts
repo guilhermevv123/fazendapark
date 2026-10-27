@@ -255,6 +255,29 @@ export const SQL_DESLOCA_SESSOES = `
    WHERE event_id = $1
    RETURNING id`
 
+/**
+ * Os dias de uso dos tipos (`ticket_types.valid_dates`, 047) andam com o início do evento, em
+ * dias de CALENDÁRIO no fuso do evento. Sem isto, a 9ª edição passada de 29/10 para 30/10 deixa
+ * o tipo "SEXTA" marcado em 29/10, e a portaria recusa o ingresso na sexta de verdade. Tipo sem
+ * dia marcado (vale em qualquer dia) não é tocado.
+ *
+ * $1 = evento, $2 = início novo, $3 = início velho.
+ */
+export const SQL_DESLOCA_DIAS_DE_USO = `
+  UPDATE ticket_types tt
+     SET valid_dates = (
+           SELECT array_agg(d + ((($2::timestamptz AT TIME ZONE COALESCE(e.timezone, 'America/Bahia'))::date
+                                - ($3::timestamptz AT TIME ZONE COALESCE(e.timezone, 'America/Bahia'))::date)) ORDER BY d)
+             FROM unnest(tt.valid_dates) d)
+    FROM lots l
+    JOIN sectors s ON s.id = l.sector_id
+    JOIN events e ON e.id = s.event_id
+   WHERE tt.lot_id = l.id AND s.event_id = $1
+     AND COALESCE(cardinality(tt.valid_dates), 0) > 0
+     AND ($2::timestamptz AT TIME ZONE COALESCE(e.timezone, 'America/Bahia'))::date
+      <> ($3::timestamptz AT TIME ZONE COALESCE(e.timezone, 'America/Bahia'))::date
+   RETURNING tt.id`
+
 /** Ingresso de evento cancelado morre. 'usado' não é tocado: a pessoa entrou. */
 export const SQL_MATA_INGRESSOS_DO_EVENTO = `
   UPDATE tickets SET status = 'cancelado', canceled_at = now()

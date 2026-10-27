@@ -36,7 +36,7 @@ import { q1, tx } from '../../../../utils/db'
 import { PEDIDO_VIVO } from '../../../../utils/liquido'
 import { idNoGateway } from '../../../../utils/mercadopago'
 import {
-  SQL_ADIA_EVENTO, SQL_DESLOCA_SESSOES, SQL_ENFILEIRA_ESTORNO_DE_UM_PEDIDO,
+  SQL_ADIA_EVENTO, SQL_DESLOCA_DIAS_DE_USO, SQL_DESLOCA_SESSOES, SQL_ENFILEIRA_ESTORNO_DE_UM_PEDIDO,
   SQL_MATA_INGRESSOS_DO_PEDIDO, SQL_TRAVA_EVENTO, devolverEstoqueDoPedido,
 } from '../../../../utils/cancelamento'
 
@@ -154,6 +154,8 @@ async function adiarEvento(
     const deslocamentoMs = novoInicio.getTime() - inicioAtual.getTime()
     const { rows: sessoes } = await c.query(
       SQL_DESLOCA_SESSOES, [eventId, `${deslocamentoMs} milliseconds`])
+    // e os dias de uso dos tipos, senão o ingresso de "sexta" fica preso à sexta velha
+    await c.query(SQL_DESLOCA_DIAS_DE_USO, [eventId, novoInicio.toISOString(), inicioAtual.toISOString()])
 
     // Quantas pessoas isso alcança, e quanto dinheiro está em jogo se todas
     // pedirem de volta. `PEDIDO_VIVO()`, nunca `status = 'pago'`: pedido com

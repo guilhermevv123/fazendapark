@@ -50,9 +50,10 @@ import { PEDIDO_VIVO } from './liquido'
 import { garantirCupomDeConsumacao } from './cupom-consumacao'
 import { diaNoFusoDaFidelidade, programaDeFidelidadeDaOrg } from './fidelidade'
 import {
-  diaDaSessao, entregar, montarConfirmacao, type DadosConfirmacao, type Entrega, type IngressoNoEmail, type Mensagem,
-  type Transporte, transporteEscolhido,
+  diaDaSessao, entregar, montarConfirmacao, remetente, type DadosConfirmacao, type Entrega, type IngressoNoEmail,
+  type Mensagem, type Transporte, transporteEscolhido,
 } from './email'
+import { imagemDaLogo } from './email-visual'
 
 /** Conexão OU pool: a reserva é um comando só e roda bem nos dois. */
 type Executor = Pool | PoolClient
@@ -66,6 +67,9 @@ export interface LinhaEnvio {
   origin: string
   to_email: string
   to_name: string | null
+  subject?: string | null
+  body_text?: string | null
+  body_html?: string | null
   status: string
   attempts: number
   max_attempts: number
@@ -338,6 +342,19 @@ export function baseDoSite(): string | null {
 
 /* ------------------------------------------------------------ processar */
 
+/**
+ * Aviso de data nova (aviso-nova-data.ts): assunto e corpo foram montados quando a data mudou e
+ * estão na linha. Só a logo volta a ir junto — imagem não fica gravada no banco.
+ */
+function mensagemGravada(linha: LinhaEnvio): Mensagem {
+  if (!linha.subject || !linha.body_html) throw new ErroDefinitivo('aviso sem texto gravado')
+  return {
+    de: remetente(), para: linha.to_email, paraNome: linha.to_name ?? undefined,
+    assunto: linha.subject, texto: linha.body_text ?? '', html: linha.body_html,
+    imagens: [imagemDaLogo()],
+  }
+}
+
 export interface ResultadoEnvio {
   id: string
   ok: boolean
@@ -366,8 +383,9 @@ export async function processarUm(
   const inicio = Date.now()
   const transporte = transporteInjetado ? 'injetado' : transporteEscolhido()
   try {
-    const mensagem = await montarMensagemDoPedido(
-      linha.order_id!, linha.to_email, linha.to_name)
+    const mensagem = linha.kind === 'aviso_nova_data'
+      ? mensagemGravada(linha)
+      : await montarMensagemDoPedido(linha.order_id!, linha.to_email, linha.to_name)
     const entrega = await entregarAgora(mensagem)
 
     await q(
