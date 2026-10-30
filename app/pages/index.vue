@@ -236,7 +236,7 @@ const DUVIDAS = [
   },
   {
     pergunta: 'Tem meia-entrada?',
-    resposta: 'Sim, nos ingressos que oferecem a opção, para quem tem direito por lei (como estudantes, idosos e pessoas com deficiência). Leve o documento que comprova: a portaria confere na entrada.',
+    resposta: 'Sim, nos ingressos que oferecem a opção, para quem tem direito por lei (como idosos e pessoas com deficiência). Leve o documento que comprova: a portaria confere na entrada.',
   },
   {
     pergunta: 'E se o evento for cancelado ou adiado?',
