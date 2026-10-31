@@ -430,6 +430,18 @@ const inteiro = (n: number) => n.toLocaleString('pt-BR')
 /** o vendido do lote com o combo contando as pessoas (combo de 10 = 10) */
 const vendidoDoLote = (lote: any) => Number(lote.vendidosContandoCombo ?? lote.vendidos)
 
+/**
+ * Lote com vários tipos: a linha do lote é a SOMA deles, não um ingresso (dono do parque, 31/10:
+ * "1º lote R$ 20 · 96" parecia um ingresso de R$ 20 comendo as vendas do domingo, que tem preço
+ * próprio de R$ 30). Devolve a faixa de preço que o comprador vê nos tipos, ou null com um tipo só.
+ */
+function resumoDosTipos(lote: any): { n: number; min: number; max: number } | null {
+  const tipos = lote.tipos ?? []
+  if (tipos.length < 2) return null
+  const precos = tipos.map((t: any) => Number(t.totalCents))
+  return { n: tipos.length, min: Math.min(...precos), max: Math.max(...precos) }
+}
+
 /* --------------------------------------------------------------- tipos ---- */
 const tipoForm = reactive({
   aberto: false, id: '', loteId: '', nome: '', quantidade: 50,
@@ -675,6 +687,12 @@ useHead({ title: 'Ingressos' })
 
                 <td class="px-3 py-3 max-md:pr-12" data-rotulo="">
                   <p class="font-medium text-tinta max-md:text-base max-md:font-semibold">{{ lote.nome }}</p>
+                  <button v-if="resumoDosTipos(lote)" type="button" data-parte="lote-agrupa"
+                          class="text-left text-xs text-tinta-fraca underline-offset-2 hover:text-acao hover:underline"
+                          @click="expandir(lote.id)">
+                    agrupa {{ resumoDosTipos(lote)!.n }} tipos de ingresso ·
+                    {{ expandidos.includes(lote.id) ? 'esconder' : 'ver cada um' }}
+                  </button>
                   <p v-if="rotuloCanais(lote.canais)" class="text-xs text-alerta">{{ rotuloCanais(lote.canais) }}</p>
                   <p v-if="lote.abreEm || lote.expiraEm" class="text-xs text-tinta-fraca">
                     <template v-if="lote.abreEm">abre {{ dataHora(lote.abreEm) }}</template>
@@ -685,17 +703,31 @@ useHead({ title: 'Ingressos' })
 
                 <!-- as quatro pontas do dinheiro, empilhadas na coluna de valor -->
                 <td class="px-3 py-3 text-right">
-                  <p class="titulo font-semibold tabular-nums text-tinta">{{ reais(lote.totalCents) }}</p>
-                  <p class="text-xs tabular-nums text-tinta-fraca">
-                    face {{ reais(lote.faceCents) }} + taxa {{ reais(lote.taxaCents) }}
-                  </p>
-                  <p class="text-xs tabular-nums text-ok">
-                    produção recebe {{ reais(lote.produtorRecebeCents) }}
-                  </p>
+                  <!-- tipos com preços diferentes: a faixa que o comprador vê; o do lote é só a base -->
+                  <template v-if="resumoDosTipos(lote) && resumoDosTipos(lote)!.min !== resumoDosTipos(lote)!.max">
+                    <p class="titulo font-semibold tabular-nums text-tinta" data-parte="lote-faixa">
+                      {{ reais(resumoDosTipos(lote)!.min) }} a {{ reais(resumoDosTipos(lote)!.max) }}
+                    </p>
+                    <p class="text-xs tabular-nums text-tinta-fraca">
+                      conforme o tipo · base {{ reais(lote.totalCents) }}
+                    </p>
+                  </template>
+                  <template v-else>
+                    <p class="titulo font-semibold tabular-nums text-tinta">{{ reais(lote.totalCents) }}</p>
+                    <p class="text-xs tabular-nums text-tinta-fraca">
+                      face {{ reais(lote.faceCents) }} + taxa {{ reais(lote.taxaCents) }}
+                    </p>
+                    <p class="text-xs tabular-nums text-ok">
+                      produção recebe {{ reais(lote.produtorRecebeCents) }}
+                    </p>
+                  </template>
                 </td>
 
                 <td class="px-3 py-3 text-right tabular-nums text-tinta" data-parte="vendido-lote">
                   {{ vendidoDoLote(lote) + lote.reservados }}
+                  <span v-if="resumoDosTipos(lote)" class="block text-xs text-tinta-fraca" data-parte="lote-soma">
+                    soma dos {{ resumoDosTipos(lote)!.n }} tipos
+                  </span>
                   <span v-if="lote.reservados" class="block text-xs text-tinta-fraca">
                     {{ vendidoDoLote(lote) }} pago · {{ lote.reservados }} em carrinho
                   </span>
