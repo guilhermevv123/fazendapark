@@ -2,11 +2,11 @@
 /**
  * "Veja o parque" — o vídeo vertical de destaque da home (dono, 05/10).
  *
- * O vídeo (59 s, drone + atrações; trocado em 14/10 pelo vídeo novo do dono — HDR do iPhone convertido pra SDR) mora em `public/videos/` já convertido pra web: H.264
- * 540×960 com `faststart` (começa a tocar antes de baixar tudo), ~8,3 MB. Três cuidados:
+ * O vídeo (77 s, drone + atrações; trocado em 17/11 pelo vídeo novo do dono — HDR do iPhone convertido pra SDR) mora em `public/videos/` já convertido pra web: H.264
+ * 540×960 com `faststart` (começa a tocar antes de baixar tudo), ~12,7 MB. Três cuidados:
  *
  * - **Só baixa quando a pessoa chega perto.** `preload="none"` e o `src` entra pelo
- *   IntersectionObserver: quem não rola até aqui não gasta os 8 MB do plano de dados.
+ *   IntersectionObserver: quem não rola até aqui não gasta os 12 MB do plano de dados.
  * - **Toca sozinho e mudo, como o Instagram** — navegador só deixa autoplay mudo —, pausa ao
  *   sair da tela e tem botão de som. Quem pede menos movimento (`prefers-reduced-motion`) não
  *   recebe autoplay: vê a capa e um botão de tocar.
@@ -14,8 +14,8 @@
  */
 defineProps<{ irComprar: string }>()
 
-const VIDEO = '/videos/conquista-park-2-540.mp4'
-const CAPA = '/videos/conquista-park-2-capa.webp'
+const VIDEO = '/videos/conquista-park-3-540.mp4'
+const CAPA = '/videos/conquista-park-3-capa.webp'
 
 const video = ref<HTMLVideoElement | null>(null)
 const caixa = ref<HTMLElement | null>(null)

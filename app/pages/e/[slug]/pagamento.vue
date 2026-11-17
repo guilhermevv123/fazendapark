@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { origemGuardada } from '~/composables/origemDaVisita'
+import { compraNoPixel } from '~/composables/metaPixel'
 /**
  * Checkout, em passos (28/09, pedido do dono):
  *
@@ -669,6 +670,11 @@ async function conferirAgora(id: string) {
 function lembrarPago(r: any) {
   const carimbo = carimboDePago(slug, r, pedido.value?.pedido)
   if (carimbo) gravarNaAba(CHAVE_PAGO, JSON.stringify(carimbo))
+  // Meta Pixel: só no `pago` de verdade (não no `estornado_parcial` que também passa aqui);
+  // uma vez por pedido, mesmo com F5 ou o vigia do Pix vendo "pago" de novo
+  if (r?.status === 'pago') {
+    compraNoPixel(r.pedidoId ?? pedido.value?.pedidoId, r.totalCents ?? pedido.value?.totalCents)
+  }
 }
 
 function aplicarEstado(r: any) {
