@@ -36,7 +36,7 @@ import { conferirCotaDeMeia, CotaDeMeiaEsgotada } from './meia-entrada'
 import { gerarCodigo } from './ingresso'
 import { faceDoTipo, precificar, type ModoTaxa } from './dinheiro'
 import { LOTE_DA_VITRINE, portaDeVenda } from '../api/e/[slug].get'
-import { limparDiasDeUso, vendeOnlineAgora } from './dias-de-uso'
+import { diaDeUsoDe, limparDiasDeUso, vendeOnlineAgora } from './dias-de-uso'
 
 /** O ingresso como o reagendamento precisa ver. */
 /**
@@ -180,7 +180,8 @@ export function diaFechadoPeloParque(i: Pick<IngressoParaReagendar, 'reagendavel
 export function diaDoIngressoComecou(
   i: Pick<IngressoParaReagendar, 'diasDeUso' | 'eventoInicio' | 'fuso'>, agora = new Date(),
 ): boolean {
-  if (i.diasDeUso?.length) return !vendeOnlineAgora(i.diasDeUso, i.eventoInicio, i.fuso, agora)
+  const marcados = limparDiasDeUso(i.diasDeUso)
+  if (marcados) return diaDeUsoDe(agora, i.fuso) >= marcados[0]!
   return new Date(i.eventoInicio).getTime() <= agora.getTime()
 }
 

@@ -136,11 +136,20 @@ export function diaDoCorteOnline(dias: unknown, inicioDoEvento: Date | string | 
   return inicioDoEvento ? diaDeUsoDe(inicioDoEvento, fuso) : null
 }
 
-/** O site ainda vende este tipo agora? Hoje (no fuso do evento) tem que ser ANTES do dia do corte. */
-export function vendeOnlineAgora(dias: unknown, inicioDoEvento: Date | string | null | undefined,
+/**
+ * O site ainda vende este tipo agora?
+ *
+ * (20/11/2026, dono) "todas as pessoas que forem comprar têm que conseguir": o tipo com dia marcado
+ * vende ATÉ o fim do próprio dia (o dia do corte inclusive). Tipo SEM dia marcado não tem corte por
+ * dia: quem fecha é o prazo de venda do evento (encerra vendas / porta). Antes, à meia-noite do 1º
+ * dia, o evento de 3 dias (20 a 22/11) com tipos sem dia saiu INTEIRO do site, sábado e domingo juntos.
+ * `inicioDoEvento` fica na assinatura pelos chamadores; `diaDoCorteOnline` segue servindo à frase.
+ */
+export function vendeOnlineAgora(dias: unknown, _inicioDoEvento: Date | string | null | undefined,
   fuso?: string | null, agora: Date = new Date()): boolean {
-  const corte = diaDoCorteOnline(dias, inicioDoEvento, fuso)
-  return !corte || diaDeUsoDe(agora, fuso) < corte
+  const marcados = limparDiasDeUso(dias)
+  if (!marcados) return true
+  return diaDeUsoDe(agora, fuso) <= marcados[0]!
 }
 
 /** "Ingresso de sexta 09/10 agora só na portaria" — a frase do site e do checkout. */
