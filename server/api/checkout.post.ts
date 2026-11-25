@@ -579,6 +579,16 @@ export default defineEventHandler(async (event) => {
     // gravado porque as telas do painel mostram ele.
     if (cupom) await c.query(`UPDATE promo_codes SET uses = uses + 1 WHERE id = $1`, [cupom.id])
 
+    // Pedido gratuito (cortesia/100% off) não passa por gateway: o ingresso sai AQUI, no mesmo
+    // commit que criou o pedido. Emitido depois, numa transação à parte, uma falha no meio deixava
+    // o pedido 'aguardando_pagamento' segurando o lugar até a varredura de expirados — e o
+    // comprador sem ingresso nem cobrança. Não emitiu = nada fica de pé (a transação volta inteira).
+    if (total.totalCents === 0) {
+      const { emitirNaTransacao } = await import('../utils/emissao')
+      const emissao = await emitirNaTransacao(c, ord.rows[0].id)
+      if (!emissao.emitiu) throw new Error(`pedido gratuito ${ord.rows[0].code} não emitiu: ${emissao.motivo}`)
+    }
+
     return { id: ord.rows[0].id, code: ord.rows[0].code, customerId: cliente.id,
              asaasCustomerId: cliente.asaas_customer_id, total, parcelas,
              fidelidade: comFidelidade
@@ -641,7 +651,7 @@ export default defineEventHandler(async (event) => {
 
   // Pedido gratuito (cortesia/100% off) não passa por gateway.
   if (total.totalCents === 0) {
-    await confirmarGratuito(pedido.id)
+    // já emitido dentro da transação do pedido (ver acima)
     return { ok: true, pedido: pedido.code, pedidoId: pedido.id, status: 'pago', totalCents: 0,
              fidelidade: pedido.fidelidade }
   }
@@ -1232,11 +1242,6 @@ async function desfazer(orderId: string, motivo: string): Promise<boolean> {
       [orderId, JSON.stringify({ motivo })])
     return true
   })
-}
-
-async function confirmarGratuito(orderId: string) {
-  const { emitirIngressos } = await import('../utils/emissao')
-  await emitirIngressos(orderId)
 }
 
 /**
