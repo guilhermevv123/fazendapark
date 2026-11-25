@@ -309,8 +309,16 @@ export async function emitirNaTransacao(
   // Pago depois de a reserva cair: o lugar volta SE ainda existir. Só
   // 'expirado' — cancelado, estornado, chargeback são decisões sobre o
   // dinheiro, não prazo vencido, e nenhum deles revive por aqui.
+  //
+  // 'falhou' entra junto: é o pedido que o checkout desfez porque o gateway
+  // não respondeu (`desfazer`, checkout.post.ts) — o lugar voltou, mas o
+  // cartão pode ter sido cobrado mesmo assim. Pagamento confirmado nele era
+  // descartado como "pedido em falhou": dinheiro na conta, nenhum ingresso e
+  // nenhuma pendência à vista. É o mesmo caso do expirado — lugar devolvido,
+  // dinheiro chegando depois — e sai pela mesma porta: refaz a reserva se
+  // couber, senão fica pendurado como `pago_sem_lugar`.
   let reservaRefeita = false
-  if (pedido.status === 'expirado') {
+  if (pedido.status === 'expirado' || pedido.status === 'falhou') {
     const volta = await refazerReserva(c, pedido)
     if (!volta.ok) {
       const motivo = `pago depois do prazo da reserva e sem lugar: ${volta.motivo}. `
