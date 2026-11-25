@@ -86,6 +86,23 @@ describe('/api/saude · os sinais que o dono só descobria pelo telefone', () =>
     expect(corpo.problemas.find((p: any) => p.item === 'emissão')).toMatchObject({ critico: true })
   })
 
+  it('pagamento confirmado que "não emitiu: pedido em …" aparece — a entrega ganhou baixa e sumiria', async () => {
+    const id = `evt_zzsaude_${Date.now()}`
+    const antes = (await medir()).corpo.webhook.pagosQueNaoEmitiramEm7Dias
+    await q(`INSERT INTO payment_events (provider, gateway_event_id, event_name, payload, processed_at, error)
+             VALUES ('asaas', $1, 'PAYMENT_RECEIVED', '{}'::jsonb, now(), $2),
+                    ('asaas', $1 || '_parcela', 'PAYMENT_RECEIVED', '{}'::jsonb, now(), $3)`,
+      [id, 'não emitiu: pedido em cancelado', 'parcela 1/3 recebida · não emitiu: pedido em estornado'])
+    try {
+      const { corpo } = await medir()
+      expect(corpo.webhook.pagosQueNaoEmitiramEm7Dias).toBe(antes + 2)
+      expect(corpo.problemas.find((p: any) => /sem ingresso emitido/.test(p.frase)))
+        .toMatchObject({ item: 'webhook', critico: false })
+    } finally {
+      await q(`DELETE FROM payment_events WHERE gateway_event_id LIKE $1`, [id + '%'])
+    }
+  })
+
   it('PROD-06 · evento à venda sem como cobrar aparece pelo slug e o motivo — a chave nunca', async () => {
     process.env.PAGAMENTO_SIMULADO = '0'
     let { corpo } = await medir()
