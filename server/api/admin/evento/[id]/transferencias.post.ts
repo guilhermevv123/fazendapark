@@ -60,6 +60,16 @@ export default defineEventHandler(async (event) => {
   if (ingresso.status === 'usado') throw createError({ statusCode: 409, statusMessage: RECUSA.usado })
   if (ingresso.status === 'cancelado') throw createError({ statusCode: 409, statusMessage: RECUSA.cancelado })
   if (ingresso.pendentes > 0) throw createError({ statusCode: 409, statusMessage: RECUSA.pendente })
+  // Troca de dia com diferença esperando pagamento (053): quando o Pix cair, a emissão cancela
+  // ESTE ingresso e o novo herda o titular dele. Transferir no meio entregaria à outra pessoa um
+  // ingresso que morre sozinho — ou o dia novo, pago por quem comprou, no nome de quem recebeu.
+  const troca = await q1<any>(
+    `SELECT code FROM orders WHERE swap_from_ticket_id = $1
+        AND status IN ('aguardando_pagamento', 'em_analise') LIMIT 1`, [ingresso.id])
+  if (troca) {
+    throw createError({ statusCode: 409, statusMessage: `Este ingresso tem uma troca de dia esperando `
+      + `pagamento (pedido ${troca.code}). Espere o pagamento ou o prazo dela vencer antes de transferir.` })
+  }
   if (mesmoEmail(ingresso.holder_email, d.paraEmail)) {
     throw createError({ statusCode: 422, statusMessage: RECUSA.mesma_pessoa })
   }

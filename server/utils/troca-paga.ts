@@ -6,12 +6,45 @@
 import type { PoolClient } from 'pg'
 
 /**
+ * A diferença foi paga, mas o ingresso ANTIGO ainda vale? Devolve o motivo quando NÃO vale.
+ *
+ * Antes, com o antigo já usado na catraca (ou cancelado pela equipe), o novo saía assim mesmo:
+ * uma pessoa entrava com o antigo e ganhava um segundo ingresso inteiro, e o rastro
+ * `troca_paga_sem_ingresso_antigo` era a única marca — numa trilha que ninguém abre sem motivo.
+ * Agora o novo NÃO sai: quem chama (`emitirNaTransacao`) pendura a entrega como o pagamento sem
+ * lugar, com este motivo escrito, e a equipe decide — devolver a diferença ou emitir à mão.
+ *
+ * Trava o antigo (`FOR UPDATE`): a catraca e o cancelamento da equipe esperam esta transação,
+ * e a decisão vale até o COMMIT. Uma linha de rastro por pedido: a entrega é retentada.
+ */
+export async function trocaSemIngressoAntigo(
+  c: PoolClient, pedido: { id: string; org_id: string; code: string; swap_from_ticket_id: string },
+): Promise<string | null> {
+  const { rows: [velho] } = await c.query(
+    `SELECT id, code, status, checked_in_at FROM tickets WHERE id = $1 FOR UPDATE`,
+    [pedido.swap_from_ticket_id])
+  if (velho && velho.status === 'valido' && !velho.checked_in_at) return null
+  const situacao = !velho ? 'não existe mais' : velho.checked_in_at ? 'já entrou no parque' : `está ${velho.status}`
+  await c.query(
+    `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+     SELECT $1::uuid, 'order', $2::text, 'troca_paga_sem_ingresso_antigo', $3::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM audit_log
+                         WHERE entity = 'order' AND entity_id = $2::text
+                           AND action = 'troca_paga_sem_ingresso_antigo')`,
+    [pedido.org_id, pedido.id, JSON.stringify({
+      pedidoNovo: pedido.code, ingressoAnterior: velho?.code ?? null, statusAnterior: velho?.status ?? null,
+    })])
+  return `troca de dia paga, mas o ingresso anterior${velho ? ` ${velho.code}` : ''} ${situacao}: `
+    + 'o novo não foi emitido. Devolver a diferença ou emitir à mão.'
+}
+
+/**
  * A diferença foi paga: o ingresso antigo morre, na MESMA transação que emite o novo
  * (`emitirNaTransacao`). O novo herda o titular do antigo, e o pedido passa a contar como troca
  * (`rescheduled_from_ticket_id`, 036) pra conta do cliente e o bilhete mostrarem "trocado".
  *
- * Se o antigo já não está válido (usado, cancelado pela equipe) a pessoa pagou e fica com o novo
- * — a emissão não volta atrás com dinheiro na mão; o rastro avisa a equipe pra conferir.
+ * O antigo já não válido (usado, cancelado pela equipe) nem chega aqui: `trocaSemIngressoAntigo`
+ * barra a emissão antes. A conferência de baixo fica como rede, na mesma transação.
  */
 export async function encerrarIngressoTrocado(
   c: PoolClient, pedido: { id: string; org_id: string; code: string; swap_from_ticket_id: string },

@@ -343,6 +343,72 @@ describe('reagendamento · troca com diferença (dono, 24/10)', () => {
   })
 })
 
+describe('reagendamento · troca com diferença e o ingresso antigo que já não vale', () => {
+  /** o pedido da diferença como o checkout grava: R$ 50 menos R$ 30 de crédito, esperando o Pix */
+  async function pedidoDaDiferenca(ingressoId: string) {
+    const pedido = (await q1<any>(
+      `INSERT INTO orders (org_id, event_id, code, status, channel, face_cents, fee_cents, platform_cents,
+                           discount_cents, total_cents, customer_account_id, swap_from_ticket_id, expires_at)
+       VALUES ($1,$2,$3,'aguardando_pagamento','online',5000,0,0,3000,2000,$4,$5, now() + interval '15 minutes')
+       RETURNING id, code`,
+      [orgId, ev.caro, `PED-U${Math.random().toString(36).slice(2, 10).toUpperCase()}`, conta, ingressoId]))!
+    await q(`INSERT INTO order_items (order_id, lot_id, ticket_type_id, quantity, unit_face_cents, unit_fee_cents, unit_total_cents)
+             VALUES ($1,$2,$3,1,5000,0,5000)`, [pedido.id, lote.caro, tipo.caroInteira])
+    await q(`UPDATE lots SET reserved = reserved + 1 WHERE id = $1`, [lote.caro])
+    return pedido
+  }
+
+  it('o antigo já entrou no parque: o novo NÃO sai, e a entrega fica pendurada com o motivo', async () => {
+    const id = await ingressoPago(conta)
+    const pedido = await pedidoDaDiferenca(id)
+    // entrou pela catraca enquanto o Pix da diferença não caía
+    await q(`UPDATE tickets SET status = 'usado', checked_in_at = now() WHERE id = $1`, [id])
+    const vendidos = await sold('lots', lote.caro!)
+
+    const r = await emitirIngressos(pedido.id)
+    expect(r.emitiu).toBe(false)
+    expect(r.pagoSemLugar, 'quem chama precisa saber que entrou dinheiro sem ingresso').toBe(true)
+    expect(r.motivo).toMatch(/já entrou no parque/)
+    expect(Number((await q1<any>(`SELECT count(*) AS n FROM tickets WHERE order_id = $1`, [pedido.id]))!.n)).toBe(0)
+    expect((await q1<any>(`SELECT status FROM tickets WHERE id = $1`, [id]))!.status).toBe('usado')
+    expect(await sold('lots', lote.caro!)).toBe(vendidos)
+    // a entrega é retentada: a trilha não repete
+    await emitirIngressos(pedido.id)
+    const trilha = await q(`SELECT 1 FROM audit_log WHERE entity = 'order' AND entity_id = $1
+                              AND action = 'troca_paga_sem_ingresso_antigo'`, [pedido.id])
+    expect(trilha).toHaveLength(1)
+  })
+
+  it('a transferência pelo painel recusa ingresso com troca esperando pagamento (409)', async () => {
+    const { createError, getRouterParam, readBody } = await import('h3')
+    ;(globalThis as any).createError ??= createError
+    ;(globalThis as any).getRouterParam ??= getRouterParam
+    ;(globalThis as any).readBody ??= readBody
+    const { default: transferir } = await import('../api/admin/evento/[id]/transferencias.post')
+    await q(`UPDATE events SET allow_transfer = true WHERE id = $1`, [ev.a])
+    const operador = (await q1<any>(
+      `INSERT INTO users (org_id, name, email, password_hash, papel, role)
+       VALUES ($1, 'Operador ZZ', $2, 'x', 'master', 'master') RETURNING id`, [orgId, `${MARCA}.operador@exemplo.com`]))!.id
+    const id = await ingressoPago(conta)
+    const pedido = await pedidoDaDiferenca(id)
+    const corpo = JSON.stringify({ ingressoId: id, paraNome: 'Outra Pessoa', paraEmail: `${MARCA}.outra@exemplo.com` })
+    const requisicao = () => ({
+      method: 'POST', path: `/api/admin/evento/${ev.a}/transferencias`,
+      context: { params: { id: ev.a }, sessao: { usuarioId: operador, orgId, email: 'operador@zz' } },
+      node: { req: { method: 'POST', url: '/', headers: { 'content-type': 'application/json' }, body: corpo },
+              res: { setHeader() {}, getHeader() {} } },
+    }) as any
+    await expect((transferir as any)(requisicao())).rejects.toMatchObject({
+      statusCode: 409, statusMessage: expect.stringContaining(pedido.code),
+    })
+    // vencida a troca, a transferência volta a valer
+    await q(`UPDATE orders SET status = 'expirado', canceled_at = now() WHERE id = $1`, [pedido.id])
+    expect(await (transferir as any)(requisicao())).toMatchObject({ ok: true })
+    await q(`DELETE FROM ticket_transfers WHERE ticket_id = $1`, [id])
+    await q(`DELETE FROM users WHERE id = $1`, [operador]).catch(() => {})
+  })
+})
+
 describe('reagendamento · interruptor (dono, 05/10: "em manutenção")', () => {
   it('ligado por padrão (dono, 24/10); só REAGENDAR_LIGADO=0 desliga', () => {
     expect(reagendamentoLigado({})).toBe(true)
