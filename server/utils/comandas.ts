@@ -257,7 +257,7 @@ export async function conferirPinDoLink(link: { id: string; pin_hash: string | n
   const negar = (mensagem: string, codigo: string): never => {
     throw createError({ statusCode: 401, statusMessage: mensagem, data: { codigo } })
   }
-  if (!link.pin_hash) negar('Este link é antigo e não tem PIN. Peça um link novo ao gerente.', 'link_sem_pin')
+  if (!link.pin_hash) negar('Este código é antigo e não tem PIN. Peça um código novo ao gerente.', 'link_sem_pin')
   const pin = String(bruto ?? '').replace(/\D/g, '')
   if (pin.length !== 4) negar('Digite o seu PIN de 4 números.', 'pin')
   const chave = `${link.id}:${hashDoLink(link.pin_hash + pin)}`
@@ -268,7 +268,7 @@ export async function conferirPinDoLink(link: { id: string; pin_hash: string | n
     `UPDATE comanda_links SET erros_pin = erros_pin + 1, erros_total = erros_total + 1
       WHERE id = $1 AND desativado_em IS NULL AND (travado_ate IS NULL OR travado_ate <= now()) AND erros_pin < 5
       RETURNING erros_pin`, [link.id])
-  if (!vez) negar('PIN errado muitas vezes. Espere 15 minutos ou peça ao gerente um link novo.', 'pin_travado')
+  if (!vez) negar('PIN errado muitas vezes. Espere 15 minutos ou peça ao gerente um código novo.', 'pin_travado')
 
   if (await bcrypt.compare(pin, link.pin_hash!)) {
     pinsDoLink.set(chave, Date.now() + 10 * 60_000)
@@ -282,9 +282,9 @@ export async function conferirPinDoLink(link: { id: string; pin_hash: string | n
             erros_pin = CASE WHEN erros_pin >= 5 THEN 0 ELSE erros_pin END,
             desativado_em = CASE WHEN erros_total >= 20 THEN now() ELSE desativado_em END
       WHERE id = $1 RETURNING erros_pin, travado_ate, desativado_em`, [link.id])
-  if (r?.desativado_em) negar('PIN errado vezes demais. Este link foi desligado: peça um link novo ao gerente.', 'link')
+  if (r?.desativado_em) negar('PIN errado vezes demais. Este código foi desligado: peça um código novo ao gerente.', 'link')
   if (r?.travado_ate && new Date(r.travado_ate).getTime() > Date.now()) {
-    negar('PIN errado 5 vezes. O link ficou travado por 15 minutos.', 'pin_travado')
+    negar('PIN errado 5 vezes. O acesso ficou travado por 15 minutos.', 'pin_travado')
   }
   negar(`PIN errado. Restam ${5 - Number(r?.erros_pin ?? 0)} tentativa(s).`, 'pin')
 }

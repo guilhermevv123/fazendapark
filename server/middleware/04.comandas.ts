@@ -41,13 +41,13 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 403, statusMessage: 'Origem não autorizada' })
     }
     if (!ROTAS_DO_LINK.some(([m, r]) => m === event.method && r.test(caminho))) {
-      throw createError({ statusCode: 403, statusMessage: 'O link do atendente não abre esta parte.' })
+      throw createError({ statusCode: 403, statusMessage: 'O app do atendente não abre esta parte.' })
     }
     const link = await q1<any>(
       `SELECT id, org_id, nome, criado_por, pin_hash
          FROM comanda_links WHERE token_hash = $1 AND desativado_em IS NULL`, [hashDoLink(segredo)])
     if (!link) {
-      throw createError({ statusCode: 401, statusMessage: 'Este link foi desligado ou não existe. Peça um link novo ao gerente.', data: { codigo: 'link' } })
+      throw createError({ statusCode: 401, statusMessage: 'Este código de funcionário foi desligado ou não existe. Peça um código novo ao gerente.', data: { codigo: 'link' } })
     }
     await conferirPinDoLink(link, getRequestHeader(event, 'x-comanda-pin'))
     const config = await configDaComanda(link.org_id)

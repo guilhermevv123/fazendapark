@@ -37,7 +37,7 @@ const SECOES: Secao[] = [
     partes: [{ id: 'vendas', nome: 'Vendas' }, { id: 'pedidos', nome: 'Todos os pedidos' }] },
   { id: 'produtos', nome: 'Produtos', resumo: 'O que vocês vendem. Tudo aqui aparece no Novo pedido dos tablets.' },
   { id: 'config', nome: 'Configurações', resumo: 'Locais de venda, pulseiras, equipe, regras e horário de fechamento.',
-    partes: [{ id: 'locais', nome: 'Locais de venda' }, { id: 'links', nome: 'Links dos atendentes' }, { id: 'pulseiras', nome: 'Pulseiras' }, { id: 'equipe', nome: 'Equipe e regras' }] },
+    partes: [{ id: 'locais', nome: 'Locais de venda' }, { id: 'links', nome: 'Funcionários do app' }, { id: 'pulseiras', nome: 'Pulseiras' }, { id: 'equipe', nome: 'Equipe e regras' }] },
 ]
 const route = useRoute()
 const secao = computed(() => SECOES.find((s) => s.id === route.query.aba) ?? SECOES[0]!)

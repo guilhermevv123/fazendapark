@@ -27,6 +27,11 @@ async function rodar() {
   } catch (e: any) {
     const status = Number(e?.statusCode ?? e?.status ?? e?.response?.status ?? 0)
     if (status === 401) {
+      // no app do tablet (código + PIN do funcionário) não existe /entrar: o app volta pro PIN
+      if (linkDoFuncionario.value) {
+        window.dispatchEvent(new Event('comanda:sair'))
+        return
+      }
       window.location.href = `/entrar?de=${encodeURIComponent(route.fullPath)}`
       return
     }
