@@ -2,7 +2,8 @@
 /**
  * Equipe e regras (055): quem usa a comanda e com que nível, o PIN do gerente, e as regras
  * (limite padrão, prazo para desfazer, quem fecha conta). O login das pessoas é o MESMO do
- * painel (Configurações → Equipe); aqui só se dá o nível na comanda.
+ * painel (Configurações → Equipe); aqui se dá o nível na comanda. O dono também cria aqui o
+ * login de um funcionário novo (papel Portaria + nível), que entra no app do tablet.
  */
 import { chamar, mensagemDoErro } from '~/composables/comandaOffline'
 import CampoMoeda from '~/components/CampoMoeda.vue'
@@ -41,6 +42,23 @@ async function salvarConfig() {
     aviso.value = 'Regras salvas.'
   } catch (e) { erro.value = mensagemDoErro(e) }
 }
+/* ---- criar login de funcionário (só o dono) */
+const souDono = computed(() => pessoas.value.some((p) => p.eu && p.master))
+const novo = ref({ nome: '', email: '', nivel: 'atendente' })
+const criando = ref(false)
+/** a senha sorteada do login recém-criado: aparece só agora */
+const criado = ref<{ nome: string; email: string; senha: string } | null>(null)
+async function criarLogin() {
+  erro.value = ''
+  criando.value = true
+  try {
+    const r = await chamar<any>('/api/comandas/equipe', { method: 'POST', body: { criar: novo.value } })
+    criado.value = { nome: novo.value.nome.trim(), email: novo.value.email.trim().toLowerCase(), senha: r.senha }
+    novo.value = { nome: '', email: '', nivel: 'atendente' }
+    await carregar()
+  } catch (e) { erro.value = mensagemDoErro(e) } finally { criando.value = false }
+}
+
 const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido, vê conta, desfaz o próprio pedido', caixa: 'Caixa — fecha conta, corrige, troca pulseira', gerente: 'Gerente — tudo, inclusive desconto, perdão e cobrança' }
 </script>
 
@@ -73,9 +91,33 @@ const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido,
       <div class="flex gap-2"><input v-model="pin" type="password" inputmode="numeric" maxlength="6" class="campo w-40" placeholder="4 a 6 números"><button type="button" class="btn-secundario" :disabled="pin.length < 4" @click="salvarPin">Salvar PIN</button></div>
     </div>
 
+    <div v-if="souDono" class="card space-y-3 p-5" data-parte="criar-login">
+      <div>
+        <p class="titulo-bloco">Criar login de funcionário</p>
+        <p class="text-sm text-ink-700">O funcionário entra no <b>app do tablet</b> com este e-mail e a senha que aparece depois de criar. No primeiro acesso ele troca pela senha dele.</p>
+      </div>
+      <form class="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto]" @submit.prevent="criarLogin">
+        <input v-model="novo.nome" class="campo" placeholder="Nome (ex.: João do bar)" maxlength="120" aria-label="Nome do funcionário">
+        <input v-model="novo.email" type="email" class="campo" placeholder="E-mail do funcionário" autocapitalize="none" spellcheck="false" aria-label="E-mail do funcionário">
+        <select v-model="novo.nivel" class="campo w-auto" aria-label="Nível nas comandas">
+          <option value="atendente">Atendente</option>
+          <option value="caixa">Caixa</option>
+          <option value="gerente">Gerente</option>
+        </select>
+        <button type="submit" class="btn-primario" :disabled="criando || novo.nome.trim().length < 2 || !novo.email.includes('@')">{{ criando ? 'Criando…' : 'Criar login' }}</button>
+      </form>
+      <div v-if="criado" class="space-y-2 rounded-card border-l-4 border-l-acao bg-acao-fraco p-4" data-parte="login-criado">
+        <p class="font-semibold text-ink-900">Login de {{ criado.nome }} criado</p>
+        <p class="text-sm text-ink-700">Passe para ele. A senha <b>só aparece agora</b>; se perder, gere outra em Configurações → Equipe.</p>
+        <p class="text-sm">E-mail: <b class="font-mono">{{ criado.email }}</b></p>
+        <p class="text-sm">Senha: <b class="font-mono text-lg tracking-wide">{{ criado.senha }}</b></p>
+        <button type="button" class="text-sm font-semibold text-ink-600 hover:text-ink-900" @click="criado = null">Já anotei, fechar</button>
+      </div>
+    </div>
+
     <div class="card p-5">
       <p class="titulo-bloco">Quem usa as comandas</p>
-      <p class="text-sm text-ink-700">Para um atendente novo: crie o login em Configurações → Equipe (papel Portaria) e dê o nível aqui.</p>
+      <p class="text-sm text-ink-700">Quem já tem login no sistema: escolha o nível ao lado do nome.</p>
       <ul class="mt-3 divide-y divide-linha">
         <li v-for="p in pessoas" :key="p.id" class="flex flex-wrap items-center justify-between gap-2 py-3" :class="p.ativo ? '' : 'opacity-50'">
           <span><b>{{ p.nome }}</b> <span class="text-sm text-ink-600">{{ p.email }}</span>
