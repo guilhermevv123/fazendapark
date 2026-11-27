@@ -19,6 +19,8 @@ import ComandaSituacao from '~/components/comanda/Situacao.vue'
 import ComandaAtender from '~/components/comanda/Atender.vue'
 import ComandaPagar from '~/components/comanda/Pagar.vue'
 import ComandaHoje from '~/components/comanda/Hoje.vue'
+import LogoMarca from '~/components/LogoMarca.vue'
+import OndasMarca from '~/components/OndasMarca.vue'
 import Leitor from './Leitor.vue'
 import { nfc } from './nfc'
 
@@ -158,6 +160,7 @@ onBeforeUnmount(() => {
 /* ------------------------------------------------------------------ abas */
 const ABAS = [{ id: 'atender', nome: 'Atender' }, { id: 'pagar', nome: 'Pagar' }, { id: 'hoje', nome: 'Contas de hoje', curto: 'Hoje' }]
 const aba = computed(() => ABAS.find((a) => a.id === route.query.aba)?.id ?? 'atender')
+// o cabeçalho acompanha a largura da tela de baixo (o cardápio é largo), pra ficar alinhado
 const coluna = computed(() => aba.value === 'atender' && faixaLarga.value ? 'max-w-6xl' : 'max-w-4xl')
 /** tela "Leitor" (testar pulseira / acertar o NFC do tablet), no lugar do atendimento */
 const vendoLeitor = ref(false)
@@ -166,12 +169,35 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
 
 <template>
   <div class="min-h-screen bg-fundo-cinza" style="padding-top: env(safe-area-inset-top)">
+    <!-- LOGIN: o mesmo desenho do /entrar do site (o roxo da logo de um lado, o formulário do outro) -->
+    <div v-if="!codigo || !entrou" class="grid min-h-screen bg-white lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+      <aside class="relative isolate hidden overflow-hidden bg-grape-950 lg:block">
+        <div aria-hidden="true"
+             class="absolute -inset-[20%] -z-10 animate-drift bg-[radial-gradient(40%_34%_at_28%_32%,rgb(79_198_219/0.55),transparent_70%),radial-gradient(36%_30%_at_74%_66%,rgb(143_212_234/0.32),transparent_70%),radial-gradient(26%_22%_at_58%_18%,rgb(253_185_42/0.2),transparent_70%)] blur-2xl" />
+        <div aria-hidden="true" class="absolute inset-0 -z-10 bg-[linear-gradient(180deg,transparent_35%,rgb(27_19_48/0.9)_100%)]" />
+        <OndasMarca class="absolute inset-x-0 bottom-0 -z-10 h-64 w-full text-white/[0.08]" />
+        <div class="flex h-full flex-col justify-between p-12 xl:p-16">
+          <LogoMarca clara class="h-14 self-start" />
+          <div>
+            <p class="titulo text-[46px] font-semibold leading-[1.02] tracking-[-0.03em] text-white xl:text-[56px]">
+              Encostou a pulseira,<br>
+              <span class="text-pool-300">está na conta.</span>
+            </p>
+            <p class="mt-6 max-w-md text-[15px] leading-7 text-white/70">
+              Comandas do Conquista Park: abrir conta, lançar pedido e fechar a conta do cliente, tudo pela pulseira.
+            </p>
+          </div>
+          <p class="text-[13px] text-white/55">Acesso restrito à equipe.</p>
+        </div>
+      </aside>
+
+      <main class="flex min-h-screen flex-col px-5 py-6 sm:px-10" style="padding-top: max(1.5rem, env(safe-area-inset-top))">
+        <LogoMarca class="h-10 self-start lg:hidden" />
+        <div class="mx-auto flex w-full max-w-[400px] flex-1 flex-col justify-center py-10">
     <!-- LOGIN, passo 1: quem é o funcionário -->
-    <div v-if="!codigo" class="flex min-h-screen items-center justify-center p-4">
-      <div class="card w-full max-w-md p-6 text-center sm:p-8" data-tela="login-codigo">
-        <span class="mx-auto flex h-12 w-12 items-center justify-center rounded-card bg-acao text-base font-bold text-white">CP</span>
-        <p class="titulo mt-4 text-xl font-bold">Comandas · Conquista Park</p>
-        <p class="mt-1 text-sm text-ink-600">Entre com o QR do seu crachá de funcionário.</p>
+      <div v-if="!codigo" class="w-full animate-rise-in" data-tela="login-codigo">
+        <h1 class="titulo text-[30px] font-semibold tracking-[-0.02em] text-ink-900">Entrar</h1>
+        <p class="mt-1 text-[15px] text-ink-600">Use o QR do seu crachá de funcionário.</p>
 
         <div v-if="lendoQr" class="mt-5 overflow-hidden rounded-card">
           <LeitorCamera @ler="usarCodigo" />
@@ -181,7 +207,7 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
           Ler QR do crachá
         </button>
 
-        <form v-if="!lendoQr" class="mt-6 space-y-2 text-left" @submit.prevent="usarCodigo(colado)">
+        <form v-if="!lendoQr" class="mt-6 space-y-2" @submit.prevent="usarCodigo(colado)">
           <label class="text-sm font-semibold text-ink-700" for="codigo">Ou cole o seu código de acesso</label>
           <div class="flex gap-2">
             <input id="codigo" v-model="colado" class="campo min-w-0 flex-1 font-mono text-sm" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Código que o gerente mandou">
@@ -189,16 +215,13 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
           </div>
         </form>
         <p v-if="erroCodigo" class="mt-4 text-sm font-semibold text-danger-600" role="alert">{{ erroCodigo }}</p>
-        <p class="mt-5 text-xs text-ink-600">Não tem crachá? Peça ao gerente: Comandas → Gestão → Funcionários do app.</p>
+        <p class="mt-6 text-[13px] text-ink-600">Não tem crachá? Peça ao gerente: Comandas → Gestão → Funcionários do app.</p>
       </div>
-    </div>
 
     <!-- LOGIN, passo 2: PIN -->
-    <div v-else-if="!entrou" class="flex min-h-screen items-center justify-center p-4">
-      <div class="card w-full max-w-sm p-6 text-center sm:p-8" data-tela="login-pin">
-        <span class="mx-auto flex h-12 w-12 items-center justify-center rounded-card bg-acao text-base font-bold text-white">CP</span>
-        <p class="titulo mt-4 text-xl font-bold">{{ nomeGuardado ? `Olá, ${nomeGuardado}` : 'Comandas · Conquista Park' }}</p>
-        <p class="mt-1 text-sm text-ink-600">Digite o seu PIN de 4 números para começar.</p>
+      <div v-else class="w-full animate-rise-in text-center" data-tela="login-pin">
+        <h1 class="titulo text-[30px] font-semibold tracking-[-0.02em] text-ink-900">{{ nomeGuardado ? `Olá, ${nomeGuardado}` : 'Digite o seu PIN' }}</h1>
+        <p class="mt-1 text-[15px] text-ink-600">Digite o seu PIN de 4 números para começar.</p>
 
         <div class="mt-6 flex justify-center gap-3" aria-live="polite" :aria-label="`${digitado.length} de 4 números`">
           <span v-for="i in 4" :key="i" class="h-4 w-4 rounded-full border-2 transition"
@@ -222,8 +245,10 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
         <button type="button" class="mt-5 text-sm font-semibold text-acao" data-acao="trocar-funcionario" @click="trocarFuncionario">
           {{ nomeGuardado ? `Não é ${nomeGuardado}? Trocar funcionário` : 'Trocar funcionário' }}
         </button>
-        <p class="mt-2 text-xs text-ink-600">Esqueceu o PIN? Peça ao gerente um código novo.</p>
+        <p class="mt-2 text-[13px] text-ink-600">Esqueceu o PIN? Peça ao gerente um código novo.</p>
       </div>
+        </div>
+      </main>
     </div>
 
     <!-- COMANDAS -->
@@ -232,11 +257,9 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
         <div class="mx-auto px-4" :class="coluna">
           <div class="flex items-center justify-between gap-3 py-3">
             <div class="flex min-w-0 items-center gap-2.5">
-              <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-card bg-acao text-sm font-bold text-white">CP</span>
-              <span class="min-w-0 leading-tight">
-                <span class="block truncate text-sm font-bold text-ink-900">Comandas</span>
-                <span class="block truncate text-xs text-ink-600">Conquista Park</span>
-              </span>
+              <LogoMarca class="h-9 shrink-0" />
+              <span class="hidden h-7 w-px bg-linha sm:block" aria-hidden="true" />
+              <span class="hidden text-sm font-semibold text-ink-700 sm:block">Comandas</span>
             </div>
             <!-- tablet: as abas ficam no meio do cabeçalho -->
             <nav class="hidden rounded-card bg-ink-50 p-1 md:flex" aria-label="Comandas">
