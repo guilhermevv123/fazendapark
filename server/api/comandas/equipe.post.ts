@@ -4,10 +4,10 @@
  * - `{ userId, nivel: 'atendente' | 'caixa' | 'gerente' | null }` dá ou tira o acesso (só gerente);
  * - `{ pin }` grava o PIN do PRÓPRIO gerente (4 a 6 números) — é o que ele digita no tablet
  *   do atendente pra liberar correção e limite;
- * - `{ criar: { nome, email, nivel } }` cria o LOGIN de um funcionário das comandas (só o dono).
+ * - `{ criar: { nome, email, senha, nivel, pontos } }` cria o LOGIN de um funcionário das comandas (só o dono).
  *   É um usuário do sistema como os de Configurações → Equipe, com o papel mais curto
- *   (Portaria), e já sai com o nível na comanda. A senha é sorteada e volta UMA vez, provisória:
- *   no 1º login (no app do tablet) a pessoa cria a dela — mesma regra de `admin/equipe`.
+ *   (Portaria), e já sai com o nível na comanda. A senha é a que o DONO digita (mínimo 8) e já
+ *   vale: não é sorteada nem provisória (pedido do dono, 27/11). Não volta na resposta.
  *   Nasce `so_comandas` (056): não entra em mais nada do sistema. `pontos` prende aos locais;
  * - `{ userId, pontos: string[] }` muda os locais de uma pessoa (só o dono; [] = todos).
  */
@@ -16,7 +16,6 @@ import { exigirNivel, recusa, registrar } from '../../utils/comandas'
 import { q, q1, tx } from '../../utils/db'
 import { autorDaRequisicao, registrarAuditoria } from '../../utils/auditoria'
 import { roleLegado } from '../../utils/papeis'
-import { sortearSenha } from '../admin/equipe/index.post'
 
 const NIVEIS = ['atendente', 'caixa', 'gerente']
 
@@ -56,12 +55,14 @@ export default defineEventHandler(async (event) => {
     const ja = await q1<any>(`SELECT active, (org_id = $1) AS daqui FROM users WHERE lower(email) = $2 ORDER BY (org_id = $1) DESC LIMIT 1`, [c.orgId, email])
     if (ja) recusa(ja.daqui ? `Já existe login com o e-mail ${email}. Dê o nível na lista abaixo.` : `O e-mail ${email} já é usado em outro lugar do sistema. Use outro.`, 'email')
 
-    const senha = sortearSenha()
+    // a senha é a que o dono digitou (pedido do dono, 27/11): mínimo de 8, a mesma regra do "Trocar senha"
+    const senha = String(b.criar?.senha ?? '')
+    if (senha.length < 8 || senha.length > 200) recusa('A senha precisa ter pelo menos 8 caracteres.', 'senha')
     const hash = await bcrypt.hash(senha, 10)
     const novo = await tx(async (cx) => {
       const { rows } = await cx.query(
         `INSERT INTO users (org_id, name, email, password_hash, papel, role, senha_provisoria)
-         VALUES ($1,$2,$3,$4,'portaria',$5, true) RETURNING id`, [c.orgId, nome, email, hash, roleLegado('portaria')])
+         VALUES ($1,$2,$3,$4,'portaria',$5, false) RETURNING id`, [c.orgId, nome, email, hash, roleLegado('portaria')])
       await cx.query(`INSERT INTO comanda_acessos (user_id, org_id, nivel, criado_por, so_comandas, pontos) VALUES ($1,$2,$3,$4,true,$5)`,
         [rows[0].id, c.orgId, nivel, c.usuarioId, pontos])
       await registrarAuditoria({
@@ -71,7 +72,7 @@ export default defineEventHandler(async (event) => {
       return rows[0]
     })
     await registrar(null, c, { acao: 'equipe', descricao: `Criou o login de ${nome} (${nivel} nas comandas)` })
-    return { ok: true, id: novo.id, senha }
+    return { ok: true, id: novo.id }
   }
 
   const alvo = await q1<any>(`SELECT id, name, papel FROM users WHERE org_id = $1 AND id::text = $2`, [c.orgId, String(b.userId ?? '')])

@@ -48,17 +48,18 @@ async function salvarConfig() {
 }
 /* ---- criar login de funcionário (só o dono) */
 const souDono = computed(() => pessoas.value.some((p) => p.eu && p.master))
-const novo = ref<{ nome: string; email: string; nivel: string; pontos: string[] }>({ nome: '', email: '', nivel: 'atendente', pontos: [] })
+const novo = ref<{ nome: string; email: string; senha: string; nivel: string; pontos: string[] }>({ nome: '', email: '', senha: '', nivel: 'atendente', pontos: [] })
+const verSenha = ref(false)
 const criando = ref(false)
-/** a senha sorteada do login recém-criado: aparece só agora */
-const criado = ref<{ nome: string; email: string; senha: string } | null>(null)
+/** o login recém-criado, para o aviso de "pronto" */
+const criado = ref<{ nome: string; email: string } | null>(null)
 async function criarLogin() {
   erro.value = ''
   criando.value = true
   try {
     const r = await chamar<any>('/api/comandas/equipe', { method: 'POST', body: { criar: novo.value } })
-    criado.value = { nome: novo.value.nome.trim(), email: novo.value.email.trim().toLowerCase(), senha: r.senha }
-    novo.value = { nome: '', email: '', nivel: 'atendente', pontos: [] }
+    criado.value = { nome: novo.value.nome.trim(), email: novo.value.email.trim().toLowerCase() }
+    novo.value = { nome: '', email: '', senha: '', nivel: 'atendente', pontos: [] }
     await carregar()
   } catch (e) { erro.value = mensagemDoErro(e) } finally { criando.value = false }
 }
@@ -111,18 +112,22 @@ const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido,
     <div v-if="souDono" class="card space-y-3 p-5" data-parte="criar-login">
       <div>
         <p class="titulo-bloco">Criar login de funcionário</p>
-        <p class="text-sm text-ink-700">O funcionário entra no <b>app do tablet</b> com este e-mail e a senha que aparece depois de criar. No primeiro acesso ele troca pela senha dele.</p>
+        <p class="text-sm text-ink-700">O funcionário entra no <b>app do tablet</b> com este e-mail e esta senha.</p>
       </div>
-      <form class="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto]" @submit.prevent="criarLogin">
+      <form class="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto_auto]" @submit.prevent="criarLogin">
         <input v-model="novo.nome" class="campo" placeholder="Nome (ex.: João do bar)" maxlength="120" aria-label="Nome do funcionário">
         <input v-model="novo.email" type="email" class="campo" placeholder="E-mail do funcionário" autocapitalize="none" spellcheck="false" aria-label="E-mail do funcionário">
+        <div class="relative">
+          <input v-model="novo.senha" :type="verSenha ? 'text' : 'password'" class="campo pr-16" placeholder="Senha (mín. 8)" autocomplete="new-password" aria-label="Senha do funcionário">
+          <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-semibold text-acao" @click="verSenha = !verSenha">{{ verSenha ? 'Esconder' : 'Ver' }}</button>
+        </div>
         <select v-model="novo.nivel" class="campo w-auto" aria-label="Nível nas comandas">
           <option value="atendente">Atendente</option>
           <option value="caixa">Caixa</option>
           <option value="gerente">Gerente</option>
         </select>
-        <button type="submit" class="btn-primario" :disabled="criando || novo.nome.trim().length < 2 || !novo.email.includes('@') || (locais.length > 0 && !novo.pontos.length)">{{ criando ? 'Criando…' : 'Criar login' }}</button>
-        <fieldset v-if="locais.length" class="sm:col-span-4">
+        <button type="submit" class="btn-primario" :disabled="criando || novo.nome.trim().length < 2 || !novo.email.includes('@') || novo.senha.length < 8 || (locais.length > 0 && !novo.pontos.length)">{{ criando ? 'Criando…' : 'Criar login' }}</button>
+        <fieldset v-if="locais.length" class="sm:col-span-5">
           <legend class="rotulo">Onde ele atende</legend>
           <div class="flex flex-wrap gap-2">
             <label v-for="l in locais" :key="l.id" class="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-card border px-3 text-sm font-semibold"
@@ -135,10 +140,8 @@ const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido,
       </form>
       <div v-if="criado" class="space-y-2 rounded-card border-l-4 border-l-acao bg-acao-fraco p-4" data-parte="login-criado">
         <p class="font-semibold text-ink-900">Login de {{ criado.nome }} criado</p>
-        <p class="text-sm text-ink-700">Passe para ele. A senha <b>só aparece agora</b>; se perder, gere outra em Configurações → Equipe.</p>
-        <p class="text-sm">E-mail: <b class="font-mono">{{ criado.email }}</b></p>
-        <p class="text-sm">Senha: <b class="font-mono text-lg tracking-wide">{{ criado.senha }}</b></p>
-        <button type="button" class="text-sm font-semibold text-ink-600 hover:text-ink-900" @click="criado = null">Já anotei, fechar</button>
+        <p class="text-sm text-ink-700">Ele já pode entrar no app do tablet com <b class="font-mono">{{ criado.email }}</b> e a senha que você escolheu.</p>
+        <button type="button" class="text-sm font-semibold text-ink-600 hover:text-ink-900" @click="criado = null">Fechar</button>
       </div>
     </div>
 

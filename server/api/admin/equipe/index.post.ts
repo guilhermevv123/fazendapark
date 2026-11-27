@@ -70,7 +70,7 @@ export const ROTULOS_DA_EQUIPE: Record<string, string> = {
  * e esses seis caracteres são os que se confundem entre si.
  */
 const ALFABETO = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
-export function sortearSenha(tamanho = 14): string {
+function sortearSenha(tamanho = 14): string {
   let s = ''
   for (let i = 0; i < tamanho; i++) s += ALFABETO[randomInt(ALFABETO.length)]
   return s
