@@ -65,7 +65,9 @@ export default defineNuxtConfig({
   // ninguém lia, e em produção ia escrito `localhost:3000` no HTML de toda página (o Nuxt só troca
   // runtimeConfig por `NUXT_PUBLIC_*`; o ambiente tem `PUBLIC_BASE_URL`). O endereço do site, pros
   // links de e-mail e WhatsApp, é `baseDoSite()` (server/utils/envio.ts), que recusa localhost.
-  runtimeConfig: { public: {} },
+  // Exceção: o ID do Meta Pixel (público por natureza, vai escrito no HTML de qualquer site com
+  // pixel). `NUXT_PUBLIC_META_PIXEL_ID` troca em produção; vazio desliga (plugins/meta-pixel.client.ts).
+  runtimeConfig: { public: { metaPixelId: '1488211269831915' } },
   app: {
     head: {
       htmlAttrs: { lang: 'pt-BR' },

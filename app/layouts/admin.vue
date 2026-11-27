@@ -266,6 +266,14 @@ const itensDoPainel = computed<Item[]>(() => eventoId.value
       { nome: 'Eventos', icone: 'calendario', para: '/admin' },
       { nome: 'Clientes', icone: 'pessoas', para: '/admin/clientes' },
 
+      // Comandas (055): consumo por pulseira no bar. Fora de `papeis.ts` de propósito: só o
+      // master vê enquanto está em teste.
+      { nome: 'Comandas', icone: 'comanda', para: '/admin/comandas/atender', filhos: [
+        { nome: 'Atender', para: '/admin/comandas/atender' },
+        { nome: 'Pagar', para: '/admin/comandas/pagar' },
+        { nome: 'Gestão', para: '/admin/comandas' },
+      ] },
+
       { nome: 'Relatórios', icone: 'relatorio', para: '/admin/relatorios', filhos: [
         { nome: 'Visão geral', para: '/admin/relatorios' },
         { nome: 'Financeiro', para: '/admin/financeiro' },

@@ -39,6 +39,7 @@ const caminhos: Record<string, string> = {
   calendario: 'M8 3v4 M16 3v4 M4 9h16 M5 5h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z',
   carteira: 'M3 7a2 2 0 012-2h12a2 2 0 012 2v1h1a1 1 0 011 1v8a1 1 0 01-1 1H5a2 2 0 01-2-2V7z M17 12h.01',
   bilhetes: 'M3 9a2 2 0 012-2h14a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M8 7v10 M14 7v10',
+  comanda: 'M7 3h10a1 1 0 011 1v17l-3-2-3 2-3-2-3 2V4a1 1 0 011-1z M9 8h6 M9 12h6 M9 16h3',
   pedido: 'M6 2h9l5 5v13a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2z M15 2v5h5 M9 13h6 M9 17h4',
   media: 'M4 6h16 M4 12h16 M4 18h10',
   pessoas: 'M16 20v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2 M9 10a4 4 0 100-8 4 4 0 000 8 M22 20v-2a4 4 0 00-3-3.9',

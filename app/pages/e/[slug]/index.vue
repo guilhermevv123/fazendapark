@@ -22,6 +22,7 @@ import {
   type DeclaracaoDeMeia, type LinhaDoPedido,
 } from '~/composables/carrinhoDaVitrine'
 import { apagarDaAba, gravarNaAba, lerDaAba } from '~/composables/armazenamentoDaAba'
+import { eventoDoPixel, reaisDoPixel } from '~/composables/metaPixel'
 
 const route = useRoute()
 const slug = String(route.params.slug ?? '')
@@ -292,6 +293,10 @@ function lerGuardado(): any {
   try { return JSON.parse(lerDaAba(CHAVE_CARRINHO) || 'null') } catch { return null }
 }
 
+onMounted(() => {
+  if (data.value?.evento) eventoDoPixel('ViewContent', { content_name: data.value.evento.nome, content_type: 'product', currency: 'BRL' })
+})
+
 onMounted(async () => {
   const salvo = lerGuardado()
   if (salvo && data.value) {
@@ -325,6 +330,9 @@ function irParaPagamento() {
     ...carrinhoParaGuardar(slug, linhas.value, promoter.value, { comDocumento: true }),
     criadoEm: Date.now(),
   }))
+  eventoDoPixel('InitiateCheckout', {
+    content_name: data.value?.evento?.nome, value: reaisDoPixel(totais.value.total), currency: 'BRL', num_items: totais.value.n,
+  })
   navigateTo(`/e/${encodeURIComponent(slug)}/pagamento`)
 }
 
