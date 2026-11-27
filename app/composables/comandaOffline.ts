@@ -23,7 +23,7 @@ export interface ItemDoCardapio { id: string; categoriaId: string; nome: string;
 export interface ContaGuardada { id: string; numero: number; nome: string; responsavelNome: string; limiteCents: number; menorDeIdade: boolean; totalCents: number; pulseira: string | null }
 export interface EstadoDoTablet {
   agora: string
-  eu: { nome: string; nivel: 'atendente' | 'caixa' | 'gerente'; master: boolean }
+  eu: { nome: string; nivel: 'atendente' | 'caixa' | 'gerente'; master: boolean; pontoFixo?: boolean }
   config: { ativo: boolean; limitePadraoCents: number; atendenteFechaConta: boolean; minutosParaDesfazer: number; avisoContaAltaCents: number; exigeCodigoWhatsapp: boolean }
   pontos: { id: string; nome: string; categorias: string[] | null }[]
   categorias: { id: string; nome: string; icone?: string | null }[]

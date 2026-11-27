@@ -103,6 +103,13 @@ onMounted(() => {
 watch(pontoId, (v) => { try { localStorage.setItem('dt_comanda_ponto', v) } catch { /* sem storage */ } })
 
 const pontoAtual = computed(() => estado.value?.pontos.find((p) => p.id === pontoId.value) ?? null)
+/** o dono prendeu esta pessoa a local(is) (056): a lista já vem só com eles; com um só, ele vem marcado */
+const pontoFixo = computed(() => !!estado.value?.eu.pontoFixo)
+watch(() => [pontoFixo.value, pontoId.value, estado.value?.pontos.map((p) => p.id).join(',')] as const, () => {
+  const lista = estado.value?.pontos ?? []
+  if (!pontoFixo.value || !lista.length) return
+  if (!lista.some((p) => p.id === pontoId.value)) pontoId.value = lista[0]!.id
+}, { immediate: true })
 
 // Divide os locais em linhas do mesmo tamanho (5 = 3+2, 4 = 2+2, 7 = 4+3), sem buraco no fim.
 function porLinha(n: number, max: number): number[] {
@@ -432,13 +439,14 @@ const grupoDe = (l: Leitura | null) => l?.conta && l.conta.nome !== l.conta.resp
             <p class="titulo mt-0.5 text-lg font-semibold">{{ pontoAtual?.nome ?? 'Onde este tablet atende?' }}</p>
           </div>
           <div class="flex items-center gap-2">
-            <span v-if="pontoAtual" class="selo-ok">Selecionado</span>
+            <span v-if="pontoFixo" class="selo-neutro">Definido pelo dono</span>
+            <span v-else-if="pontoAtual" class="selo-ok">Selecionado</span>
             <span v-else class="selo-alerta">Escolha um</span>
             <button v-if="estado?.eu.nivel === 'gerente'" type="button" data-acao="gerenciar-locais" class="btn-secundario px-3 py-1.5 text-sm"
                     @click="abrirLocais">Gerenciar locais</button>
           </div>
         </div>
-        <div class="mt-4 flex flex-wrap gap-2">
+        <div v-if="!pontoFixo || (estado?.pontos.length ?? 0) > 1" class="mt-4 flex flex-wrap gap-2">
           <button v-for="(p, i) in estado?.pontos" :key="p.id" type="button" :style="larguraDoLocal[i]"
                   class="flex min-h-[52px] shrink-0 grow-0 basis-[var(--l)] items-center justify-center gap-2 rounded-card border px-3 text-center text-sm font-semibold transition sm:basis-[var(--l-sm)]"
                   :class="pontoId === p.id ? 'border-acao bg-acao text-white' : 'border-linha bg-white text-ink-800 hover:border-acao'"

@@ -77,10 +77,12 @@ export default defineEventHandler(async (event) => {
 
   const master = sessao.papelFino === 'master'
   let nivel: Nivel | null = master ? 'gerente' : null
+  let pontos: string[] | null = null
   if (!nivel) {
-    const a = await q1<{ nivel: Nivel }>(
-      `SELECT nivel FROM comanda_acessos WHERE user_id = $1 AND org_id = $2`, [sessao.usuarioId, sessao.orgId])
+    const a = await q1<{ nivel: Nivel; pontos: string[] | null }>(
+      `SELECT nivel, pontos FROM comanda_acessos WHERE user_id = $1 AND org_id = $2`, [sessao.usuarioId, sessao.orgId])
     nivel = a?.nivel ?? null
+    pontos = a?.pontos?.length ? a.pontos : null
   }
   if (!nivel) {
     throw createError({ statusCode: 403, statusMessage: 'Seu acesso não inclui as comandas. Peça ao gerente para liberar.' })
@@ -102,5 +104,6 @@ export default defineEventHandler(async (event) => {
     nivel,
     master,
     aparelho,
+    pontos,
   } satisfies ContextoDaComanda
 })

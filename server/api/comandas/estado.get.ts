@@ -27,9 +27,10 @@ export default defineEventHandler(async (event) => {
 
   return {
     agora: new Date().toISOString(),
-    eu: { nome: c.nome, nivel: c.nivel, master: c.master },
+    // `pontoFixo`: a pessoa atende só nesses locais (056) — o tablet não deixa escolher outro
+    eu: { nome: c.nome, nivel: c.nivel, master: c.master, pontoFixo: !!c.pontos?.length },
     config,
-    pontos,
+    pontos: c.pontos?.length ? pontos.filter((p) => c.pontos!.includes(p.id)) : pontos,
     categorias,
     itens: itens.map((i) => ({ id: i.id, categoriaId: i.categoria_id, nome: i.nome, icone: i.icone, precoCents: Number(i.preco_cents),
       maior18: i.maior_18, esgotado: i.esgotado })),

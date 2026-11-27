@@ -10,13 +10,17 @@ import CampoMoeda from '~/components/CampoMoeda.vue'
 
 const pessoas = ref<any[]>([])
 const config = ref<any>(null)
+/** os locais de venda ativos, para prender o funcionário a eles (056) */
+const locais = ref<{ id: string; nome: string }[]>([])
 const erro = ref('')
 const aviso = ref('')
 const pin = ref('')
 async function carregar() {
   try {
     pessoas.value = (await chamar<any>('/api/comandas/equipe')).pessoas
-    config.value = { ...(await chamar<any>('/api/comandas/estado')).config }
+    const e = await chamar<any>('/api/comandas/estado')
+    config.value = { ...e.config }
+    locais.value = e.pontos ?? []
     erro.value = ''
   } catch (e) { erro.value = mensagemDoErro(e) }
 }
@@ -44,7 +48,7 @@ async function salvarConfig() {
 }
 /* ---- criar login de funcionário (só o dono) */
 const souDono = computed(() => pessoas.value.some((p) => p.eu && p.master))
-const novo = ref({ nome: '', email: '', nivel: 'atendente' })
+const novo = ref<{ nome: string; email: string; nivel: string; pontos: string[] }>({ nome: '', email: '', nivel: 'atendente', pontos: [] })
 const criando = ref(false)
 /** a senha sorteada do login recém-criado: aparece só agora */
 const criado = ref<{ nome: string; email: string; senha: string } | null>(null)
@@ -54,9 +58,22 @@ async function criarLogin() {
   try {
     const r = await chamar<any>('/api/comandas/equipe', { method: 'POST', body: { criar: novo.value } })
     criado.value = { nome: novo.value.nome.trim(), email: novo.value.email.trim().toLowerCase(), senha: r.senha }
-    novo.value = { nome: '', email: '', nivel: 'atendente' }
+    novo.value = { nome: '', email: '', nivel: 'atendente', pontos: [] }
     await carregar()
   } catch (e) { erro.value = mensagemDoErro(e) } finally { criando.value = false }
+}
+
+const nomeDoLocal = (id: string) => locais.value.find((l) => l.id === id)?.nome ?? 'local apagado'
+/** a pessoa cujos locais o dono está mudando, e a escolha em andamento */
+const mudandoLocal = ref<{ id: string; pontos: string[] } | null>(null)
+async function salvarLocais() {
+  const m = mudandoLocal.value
+  if (!m) return
+  try {
+    await chamar('/api/comandas/equipe', { method: 'POST', body: { userId: m.id, pontos: m.pontos } })
+    mudandoLocal.value = null
+    await carregar()
+  } catch (e) { erro.value = mensagemDoErro(e) }
 }
 
 const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido, vê conta, desfaz o próprio pedido', caixa: 'Caixa — fecha conta, corrige, troca pulseira', gerente: 'Gerente — tudo, inclusive desconto, perdão e cobrança' }
@@ -104,7 +121,17 @@ const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido,
           <option value="caixa">Caixa</option>
           <option value="gerente">Gerente</option>
         </select>
-        <button type="submit" class="btn-primario" :disabled="criando || novo.nome.trim().length < 2 || !novo.email.includes('@')">{{ criando ? 'Criando…' : 'Criar login' }}</button>
+        <button type="submit" class="btn-primario" :disabled="criando || novo.nome.trim().length < 2 || !novo.email.includes('@') || (locais.length > 0 && !novo.pontos.length)">{{ criando ? 'Criando…' : 'Criar login' }}</button>
+        <fieldset v-if="locais.length" class="sm:col-span-4">
+          <legend class="rotulo">Onde ele atende</legend>
+          <div class="flex flex-wrap gap-2">
+            <label v-for="l in locais" :key="l.id" class="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-card border px-3 text-sm font-semibold"
+                   :class="novo.pontos.includes(l.id) ? 'border-acao bg-acao-fraco text-acao' : 'border-linha bg-white text-ink-700'">
+              <input v-model="novo.pontos" type="checkbox" :value="l.id" class="h-4 w-4"> {{ l.nome }}
+            </label>
+          </div>
+          <span class="mt-1 block text-xs text-ink-600">Ele só vê e só lança nesses locais, e não consegue trocar. Marque pelo menos um.</span>
+        </fieldset>
       </form>
       <div v-if="criado" class="space-y-2 rounded-card border-l-4 border-l-acao bg-acao-fraco p-4" data-parte="login-criado">
         <p class="font-semibold text-ink-900">Login de {{ criado.nome }} criado</p>
@@ -121,7 +148,20 @@ const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido,
       <ul class="mt-3 divide-y divide-linha">
         <li v-for="p in pessoas" :key="p.id" class="flex flex-wrap items-center justify-between gap-2 py-3" :class="p.ativo ? '' : 'opacity-50'">
           <span><b>{{ p.nome }}</b> <span class="text-sm text-ink-600">{{ p.email }}</span>
-            <span v-if="p.temPin" class="selo-neutro ml-1">tem PIN</span></span>
+            <span v-if="p.temPin" class="selo-neutro ml-1">tem PIN</span>
+            <span v-if="p.soComandas" class="selo-neutro ml-1">só comandas</span>
+            <span v-if="!p.master && p.nivel" class="block text-xs text-ink-600">
+              Atende em: {{ p.pontos.length ? p.pontos.map(nomeDoLocal).join(', ') : 'todos os locais' }}
+              <button v-if="souDono" type="button" class="ml-1 font-semibold text-acao" @click="mudandoLocal = { id: p.id, pontos: [...p.pontos] }">mudar</button>
+            </span>
+            <span v-if="mudandoLocal?.id === p.id" class="mt-2 flex flex-wrap items-center gap-2">
+              <label v-for="l in locais" :key="l.id" class="flex items-center gap-1.5 text-sm">
+                <input v-model="mudandoLocal!.pontos" type="checkbox" :value="l.id" class="h-4 w-4"> {{ l.nome }}
+              </label>
+              <span class="text-xs text-ink-600">(nenhum marcado = todos)</span>
+              <button type="button" class="btn-primario px-3 py-1.5 text-xs" @click="salvarLocais">Salvar</button>
+              <button type="button" class="btn-secundario px-3 py-1.5 text-xs" @click="mudandoLocal = null">Cancelar</button>
+            </span></span>
           <span v-if="p.master" class="selo-ok">Dono — gerente</span>
           <select v-else :value="p.nivel ?? ''" class="campo w-auto" @change="nivel(p, ($event.target as HTMLSelectElement).value)">
             <option value="">Sem acesso</option>

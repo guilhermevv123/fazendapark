@@ -10,7 +10,7 @@ export default defineEventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'no-store')
   const c = exigirNivel(event, 'gerente')
   const linhas = await q<any>(
-    `SELECT u.id, u.name, u.email, u.papel, u.active, a.nivel, (a.pin_hash IS NOT NULL) AS tem_pin
+    `SELECT u.id, u.name, u.email, u.papel, u.active, a.nivel, (a.pin_hash IS NOT NULL) AS tem_pin, a.pontos, a.so_comandas
        FROM users u LEFT JOIN comanda_acessos a ON a.user_id = u.id
       WHERE u.org_id = $1 ORDER BY u.active DESC, u.name`, [c.orgId])
   return {
@@ -18,6 +18,7 @@ export default defineEventHandler(async (event) => {
       id: u.id, nome: u.name, email: u.email, papel: u.papel, ativo: u.active,
       nivel: u.papel === 'master' ? 'gerente' : u.nivel ?? null,
       master: u.papel === 'master', temPin: !!u.tem_pin, eu: u.id === c.usuarioId,
+      pontos: u.pontos ?? [], soComandas: !!u.so_comandas,
     })),
   }
 })

@@ -43,6 +43,8 @@ export interface ContextoDaComanda {
   aparelho: string | null
   /** entrou pelo link do funcionário (não é usuário do sistema): o id do link */
   linkId?: string | null
+  /** os locais de venda em que esta pessoa atende (056); null = todos */
+  pontos?: string[] | null
 }
 
 export interface ConfigDaComanda {
@@ -485,6 +487,10 @@ export async function gravarPedido(c: ContextoDaComanda, p: PedidoDoTablet): Pro
       // local obrigatório com internet; sem internet o pedido entra mesmo assim (o produto já saiu)
       const pontoId = await pontoValido(cl, c.orgId, p.pontoId)
       if (!pontoId && !p.semInternet) return falha('ponto_obrigatorio', 'Escolha o local de venda deste tablet antes de lançar.')
+      // funcionário preso a local(is) (056): pedido de outro local é recusado (sem internet entra: o produto já saiu)
+      if (pontoId && c.pontos?.length && !c.pontos.includes(pontoId) && !p.semInternet) {
+        return falha('ponto_nao_permitido', 'Você não atende neste local. Peça ao dono para mudar o seu local.')
+      }
       const pendente = fechada || paraConferir.length > 0
 
       const lanc = (await cl.query(
