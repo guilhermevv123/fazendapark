@@ -6,7 +6,7 @@
  * - **Pelo ingresso** (o normal): lê o QR ou digita o código. O responsável é quem COMPROU
  *   (o contato que pagou). Acompanhante vira "Fulano, grupo de João" e a cobrança vai pro João.
  * - **Sem ingresso**: nome + WhatsApp, e o cliente diz o código de 4 números que chegou no
- *   WhatsApp dele. Sem o código, só com o PIN do gerente (fica marcado "não confirmado").
+ *   WhatsApp dele. Sem o código, só o gerente abre (fica marcado "não confirmado").
  *
  * Precisa de internet.
  */
@@ -46,7 +46,6 @@ const documento = ref('')
 const codigo = ref('')
 const codigoEnviado = ref(false)
 const codigoDeTeste = ref('')
-const pin = ref('')
 const semCodigo = ref(false)
 
 async function mandarCodigo() {
@@ -65,7 +64,7 @@ async function abrir() {
     const base = { uid: props.uid, pontoId: props.pontoId, menor: menor.value, nome: nome.value }
     const corpo = modo.value === 'ingresso'
       ? { ...base, modo: 'ingresso', qr: qr.value || undefined, codigoIngresso: qr.value ? undefined : codigoIngresso.value }
-      : { ...base, modo: 'manual', telefone: telefone.value, documento: documento.value, codigo: semCodigo.value ? undefined : codigo.value, pin: semCodigo.value ? pin.value : undefined }
+      : { ...base, modo: 'manual', telefone: telefone.value, documento: documento.value, codigo: semCodigo.value ? undefined : codigo.value }
     const r = await chamar<any>('/api/comandas/abrir', { method: 'POST', body: corpo })
     emit('aberta', r.conta)
   } catch (e) { erro.value = mensagemDoErro(e) } finally { enviando.value = false }
@@ -115,7 +114,7 @@ async function abrir() {
         <label v-if="codigoEnviado" class="block"><span class="rotulo">Código que o cliente recebeu</span><input v-model="codigo" class="campo text-center text-2xl tracking-[0.4em]" inputmode="numeric" maxlength="4"></label>
       </template>
       <label class="flex items-center gap-2 text-sm"><input v-model="semCodigo" type="checkbox" class="h-5 w-5"> Cliente sem WhatsApp agora (precisa do gerente)</label>
-      <label v-if="semCodigo && !gerente" class="block"><span class="rotulo">PIN do gerente</span><input v-model="pin" type="password" class="campo" inputmode="numeric" autocomplete="off"></label>
+      <p v-if="semCodigo && !gerente" class="faixa-aviso">Sem o código, só o gerente abre a conta: chame o gerente.</p>
     </div>
 
     <label class="card flex items-center gap-3 p-4"><input v-model="menor" type="checkbox" class="h-6 w-6"> <span><b>Menor de 18 anos</b> — o tablet não deixa lançar bebida alcoólica</span></label>
@@ -124,7 +123,7 @@ async function abrir() {
     <div class="flex gap-3">
       <button type="button" class="btn-secundario min-h-[56px] flex-1" @click="emit('voltar')">Voltar</button>
       <button type="button" data-acao="abrir" class="btn-primario min-h-[56px] flex-[2] text-lg"
-              :disabled="enviando || !nome || (modo === 'ingresso' ? !ingresso : (semCodigo ? (!gerente && !pin) : codigo.length !== 4))"
+              :disabled="enviando || !nome || (modo === 'ingresso' ? !ingresso : (semCodigo ? !gerente : codigo.length !== 4))"
               @click="abrir">{{ enviando ? 'Abrindo…' : 'Abrir conta nesta pulseira' }}</button>
     </div>
   </div>

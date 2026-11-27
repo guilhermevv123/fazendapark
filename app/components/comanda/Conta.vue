@@ -314,10 +314,6 @@ defineExpose({ carregar })
           <span class="rotulo">Motivo (fica registrado)</span>
           <input v-model="form.motivo" class="campo" required minlength="3" placeholder="Ex.: cliente desistiu, lançado errado…">
         </label>
-        <label v-if="!pode.gerente && ['desconto_item','desconto_conta','limite','reabrir','perdoar','anular_pagamento'].includes(correcao.acao)" class="block">
-          <span class="rotulo">PIN do gerente</span>
-          <input v-model="form.pin" class="campo" type="password" inputmode="numeric" autocomplete="off">
-        </label>
         <p v-if="erroForm" class="faixa-erro">{{ erroForm }}</p>
         <div class="flex gap-2">
           <button type="button" class="btn-secundario flex-1" @click="correcao = null">Voltar</button>

@@ -100,7 +100,7 @@ export default defineEventHandler(async (event) => {
   const limite = Number.isInteger(b.limiteCents) && b.limiteCents! >= 0 ? b.limiteCents! : config.limitePadraoCents
   if (limite !== config.limitePadraoCents && c.nivel !== 'gerente') {
     const g = await liberacaoDoGerente(c, b.pin)
-    if (!g) recusa('Mudar o limite precisa do PIN do gerente.', 'precisa_gerente')
+    if (!g) recusa('Só o gerente muda o limite da conta.', 'precisa_gerente')
   }
 
   const id = await tx(async (cl) => {

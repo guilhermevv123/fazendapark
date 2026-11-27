@@ -765,11 +765,11 @@ const grupoDe = (l: Leitura | null) => l?.conta && l.conta.nome !== l.conta.resp
       <p v-if="!online || lida.daCopia" class="faixa-aviso">Sem internet: o pedido fica guardado no tablet e sobe sozinho.</p>
       <div v-if="precisaPin" class="card space-y-2 p-4">
         <p class="faixa-erro">{{ precisaPin }}</p>
-        <label class="block"><span class="rotulo">PIN do gerente para liberar</span><input v-model="pin" type="password" inputmode="numeric" class="campo" autocomplete="off"></label>
+        <p class="text-sm text-ink-700">Só o gerente libera isto: peça para ele lançar este pedido no tablet dele.</p>
       </div>
       <div class="grid gap-3 sm:grid-cols-2">
         <button type="button" class="btn-secundario min-h-[72px] text-lg" @click="tela = 'identificar'">Não é / voltar</button>
-        <button type="button" data-acao="confirmar" class="btn-primario min-h-[72px] text-xl" :disabled="enviando || (!!precisaPin && !pin)" @click="confirmar">
+        <button type="button" data-acao="confirmar" class="btn-primario min-h-[72px] text-xl" :disabled="enviando || (!!precisaPin && estado?.eu.nivel !== 'gerente')" @click="confirmar">
           {{ enviando ? 'Lançando…' : 'Confirmar pedido' }}
         </button>
       </div>

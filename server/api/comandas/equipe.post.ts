@@ -2,8 +2,6 @@
  * POST /api/comandas/equipe
  *
  * - `{ userId, nivel: 'atendente' | 'caixa' | 'gerente' | null }` dá ou tira o acesso (só gerente);
- * - `{ pin }` grava o PIN do PRÓPRIO gerente (4 a 6 números) — é o que ele digita no tablet
- *   do atendente pra liberar correção e limite;
  * - `{ criar: { nome, email, senha, nivel, pontos } }` cria o LOGIN de um funcionário das comandas (só o dono).
  *   É um usuário do sistema como os de Configurações → Equipe, com o papel mais curto
  *   (Portaria), e já sai com o nível na comanda. A senha é a que o DONO digita (mínimo 8) e já
@@ -32,15 +30,6 @@ export default defineEventHandler(async (event) => {
   const c = exigirNivel(event, 'gerente')
   const b = (await readBody<Record<string, any>>(event)) ?? {}
 
-  if (b.pin !== undefined) {
-    const pin = String(b.pin ?? '').replace(/\D/g, '')
-    if (pin.length < 4 || pin.length > 6) recusa('O PIN tem de 4 a 6 números.', 'pin')
-    const hash = await bcrypt.hash(pin, 10)
-    await q(`INSERT INTO comanda_acessos (user_id, org_id, nivel, pin_hash, criado_por) VALUES ($1,$2,'gerente',$3,$1)
-             ON CONFLICT (user_id) DO UPDATE SET pin_hash = EXCLUDED.pin_hash`, [c.usuarioId, c.orgId, hash])
-    await registrar(null, c, { acao: 'equipe', descricao: `${c.nome} definiu o próprio PIN de gerente` })
-    return { ok: true }
-  }
 
   if (b.criar !== undefined) {
     if (!c.master) recusa('Só o dono cria login de funcionário.', 'master')

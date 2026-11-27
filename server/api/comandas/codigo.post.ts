@@ -14,6 +14,6 @@ export default defineEventHandler(async (event) => {
     return await mandarCodigo(c.orgId, c.usuarioId, fone)
   } catch (e: any) {
     if (e?.statusCode) throw e
-    recusa('Não consegui mandar o código pelo WhatsApp agora. Tente de novo ou peça o PIN do gerente.', 'whatsapp_falhou')
+    recusa('Não consegui mandar o código pelo WhatsApp agora. Tente de novo ou chame o gerente.', 'whatsapp_falhou')
   }
 })

@@ -14,7 +14,6 @@ const config = ref<any>(null)
 const locais = ref<{ id: string; nome: string }[]>([])
 const erro = ref('')
 const aviso = ref('')
-const pin = ref('')
 async function carregar() {
   try {
     pessoas.value = (await chamar<any>('/api/comandas/equipe')).pessoas
@@ -29,14 +28,6 @@ onMounted(carregar)
 async function nivel(p: any, n: string) {
   try {
     await chamar('/api/comandas/equipe', { method: 'POST', body: { userId: p.id, nivel: n || null } })
-    await carregar()
-  } catch (e) { erro.value = mensagemDoErro(e) }
-}
-async function salvarPin() {
-  try {
-    await chamar('/api/comandas/equipe', { method: 'POST', body: { pin: pin.value } })
-    pin.value = ''
-    aviso.value = 'PIN salvo.'
     await carregar()
   } catch (e) { erro.value = mensagemDoErro(e) }
 }
@@ -103,11 +94,6 @@ const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido,
       <button type="button" class="btn-primario" @click="salvarConfig">Salvar regras</button>
     </div>
 
-    <div class="card space-y-3 p-5">
-      <p class="titulo-bloco">Meu PIN de gerente</p>
-      <p class="text-sm text-ink-700">É o que você digita no tablet do atendente para liberar limite, desconto ou correção.</p>
-      <div class="flex gap-2"><input v-model="pin" type="password" inputmode="numeric" maxlength="6" class="campo w-40" placeholder="4 a 6 números"><button type="button" class="btn-secundario" :disabled="pin.length < 4" @click="salvarPin">Salvar PIN</button></div>
-    </div>
 
     <div v-if="souDono" class="card space-y-3 p-5" data-parte="criar-login">
       <div>
@@ -151,7 +137,6 @@ const NIVEL: Record<string, string> = { atendente: 'Atendente — lança pedido,
       <ul class="mt-3 divide-y divide-linha">
         <li v-for="p in pessoas" :key="p.id" class="flex flex-wrap items-center justify-between gap-2 py-3" :class="p.ativo ? '' : 'opacity-50'">
           <span><b>{{ p.nome }}</b> <span class="text-sm text-ink-600">{{ p.email }}</span>
-            <span v-if="p.temPin" class="selo-neutro ml-1">tem PIN</span>
             <span v-if="p.soComandas" class="selo-neutro ml-1">só comandas</span>
             <span v-if="!p.master && p.nivel" class="block text-xs text-ink-600">
               Atende em: {{ p.pontos.length ? p.pontos.map(nomeDoLocal).join(', ') : 'todos os locais' }}

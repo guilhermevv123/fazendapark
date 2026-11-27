@@ -107,40 +107,19 @@ export function recusa(mensagem: string, codigo: string, extra: Record<string, u
 /* ------------------------------------------------------------------ PIN do gerente */
 
 /**
- * Confere o PIN do gerente digitado no tablet. Devolve quem liberou (pra linha do tempo).
- * O próprio usuário gerente/master não precisa de PIN: quem já é gerente libera sozinho.
+ * Quem pode liberar o que passa da regra (limite, +18 em menor, correção, desfazer fora do
+ * prazo): só quem está logado como GERENTE (ou o dono). O PIN de gerente saiu (pedido do dono,
+ * 27/11/2026): o atendente não libera nada, chama o gerente. `pin` é ignorado (tablets antigos).
  */
 export async function liberacaoDoGerente(
-  c: ContextoDaComanda, pin: unknown,
+  c: ContextoDaComanda, _pin?: unknown,
 ): Promise<{ id: string; nome: string } | null> {
-  if (c.nivel === 'gerente') return { id: c.usuarioId, nome: c.nome }
-  const p = String(pin ?? '').replace(/\D/g, '')
-  if (p.length < 4 || p.length > 6) return null
-  // Chute de PIN: 5 erros seguidos travam este usuário por 15 minutos (mesmo com o PIN certo).
-  const chave = `${c.orgId}:${c.usuarioId}`
-  const t = tentativasDePin.get(chave)
-  if (t && t.travadoAte > Date.now()) {
-    recusa('PIN errado muitas vezes. Espere 15 minutos ou chame o gerente para liberar no tablet dele.', 'pin_travado')
-  }
-  const gerentes = await q<any>(
-    `SELECT a.user_id, a.pin_hash, u.name FROM comanda_acessos a JOIN users u ON u.id = a.user_id
-      WHERE a.org_id = $1 AND a.nivel = 'gerente' AND a.pin_hash IS NOT NULL AND u.active`,
-    [c.orgId])
-  for (const g of gerentes) {
-    if (await bcrypt.compare(p, g.pin_hash)) { tentativasDePin.delete(chave); return { id: g.user_id, nome: g.name } }
-  }
-  const erros = (t && t.travadoAte <= Date.now() && t.travadoAte > 0 ? 0 : t?.erros ?? 0) + 1
-  tentativasDePin.set(chave, { erros: erros >= 5 ? 0 : erros, travadoAte: erros >= 5 ? Date.now() + 15 * 60_000 : 0 })
-  if (erros >= 5) {
-    await registrar(null, c, { acao: 'pin_travado', descricao: `PIN do gerente errado 5 vezes por ${c.nome} — travado por 15 minutos` }).catch(() => {})
-  }
-  return null
+  return c.nivel === 'gerente' ? { id: c.usuarioId, nome: c.nome } : null
 }
-const tentativasDePin = new Map<string, { erros: number; travadoAte: number }>()
 
 export async function exigirGerente(c: ContextoDaComanda, pin: unknown) {
   const g = await liberacaoDoGerente(c, pin)
-  if (!g) recusa('Precisa do PIN do gerente para isto.', 'precisa_gerente')
+  if (!g) recusa('Só o gerente pode fazer isto. Chame o gerente.', 'precisa_gerente')
   return g
 }
 
