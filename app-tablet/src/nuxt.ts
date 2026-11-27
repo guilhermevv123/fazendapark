@@ -17,6 +17,8 @@ export const ENDERECO_DO_SISTEMA: string = import.meta.env.VITE_API_URL
   || (Capacitor.isNativePlatform() ? 'https://www.conquistapark.com.br' : '')
 
 ;(globalThis as any).$fetch = ofetch.create({ baseURL: ENDERECO_DO_SISTEMA })
+// as fotos enviadas pelo painel (`/api/cardapio-foto/...`) vêm do sistema, não de dentro do app
+;(globalThis as any).__ENDERECO_DO_SISTEMA__ = ENDERECO_DO_SISTEMA
 
 export function useRuntimeConfig() {
   return { app: { buildId: import.meta.env.VITE_VERSAO ?? 'app' }, public: {} }

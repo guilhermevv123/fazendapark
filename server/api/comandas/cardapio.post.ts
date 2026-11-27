@@ -10,6 +10,9 @@ import { q, q1 } from '../../utils/db'
 
 /** emoji escolhido no cadastro (até 16 caracteres; vazio = o tablet escolhe pelo nome) */
 const icone = (v: unknown) => typeof v === 'string' && v.trim() ? [...v.trim()].slice(0, 4).join('').slice(0, 16) : null
+/** foto do item (057): null = automática, 'nenhuma' = só ícone, ou uma foto enviada (`cardapio/foto.post.ts`) */
+const foto = (v: unknown) => v === 'nenhuma' ? 'nenhuma'
+  : typeof v === 'string' && /^\/api\/cardapio-foto\/[0-9a-f-]{36}\.webp$/i.test(v) ? v : null
 
 export default defineEventHandler(async (event) => {
   const c = exigirNivel(event, 'gerente')
@@ -39,17 +42,17 @@ export default defineEventHandler(async (event) => {
         const antes = await q1<any>(`SELECT nome, preco_cents FROM comanda_itens WHERE org_id = $1 AND id::text = $2`, [c.orgId, id])
         if (!antes) recusa('Item não encontrado.', 'item')
         await q1(`UPDATE comanda_itens SET nome = $3, preco_cents = $4, categoria_id = $5, maior_18 = $6, esgotado = $7, ativo = $8,
-                         ordem = COALESCE($9, ordem), icone = $10, atualizado_em = now() WHERE org_id = $1 AND id::text = $2 RETURNING id`,
-        [c.orgId, id, nome, preco, (cat as any).id, !!b.maior18, !!b.esgotado, b.ativo !== false, num(b.ordem), icone(b.icone)])
+                         ordem = COALESCE($9, ordem), icone = $10, foto = $11, atualizado_em = now() WHERE org_id = $1 AND id::text = $2 RETURNING id`,
+        [c.orgId, id, nome, preco, (cat as any).id, !!b.maior18, !!b.esgotado, b.ativo !== false, num(b.ordem), icone(b.icone), foto(b.foto)])
         await registrar(null, c, { acao: 'cardapio',
           descricao: `Editou ${antes.nome}` + (Number(antes.preco_cents) !== preco ? ` — preço ${reaisTexto(Number(antes.preco_cents))} → ${reaisTexto(preco)}` : '')
             + (b.esgotado ? ' (esgotado)' : '') + (b.ativo === false ? ' (desativado)' : '') })
         return { id }
       }
       const r = await q1<any>(
-        `INSERT INTO comanda_itens (org_id, categoria_id, nome, preco_cents, maior_18, esgotado, ordem, icone)
-         VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7, (SELECT COALESCE(MAX(ordem),0)+1 FROM comanda_itens WHERE org_id = $1)), $8) RETURNING id`,
-        [c.orgId, (cat as any).id, nome, preco, !!b.maior18, !!b.esgotado, num(b.ordem), icone(b.icone)])
+        `INSERT INTO comanda_itens (org_id, categoria_id, nome, preco_cents, maior_18, esgotado, ordem, icone, foto)
+         VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7, (SELECT COALESCE(MAX(ordem),0)+1 FROM comanda_itens WHERE org_id = $1)), $8, $9) RETURNING id`,
+        [c.orgId, (cat as any).id, nome, preco, !!b.maior18, !!b.esgotado, num(b.ordem), icone(b.icone), foto(b.foto)])
       await registrar(null, c, { acao: 'cardapio', descricao: `Criou o item ${nome} (${reaisTexto(preco)})` })
       return { id: r.id }
     }

@@ -19,6 +19,7 @@ import {
 import { dataHora, reais } from '~/composables/formato'
 import { iconeDaCategoria, iconeDoItem } from '~/composables/comandaIcones'
 import ComandaIcone from '~/components/comanda/Icone.vue'
+import FotoDoItem from '~/components/comanda/FotoDoItem.vue'
 import ComandaAbrirConta from '~/components/comanda/AbrirConta.vue'
 import ComandaConta from '~/components/comanda/Conta.vue'
 import ComandaPagamento from '~/components/comanda/Pagamento.vue'
@@ -603,9 +604,7 @@ const grupoDe = (l: Leitura | null) => l?.conta && l.conta.nome !== l.conta.resp
               <button type="button" :disabled="i.esgotado" data-parte="produto"
                       class="flex h-full w-full flex-col overflow-hidden rounded-card border bg-white text-left shadow-sm transition active:scale-[0.97] disabled:opacity-40"
                       :class="qtdNoCarrinho(i.id) ? 'border-acao ring-2 ring-acao' : 'border-linha hover:border-acao hover:shadow'" @click="por(i)">
-                <span class="flex h-28 w-full items-center justify-center bg-gradient-to-b from-ink-50 to-white">
-                  <ComandaIcone :icone="iconeDe(i)" :tamanho="76" />
-                </span>
+                <FotoDoItem :item="i" :categoria="catDoItem(i.categoriaId)" :tamanho="76" class="h-28 w-full bg-gradient-to-b from-ink-50 to-white" />
                 <span class="flex w-full flex-1 flex-col justify-between gap-1 px-3 pb-3 pt-2">
                   <span class="line-clamp-2 min-h-[2.5rem] font-semibold leading-tight text-ink-900">{{ i.nome }}</span>
                   <span class="flex items-center justify-between gap-2">
@@ -637,7 +636,7 @@ const grupoDe = (l: Leitura | null) => l?.conta && l.conta.nome !== l.conta.resp
         <p v-if="!carrinho.length" class="rounded-card bg-ink-50 p-4 text-center text-sm text-ink-600">Toque nos produtos para adicionar.</p>
         <ul class="max-h-[50vh] space-y-2 overflow-y-auto">
           <li v-for="c in carrinho" :key="c.itemId" class="flex items-center gap-2 rounded-card bg-ink-50 p-2">
-            <ComandaIcone :icone="iconeDe(estado!.itens.find((x) => x.id === c.itemId) ?? { nome: c.nome, categoriaId: '' })" :tamanho="34" />
+            <FotoDoItem :item="estado!.itens.find((x) => x.id === c.itemId) ?? { nome: c.nome }" :categoria="catDoItem(estado!.itens.find((x) => x.id === c.itemId)?.categoriaId ?? '')" :tamanho="34" class="h-10 w-10 shrink-0 rounded-card" />
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm font-semibold leading-tight">{{ c.nome }}</span>
               <span class="text-xs text-ink-600">{{ reais(c.precoCents * c.quantidade) }}</span>

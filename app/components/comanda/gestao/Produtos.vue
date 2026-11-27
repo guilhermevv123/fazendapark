@@ -11,6 +11,8 @@ import { chamar, mensagemDoErro } from '~/composables/comandaOffline'
 import { reais } from '~/composables/formato'
 import { buscarIcones, iconeDaCategoria, iconeDoItem, nomeDoIcone } from '~/composables/comandaIcones'
 import ComandaIcone from '~/components/comanda/Icone.vue'
+import FotoDoItem from '~/components/comanda/FotoDoItem.vue'
+import { fotoPronta } from '~/composables/comandaFotos'
 import CampoMoeda from '~/components/CampoMoeda.vue'
 import ModalLateral from '~/components/ModalLateral.vue'
 
@@ -46,9 +48,25 @@ const editando = ref<any>(null)
 const erroForm = ref('')
 function novoProduto() {
   erroForm.value = ''
-  editando.value = { tipo: 'item', nome: '', precoCents: 0, categoriaId: categoria.value || d.value?.categorias[0]?.id || '', icone: '', maior18: false, esgotado: false, ativo: true }
+  editando.value = { tipo: 'item', nome: '', precoCents: 0, categoriaId: categoria.value || d.value?.categorias[0]?.id || '', icone: '', foto: null, maior18: false, esgotado: false, ativo: true }
 }
-function editarProduto(i: any) { erroForm.value = ''; editando.value = { tipo: 'item', ...i, icone: i.icone ?? '' } }
+function editarProduto(i: any) { erroForm.value = ''; editando.value = { tipo: 'item', ...i, icone: i.icone ?? '', foto: i.foto ?? null } }
+
+/* ---- foto do produto (057): null = automática pelo nome, 'nenhuma' = só ícone, ou a enviada */
+const enviandoFoto = ref(false)
+async function enviarFoto(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const arquivo = input.files?.[0]
+  input.value = ''
+  if (!arquivo || !editando.value) return
+  erroForm.value = ''
+  enviandoFoto.value = true
+  try {
+    const corpo = new FormData()
+    corpo.append('arquivo', arquivo)
+    editando.value.foto = (await chamar<any>('/api/comandas/cardapio/foto', { method: 'POST', body: corpo, timeout: 30000 })).foto
+  } catch (e) { erroForm.value = mensagemDoErro(e) } finally { enviandoFoto.value = false }
+}
 function novaCategoria() { erroForm.value = ''; editando.value = { tipo: 'categoria', nome: '', icone: '', ativo: true } }
 function editarCategoria(c: any) { erroForm.value = ''; editando.value = { tipo: 'categoria', ...c, icone: c.icone ?? '' } }
 const buscaIcone = ref('')
@@ -133,7 +151,7 @@ async function usarPadrao() {
 
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <article v-for="i in produtos" :key="i.id" class="card flex gap-3 p-4" :class="i.ativo ? '' : 'opacity-60'">
-            <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-card bg-gradient-to-b from-ink-50 to-white ring-1 ring-linha"><ComandaIcone :icone="iconeDoItem(i, catDe(i.categoriaId))" :tamanho="48" /></div>
+            <FotoDoItem :item="i" :categoria="catDe(i.categoriaId)" :tamanho="48" class="h-16 w-16 shrink-0 rounded-card bg-gradient-to-b from-ink-50 to-white ring-1 ring-linha" />
             <div class="min-w-0 flex-1">
               <p class="truncate font-semibold">{{ i.nome }}</p>
               <p class="titulo text-lg font-bold text-acao">{{ reais(i.precoCents) }}</p>
@@ -159,7 +177,9 @@ async function usarPadrao() {
       <form class="space-y-4" @submit.prevent="salvar">
         <!-- como vai aparecer no tablet -->
         <div class="flex items-center gap-4 rounded-card bg-ink-50 p-3">
-          <div class="flex h-24 w-24 shrink-0 items-center justify-center rounded-card bg-white shadow-sm ring-1 ring-linha">
+          <FotoDoItem v-if="editando.tipo === 'item'" :item="editando" :categoria="catDe(editando.categoriaId)" :tamanho="72"
+                      class="h-24 w-24 shrink-0 rounded-card bg-white shadow-sm ring-1 ring-linha" />
+          <div v-else class="flex h-24 w-24 shrink-0 items-center justify-center rounded-card bg-white shadow-sm ring-1 ring-linha">
             <ComandaIcone :icone="iconeAtual" :tamanho="72" />
           </div>
           <div class="min-w-0 space-y-1">
@@ -177,6 +197,18 @@ async function usarPadrao() {
               <option v-for="c in d.categorias" :key="c.id" :value="c.id">{{ c.nome }}</option>
             </select></label>
           <p v-if="editando.categoriaId" class="-mt-2 text-xs text-ink-600">Aparece em: {{ locaisDa(editando.categoriaId).join(', ') || 'nenhum local' }}</p>
+          <div class="space-y-2" data-parte="foto-do-produto">
+            <p class="rotulo !mb-0">Foto</p>
+            <div class="flex flex-wrap gap-2">
+              <label class="btn-primario inline-flex cursor-pointer items-center" :class="enviandoFoto ? 'opacity-60' : ''">
+                {{ enviandoFoto ? 'Enviando…' : 'Enviar foto' }}
+                <input type="file" accept="image/*" class="sr-only" :disabled="enviandoFoto" @change="enviarFoto">
+              </label>
+              <button type="button" class="chip" :class="editando.foto === null ? 'chip-ativo' : ''" @click="editando.foto = null">Automática</button>
+              <button type="button" class="chip" :class="editando.foto === 'nenhuma' ? 'chip-ativo' : ''" @click="editando.foto = 'nenhuma'">Sem foto (só ícone)</button>
+            </div>
+            <p class="text-xs text-ink-600">{{ editando.foto && editando.foto !== 'nenhuma' ? 'Foto enviada por você.' : editando.foto === 'nenhuma' ? 'O tablet mostra só o ícone.' : fotoPronta(editando.nome) ? 'Automática: foto pronta pelo nome do produto.' : 'Automática: sem foto pronta para este nome, o tablet mostra o ícone.' }}</p>
+          </div>
         </template>
         <div class="space-y-2">
           <div class="flex items-center justify-between gap-2">

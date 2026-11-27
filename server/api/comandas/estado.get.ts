@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
   const [pontos, categorias, itens, contas] = await Promise.all([
     q<any>(`SELECT id, nome, categorias FROM comanda_pontos WHERE org_id = $1 AND ativo ORDER BY ordem, nome`, [c.orgId]),
     q<any>(`SELECT id, nome, icone FROM comanda_categorias WHERE org_id = $1 AND ativo ORDER BY ordem, nome`, [c.orgId]),
-    q<any>(`SELECT i.id, i.categoria_id, i.nome, i.icone, i.preco_cents, i.maior_18, i.esgotado
+    q<any>(`SELECT i.id, i.categoria_id, i.nome, i.icone, i.foto, i.preco_cents, i.maior_18, i.esgotado
               FROM comanda_itens i JOIN comanda_categorias k ON k.id = i.categoria_id
              WHERE i.org_id = $1 AND i.ativo AND k.ativo ORDER BY i.ordem, i.nome`, [c.orgId]),
     q<any>(`SELECT c.id, c.numero, c.nome, c.responsavel_nome, c.limite_cents, c.menor_de_idade,
@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
     config,
     pontos: c.pontos?.length ? pontos.filter((p) => c.pontos!.includes(p.id)) : pontos,
     categorias,
-    itens: itens.map((i) => ({ id: i.id, categoriaId: i.categoria_id, nome: i.nome, icone: i.icone, precoCents: Number(i.preco_cents),
+    itens: itens.map((i) => ({ id: i.id, categoriaId: i.categoria_id, nome: i.nome, icone: i.icone, foto: i.foto, precoCents: Number(i.preco_cents),
       maior18: i.maior_18, esgotado: i.esgotado })),
     contas: contas.map((r) => ({ id: r.id, numero: Number(r.numero), nome: r.nome, responsavelNome: r.responsavel_nome,
       limiteCents: Number(r.limite_cents), menorDeIdade: r.menor_de_idade, totalCents: Number(r.total_cents),

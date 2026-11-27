@@ -6,16 +6,24 @@
  * (`$fetch`, `<NuxtLink>`, `<ClientOnly>`, auto-import de `ref`/`computed`…) é suprido em
  * `src/nuxt.ts` e no AutoImport abaixo.
  */
+import { cpSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import AutoImport from 'unplugin-auto-import/vite'
 import { defineConfig } from 'vite'
 
 const site = fileURLToPath(new URL('../app', import.meta.url))
+/** ícones e fotos prontas dos produtos (`public/comandas` do site): vão dentro do APK */
+const imagensDoSite = fileURLToPath(new URL('../public/comandas', import.meta.url))
 
 export default defineConfig({
   plugins: [
     vue(),
+    {
+      name: 'imagens-das-comandas',
+      apply: 'build',
+      closeBundle() { cpSync(imagensDoSite, fileURLToPath(new URL('./dist/comandas', import.meta.url)), { recursive: true }) },
+    },
     AutoImport({
       imports: ['vue', 'vue-router', { '#nuxt-do-app': ['useRuntimeConfig'] }],
       dts: false,
@@ -29,7 +37,7 @@ export default defineConfig({
   server: {
     fs: { allow: ['..'] },
     // no navegador do PC, `/api` vai pro servidor local do site (porta 3100), sem CORS
-    proxy: { '/api': 'http://localhost:3100' },
+    proxy: { '/api': 'http://localhost:3100', '/comandas/': 'http://localhost:3100' },
   },
   build: { outDir: 'dist', emptyOutDir: true },
 })

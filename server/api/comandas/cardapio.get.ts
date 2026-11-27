@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
   const c = exigirNivel(event, 'caixa')
   const [categorias, itens, pontos] = await Promise.all([
     q<any>(`SELECT id, nome, icone, ordem, ativo FROM comanda_categorias WHERE org_id = $1 ORDER BY ordem, nome`, [c.orgId]),
-    q<any>(`SELECT i.id, i.categoria_id, i.nome, i.icone, i.preco_cents, i.maior_18, i.esgotado, i.ativo, i.ordem, i.atualizado_em,
+    q<any>(`SELECT i.id, i.categoria_id, i.nome, i.icone, i.foto, i.preco_cents, i.maior_18, i.esgotado, i.ativo, i.ordem, i.atualizado_em,
                    (SELECT COUNT(*) FROM comanda_lancamento_itens li WHERE li.item_id = i.id AND NOT li.cancelado) AS vendidos
               FROM comanda_itens i WHERE i.org_id = $1 ORDER BY i.ordem, i.nome`, [c.orgId]),
     q<any>(`SELECT p.id, p.nome, p.ativo, p.ordem, p.categorias, p.criado_em,
@@ -16,7 +16,7 @@ export default defineEventHandler(async (event) => {
   ])
   return {
     categorias,
-    itens: itens.map((i) => ({ id: i.id, categoriaId: i.categoria_id, nome: i.nome, icone: i.icone, precoCents: Number(i.preco_cents),
+    itens: itens.map((i) => ({ id: i.id, categoriaId: i.categoria_id, nome: i.nome, icone: i.icone, foto: i.foto, precoCents: Number(i.preco_cents),
       maior18: i.maior_18, esgotado: i.esgotado, ativo: i.ativo, ordem: i.ordem, atualizadoEm: i.atualizado_em,
       vendidos: Number(i.vendidos) })),
     pontos,

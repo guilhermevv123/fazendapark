@@ -19,7 +19,7 @@ const CHAVE_FILA = 'dt_comanda_fila'
 const CHAVE_APARELHO = 'dt_comanda_aparelho'
 const CHAVE_PROBLEMAS = 'dt_comanda_problemas'
 
-export interface ItemDoCardapio { id: string; categoriaId: string; nome: string; icone?: string | null; precoCents: number; maior18: boolean; esgotado: boolean }
+export interface ItemDoCardapio { id: string; categoriaId: string; nome: string; icone?: string | null; foto?: string | null; precoCents: number; maior18: boolean; esgotado: boolean }
 export interface ContaGuardada { id: string; numero: number; nome: string; responsavelNome: string; limiteCents: number; menorDeIdade: boolean; totalCents: number; pulseira: string | null }
 export interface EstadoDoTablet {
   agora: string
