@@ -167,6 +167,27 @@ describe('PROD-06 · sem jeito de cobrar, a recusa sai antes do estoque e do cad
     }
   })
 
+  it('pedido gratuito: o ingresso sai no MESMO commit — emissão que falha não deixa pedido segurando lugar', async () => {
+    await semGateway(null)
+    await q(`UPDATE events SET fee_bps = 0 WHERE id = $1`, [eventId])
+    // a emissão quebra no INSERT do ingresso (só neste lote, só no banco de teste)
+    await q(`CREATE OR REPLACE FUNCTION zz_emissao_quebra() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'zz: emissão quebrou de propósito'; END $$`)
+    await q(`CREATE TRIGGER zz_emissao_quebra BEFORE INSERT ON tickets FOR EACH ROW
+             WHEN (NEW.lot_id = '${lotId}'::uuid) EXECUTE FUNCTION zz_emissao_quebra()`)
+    try {
+      const antes = await reservados()
+      const email = novoEmail()
+      await expect(comprar({ cupom: 'ZZTUDO', email })).rejects.toThrow(/emissão quebrou/)
+      expect(await reservados(), 'o lugar ficou preso num pedido sem ingresso').toBe(antes)
+      expect(await pedidosDo(email), 'sobrou pedido pendente').toEqual([])
+    } finally {
+      await q(`DROP TRIGGER IF EXISTS zz_emissao_quebra ON tickets`)
+      await q(`DROP FUNCTION IF EXISTS zz_emissao_quebra()`)
+      await q(`UPDATE events SET fee_bps = 1000 WHERE id = $1`, [eventId])
+    }
+  })
+
   it('cupom que NÃO zera: recusado depois do cupom, com o estoque devolvido', async () => {
     await semGateway(null)
     const antes = await reservados()

@@ -579,6 +579,16 @@ export default defineEventHandler(async (event) => {
     // gravado porque as telas do painel mostram ele.
     if (cupom) await c.query(`UPDATE promo_codes SET uses = uses + 1 WHERE id = $1`, [cupom.id])
 
+    // Pedido gratuito (cortesia/100% off) não passa por gateway: o ingresso sai AQUI, no mesmo
+    // commit que criou o pedido. Emitido depois, numa transação à parte, uma falha no meio deixava
+    // o pedido 'aguardando_pagamento' segurando o lugar até a varredura de expirados — e o
+    // comprador sem ingresso nem cobrança. Não emitiu = nada fica de pé (a transação volta inteira).
+    if (total.totalCents === 0) {
+      const { emitirNaTransacao } = await import('../utils/emissao')
+      const emissao = await emitirNaTransacao(c, ord.rows[0].id)
+      if (!emissao.emitiu) throw new Error(`pedido gratuito ${ord.rows[0].code} não emitiu: ${emissao.motivo}`)
+    }
+
     return { id: ord.rows[0].id, code: ord.rows[0].code, customerId: cliente.id,
              asaasCustomerId: cliente.asaas_customer_id, total, parcelas,
              fidelidade: comFidelidade
@@ -641,7 +651,7 @@ export default defineEventHandler(async (event) => {
 
   // Pedido gratuito (cortesia/100% off) não passa por gateway.
   if (total.totalCents === 0) {
-    await confirmarGratuito(pedido.id)
+    // já emitido dentro da transação do pedido (ver acima)
     return { ok: true, pedido: pedido.code, pedidoId: pedido.id, status: 'pago', totalCents: 0,
              fidelidade: pedido.fidelidade }
   }
@@ -721,11 +731,39 @@ export default defineEventHandler(async (event) => {
     // Cartão no site sem resposta (prazo, rede, 5xx): o cartão PODE ter sido cobrado — a doc manda
     // perguntar antes de qualquer outra coisa. Achou a cobrança: segue com ela, como se tivesse
     // respondido. Não achou: aí sim desfaz.
+    //
+    // "Não achou" e "não consegui perguntar" são respostas DIFERENTES. A consulta antiga era
+    // `.catch(() => null)`: o Asaas fora do ar na pergunta virava "não existe cobrança", e o pedido
+    // era desfeito com o cartão possivelmente cobrado — o webhook chegava depois num pedido
+    // 'falhou', com o lugar já devolvido pra prateleira. Sem resposta na pergunta, o pedido FICA
+    // esperando pagamento: se a cobrança existe, o webhook (`externalReference` = id do pedido)
+    // emite o ingresso; se não existe, a varredura de expirados devolve o lugar no prazo da reserva.
+    let consultaFalhou = false
     const achada = cartao && falhaPassageiraDoAsaas(e)
-      ? await cobrancaDoPedidoNoAsaas(cfg, pedido.id).catch(() => null)
+      ? await cobrancaDoPedidoNoAsaas(cfg, pedido.id).catch((erro: any) => {
+          consultaFalhou = true
+          console.warn(`[checkout] pedido ${pedido.code}: cartão sem resposta e a consulta da cobrança `
+            + `também falhou (${erro?.message ?? erro}) — o pedido segue esperando o pagamento`)
+          return null
+        })
       : null
     if (achada) {
       cobranca = achada
+    } else if (consultaFalhou) {
+      await q(
+        `INSERT INTO audit_log (org_id, entity, entity_id, action, after)
+         VALUES ($1, 'order', $2, 'cartao_sem_resposta', $3::jsonb)`,
+        [ev.org_id, pedido.id, JSON.stringify({ pedido: pedido.code, erro: e?.message ?? String(e) })],
+      ).catch(() => {})
+      // A tela de "aguardando a aprovação do banco" (cartão no site) é a frase honesta: o cartão
+      // foi enviado, a resposta não veio, e ela muda sozinha quando o aviso do Asaas chegar.
+      return {
+        ok: true, pedido: pedido.code, pedidoId: pedido.id, status: 'aguardando_pagamento',
+        expiraEm: expiraEm.toISOString(), totalCents: total.totalCents, parcelas: pedido.parcelas,
+        faceCents: total.faceCents, feeCents: total.feeCents, descontoCents: total.discountCents,
+        fidelidade: pedido.fidelidade,
+        pagamento: { forma: dados.forma, pixPayload: null, pixQrBase64: null, linkFatura: null, cartaoNoSite: true },
+      }
     } else {
     // Gateway caiu: devolve o estoque na hora. Sem isso, cada erro do Asaas
     // queima ingresso que ninguém comprou até a varredura de expirados passar.
@@ -1179,25 +1217,31 @@ export function cadastroPendente(d: {
   }
 }
 
-/** Desfaz pedido que não virou cobrança: libera estoque e marca como falhou. */
-async function desfazer(orderId: string, motivo: string) {
-  await tx(async (c) => {
+/**
+ * Desfaz pedido que não virou cobrança: libera estoque e marca como falhou.
+ *
+ * Só desfaz pedido que AINDA espera pagamento, e decide isso com a linha do pedido travada,
+ * antes de mexer no estoque. Sem essa porta, um webhook que pagasse o pedido no meio (cartão que
+ * o Asaas aprovou sem responder a tempo) era sobrescrito com 'falhou', e o `liberar()` subtraía
+ * do `reserved` do lote uma reserva que este pedido já não segurava — lugar a mais pra vender,
+ * tirado dos pedidos vizinhos. Devolve `true` quando desfez.
+ */
+async function desfazer(orderId: string, motivo: string): Promise<boolean> {
+  return tx(async (c) => {
+    const { rows: [mudou] } = await c.query(
+      `UPDATE orders SET status = 'falhou', canceled_at = now()
+        WHERE id = $1 AND status = 'aguardando_pagamento' RETURNING id`, [orderId])
+    if (!mudou) return false
     const { rows } = await c.query(
       `SELECT lot_id AS "lotId", ticket_type_id AS "ticketTypeId", quantity AS quantidade
          FROM order_items WHERE order_id = $1`, [orderId])
     await liberar(c, rows)
     await c.query(
-      `UPDATE orders SET status = 'falhou', canceled_at = now() WHERE id = $1`, [orderId])
-    await c.query(
       `INSERT INTO audit_log (entity, entity_id, action, after)
        VALUES ('order', $1, 'falhou', $2::jsonb)`,
       [orderId, JSON.stringify({ motivo })])
+    return true
   })
-}
-
-async function confirmarGratuito(orderId: string) {
-  const { emitirIngressos } = await import('../utils/emissao')
-  await emitirIngressos(orderId)
 }
 
 /**

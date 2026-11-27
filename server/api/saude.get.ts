@@ -101,18 +101,31 @@ export async function medir(): Promise<{ status: number; corpo: any }> {
                                AND created_at < now() - interval '5 minutes'
                                -- a devolução do MP em processamento não é aviso sem baixa: tem
                                -- régua própria logo abaixo
-                               AND event_name <> 'MP_DEVOLUCAO_A_CONFIRMAR')::int AS sem_baixa
+                               AND event_name <> 'MP_DEVOLUCAO_A_CONFIRMAR')::int AS sem_baixa,
+            -- pagamento confirmado que a emissão recusou pelo status do pedido ("não emitiu: pedido
+            -- em cancelado", "… em estornado"): a entrega GANHA baixa, então não entra no
+            -- sem_baixa acima — é dinheiro que entrou sem ingresso e sem pendência à vista.
+            -- O recado pode vir depois do aviso da parcela ("… · não emitiu: …"), daí o % na frente.
+            count(*) FILTER (WHERE error LIKE '%não emitiu: pedido em %'
+                               AND created_at > now() - interval '7 days')::int AS pagos_nao_emitidos
        FROM payment_events`)
   const webhook = {
     ultimoRecebidoHaSegundos: wh?.ultimo_ha ?? null,
     ultimoRecebidoHa: wh?.ultimo_ha != null ? emPortugues(Number(wh.ultimo_ha)) : 'nunca',
     semBaixaHaMaisDe5min: Number(wh?.sem_baixa ?? 0),
+    pagosQueNaoEmitiramEm7Dias: Number(wh?.pagos_nao_emitidos ?? 0),
   }
   if (webhook.semBaixaHaMaisDe5min > 0) {
     problemas.push({ item: 'webhook', critico: false,
       // conta os dois gateways: o Pix do Mercado Pago (28/09) pendura na mesma tabela
       frase: `${webhook.semBaixaHaMaisDe5min} aviso(s) de pagamento (Asaas ou Mercado Pago) sem baixa há mais de 5 min `
         + '(o reprocessador tenta de novo; olhe a reconciliação se não baixar).' })
+  }
+  if (webhook.pagosQueNaoEmitiramEm7Dias > 0) {
+    problemas.push({ item: 'webhook', critico: false,
+      frase: `${webhook.pagosQueNaoEmitiramEm7Dias} pagamento(s) confirmado(s) nos últimos 7 dias sem ingresso emitido `
+        + '("não emitiu: pedido em …"): o dinheiro entrou num pedido já desfeito. Confira em Financeiro → entregas '
+        + 'e decida — emitir à mão ou devolver o valor.' })
   }
 
   // ------------------------------------------------ o Pix do Mercado Pago

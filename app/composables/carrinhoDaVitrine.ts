@@ -686,6 +686,9 @@ export function situacaoDoPedido(
         'Este pedido foi cancelado e os ingressos dele não valem na entrada. Se foi engano, fale com '
         + 'a bilheteria com o número do pedido.')
     case 'falhou':
+      // cartão cobrado depois de o checkout desistir, sem lugar pra refazer a
+      // reserva: mesmo bloco do expirado pago — "não aprovado" seria mentira
+      if (extra.pagoSemIngresso) return fora('PAGAMENTO RECEBIDO', 'selo-alerta', null)
       return fora('NÃO APROVADO', 'selo-erro',
         'O pagamento deste pedido não foi aprovado e nenhum ingresso foi emitido. Você pode fazer '
         + 'uma nova compra com outra forma de pagamento.')

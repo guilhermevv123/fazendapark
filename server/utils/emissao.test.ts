@@ -17,7 +17,7 @@ import {
   SQL_CORTESIA_SEM_ORIGEM, SQL_E_CORTESIA, SQL_E_VENDA_GRATUITA,
   eCortesia, emitirIngressos,
 } from './emissao'
-import { reservar } from './estoque'
+import { liberar, reservar } from './estoque'
 import { lerQr, montarQr } from './ingresso'
 
 let orgId: string, eventId: string, sectorId: string, lotId: string, customerId: string
@@ -123,6 +123,47 @@ describe('emissão', () => {
     const r = await emitirIngressos(ped.id)
     expect(r.emitiu).toBe(false)
     expect(r.motivo).toMatch(/cancelado/)
+  })
+})
+
+// O checkout desiste do pedido quando o gateway não responde (`desfazer`: 'falhou' e o lugar
+// volta). O cartão pode ter sido cobrado mesmo assim, e o pagamento chega depois pelo webhook.
+// Antes: "pedido em falhou", entrega dada por concluída, dinheiro sem ingresso e sem pendência.
+describe('pagamento confirmado num pedido que o checkout desfez (falhou)', () => {
+  async function desfeitoPeloCheckout(qtd = 2) {
+    const ped = await pedidoPendente(qtd)
+    await tx(async (c) => {
+      await c.query(`UPDATE orders SET status = 'falhou', canceled_at = now() WHERE id = $1`, [ped.id])
+      await liberar(c, [{ lotId, quantidade: qtd }])
+    })
+    return ped
+  }
+
+  it('com lugar: refaz a reserva e emite, sem data de cancelamento', async () => {
+    const ped = await desfeitoPeloCheckout(2)
+    const r = await emitirIngressos(ped.id)
+    expect(r.emitiu, r.motivo).toBe(true)
+    expect(r.reservaRefeita).toBe(true)
+    expect(r.ingressos).toBe(2)
+    const o = await q1<any>(`SELECT status, canceled_at FROM orders WHERE id = $1`, [ped.id])
+    expect(o).toMatchObject({ status: 'pago', canceled_at: null })
+    expect(await q1<any>(`SELECT sold, reserved FROM lots WHERE id = $1`, [lotId]))
+      .toMatchObject({ sold: 2, reserved: 0 })
+  })
+
+  it('sem lugar: não some — vira `pago_sem_lugar`, como o expirado', async () => {
+    const ped = await desfeitoPeloCheckout(1)
+    // o lugar devolvido foi vendido pra outra pessoa
+    await q(`UPDATE lots SET quantity = 1, sold = 1 WHERE id = $1`, [lotId])
+    const r = await emitirIngressos(ped.id)
+    expect(r.emitiu).toBe(false)
+    expect(r.pagoSemLugar).toBe(true)
+    expect((await q1<any>(`SELECT status FROM orders WHERE id = $1`, [ped.id])).status).toBe('falhou')
+    const trilha = await q<any>(
+      `SELECT 1 FROM audit_log WHERE entity = 'order' AND entity_id = $1 AND action = 'pago_sem_lugar'`, [ped.id])
+    expect(trilha).toHaveLength(1)
+    expect(await q1<any>(`SELECT sold, reserved FROM lots WHERE id = $1`, [lotId]))
+      .toMatchObject({ sold: 1, reserved: 0 })
   })
 })
 

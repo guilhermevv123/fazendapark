@@ -37,6 +37,7 @@ delete process.env.PAGAMENTO_SIMULADO
 
 const { db, q, q1 } = await import('./db')
 const { default: checkout } = await import('../api/checkout.post')
+const { emitirIngressos } = await import('./emissao')
 const { default: cartaoLigado } = await import('../api/pagamento/cartao.get')
 
 const CHAVE = '$aact_hmlg_zz_duble_cartao_no_site_000000000000000001'
@@ -45,8 +46,12 @@ const RECUSADO = '5184019740373151' // o "recusa" Mastercard do sandbox do Asaas
 
 type Chamada = { metodo: string; caminho: string; busca: string; corpo: any; bruto: string }
 let chamadas: Chamada[] = []
-/** 'lento': cria a cobrança mas responde depois do prazo; 'lento-sem-criar': nem cria */
-let modo: 'normal' | 'lento' | 'lento-sem-criar' = 'normal'
+/**
+ * 'lento': cria a cobrança mas responde depois do prazo; 'lento-sem-criar': nem cria;
+ * 'lento-consulta-cai': nem cria, e a PERGUNTA pela cobrança também falha (503);
+ * 'lento-pago-no-meio': nem cria, e o webhook paga o pedido enquanto o checkout pergunta
+ */
+let modo: 'normal' | 'lento' | 'lento-sem-criar' | 'lento-consulta-cai' | 'lento-pago-no-meio' = 'normal'
 let seq = 0
 const cobrancas = new Map<string, any>()
 
@@ -57,7 +62,7 @@ function responder(c: Chamada): { status: number; json: any } {
     if (c.corpo?.creditCard?.number === RECUSADO) {
       return { status: 400, json: { errors: [{ code: 'invalid_creditCard', description: 'Transação não autorizada. Verifique os dados do cartão de crédito e tente novamente.' }] } }
     }
-    if (modo === 'lento-sem-criar') return { status: 200, json: null }
+    if (modo !== 'normal' && modo !== 'lento') return { status: 200, json: null }
     const id = `pay_zzcs_${++seq}`
     const p = { id, object: 'payment', status: c.corpo?.creditCard ? 'CONFIRMED' : 'PENDING', billingType: c.corpo.billingType,
       value: c.corpo.value ?? c.corpo.totalValue, externalReference: c.corpo.externalReference, deleted: false,
@@ -67,6 +72,7 @@ function responder(c: Chamada): { status: number; json: any } {
   }
   if (c.caminho === '/payments' && c.metodo === 'GET') {
     const ref = new URLSearchParams(c.busca).get('externalReference')
+    if (modo === 'lento-consulta-cai') return { status: 503, json: { errors: [{ code: 'x', description: 'fora do ar' }] } }
     return { status: 200, json: { data: [...cobrancas.values()].filter((x) => x.externalReference === ref) } }
   }
   const m = c.caminho.match(/^\/payments\/([^/]+)$/)
@@ -118,6 +124,10 @@ beforeAll(async () => {
     const c: Chamada = { metodo: init?.method ?? 'GET', caminho: u.pathname.replace(/^\/v3/, ''), busca: u.search,
       corpo: init?.body ? JSON.parse(init.body) : null, bruto: init?.body ?? '' }
     chamadas.push(c)
+    if (modo === 'lento-pago-no-meio' && c.metodo === 'GET' && c.caminho === '/payments') {
+      // o aviso do Asaas chega e emite ANTES de o checkout decidir desfazer
+      await emitirIngressos(new URLSearchParams(c.busca).get('externalReference')!)
+    }
     const r = responder(c)
     const resposta = () => new Response(r.json == null ? '' : JSON.stringify(r.json), { status: r.status })
     if (modo === 'normal' || c.caminho !== '/payments' || c.metodo !== 'POST' || c.corpo?.creditCard?.number === RECUSADO) {
@@ -258,6 +268,43 @@ describe('cartão no site · ligado (CARTAO_NO_SITE=1)', () => {
     expect(r.recado).toMatch(/Confira no app do seu banco/)
     expect(await reservados()).toBe(antes)
     expect(posts()).toHaveLength(1)
+  })
+
+  it('sem resposta e a PERGUNTA também falhou: não desfaz — o pedido fica esperando, com o lugar', async () => {
+    process.env.CARTAO_NO_SITE = '1'
+    process.env.ASAAS_PRAZO_CARTAO_MS = '300'
+    modo = 'lento-consulta-cai'
+    const antes = await reservados()
+    const r = await comprar({ cartao: cartao() })
+    // a tela de "aguardando a aprovação do banco": não manda pagar de novo
+    expect(r.status, r.recado).toBe(200)
+    expect(r.corpo).toMatchObject({ status: 'aguardando_pagamento', pagamento: { cartaoNoSite: true, linkFatura: null } })
+    const o = await q1<any>(`SELECT id, status FROM orders WHERE code = $1`, [r.corpo.pedido])
+    expect(o!.status).toBe('aguardando_pagamento')
+    expect(await reservados(), 'devolveu o lugar de um cartão que pode ter sido cobrado').toBe(antes + 1)
+    const trilha = await q(`SELECT action FROM audit_log WHERE entity = 'order' AND entity_id = $1`, [o!.id])
+    expect(trilha.map((t: any) => t.action)).toContain('cartao_sem_resposta')
+    expect(trilha.map((t: any) => t.action)).not.toContain('falhou')
+    expect(posts(), 'reenviou o cartão às cegas').toHaveLength(1)
+  })
+
+  it('o webhook pagou enquanto o checkout desistia: o pedido segue PAGO e a reserva dos outros fica', async () => {
+    // uma reserva vizinha de pé no mesmo lote (fatura esperando pagamento)
+    delete process.env.CARTAO_NO_SITE
+    expect((await comprar({ cartao: cartao() })).status).toBe(200)
+    process.env.CARTAO_NO_SITE = '1'
+    process.env.ASAAS_PRAZO_CARTAO_MS = '300'
+    modo = 'lento-pago-no-meio'
+    const antes = Number((await q1<any>(`SELECT reserved, sold FROM lots WHERE id = $1`, [lotId]))!.reserved)
+    const vendidos = Number((await q1<any>(`SELECT sold FROM lots WHERE id = $1`, [lotId]))!.sold)
+    await comprar({ cartao: cartao() })
+    const o = await q1<any>(
+      `SELECT o.status, (SELECT count(*)::int FROM tickets t WHERE t.order_id = o.id) AS n
+         FROM orders o WHERE o.event_id = $1 ORDER BY o.created_at DESC LIMIT 1`, [eventId])
+    expect(o, 'pedido pago sobrescrito').toMatchObject({ status: 'pago', n: 1 })
+    const lote = await q1<any>(`SELECT reserved, sold FROM lots WHERE id = $1`, [lotId])
+    expect(Number(lote!.sold)).toBe(vendidos + 1)
+    expect(Number(lote!.reserved), 'tirou a reserva de outro pedido').toBe(antes)
   })
 
   it('débito nunca leva o cartão pela API (a doc do Asaas não aceita): vai pela fatura', async () => {

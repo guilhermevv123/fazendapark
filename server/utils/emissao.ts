@@ -15,7 +15,7 @@ import { tx } from './db'
 import { randomUUID } from 'node:crypto'
 import { gerarCodigo } from './ingresso'
 import { partesPorUnidade } from './combo'
-import { encerrarIngressoTrocado } from './troca-paga'
+import { encerrarIngressoTrocado, trocaSemIngressoAntigo } from './troca-paga'
 import {
   conferirCotaDeMeia, CotaDeMeiaEsgotada, documentoExigido, motivoValido,
 } from './meia-entrada'
@@ -309,8 +309,33 @@ export async function emitirNaTransacao(
   // Pago depois de a reserva cair: o lugar volta SE ainda existir. Só
   // 'expirado' — cancelado, estornado, chargeback são decisões sobre o
   // dinheiro, não prazo vencido, e nenhum deles revive por aqui.
+  //
+  // 'falhou' entra junto: é o pedido que o checkout desfez porque o gateway
+  // não respondeu (`desfazer`, checkout.post.ts) — o lugar voltou, mas o
+  // cartão pode ter sido cobrado mesmo assim. Pagamento confirmado nele era
+  // descartado como "pedido em falhou": dinheiro na conta, nenhum ingresso e
+  // nenhuma pendência à vista. É o mesmo caso do expirado — lugar devolvido,
+  // dinheiro chegando depois — e sai pela mesma porta: refaz a reserva se
+  // couber, senão fica pendurado como `pago_sem_lugar`.
+  const atrasado = pedido.status === 'expirado' || pedido.status === 'falhou'
+  if (!atrasado && !['aguardando_pagamento', 'em_analise', 'rascunho'].includes(pedido.status)) {
+    return { emitiu: false, motivo: `pedido em ${pedido.status}`, ingressos: 0 }
+  }
+
+  // Troca com diferença (053) cujo ingresso ANTIGO já não vale (entrou no parque, foi cancelado
+  // ou transferido pela equipe): emitir o novo daria dois ingressos por uma pessoa — o antigo já
+  // usado e o novo inteiro. Decidido ANTES de refazer qualquer reserva, com o antigo travado, e
+  // pendurado como o `pagoSemLugar`: a entrega não ganha baixa (fica em Financeiro → entregas
+  // com o motivo escrito) e a trilha do pedido ganha `troca_paga_sem_ingresso_antigo`.
+  if (pedido.swap_from_ticket_id) {
+    const semAntigo = await trocaSemIngressoAntigo(c, pedido)
+    if (semAntigo) {
+      return { emitiu: false, motivo: semAntigo, ingressos: 0, pedidoCode: pedido.code, pagoSemLugar: true }
+    }
+  }
+
   let reservaRefeita = false
-  if (pedido.status === 'expirado') {
+  if (atrasado) {
     const volta = await refazerReserva(c, pedido)
     if (!volta.ok) {
       const motivo = `pago depois do prazo da reserva e sem lugar: ${volta.motivo}. `
@@ -328,8 +353,6 @@ export async function emitirNaTransacao(
       return { emitiu: false, motivo, ingressos: 0, pedidoCode: pedido.code, pagoSemLugar: true }
     }
     reservaRefeita = true
-  } else if (!['aguardando_pagamento', 'em_analise', 'rascunho'].includes(pedido.status)) {
-    return { emitiu: false, motivo: `pedido em ${pedido.status}`, ingressos: 0 }
   }
 
   const { rows: itens } = await c.query(

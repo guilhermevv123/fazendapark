@@ -190,8 +190,9 @@ export default defineEventHandler(async (event) => {
 
   // PIX pago depois do prazo e sem lugar pra refazer a reserva (ver
   // `emissao.ts`). O pedido segue 'expirado', mas ENTROU dinheiro: a tela não
-  // pode mandar essa pessoa "escolher de novo" e pagar duas vezes.
-  const pagoSemIngresso = o.status === 'expirado' && !!(await q1<any>(
+  // pode mandar essa pessoa "escolher de novo" e pagar duas vezes. O mesmo
+  // vale pro 'falhou' (cartão cobrado depois de o checkout desistir).
+  const pagoSemIngresso = (o.status === 'expirado' || o.status === 'falhou') && !!(await q1<any>(
     `SELECT 1 FROM audit_log
       WHERE entity = 'order' AND entity_id = $1::text AND action = 'pago_sem_lugar'
       LIMIT 1`, [o.id]))

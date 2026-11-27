@@ -251,6 +251,36 @@ async function excluirEvento(e: any) {
   }
 }
 
+/*
+ * Ocultar / mostrar no site (dono, 14/11: "um botão pra eu ocultar ou deixar no sistema").
+ * Ocultar = status 'oculto': some da vitrine e o link para de vender, mas o evento, os
+ * pedidos e os ingressos já vendidos ficam no painel. Mostrar volta pra 'ativo' (mesma
+ * trava do servidor: sem lote à venda → 422 com a frase dele no card).
+ */
+const podeOcultar = (e: any) => podePublicar(e.id) && e.status === 'ativo'
+async function trocarVisibilidade(e: any, status: 'oculto' | 'ativo') {
+  abertoId.value = null
+  if (status === 'oculto') {
+    const sim = await perguntar({
+      titulo: `Ocultar “${e.nome}” do site?`,
+      texto: 'O evento sai do site e para de vender. Ele continua aqui no painel.',
+      detalhes: ['Quem já comprou continua com o ingresso valendo.', 'Para voltar, é só clicar em “Mostrar no site”.'],
+      confirmar: 'Ocultar do site',
+    })
+    if (!sim) return
+  }
+  publicando.value = e.id
+  erroPublicar.value = { ...erroPublicar.value, [e.id]: '' }
+  try {
+    await $fetch(`/api/admin/evento/${e.id}/configuracoes`, { method: 'PATCH', body: { status } })
+    await refresh()
+  } catch (err: any) {
+    erroPublicar.value = { ...erroPublicar.value, [e.id]: err?.data?.statusMessage || 'Não foi possível mudar. Tente de novo.' }
+  } finally {
+    publicando.value = null
+  }
+}
+
 // Aonde o clique no evento leva: a primeira tela que ESTE papel abre (ver
 // `primeiraTelaDoEvento` em composables/menuDoEvento.ts). Antes era sempre o
 // dashboard — área de dinheiro — e a operação caía numa tela em branco.
@@ -430,6 +460,11 @@ useHead({ title: 'Eventos' })
                   :disabled="publicando === e.id" @click="publicarEvento(e.id)">
             {{ publicando === e.id ? 'Publicando…' : 'Publicar' }}
           </button>
+          <button v-else-if="e.status === 'oculto' && podePublicar(e.id)" type="button" data-acao="mostrar-no-site"
+                  class="btn-primario min-h-[40px] shrink-0 px-3.5 py-2 text-[13.5px]"
+                  :disabled="publicando === e.id" @click="trocarVisibilidade(e, 'ativo')">
+            {{ publicando === e.id ? 'Mostrando…' : 'Mostrar no site' }}
+          </button>
           <span v-else :class="selo[e.status]?.c ?? 'selo-neutro'" data-parte="selo">{{ selo[e.status]?.t ?? String(e.status).toUpperCase() }}</span>
 
           <div class="relative">
@@ -449,6 +484,14 @@ useHead({ title: 'Eventos' })
                         @click="abertoId = null">
                 <IconeMenu :nome="a.icone" :tamanho="16" /> {{ a.nome }}
               </NuxtLink>
+              <template v-if="podeOcultar(e)">
+                <div class="my-1 border-t border-ink-100" role="separator" />
+                <button type="button" role="menuitem" data-acao="ocultar-do-site" :disabled="publicando === e.id"
+                        class="flex min-h-[40px] w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13.5px] font-medium text-ink-700 transition-colors hover:bg-fundo-cinza hover:text-ink-900"
+                        @click="trocarVisibilidade(e, 'oculto')">
+                  <IconeMenu nome="olhoFechado" :tamanho="16" /> {{ publicando === e.id ? 'Ocultando…' : 'Ocultar do site' }}
+                </button>
+              </template>
               <template v-if="podeExcluir(e)">
                 <div class="my-1 border-t border-ink-100" role="separator" />
                 <button type="button" role="menuitem" data-acao="excluir-evento" :disabled="excluindo === e.id"
