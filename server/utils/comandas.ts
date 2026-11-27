@@ -487,9 +487,11 @@ export async function gravarPedido(c: ContextoDaComanda, p: PedidoDoTablet): Pro
       // local obrigatório com internet; sem internet o pedido entra mesmo assim (o produto já saiu)
       const pontoId = await pontoValido(cl, c.orgId, p.pontoId)
       if (!pontoId && !p.semInternet) return falha('ponto_obrigatorio', 'Escolha o local de venda deste tablet antes de lançar.')
-      // funcionário preso a local(is) (056): pedido de outro local é recusado (sem internet entra: o produto já saiu)
-      if (pontoId && c.pontos?.length && !c.pontos.includes(pontoId) && !p.semInternet) {
-        return falha('ponto_nao_permitido', 'Você não atende neste local. Peça ao dono para mudar o seu local.')
+      // funcionário preso a local(is) (056): pedido fora dos locais dele é recusado. "Sem internet" não
+      // libera: o produto já saiu, então entra, mas PENDENTE para o gerente conferir (nunca passa calado)
+      if (c.pontos?.length && (!pontoId || !c.pontos.includes(pontoId))) {
+        if (!p.semInternet) return falha('ponto_nao_permitido', 'Você não atende neste local. Peça ao dono para mudar o seu local.')
+        paraConferir.push('lançado fora do local deste funcionário')
       }
       const pendente = fechada || paraConferir.length > 0
 
