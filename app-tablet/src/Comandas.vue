@@ -1,20 +1,17 @@
 <script setup lang="ts">
 /**
- * O app do tablet das Comandas (055): login do funcionário e as telas dele (Atender, Pagar e
- * as contas de hoje). Substitui a página `/comanda/<link>` do navegador, que saiu.
+ * O app do tablet das Comandas (055): login e as telas do funcionário (Atender, Pagar e as
+ * contas de hoje). Substitui a página `/comanda/<link>` do navegador, que saiu.
  *
- * O login tem dois passos:
- *  1. o CÓDIGO do funcionário: lido do QR do crachá (câmera) ou colado (o gerente cria na
- *     Gestão → Funcionários do app). Fica guardado no tablet até alguém tocar em "Trocar
- *     funcionário";
- *  2. o PIN de 4 números, que só ele sabe. Vale 12 h (um turno); "Sair" apaga na hora.
+ * O login é o MESMO do sistema: o e-mail e a senha que o gerente cria em Configurações →
+ * Equipe (`POST /api/auth/entrar`, a sessão de sempre, no cookie). Quem pode usar as comandas,
+ * e com que nível, o gerente dá em Comandas → Configurações → Equipe e regras; sem isso o
+ * porteiro (`server/middleware/04.comandas.ts`) recusa e o app diz o porquê.
  *
- * O servidor confere os dois em CADA chamada (`x-comanda-link`, `x-comanda-pin`) e só deixa
- * Atender, Pagar e as contas de hoje (`server/middleware/04.comandas.ts`). As telas são as
- * mesmas do site (`~/components/comanda/*`).
+ * As telas são as mesmas do site (`~/components/comanda/*`), com `noAppDoTablet` ligado.
  */
-import { chamar, faixaLarga, linkDoFuncionario, mensagemDoErro, pinDoFuncionario } from '~/composables/comandaOffline'
-import LeitorCamera from '~/components/LeitorCamera.vue'
+import { chamar, faixaLarga, mensagemDoErro, noAppDoTablet } from '~/composables/comandaOffline'
+import CriarSenha from '~/components/CriarSenha.vue'
 import ComandaSituacao from '~/components/comanda/Situacao.vue'
 import ComandaAtender from '~/components/comanda/Atender.vue'
 import ComandaPagar from '~/components/comanda/Pagar.vue'
@@ -24,138 +21,82 @@ import OndasMarca from '~/components/OndasMarca.vue'
 import Leitor from './Leitor.vue'
 import { nfc } from './nfc'
 
+noAppDoTablet.value = true
 const route = useRoute()
 
-/* ------------------------------------------------------------------ guardado no tablet */
-const CHAVE_CODIGO = 'cp_comanda_codigo'
-const CHAVE_PIN = 'cp_comanda_pin'
-const DOZE_HORAS = 12 * 60 * 60_000
+/* ------------------------------------------------------------------ login */
+const CHAVE_EMAIL = 'cp_comanda_email'
+function lerEmail() { try { return localStorage.getItem(CHAVE_EMAIL) ?? '' } catch { return '' } }
 
-function ler<T>(chave: string): T | null {
-  try { return JSON.parse(localStorage.getItem(chave) ?? 'null') } catch { return null }
-}
-function gravar(chave: string, valor: unknown) {
-  try { localStorage.setItem(chave, JSON.stringify(valor)) } catch { /* sem storage */ }
-}
-function apagar(chave: string) {
-  try { localStorage.removeItem(chave) } catch { /* sem storage */ }
-}
-
-/**
- * Tira o código do que veio: o QR do crachá, o código colado ou o link antigo inteiro
- * (`https://…/comanda/<código>`). O código é o segredo de 32 letras do link (base64url).
- */
-function codigoDe(texto: string): string | null {
-  const t = texto.trim()
-  const doLink = t.match(/\/comanda\/([A-Za-z0-9_-]{20,64})(?:[/?#]|$)/)
-  if (doLink) return doLink[1]
-  return /^[A-Za-z0-9_-]{20,64}$/.test(t) ? t : null
-}
-
-/* ------------------------------------------------------------------ passo 1: código */
-const guardado = ler<{ codigo: string; nome?: string }>(CHAVE_CODIGO)
-const codigo = ref(guardado?.codigo ?? '')
-const nomeGuardado = ref(guardado?.nome ?? '')
-const colado = ref('')
-const lendoQr = ref(false)
-const erroCodigo = ref('')
-
-function usarCodigo(texto: string) {
-  const c = codigoDe(texto)
-  if (!c) {
-    erroCodigo.value = 'Esse código não é de funcionário. Use o QR do crachá ou o código que o gerente mandou.'
-    return
-  }
-  lendoQr.value = false
-  erroCodigo.value = ''
-  colado.value = ''
-  codigo.value = c
-  nomeGuardado.value = ''
-  gravar(CHAVE_CODIGO, { codigo: c })
-}
-function trocarFuncionario() {
-  sair()
-  apagar(CHAVE_CODIGO)
-  codigo.value = ''
-  nomeGuardado.value = ''
-  erroPin.value = ''
-  travado.value = false
-}
-
-/* ------------------------------------------------------------------ passo 2: PIN */
-const entrou = ref(false)
+/** 'conferindo': abrindo o app, vendo se a sessão do sistema ainda vale */
+const etapa = ref<'conferindo' | 'login' | 'senha_nova' | 'dentro'>('conferindo')
+const email = ref(lerEmail())
+const senha = ref('')
+const senhaProvisoria = ref('')
+const erro = ref('')
+const entrando = ref(false)
 const quem = ref('')
-const digitado = ref('')
-const erroPin = ref('')
-const conferindo = ref(false)
-const travado = ref(false)
+const NIVEL: Record<string, string> = { atendente: 'Atendente', caixa: 'Caixa', gerente: 'Gerente' }
+const nivel = ref('')
 
-async function entrar(pin: string, silencioso = false) {
-  conferindo.value = true
-  linkDoFuncionario.value = codigo.value
-  pinDoFuncionario.value = pin
+/** Com a sessão do sistema aberta, confere o acesso às comandas e entra. */
+async function abrirComandas() {
   try {
     const e = await chamar<any>('/api/comandas/estado')
     quem.value = e.eu?.nome ?? ''
-    nomeGuardado.value = quem.value
-    gravar(CHAVE_CODIGO, { codigo: codigo.value, nome: quem.value })
-    gravar(CHAVE_PIN, { pin, em: Date.now() })
-    entrou.value = true
-    erroPin.value = ''
+    nivel.value = NIVEL[e.eu?.nivel] ?? ''
+    erro.value = ''
+    etapa.value = 'dentro'
   } catch (e: any) {
-    pinDoFuncionario.value = null
-    apagar(CHAVE_PIN)
-    const motivo = e?.data?.data?.codigo
-    if (motivo === 'link' || motivo === 'link_sem_pin') {
-      // o código foi desligado ou trocado pelo gerente: volta pro passo 1
-      const msg = mensagemDoErro(e)
-      trocarFuncionario()
-      erroCodigo.value = msg
-      return
-    }
-    travado.value = motivo === 'pin_travado'
-    if (!silencioso || travado.value) erroPin.value = mensagemDoErro(e, 'Não consegui conferir agora. Veja a internet e tente de novo.')
-  } finally {
-    digitado.value = ''
-    conferindo.value = false
+    const status = Number(e?.statusCode ?? e?.status ?? e?.response?.status ?? 0)
+    etapa.value = 'login'
+    // 401 ao abrir o app = não tem sessão ainda: só mostra o login, sem erro
+    if (status !== 401) erro.value = mensagemDoErro(e, 'Não consegui abrir as comandas agora. Veja a internet e tente de novo.')
   }
 }
-function tecla(t: string) {
-  if (conferindo.value) return
-  erroPin.value = ''
-  if (t === 'apagar') { digitado.value = digitado.value.slice(0, -1); return }
-  if (digitado.value.length >= 4) return
-  digitado.value += t
-  if (digitado.value.length === 4) entrar(digitado.value)
+
+async function entrar() {
+  if (entrando.value) return
+  erro.value = ''
+  entrando.value = true
+  try {
+    const r = await $fetch<any>('/api/auth/entrar', { method: 'POST', body: { email: email.value.trim(), senha: senha.value } })
+    try { localStorage.setItem(CHAVE_EMAIL, email.value.trim()) } catch { /* sem storage */ }
+    if (r?.trocarSenha) {
+      // primeira entrada com a senha que o gerente sorteou: cria a própria antes de usar
+      senhaProvisoria.value = senha.value
+      quem.value = r.usuario?.nome ?? ''
+      etapa.value = 'senha_nova'
+    } else {
+      await abrirComandas()
+    }
+  } catch (e: any) {
+    erro.value = mensagemDoErro(e, 'Não consegui entrar agora. Veja a internet e tente de novo.')
+  } finally {
+    senha.value = ''
+    entrando.value = false
+  }
 }
-// teclado físico também digita o PIN
-function porTeclado(ev: KeyboardEvent) {
-  if (entrou.value || !codigo.value) return
-  if (/^\d$/.test(ev.key)) tecla(ev.key)
-  else if (ev.key === 'Backspace') tecla('apagar')
-}
-function sair() {
-  apagar(CHAVE_PIN)
-  pinDoFuncionario.value = null
-  entrou.value = false
+
+async function sair() {
+  try { await $fetch('/api/auth/sair', { method: 'POST' }) } catch { /* sem rede: a sessão vence sozinha */ }
   quem.value = ''
+  senhaProvisoria.value = ''
+  erro.value = ''
+  etapa.value = 'login'
 }
-// o servidor recusou no meio do turno (PIN trocado, código desligado): volta pro login
+// o servidor recusou no meio do turno (sessão vencida, acesso tirado): volta pro login
 function recusado() {
-  sair()
-  erroPin.value = 'Sua entrada caiu. Digite o PIN de novo.'
+  quem.value = ''
+  etapa.value = 'login'
+  erro.value = 'Sua entrada venceu. Entre de novo com o seu e-mail e senha.'
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', porTeclado)
   window.addEventListener('comanda:sair', recusado)
-  const g = ler<{ pin: string; em: number }>(CHAVE_PIN)
-  if (codigo.value && g && Date.now() - g.em < DOZE_HORAS) entrar(g.pin, true)
+  abrirComandas()
 })
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', porTeclado)
-  window.removeEventListener('comanda:sair', recusado)
-})
+onBeforeUnmount(() => window.removeEventListener('comanda:sair', recusado))
 
 /* ------------------------------------------------------------------ abas */
 const ABAS = [{ id: 'atender', nome: 'Atender' }, { id: 'pagar', nome: 'Pagar' }, { id: 'hoje', nome: 'Contas de hoje', curto: 'Hoje' }]
@@ -164,13 +105,12 @@ const aba = computed(() => ABAS.find((a) => a.id === route.query.aba)?.id ?? 'at
 const coluna = computed(() => aba.value === 'atender' && faixaLarga.value ? 'max-w-6xl' : 'max-w-4xl')
 /** tela "Leitor" (testar pulseira / acertar o NFC do tablet), no lugar do atendimento */
 const vendoLeitor = ref(false)
-const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
 </script>
 
 <template>
   <div class="min-h-screen bg-fundo-cinza" style="padding-top: env(safe-area-inset-top)">
     <!-- LOGIN: o mesmo desenho do /entrar do site (o roxo da logo de um lado, o formulário do outro) -->
-    <div v-if="!codigo || !entrou" class="grid min-h-screen bg-white lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+    <div v-if="etapa !== 'dentro'" class="grid min-h-screen bg-white lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
       <aside class="relative isolate hidden overflow-hidden bg-grape-950 lg:block">
         <div aria-hidden="true"
              class="absolute -inset-[20%] -z-10 animate-drift bg-[radial-gradient(40%_34%_at_28%_32%,rgb(79_198_219/0.55),transparent_70%),radial-gradient(36%_30%_at_74%_66%,rgb(143_212_234/0.32),transparent_70%),radial-gradient(26%_22%_at_58%_18%,rgb(253_185_42/0.2),transparent_70%)] blur-2xl" />
@@ -194,59 +134,36 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
       <main class="flex min-h-screen flex-col px-5 py-6 sm:px-10" style="padding-top: max(1.5rem, env(safe-area-inset-top))">
         <LogoMarca class="h-10 self-start lg:hidden" />
         <div class="mx-auto flex w-full max-w-[400px] flex-1 flex-col justify-center py-10">
-    <!-- LOGIN, passo 1: quem é o funcionário -->
-      <div v-if="!codigo" class="w-full animate-rise-in" data-tela="login-codigo">
-        <h1 class="titulo text-[30px] font-semibold tracking-[-0.02em] text-ink-900">Entrar</h1>
-        <p class="mt-1 text-[15px] text-ink-600">Use o QR do seu crachá de funcionário.</p>
+      <div v-if="etapa === 'conferindo'" class="py-10 text-center text-ink-600">Abrindo…</div>
 
-        <div v-if="lendoQr" class="mt-5 overflow-hidden rounded-card">
-          <LeitorCamera @ler="usarCodigo" />
-          <button type="button" class="btn-secundario mt-3 w-full min-h-[52px]" @click="lendoQr = false">Cancelar</button>
+      <CriarSenha v-else-if="etapa === 'senha_nova'" :provisoria="senhaProvisoria" :nome="quem"
+                  class="animate-rise-in" @pronto="abrirComandas" />
+
+      <form v-else class="grid animate-rise-in gap-5" data-tela="login" @submit.prevent="entrar">
+        <div>
+          <h1 class="titulo text-[30px] font-semibold tracking-[-0.02em] text-ink-900">Entrar</h1>
+          <p class="mt-1 text-[15px] text-ink-600">Use o e-mail e a senha do seu acesso de equipe.</p>
         </div>
-        <button v-else type="button" class="btn-primario mt-6 w-full min-h-[64px] text-lg" data-acao="ler-qr" @click="lendoQr = true; erroCodigo = ''">
-          Ler QR do crachá
+
+        <p v-if="erro" class="faixa-erro" role="alert">{{ erro }}</p>
+
+        <div>
+          <label for="email" class="rotulo">E-mail</label>
+          <input id="email" v-model="email" type="email" autocomplete="username" required
+                 inputmode="email" autocapitalize="none" spellcheck="false"
+                 class="campo min-h-[52px] text-base" placeholder="voce@conquistapark.com.br">
+        </div>
+        <div>
+          <label for="senha" class="rotulo">Senha</label>
+          <input id="senha" v-model="senha" type="password" autocomplete="current-password" required
+                 class="campo min-h-[52px] text-base">
+        </div>
+
+        <button type="submit" class="btn-primario min-h-[56px] text-lg" :disabled="entrando || !email.trim() || !senha">
+          {{ entrando ? 'Entrando…' : 'Entrar' }}
         </button>
-
-        <form v-if="!lendoQr" class="mt-6 space-y-2" @submit.prevent="usarCodigo(colado)">
-          <label class="text-sm font-semibold text-ink-700" for="codigo">Ou cole o seu código de acesso</label>
-          <div class="flex gap-2">
-            <input id="codigo" v-model="colado" class="campo min-w-0 flex-1 font-mono text-sm" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Código que o gerente mandou">
-            <button type="submit" class="btn-secundario px-4" :disabled="!colado.trim()">Continuar</button>
-          </div>
-        </form>
-        <p v-if="erroCodigo" class="mt-4 text-sm font-semibold text-danger-600" role="alert">{{ erroCodigo }}</p>
-        <p class="mt-6 text-[13px] text-ink-600">Não tem crachá? Peça ao gerente: Comandas → Gestão → Funcionários do app.</p>
-      </div>
-
-    <!-- LOGIN, passo 2: PIN -->
-      <div v-else class="w-full animate-rise-in text-center" data-tela="login-pin">
-        <h1 class="titulo text-[30px] font-semibold tracking-[-0.02em] text-ink-900">{{ nomeGuardado ? `Olá, ${nomeGuardado}` : 'Digite o seu PIN' }}</h1>
-        <p class="mt-1 text-[15px] text-ink-600">Digite o seu PIN de 4 números para começar.</p>
-
-        <div class="mt-6 flex justify-center gap-3" aria-live="polite" :aria-label="`${digitado.length} de 4 números`">
-          <span v-for="i in 4" :key="i" class="h-4 w-4 rounded-full border-2 transition"
-                :class="i <= digitado.length ? 'border-acao bg-acao' : 'border-linha-forte bg-white'" />
-        </div>
-        <p class="mt-4 min-h-[40px] text-sm" :class="erroPin ? 'font-semibold text-danger-600' : 'text-ink-600'">
-          {{ conferindo ? 'Conferindo…' : erroPin }}
-        </p>
-
-        <div class="mt-2 grid grid-cols-3 gap-3">
-          <template v-for="t in TECLAS" :key="t || 'vazio'">
-            <span v-if="!t" />
-            <button v-else type="button" :disabled="conferindo || travado"
-                    class="flex h-16 items-center justify-center rounded-card border border-linha bg-white text-2xl font-semibold text-ink-900 transition active:scale-95 active:bg-acao-claro disabled:opacity-40"
-                    :aria-label="t === 'apagar' ? 'Apagar' : t" @click="tecla(t)">
-              <svg v-if="t === 'apagar'" viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H9l-6 7 6 7h12a1 1 0 001-1V6a1 1 0 00-1-1zM17 9l-6 6M11 9l6 6" /></svg>
-              <template v-else>{{ t }}</template>
-            </button>
-          </template>
-        </div>
-        <button type="button" class="mt-5 text-sm font-semibold text-acao" data-acao="trocar-funcionario" @click="trocarFuncionario">
-          {{ nomeGuardado ? `Não é ${nomeGuardado}? Trocar funcionário` : 'Trocar funcionário' }}
-        </button>
-        <p class="mt-2 text-[13px] text-ink-600">Esqueceu o PIN? Peça ao gerente um código novo.</p>
-      </div>
+        <p class="text-[13px] text-ink-600">Não tem acesso ou esqueceu a senha? Fale com o gerente.</p>
+      </form>
         </div>
       </main>
     </div>
@@ -270,7 +187,7 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
             <div class="flex shrink-0 items-center gap-2">
               <span class="hidden text-right leading-tight sm:block">
                 <span class="block text-sm font-semibold text-ink-900">{{ quem }}</span>
-                <span class="block text-xs text-ink-600">Atendente</span>
+                <span class="block text-xs text-ink-600">{{ nivel }}</span>
               </span>
               <button type="button" class="btn-secundario min-h-[44px] px-3 text-sm" data-acao="leitor"
                       :class="nfc.existe.value && !nfc.ligado.value ? 'ring-danger-600 text-danger-600' : ''"

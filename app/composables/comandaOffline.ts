@@ -99,7 +99,6 @@ export function chamar<T>(url: string, opcoes: Record<string, any> = {}): Promis
     ...opcoes,
     headers: {
       'x-aparelho': aparelho(),
-      ...(linkDoFuncionario.value ? { 'x-comanda-link': linkDoFuncionario.value, 'x-comanda-pin': pinDoFuncionario.value ?? '' } : {}),
       ...(opcoes.headers ?? {}),
     },
   }) as Promise<T>
@@ -125,10 +124,11 @@ export const ultimaSincronia = ref<string | null>(null)
 export const estado = ref<EstadoDoTablet | null>(null)
 /** a tela pede a largura toda (cardápio): a faixa de cima acompanha; nas outras fica no meio, alinhada */
 export const faixaLarga = ref(false)
-/** o tablet entrou pelo link do funcionário (`/comanda/<segredo>`): vai em toda chamada */
-export const linkDoFuncionario = ref<string | null>(null)
-/** o PIN que o funcionário digitou neste tablet (vai junto com o link) */
-export const pinDoFuncionario = ref<string | null>(null)
+/**
+ * As telas estão rodando no app Android do tablet (`app-tablet/`), não no painel do site: lá não
+ * existe `/admin` nem `/entrar` (o app tem o login dele, com o e-mail e a senha do sistema).
+ */
+export const noAppDoTablet = ref(false)
 let rodando = false
 
 /**

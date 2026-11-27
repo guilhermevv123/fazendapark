@@ -13,7 +13,7 @@
  */
 import { bip, useLeitorDePulseira } from '~/composables/comandaLeitor'
 import {
-  chamar, contaDaPulseiraGuardada, ehFaltaDeRede, enfileirar, estado, faixaLarga, linkDoFuncionario, mensagemDoErro, novoIdLocal, online, sincronizar,
+  chamar, contaDaPulseiraGuardada, ehFaltaDeRede, enfileirar, estado, faixaLarga, mensagemDoErro, noAppDoTablet, novoIdLocal, online, sincronizar,
   type ContaGuardada,
 } from '~/composables/comandaOffline'
 import { dataHora, reais } from '~/composables/formato'
@@ -505,7 +505,7 @@ const grupoDe = (l: Leitura | null) => l?.conta && l.conta.nome !== l.conta.resp
         <button type="button" data-acao="novo-pedido" class="btn-primario min-h-[64px] text-lg" :class="pontoAtual ? '' : 'opacity-50'" @click="novoPedido">
           {{ pontoAtual ? '+ Novo pedido' : 'Escolha o local acima para fazer pedido' }}
         </button>
-        <NuxtLink :to="linkDoFuncionario ? { query: { aba: 'pagar' } } : '/admin/comandas/pagar'" data-acao="pagar" class="btn-secundario flex min-h-[64px] items-center justify-center text-lg">Pagar conta</NuxtLink>
+        <NuxtLink :to="noAppDoTablet ? { query: { aba: 'pagar' } } : '/admin/comandas/pagar'" data-acao="pagar" class="btn-secundario flex min-h-[64px] items-center justify-center text-lg">Pagar conta</NuxtLink>
       </div>
     </section>
 
@@ -565,7 +565,7 @@ const grupoDe = (l: Leitura | null) => l?.conta && l.conta.nome !== l.conta.resp
               <input v-model="buscaItem" class="campo min-h-[48px] pl-10" placeholder="Buscar produto" autocomplete="off">
             </div>
             <!-- gerente cadastra produto novo sem caçar a tela -->
-            <NuxtLink v-if="estado?.eu.nivel === 'gerente' && !linkDoFuncionario" :to="{ path: '/admin/comandas', query: { aba: 'produtos', novo: '1' } }"
+            <NuxtLink v-if="estado?.eu.nivel === 'gerente' && !noAppDoTablet" :to="{ path: '/admin/comandas', query: { aba: 'produtos', novo: '1' } }"
                       class="btn-secundario flex min-h-[48px] shrink-0 items-center whitespace-nowrap px-4" data-acao="cadastrar-produto">+ Produto</NuxtLink>
           </div>
         </div>

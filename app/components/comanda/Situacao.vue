@@ -8,7 +8,7 @@
  * recebe o estado pronto. Sem acesso à comanda, mostra o porquê.
  */
 import {
-  estado, estadoGuardado, faixaLarga, linkDoFuncionario, mensagemDoErro, online, pendentes, problemas, sincronizar, ultimaSincronia,
+  estado, estadoGuardado, faixaLarga, mensagemDoErro, noAppDoTablet, online, pendentes, problemas, sincronizar, ultimaSincronia,
 } from '~/composables/comandaOffline'
 
 /** dentro da Gestão: a faixa (online, hora, quem está) só aparece se tiver problema */
@@ -27,8 +27,8 @@ async function rodar() {
   } catch (e: any) {
     const status = Number(e?.statusCode ?? e?.status ?? e?.response?.status ?? 0)
     if (status === 401) {
-      // no app do tablet (código + PIN do funcionário) não existe /entrar: o app volta pro PIN
-      if (linkDoFuncionario.value) {
+      // no app do tablet não existe /entrar: o app volta pra tela de login dele
+      if (noAppDoTablet.value) {
         window.dispatchEvent(new Event('comanda:sair'))
         return
       }
@@ -47,7 +47,7 @@ onMounted(async () => {
   window.addEventListener('online', rodar)
   // a tela da comanda abre sem internet (service worker só de /admin/comandas)
   if ('serviceWorker' in navigator) {
-    if (!linkDoFuncionario.value) navigator.serviceWorker.register(`/sw-comandas.js?v=${VERSAO_DO_APP}`, { scope: '/admin/comandas' }).catch(() => {})
+    if (!noAppDoTablet.value) navigator.serviceWorker.register(`/sw-comandas.js?v=${VERSAO_DO_APP}`, { scope: '/admin/comandas' }).catch(() => {})
   }
 })
 onBeforeUnmount(() => {
@@ -87,8 +87,8 @@ const sincronizouHa = computed(() => {
         <span class="hidden text-ink-600 sm:inline">{{ dia }}</span>
         <span class="text-lg font-bold tabular-nums text-ink-900">{{ hora }}</span>
       </div>
-      <!-- no link do funcionário o nome já está no cabeçalho -->
-      <div v-if="estado && !linkDoFuncionario" class="flex items-center gap-2">
+      <!-- no app do tablet o nome já está no cabeçalho -->
+      <div v-if="estado && !noAppDoTablet" class="flex items-center gap-2">
         <span class="flex h-8 w-8 items-center justify-center rounded-full bg-acao-claro text-sm font-bold text-acao">{{ estado.eu.nome.charAt(0).toUpperCase() }}</span>
         <span class="leading-tight"><span class="block font-semibold text-ink-900">{{ estado.eu.nome }}</span>
           <span class="block text-xs text-ink-600">{{ NIVEL[estado.eu.nivel] ?? estado.eu.nivel }}</span></span>

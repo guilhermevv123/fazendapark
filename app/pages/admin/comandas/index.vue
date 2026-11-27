@@ -21,7 +21,6 @@ import ComandaProdutos from '~/components/comanda/gestao/Produtos.vue'
 import ComandaLocais from '~/components/comanda/gestao/Locais.vue'
 import ComandaPulseiras from '~/components/comanda/gestao/Pulseiras.vue'
 import ComandaEquipe from '~/components/comanda/gestao/Equipe.vue'
-import ComandaLinks from '~/components/comanda/gestao/Links.vue'
 
 definePageMeta({ layout: 'admin' })
 useHead({ title: 'Comandas — Gestão' })
@@ -37,7 +36,7 @@ const SECOES: Secao[] = [
     partes: [{ id: 'vendas', nome: 'Vendas' }, { id: 'pedidos', nome: 'Todos os pedidos' }] },
   { id: 'produtos', nome: 'Produtos', resumo: 'O que vocês vendem. Tudo aqui aparece no Novo pedido dos tablets.' },
   { id: 'config', nome: 'Configurações', resumo: 'Locais de venda, pulseiras, equipe, regras e horário de fechamento.',
-    partes: [{ id: 'locais', nome: 'Locais de venda' }, { id: 'links', nome: 'Funcionários do app' }, { id: 'pulseiras', nome: 'Pulseiras' }, { id: 'equipe', nome: 'Equipe e regras' }] },
+    partes: [{ id: 'locais', nome: 'Locais de venda' }, { id: 'pulseiras', nome: 'Pulseiras' }, { id: 'equipe', nome: 'Equipe e regras' }] },
 ]
 const route = useRoute()
 const secao = computed(() => SECOES.find((s) => s.id === route.query.aba) ?? SECOES[0]!)
@@ -99,7 +98,6 @@ const marca = (id: string) => id === 'contas' ? hoje.value?.pendencias || 0 : 0
       <ComandaProdutos v-else-if="secao.id === 'produtos'" />
       <template v-else-if="secao.id === 'config'">
         <ComandaLocais v-if="parte === 'locais'" />
-        <ComandaLinks v-else-if="parte === 'links'" />
         <ComandaPulseiras v-else-if="parte === 'pulseiras'" />
         <ComandaEquipe v-else />
       </template>

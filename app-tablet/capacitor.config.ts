@@ -9,6 +9,8 @@ const config: CapacitorConfig = {
     // as chamadas pro sistema saem pelo Android (não pelo navegador do app): sem CORS e sem
     // cabeçalho Origin, que o porteiro de /api/comandas aceita (`mutacaoDeOutroSite`)
     CapacitorHttp: { enabled: true },
+    // o login é a sessão do sistema (cookie): guardada no Android, vale nas próximas chamadas
+    CapacitorCookies: { enabled: true },
   },
 }
 

@@ -1,11 +1,12 @@
 # App do tablet — Comandas (Android)
 
-App dos funcionários: login (QR do crachá ou código + PIN) e as telas Atender, Pagar e Contas de hoje.
+App dos funcionários: login com o e-mail e a senha do sistema e as telas Atender, Pagar e Contas de hoje.
 As telas **não são copiadas**: vêm de `../app/components/comanda/*` (as mesmas do site), pelo apelido
 `~` → `../app`. Mudou lá, muda aqui. O que é do Nuxt é suprido em `src/nuxt.ts`.
 
-A página do navegador `/comanda/<código>` saiu: o funcionário só entra pelo app. O gerente cria o
-acesso em **Comandas → Gestão → Configurações → Funcionários do app** (QR do crachá + PIN).
+A página do navegador `/comanda/<código>` saiu: o funcionário só entra pelo app. O login é o do
+sistema (o gerente cria em **Configurações → Equipe**) e quem usa as comandas, com que nível, sai de
+**Comandas → Configurações → Equipe e regras**.
 
 ## Rodar no PC (navegador)
 1. Site local na porta 3100 (`npx nuxt dev --port 3100` na pasta de cima, banco local ligado).
