@@ -9,6 +9,7 @@ import IconeMenu from '~/components/IconeMenu.vue'
 import ModalLateral from '~/components/ModalLateral.vue'
 import App from './App.vue'
 import Comandas from './Comandas.vue'
+import { ligarNfc } from './nfc'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -22,3 +23,6 @@ createApp(App)
   .component('ModalLateral', ModalLateral)
   .component('IconeMenu', IconeMenu)
   .mount('#app')
+
+// NFC do próprio tablet (só no app Android); o leitor USB funciona sozinho, como teclado
+ligarNfc()

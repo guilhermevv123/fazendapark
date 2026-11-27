@@ -41,4 +41,7 @@
     <!-- câmera: ler o QR do crachá no login e o QR do ingresso ao abrir conta -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- NFC do tablet: ler a pulseira encostando nele (o leitor USB continua valendo) -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
 </manifest>

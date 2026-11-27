@@ -19,6 +19,8 @@ import ComandaSituacao from '~/components/comanda/Situacao.vue'
 import ComandaAtender from '~/components/comanda/Atender.vue'
 import ComandaPagar from '~/components/comanda/Pagar.vue'
 import ComandaHoje from '~/components/comanda/Hoje.vue'
+import Leitor from './Leitor.vue'
+import { nfc } from './nfc'
 
 const route = useRoute()
 
@@ -157,6 +159,8 @@ onBeforeUnmount(() => {
 const ABAS = [{ id: 'atender', nome: 'Atender' }, { id: 'pagar', nome: 'Pagar' }, { id: 'hoje', nome: 'Contas de hoje', curto: 'Hoje' }]
 const aba = computed(() => ABAS.find((a) => a.id === route.query.aba)?.id ?? 'atender')
 const coluna = computed(() => aba.value === 'atender' && faixaLarga.value ? 'max-w-6xl' : 'max-w-4xl')
+/** tela "Leitor" (testar pulseira / acertar o NFC do tablet), no lugar do atendimento */
+const vendoLeitor = ref(false)
 const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
 </script>
 
@@ -236,7 +240,7 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
             </div>
             <!-- tablet: as abas ficam no meio do cabeçalho -->
             <nav class="hidden rounded-card bg-ink-50 p-1 md:flex" aria-label="Comandas">
-              <RouterLink v-for="a in ABAS" :key="a.id" :to="{ query: a.id === 'atender' ? {} : { aba: a.id } }"
+              <RouterLink v-for="a in ABAS" :key="a.id" :to="{ query: a.id === 'atender' ? {} : { aba: a.id } }" @click="vendoLeitor = false"
                           class="flex min-h-[48px] items-center whitespace-nowrap rounded-card px-6 text-base font-semibold transition"
                           :class="aba === a.id ? 'bg-white text-acao shadow-sm' : 'text-ink-600 hover:text-ink-900'">{{ a.nome }}</RouterLink>
             </nav>
@@ -245,12 +249,15 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
                 <span class="block text-sm font-semibold text-ink-900">{{ quem }}</span>
                 <span class="block text-xs text-ink-600">Atendente</span>
               </span>
+              <button type="button" class="btn-secundario min-h-[44px] px-3 text-sm" data-acao="leitor"
+                      :class="nfc.existe.value && !nfc.ligado.value ? 'ring-danger-600 text-danger-600' : ''"
+                      @click="vendoLeitor = !vendoLeitor">{{ nfc.existe.value && !nfc.ligado.value ? 'NFC desligado' : 'Leitor' }}</button>
               <button type="button" class="btn-secundario min-h-[44px] px-3 text-sm" @click="sair">Sair</button>
             </div>
           </div>
           <!-- celular: as abas ganham uma linha só delas -->
           <nav class="mb-3 grid grid-cols-3 gap-1 rounded-card bg-ink-50 p-1 md:hidden" aria-label="Comandas">
-            <RouterLink v-for="a in ABAS" :key="a.id" :to="{ query: a.id === 'atender' ? {} : { aba: a.id } }"
+            <RouterLink v-for="a in ABAS" :key="a.id" :to="{ query: a.id === 'atender' ? {} : { aba: a.id } }" @click="vendoLeitor = false"
                         class="flex min-h-[44px] items-center justify-center rounded-card text-[15px] font-semibold transition"
                         :class="aba === a.id ? 'bg-white text-acao shadow-sm' : 'text-ink-600'">{{ a.curto ?? a.nome }}</RouterLink>
           </nav>
@@ -258,7 +265,8 @@ const TECLAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'apagar']
       </header>
 
       <main class="mx-auto px-3 py-4 sm:px-4 sm:py-5" :class="coluna">
-        <ComandaSituacao>
+        <Leitor v-if="vendoLeitor" @fechar="vendoLeitor = false" />
+        <ComandaSituacao v-else>
           <ComandaAtender v-if="aba === 'atender'" />
           <ComandaPagar v-else-if="aba === 'pagar'" />
           <ComandaHoje v-else />

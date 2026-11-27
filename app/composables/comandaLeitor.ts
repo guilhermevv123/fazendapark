@@ -48,10 +48,7 @@ export function useLeitorDePulseira(aoLer: (uid: string) => void, ativo?: Ref<bo
         alvo.value = alvo.value.slice(0, alvo.value.length - qtd)
         alvo.dispatchEvent(new Event('input', { bubbles: true }))
       }
-      const now = Date.now()
-      if (uid === ultimo.uid && now - ultimo.em < REPETICAO_MS) return
-      ultimo = { uid, em: now }
-      aoLer(uid)
+      entregar(uid)
       return
     }
     if (e.key.length !== 1 || !/[0-9A-Za-z]/.test(e.key)) { teclas = []; return }
@@ -61,9 +58,33 @@ export function useLeitorDePulseira(aoLer: (uid: string) => void, ativo?: Ref<bo
     if (teclas.length > 30) teclas = teclas.slice(-30)
   }
 
-  onMounted(() => window.addEventListener('keydown', tecla, true))
-  onBeforeUnmount(() => window.removeEventListener('keydown', tecla, true))
+  /** a mesma pulseira em menos de 2 s não conta de novo, venha do leitor USB ou do NFC do tablet */
+  function entregar(uid: string) {
+    const now = Date.now()
+    if (uid === ultimo.uid && now - ultimo.em < REPETICAO_MS) return
+    ultimo = { uid, em: now }
+    aoLer(uid)
+  }
+  // o NFC do próprio tablet (app Android, `app-tablet/src/nfc.ts`) avisa por evento, já no
+  // mesmo formato do leitor USB
+  function porEvento(e: Event) {
+    if (ativo && !ativo.value) return
+    const uid = String((e as CustomEvent<{ uid?: string }>).detail?.uid ?? '')
+    if (/^[0-9A-Za-z]{4,24}$/.test(uid)) entregar(uid)
+  }
+
+  onMounted(() => {
+    window.addEventListener('keydown', tecla, true)
+    window.addEventListener(EVENTO_DA_PULSEIRA, porEvento)
+  })
+  onBeforeUnmount(() => {
+    window.removeEventListener('keydown', tecla, true)
+    window.removeEventListener(EVENTO_DA_PULSEIRA, porEvento)
+  })
 }
+
+/** Evento que entrega uma pulseira lida por outro caminho que não o teclado (NFC do tablet). */
+export const EVENTO_DA_PULSEIRA = 'comanda:pulseira'
 
 /* ------------------------------------------------------------------ bip e vibração */
 
